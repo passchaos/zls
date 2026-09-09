@@ -1617,6 +1617,90 @@ fn resolveIntegerBinaryValue(
     return Type.fromIP(analyser, result_type, coerced);
 }
 
+fn resolveFixedWidthIntegerBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+    result_type_override: ?InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_index = lhs_payload.index orelse return null;
+    const rhs_index = rhs_payload.index orelse return null;
+    const result_type = result_type_override orelse
+        try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    if (analyser.ip.zigTypeTag(result_type) != .int) return null;
+    const int_info = analyser.ip.intInfo(result_type, builtin.target);
+    if (int_info.bits == 0 or int_info.bits > 64) return null;
+
+    const result_index = switch (int_info.signedness) {
+        .unsigned => unsigned: {
+            const a = analyser.ip.toInt(lhs_index, u128) orelse return null;
+            const b = analyser.ip.toInt(rhs_index, u128) orelse return null;
+            const max: u128 = (@as(u128, 1) << @intCast(int_info.bits)) - 1;
+            const value: u128 = switch (tag) {
+                .add_wrap => (a + b) & max,
+                .sub_wrap => (a -% b) & max,
+                .mul_wrap => (a * b) & max,
+                .add_sat => @min(a + b, max),
+                .sub_sat => a -| b,
+                .mul_sat => @min(a * b, max),
+                .shl_sat => blk: {
+                    if (b >= int_info.bits) return null;
+                    break :blk @min(a << @intCast(b), max);
+                },
+                else => return null,
+            };
+            break :unsigned try analyser.ip.get(.{ .int_u64_value = .{
+                .ty = result_type,
+                .int = @intCast(value),
+            } });
+        },
+        .signed => signed: {
+            const a = analyser.ip.toInt(lhs_index, i128) orelse return null;
+            const b = analyser.ip.toInt(rhs_index, i128) orelse return null;
+            const min = -(@as(i128, 1) << @intCast(int_info.bits - 1));
+            const max = (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1;
+            const mathematical: i128 = switch (tag) {
+                .add_wrap, .add_sat => a + b,
+                .sub_wrap, .sub_sat => a - b,
+                .mul_wrap, .mul_sat => a * b,
+                .shl_sat => blk: {
+                    if (b < 0 or b >= int_info.bits) return null;
+                    break :blk a * (@as(i128, 1) << @intCast(b));
+                },
+                else => return null,
+            };
+            const value: i128 = switch (tag) {
+                .add_sat, .sub_sat, .mul_sat, .shl_sat => std.math.clamp(mathematical, min, max),
+                .add_wrap, .sub_wrap, .mul_wrap => blk: {
+                    const modulus = @as(u128, 1) << @intCast(int_info.bits);
+                    const mask = modulus - 1;
+                    const raw = @as(u128, @bitCast(mathematical)) & mask;
+                    const sign_bit = @as(u128, 1) << @intCast(int_info.bits - 1);
+                    break :blk if (raw & sign_bit == 0)
+                        @intCast(raw)
+                    else
+                        @intCast(@as(i256, raw) - @as(i256, modulus));
+                },
+                else => return null,
+            };
+            break :signed if (value >= 0)
+                try analyser.ip.get(.{ .int_u64_value = .{ .ty = result_type, .int = @intCast(value) } })
+            else
+                try analyser.ip.get(.{ .int_i64_value = .{ .ty = result_type, .int = @intCast(value) } });
+        },
+    };
+    return Type.fromIP(analyser, result_type, result_index);
+}
+
 fn resolveIntegerDivisionValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -3898,7 +3982,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| return value;
+                const value = switch (tree.nodeTag(node)) {
+                    .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
+                    else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
+                };
+                if (value) |resolved| return resolved;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
@@ -3958,10 +4046,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const lhs, const rhs = tree.nodeData(node).node_and_node;
             const lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
             if (lhs_ty.is_type_val) return null;
-            if (analyser.evaluate_comptime_values and tag != .shl_sat) {
+            if (analyser.evaluate_comptime_values) {
                 const rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (!rhs_ty.is_type_val) {
-                    if (try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty)) |value| return value;
+                    const value = if (tag == .shl_sat)
+                        try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex())
+                    else
+                        try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty);
+                    if (value) |resolved| return resolved;
                 }
             }
             return lhs_ty.withoutIPIndex(analyser);

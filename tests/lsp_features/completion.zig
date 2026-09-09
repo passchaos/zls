@@ -516,6 +516,70 @@ test "generic function with comptime integer expressions" {
     }
 }
 
+test "generic function with wrapping and saturating comptime integers" {
+    const cases = [_]struct { expression: []const u8, detail: []const u8 }{
+        .{ .expression = "@as(u8, 250) +% 10", .detail = "[4]u8" },
+        .{ .expression = "@as(u8, 250) +| 10", .detail = "[255]u8" },
+        .{ .expression = "@as(u8, 2) -% 3", .detail = "[255]u8" },
+        .{ .expression = "@as(u8, 2) -| 3", .detail = "[0]u8" },
+        .{ .expression = "@as(u8, 40) *% 7", .detail = "[24]u8" },
+        .{ .expression = "@as(u8, 40) *| 7", .detail = "[255]u8" },
+        .{ .expression = "@as(u8, 0x40) <<| 2", .detail = "[255]u8" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Buffer(comptime N: usize) type {{
+            \\    return struct {{ items: [N]u8 }};
+            \\}}
+            \\const buffer: Buffer({s}) = undefined;
+            \\const fields = buffer.<cursor>
+        , .{case.expression});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.detail },
+        });
+    }
+
+    try testCompletion(
+        \\fn Select(comptime N: i8) type {
+        \\    return if (N +% 20 == -116 and N +| 20 == 127)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(120) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime N: i8) type {
+        \\    return if (N -% 20 == 116 and N -| 20 == -128 and @as(i8, 40) *% 4 == -96 and @as(i8, 40) *| 4 == 127)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-120) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime shift: u16) type {
+        \\    return if (@as(i16, 0x4000) <<| shift == 32767)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime size builtins" {
     try testCompletion(
         \\fn Buffer(comptime T: type) type {
