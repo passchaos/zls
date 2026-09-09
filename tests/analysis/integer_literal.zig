@@ -73,6 +73,14 @@ const byte_size_u13 = @sizeOf(u13);
 const wide_clz = @clz(@as(u65535, 0));
 //    ^^^^^^^^ (u16)((unknown value))
 
+const max_u128: u128 = 340282366920938463463374607431768211455;
+const max_u128_equal = max_u128 == 340282366920938463463374607431768211455;
+//    ^^^^^^^^^^^^^^ (bool)(true)
+const max_u128_greater = max_u128 > 5;
+//    ^^^^^^^^^^^^^^^^ (bool)(true)
+const signed_unsigned_order = @as(i128, -1) < max_u128;
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+
 comptime {
     @compileLog(comptime_div);
 }

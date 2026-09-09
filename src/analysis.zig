@@ -2336,8 +2336,8 @@ fn resolveComparisonValue(
     if (rhs_index) |index| {
         if (analyser.ip.isUndefined(index) or analyser.ip.isUnknown(index)) return null;
     }
-    const lhs_int = if (lhs_index) |index| analyser.ip.toInt(index, i128) else null;
-    const rhs_int = if (rhs_index) |index| analyser.ip.toInt(index, i128) else null;
+    const lhs_int = if (lhs_index) |index| analyser.ip.toInt(index, i256) else null;
+    const rhs_int = if (rhs_index) |index| analyser.ip.toInt(index, i256) else null;
     const result = switch (tag) {
         .equal_equal, .bang_equal => blk: {
             const equal = if (lhs_int != null and rhs_int != null)
