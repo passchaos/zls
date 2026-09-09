@@ -200,6 +200,10 @@ const int_from_float_u8_value: u8 = @intFromFloat(@as(f32, 42.75));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(42)
 const int_from_float_i8_value: i8 = @intFromFloat(@as(f64, -42.75));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-42)
+const float_from_int_f32_value: f32 = @floatFromInt(@as(u16, 42));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(42)
+const float_from_int_f64_value: f64 = @floatFromInt(@as(i16, -42));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (f64)(-42)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

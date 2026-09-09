@@ -1657,7 +1657,8 @@ fn resolveCoercedIPValue(
             if (std.mem.eql(u8, name, "@intCast") or
                 std.mem.eql(u8, name, "@truncate") or
                 std.mem.eql(u8, name, "@bitCast") or
-                std.mem.eql(u8, name, "@intFromFloat"))
+                std.mem.eql(u8, name, "@intFromFloat") or
+                std.mem.eql(u8, name, "@floatFromInt"))
             {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, options.node_handle.node).?;
@@ -1669,6 +1670,8 @@ fn resolveCoercedIPValue(
                     .bit_cast
                 else if (std.mem.eql(u8, name, "@intFromFloat"))
                     .int_from_float
+                else if (std.mem.eql(u8, name, "@floatFromInt"))
+                    .float_from_int
                 else
                     .int_cast;
             }
@@ -1680,11 +1683,17 @@ fn resolveCoercedIPValue(
     if (analyser.ip.isUndefined(ip_index)) return null;
     const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
     if (integer_cast) |tag| {
-        if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
         if (tag == .int_from_float) {
+            if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
             if (source_tag != .float and source_tag != .comptime_float) return null;
             return try analyser.intFromFloatValue(ip_ty, ip_index);
         }
+        if (tag == .float_from_int) {
+            if (analyser.ip.zigTypeTag(ip_ty) != .float) return null;
+            if (source_tag != .int and source_tag != .comptime_int) return null;
+            return try analyser.floatFromIntValue(ip_ty, ip_index);
+        }
+        if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
         if (source_tag != .int and source_tag != .comptime_int) return null;
         if (tag == .truncate) return try analyser.truncateIntValue(ip_ty, ip_index);
         if (tag == .bit_cast) return try analyser.bitCastIntValue(ip_ty, ip_index);
@@ -1728,6 +1737,21 @@ fn coerceFloatValue(
         .f128_type => try analyser.ip.get(.{ .float_128_value = float_value }),
         else => null,
     };
+}
+
+fn floatFromIntValue(
+    analyser: *Analyser,
+    dest_ty: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const float_value: f128 = if (analyser.ip.toInt(value, i64)) |signed|
+        @floatFromInt(signed)
+    else if (analyser.ip.toInt(value, u64)) |unsigned|
+        @floatFromInt(unsigned)
+    else
+        return null;
+    const comptime_value = try analyser.ip.get(.{ .float_comptime_value = float_value });
+    return analyser.coerceFloatValue(dest_ty, comptime_value);
 }
 
 fn intFromFloatValue(
