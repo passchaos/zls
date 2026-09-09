@@ -172,6 +172,12 @@ const abs_i8_value = @abs(@as(i8, -128));
 //    ^^^^^^^^^^^^ (u8)(128)
 const abs_u8_value = @abs(@as(u8, 42));
 //    ^^^^^^^^^^^^ (u8)(42)
+const abs_comptime_float_value = @abs(-42.75);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_float)(42.75)
+const abs_f32_value = @abs(@as(f32, -42.75));
+//    ^^^^^^^^^^^^^ (f32)(42.75)
+const abs_f64_value = @abs(@as(f64, -42.75));
+//    ^^^^^^^^^^^^^ (f64)(42.75)
 const bit_reverse_u8_value = @bitReverse(@as(u8, 0b0000_0011));
 //    ^^^^^^^^^^^^^^^^^^^^ (u8)(192)
 const bit_reverse_i8_value = @bitReverse(@as(i8, 1));

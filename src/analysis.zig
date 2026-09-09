@@ -4087,6 +4087,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                                 } });
                                 return Type.fromIP(analyser, result_ty, result_index);
                             }
+                        } else if (scalar_tag == .float or scalar_tag == .comptime_float) {
+                            const value = analyser.floatValue(operand_index) orelse return Type.fromIP(analyser, result_ty, null);
+                            if (!std.math.isFinite(value)) return Type.fromIP(analyser, result_ty, null);
+                            const result_index = try analyser.coerceFloatValue(
+                                result_ty,
+                                try analyser.ip.get(.{ .float_comptime_value = @abs(value) }),
+                            ) orelse return Type.fromIP(analyser, result_ty, null);
+                            return Type.fromIP(analyser, result_ty, result_index);
                         }
                     }
 
