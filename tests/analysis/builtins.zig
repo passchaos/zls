@@ -238,6 +238,16 @@ const float_mul_value = @as(f32, 6.0) * @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(12)
 const float_div_value = @as(f32, 6.0) / @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(3)
+const mixed_float_add_value = @as(f32, 2.5) + 2;
+//    ^^^^^^^^^^^^^^^^^^^^^ (f32)(4.5)
+const mixed_float_sub_value = 7 - @as(f64, 2.5);
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4.5)
+const mixed_float_mul_value = @as(f32, -2.5) * 4;
+//    ^^^^^^^^^^^^^^^^^^^^^ (f32)(-10)
+const mixed_float_div_value = 9 / @as(f64, 2.0);
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4.5)
+const mixed_float_rounding_value = @as(f32, 16777216.0) + 1;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(16777216)
 const mul_add_f32_value = @mulAdd(f32, 2.5, 4.0, -1.0);
 //    ^^^^^^^^^^^^^^^^^ (f32)(9)
 const mul_add_f64_value = @mulAdd(f64, -2.0, 4.0, 1.0);

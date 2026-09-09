@@ -2325,8 +2325,10 @@ fn resolveFloatBinaryValue(
 ) error{OutOfMemory}!?Type {
     const lhs_index = lhs.ipIndex() orelse return null;
     const rhs_index = rhs.ipIndex() orelse return null;
-    const lhs_value = analyser.floatValue(lhs_index) orelse return null;
-    const rhs_value = analyser.floatValue(rhs_index) orelse return null;
+    const lhs_value = analyser.floatValue(lhs_index) orelse
+        analyser.exactFloatFromInt(lhs_index) orelse return null;
+    const rhs_value = analyser.floatValue(rhs_index) orelse
+        analyser.exactFloatFromInt(rhs_index) orelse return null;
     const result_type = try analyser.resolvePeerTypesIP(
         analyser.ip.typeOf(lhs_index),
         analyser.ip.typeOf(rhs_index),

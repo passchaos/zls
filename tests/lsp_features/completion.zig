@@ -909,6 +909,33 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime value: f32) type {
+        \\    return if (value + 2 == 4.5 and 7 - @as(f64, value) == 4.5 and
+        \\        value * 4 == 10 and 9 / @as(f64, value - 0.5) == 4.5)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: f32) type {
+        \\    return if (value + 1 == 16777216)
+        \\        struct { rounded: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(16777216.0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "rounded", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {
