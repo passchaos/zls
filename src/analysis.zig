@@ -2259,6 +2259,25 @@ fn resolveIfConditionValue(analyser: *Analyser, options: ResolveOptions) Error!?
     };
 }
 
+fn internComptimeInt(analyser: *Analyser, value: i256) error{OutOfMemory}!InternPool.Index {
+    if (value >= 0 and value <= std.math.maxInt(u64)) {
+        return analyser.ip.get(.{ .int_u64_value = .{
+            .ty = .comptime_int_type,
+            .int = @intCast(value),
+        } });
+    }
+    if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64)) {
+        return analyser.ip.get(.{ .int_i64_value = .{
+            .ty = .comptime_int_type,
+            .int = @intCast(value),
+        } });
+    }
+
+    var big_int: std.math.big.int.Managed = try .initSet(analyser.gpa, value);
+    defer big_int.deinit();
+    return analyser.ip.getBigInt(.comptime_int_type, big_int.toConst());
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2275,35 +2294,30 @@ fn resolveIntegerBinaryValue(
     };
     const lhs_index = lhs_payload.index orelse return null;
     const rhs_index = rhs_payload.index orelse return null;
-    const lhs_value = analyser.ip.toInt(lhs_index, i128) orelse return null;
-    const rhs_value = analyser.ip.toInt(rhs_index, i128) orelse return null;
+    const lhs_value = analyser.ip.toInt(lhs_index, i256) orelse return null;
+    const rhs_value = analyser.ip.toInt(rhs_index, i256) orelse return null;
 
-    const value: i128 = switch (tag) {
-        .add => std.math.add(i128, lhs_value, rhs_value) catch return null,
-        .sub => std.math.sub(i128, lhs_value, rhs_value) catch return null,
-        .mul => std.math.mul(i128, lhs_value, rhs_value) catch return null,
-        .div => std.math.divTrunc(i128, lhs_value, rhs_value) catch return null,
-        .mod => std.math.mod(i128, lhs_value, rhs_value) catch return null,
+    const value: i256 = switch (tag) {
+        .add => std.math.add(i256, lhs_value, rhs_value) catch return null,
+        .sub => std.math.sub(i256, lhs_value, rhs_value) catch return null,
+        .mul => std.math.mul(i256, lhs_value, rhs_value) catch return null,
+        .div => std.math.divTrunc(i256, lhs_value, rhs_value) catch return null,
+        .mod => std.math.mod(i256, lhs_value, rhs_value) catch return null,
         .bit_and => lhs_value & rhs_value,
         .bit_xor => lhs_value ^ rhs_value,
         .bit_or => lhs_value | rhs_value,
         .shl => blk: {
-            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i128)) return null;
-            break :blk std.math.shlExact(i128, lhs_value, @intCast(rhs_value)) catch return null;
+            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i256)) return null;
+            break :blk std.math.shlExact(i256, lhs_value, @intCast(rhs_value)) catch return null;
         },
         .shr => blk: {
-            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i128)) return null;
+            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i256)) return null;
             break :blk lhs_value >> @intCast(rhs_value);
         },
         else => return null,
     };
 
-    const raw_value = if (value >= 0 and value <= std.math.maxInt(u64))
-        try analyser.ip.get(.{ .int_u64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
-    else if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64))
-        try analyser.ip.get(.{ .int_i64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
-    else
-        return null;
+    const raw_value = try analyser.internComptimeInt(value);
 
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     if (result_type == .comptime_int_type) {

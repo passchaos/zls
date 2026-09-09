@@ -539,6 +539,25 @@ test "generic function with comptime integer expressions" {
     }
 }
 
+test "generic function with full-width comptime integer expressions" {
+    try testCompletion(
+        \\fn Select(comptime N: u128) type {
+        \\    return if (N + 5 == 170141183460469231731687303715884105733 and
+        \\        N - 5 == 170141183460469231731687303715884105723 and
+        \\        N * 1 == 170141183460469231731687303715884105728 and
+        \\        N / 2 == 85070591730234615865843651857942052864 and
+        \\        N % 7 == 2 and (N | 3) == 170141183460469231731687303715884105731)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(170141183460469231731687303715884105728) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with wrapping and saturating comptime integers" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@as(u8, 250) +% 10", .detail = "[4]u8" },
