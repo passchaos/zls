@@ -1173,6 +1173,45 @@ fn resolveStringSliceValue(
     };
 }
 
+fn stringSentinel(analyser: *Analyser, string: Type) ?InternPool.Index {
+    const runtime_type = string.runtimeType(analyser);
+    const pointer_info = switch (runtime_type.data) {
+        .pointer => |info| return switch (info.size) {
+            .one => switch (info.elem_ty.data) {
+                .array => |array_info| known: {
+                    if (array_info.sentinel == .none or array_info.sentinel == .unknown_unknown) return null;
+                    break :known array_info.sentinel;
+                },
+                else => null,
+            },
+            .many, .slice => if (info.sentinel == .none or info.sentinel == .unknown_unknown)
+                null
+            else
+                info.sentinel,
+            .c => null,
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
+            .pointer_type => |info| info,
+            else => return null,
+        },
+        else => return null,
+    };
+    return switch (pointer_info.flags.size) {
+        .one => switch (analyser.ip.indexToKey(pointer_info.elem_type)) {
+            .array_type => |array_info| if (array_info.sentinel == .none or array_info.sentinel == .unknown_unknown)
+                null
+            else
+                array_info.sentinel,
+            else => null,
+        },
+        .many, .slice => if (pointer_info.sentinel == .none or pointer_info.sentinel == .unknown_unknown)
+            null
+        else
+            pointer_info.sentinel,
+        .c => null,
+    };
+}
+
 // TODO: copy indexing logic from Zig compiler to InternPool, and then delete bracketAccessTypeFromIPIndex
 fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index) error{OutOfMemory}!Type {
     std.debug.assert(analyser.ip.typeOf(ip_index) == .type_type);
@@ -1229,13 +1268,18 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
     if (analyser.evaluate_comptime_values and lhs_binding.type.data == .string_value) {
         const bytes = lhs_binding.type.data.string_value.bytes;
         switch (rhs) {
-            .single => |index| if (index != null and index.? < bytes.len) {
-                const byte = bytes[@intCast(index.?)];
-                const value = try analyser.ip.get(.{
-                    .int_u64_value = .{ .ty = .u8_type, .int = byte },
-                });
+            .single => |index| if (index) |i| {
+                const value = if (i < bytes.len)
+                    try analyser.ip.get(.{ .int_u64_value = .{
+                        .ty = .u8_type,
+                        .int = bytes[@intCast(i)],
+                    } })
+                else if (i == bytes.len)
+                    analyser.stringSentinel(lhs_binding.type) orelse return null
+                else
+                    return null;
                 return .{
-                    .type = Type.fromIP(analyser, .u8_type, value),
+                    .type = Type.fromIP(analyser, analyser.ip.typeOf(value), value),
                     .is_const = true,
                 };
             },
