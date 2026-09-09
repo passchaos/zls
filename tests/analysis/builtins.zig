@@ -179,6 +179,10 @@ const int_from_enum = @intFromEnum(IntEnum.second);
 const InferredEnum = enum { zero, one, two };
 const int_from_inferred_enum = @intFromEnum(InferredEnum.two);
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u2)(2)
+const enum_tag_name = @tagName(IntEnum.second);
+//    ^^^^^^^^^^^^^ (*const [6:0]u8)()
+const enum_tag_name_len = enum_tag_name.len;
+//    ^^^^^^^^^^^^^^^^^ (usize)(6)
 
 const panic = @panic("foo");
 //    ^^^^^ (noreturn)()

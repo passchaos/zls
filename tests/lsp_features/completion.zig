@@ -835,6 +835,21 @@ test "generic function with comptime member reflection" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type) type {
+        \\    const name = "field";
+        \\    return if (@hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime local constants" {
@@ -1197,6 +1212,41 @@ test "generic function with comptime intFromEnum" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "generic function with comptime enum tagName length" {
+    try testCompletion(
+        \\const Mode = enum { fast, safety };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    return struct { name: [@tagName(mode).len]u8 };
+        \\}
+        \\const buffer: Buffer(.safety) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "name", .kind = .Field, .detail = "[6]u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { @"快速", slow };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    return struct { name: [@tagName(mode).len]u8 };
+        \\}
+        \\const buffer: Buffer(.@"快速") = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "name", .kind = .Field, .detail = "[6]u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safety };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    return struct { name: [@tagName(mode).len]u8 };
+        \\}
+        \\const buffer: Buffer(undefined) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "name", .kind = .Field, .detail = "[?]u8" },
     });
 }
 

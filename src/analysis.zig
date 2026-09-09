@@ -2126,6 +2126,21 @@ fn comptimeIntValue(analyser: *Analyser, value: u64) error{OutOfMemory}!Type {
     return Type.fromIP(analyser, .comptime_int_type, index);
 }
 
+fn staticStringType(analyser: *Analyser, len: u64) error{OutOfMemory}!Type {
+    const pointer_type = try analyser.ip.get(.{ .pointer_type = .{
+        .elem_type = try analyser.ip.get(.{ .array_type = .{
+            .child = .u8_type,
+            .len = len,
+            .sentinel = .zero_u8,
+        } }),
+        .flags = .{
+            .size = .one,
+            .is_const = true,
+        },
+    } });
+    return Type.fromIP(analyser, pointer_type, null);
+}
+
 fn resolveBitCountValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -3337,6 +3352,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
                     return Type.fromIP(analyser, tag_type, null);
                 },
+                .tag_name => {
+                    if (params.len != 1) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (operand.data == .enum_value) {
+                        return try analyser.staticStringType(operand.data.enum_value.tag.len);
+                    }
+                    return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
+                },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
                     const resolved = try analyser.arena.alloc(Type, params.len);
@@ -3945,18 +3968,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 length += slice.len - 2 + @intFromBool(i != 0);
             }
 
-            const string_literal_type = try analyser.ip.get(.{ .pointer_type = .{
-                .elem_type = try analyser.ip.get(.{ .array_type = .{
-                    .child = .u8_type,
-                    .len = length,
-                    .sentinel = .zero_u8,
-                } }),
-                .flags = .{
-                    .size = .one,
-                    .is_const = true,
-                },
-            } });
-            return Type.fromIP(analyser, string_literal_type, null);
+            return try analyser.staticStringType(length);
         },
         .string_literal => {
             const token_bytes = tree.tokenSlice(tree.nodeMainToken(node));
@@ -3970,18 +3982,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .failure => return null,
             }
 
-            const string_literal_type = try analyser.ip.get(.{ .pointer_type = .{
-                .elem_type = try analyser.ip.get(.{ .array_type = .{
-                    .child = .u8_type,
-                    .len = discarding_writer.count,
-                    .sentinel = .zero_u8,
-                } }),
-                .flags = .{
-                    .size = .one,
-                    .is_const = true,
-                },
-            } });
-            return Type.fromIP(analyser, string_literal_type, null);
+            return try analyser.staticStringType(discarding_writer.count);
         },
         .error_value => {
             const name_token = tree.nodeMainToken(node) + 2;
