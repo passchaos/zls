@@ -1407,6 +1407,24 @@ test "generic function with comptime enum tagName length" {
     });
 }
 
+test "generic function with comptime errorName" {
+    try testCompletion(
+        \\const Fields = struct { Missing: u8 };
+        \\fn Select(comptime err: anyerror) type {
+        \\    const name = @errorName(err);
+        \\    return if (@TypeOf(name) == [:0]const u8 and name.len == 7 and
+        \\        name[0] == 'M' and @hasField(Fields, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(error.Missing) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "enum declarations are not comptime enum values" {
     try testCompletion(
         \\const Mode = enum {

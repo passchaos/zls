@@ -3555,6 +3555,26 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                     return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
                 },
+                .error_name => {
+                    if (params.len != 1) return null;
+                    const result = try analyser.resolveLangrefType(
+                        version_data.builtins.get(call_name).?.return_type,
+                    ) orelse return null;
+                    if (!analyser.evaluate_comptime_values) return result;
+
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return result;
+                    const index = operand.ipIndex() orelse return result;
+                    const error_value = switch (analyser.ip.indexToKey(index)) {
+                        .error_value => |value| value,
+                        else => return result,
+                    };
+                    const bytes = try analyser.ip.string_pool.stringToSliceAlloc(
+                        analyser.store.io,
+                        analyser.arena,
+                        error_value.error_tag_name,
+                    );
+                    return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+                },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
                     const resolved = try analyser.arena.alloc(Type, params.len);
