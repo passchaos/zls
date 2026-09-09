@@ -976,6 +976,22 @@ test "generic function with comptime division builtins" {
     });
 
     try testCompletion(
+        \\fn Select(comptime value: f32) type {
+        \\    return if (@min(value, 4) == 2.5 and @max(4, value) == 4 and
+        \\        @divTrunc(-value * 3, 2) == -3 and @divFloor(-value * 3, 2) == -4 and
+        \\        @divExact(value * 4, 2) == 5 and @mod(-value * 3, 5) == 2.5 and
+        \\        @rem(-value * 3, 5) == -2.5)
+        \\        struct { mixed: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "mixed", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime lhs: f32, comptime rhs: f64) type {
         \\    return if (@divTrunc(lhs, rhs) == -3 and @divFloor(lhs, rhs) == -4 and
         \\        @divExact(@as(f32, 8.0), rhs) == 4)

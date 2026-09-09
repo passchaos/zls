@@ -1758,6 +1758,20 @@ fn exactFloatFromInt(analyser: *Analyser, value: InternPool.Index) ?f128 {
     return null;
 }
 
+fn numericFloatValue(analyser: *Analyser, value: InternPool.Index) ?f128 {
+    return analyser.floatValue(value) orelse analyser.exactFloatFromInt(value);
+}
+
+fn coerceNumericToFloatValue(
+    analyser: *Analyser,
+    dest_ty: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const float_value = analyser.numericFloatValue(value) orelse return null;
+    const comptime_value = try analyser.ip.get(.{ .float_comptime_value = float_value });
+    return analyser.coerceFloatValue(dest_ty, comptime_value);
+}
+
 fn resolveFloatRoundingValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -2325,10 +2339,8 @@ fn resolveFloatBinaryValue(
 ) error{OutOfMemory}!?Type {
     const lhs_index = lhs.ipIndex() orelse return null;
     const rhs_index = rhs.ipIndex() orelse return null;
-    const lhs_value = analyser.floatValue(lhs_index) orelse
-        analyser.exactFloatFromInt(lhs_index) orelse return null;
-    const rhs_value = analyser.floatValue(rhs_index) orelse
-        analyser.exactFloatFromInt(rhs_index) orelse return null;
+    const lhs_value = analyser.numericFloatValue(lhs_index) orelse return null;
+    const rhs_value = analyser.numericFloatValue(rhs_index) orelse return null;
     const result_type = try analyser.resolvePeerTypesIP(
         analyser.ip.typeOf(lhs_index),
         analyser.ip.typeOf(rhs_index),
@@ -2369,8 +2381,8 @@ fn resolveFloatRemainderValue(
 ) error{OutOfMemory}!?Type {
     const lhs_index = lhs.ipIndex() orelse return null;
     const rhs_index = rhs.ipIndex() orelse return null;
-    const lhs_value = analyser.floatValue(lhs_index) orelse return null;
-    const rhs_value = analyser.floatValue(rhs_index) orelse return null;
+    const lhs_value = analyser.numericFloatValue(lhs_index) orelse return null;
+    const rhs_value = analyser.numericFloatValue(rhs_index) orelse return null;
     const result_type = try analyser.resolvePeerTypesIP(
         analyser.ip.typeOf(lhs_index),
         analyser.ip.typeOf(rhs_index),
@@ -2412,8 +2424,8 @@ fn resolveFloatDivisionValue(
 ) error{OutOfMemory}!?Type {
     const lhs_index = lhs.ipIndex() orelse return null;
     const rhs_index = rhs.ipIndex() orelse return null;
-    const lhs_value = analyser.floatValue(lhs_index) orelse return null;
-    const rhs_value = analyser.floatValue(rhs_index) orelse return null;
+    const lhs_value = analyser.numericFloatValue(lhs_index) orelse return null;
+    const rhs_value = analyser.numericFloatValue(rhs_index) orelse return null;
     const result_type = try analyser.resolvePeerTypesIP(
         analyser.ip.typeOf(lhs_index),
         analyser.ip.typeOf(rhs_index),
@@ -4459,11 +4471,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                             }
                         },
                         .float, .comptime_float => {
-                            var selected_value = analyser.floatValue(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
+                            var selected_value = analyser.numericFloatValue(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
                                 return Type.fromIP(analyser, result_type, null);
                             if (!std.math.isFinite(selected_value)) return Type.fromIP(analyser, result_type, null);
                             for (resolved[1..]) |candidate| {
-                                const candidate_value = analyser.floatValue(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
+                                const candidate_value = analyser.numericFloatValue(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
                                     return Type.fromIP(analyser, result_type, null);
                                 if (!std.math.isFinite(candidate_value)) return Type.fromIP(analyser, result_type, null);
                                 const prefer_candidate = switch (tag) {
@@ -4482,7 +4494,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const selected_index = selected.ipIndex().?;
                     if (analyser.ip.typeOf(selected_index) == result_type) return selected;
                     if (analyser.ip.zigTypeTag(result_type) == .float) {
-                        const coerced = try analyser.coerceFloatValue(result_type, selected_index) orelse
+                        const coerced = try analyser.coerceNumericToFloatValue(result_type, selected_index) orelse
                             return Type.fromIP(analyser, result_type, null);
                         return Type.fromIP(analyser, result_type, coerced);
                     }

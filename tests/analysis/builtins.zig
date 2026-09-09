@@ -230,6 +230,10 @@ const float_min_value = @min(@as(f32, 2.5), @as(f64, 4.5));
 //    ^^^^^^^^^^^^^^^ (f64)(2.5)
 const float_max_value = @max(@as(f32, -2.5), @as(f64, -4.5));
 //    ^^^^^^^^^^^^^^^ (f64)(-2.5)
+const mixed_float_min_value = @min(@as(f32, 2.5), 4);
+//    ^^^^^^^^^^^^^^^^^^^^^ (f32)(2.5)
+const mixed_float_max_value = @max(4, @as(f64, 2.5));
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4)
 const float_add_value = @as(f32, 6.0) + @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(8)
 const float_sub_value = @as(f32, 6.0) - @as(f64, 2.0);
@@ -290,6 +294,16 @@ const float_div_floor_value = @divFloor(@as(f32, -7.5), @as(f64, 2.0));
 //    ^^^^^^^^^^^^^^^^^^^^^ (f64)(-4)
 const float_div_exact_value = @divExact(@as(f32, 8.0), @as(f64, 2.0));
 //    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4)
+const mixed_float_div_trunc_value = @divTrunc(@as(f32, -7.5), 2);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-3)
+const mixed_float_div_floor_value = @divFloor(@as(f32, -7.5), 2);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-4)
+const mixed_float_div_exact_value = @divExact(@as(f32, 8.0), 2);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(4)
+const mixed_float_mod_value = @mod(@as(f32, -7.5), 5);
+//    ^^^^^^^^^^^^^^^^^^^^^ (f32)(2.5)
+const mixed_float_rem_value = @rem(@as(f32, -7.5), 5);
+//    ^^^^^^^^^^^^^^^^^^^^^ (f32)(-2.5)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);
