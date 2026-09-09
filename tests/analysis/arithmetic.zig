@@ -98,6 +98,20 @@ const vector_wrapping_negation_value = (-%@as(@Vector(2, u8), .{ 1, 2 }))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
 const vector_float_negation_value = (-@as(@Vector(2, f32), .{ 2.5, -4.5 }))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(4.5)
+const vector_add_wrap_value = (@as(@Vector(2, u8), @splat(255)) +% @as(@Vector(2, u8), @splat(1)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_add_sat_value = (@as(@Vector(2, u8), @splat(255)) +| @as(@Vector(2, u8), @splat(1)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const vector_sub_wrap_value = (@as(@Vector(2, u8), @splat(1)) -% @as(@Vector(2, u8), @splat(2)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const vector_sub_sat_value = (@as(@Vector(2, u8), @splat(1)) -| @as(@Vector(2, u8), @splat(2)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_mul_wrap_value = (@as(@Vector(2, i8), @splat(127)) *% @as(@Vector(2, i8), @splat(2)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (i8)(-2)
+const vector_mul_sat_value = (@as(@Vector(2, i8), @splat(127)) *| @as(@Vector(2, i8), @splat(2)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (i8)(127)
+const vector_shl_sat_value = (@as(@Vector(2, u8), @splat(0x40)) <<| @as(@Vector(2, u3), @splat(2)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(255)
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;

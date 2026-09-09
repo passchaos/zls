@@ -744,6 +744,30 @@ test "generic function with comptime vector unary operators" {
     });
 }
 
+test "generic function with comptime vector wrapping and saturating arithmetic" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const value: @Vector(2, u8) = @splat(N);
+        \\    const one: @Vector(2, u8) = @splat(1);
+        \\    const two: @Vector(2, u8) = @splat(2);
+        \\    const signed_max: @Vector(2, i8) = @splat(127);
+        \\    const signed_two: @Vector(2, i8) = @splat(2);
+        \\    const shifts: @Vector(2, u3) = @splat(2);
+        \\    return if ((value +% one)[0] == 0 and (value +| one)[1] == 255 and
+        \\        (one -% two)[0] == 255 and (one -| two)[1] == 0 and
+        \\        (signed_max *% signed_two)[0] == -2 and (signed_max *| signed_two)[1] == 127 and
+        \\        (@as(@Vector(2, u8), @splat(0x40)) <<| shifts)[0] == 255)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(255) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

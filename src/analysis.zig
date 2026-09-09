@@ -2687,6 +2687,56 @@ fn resolveVectorBinaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn resolveVectorFixedWidthIntegerBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+    result_type_override: ?InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (lhs_vector.len != rhs_vector.len) return null;
+    const lhs_values = analyser.aggregateValues(lhs) orelse return null;
+    const rhs_values = analyser.aggregateValues(rhs) orelse return null;
+    if (lhs_values.len != lhs_vector.len or rhs_values.len != rhs_vector.len) return null;
+
+    const result_type = result_type_override orelse
+        try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const result_vector = switch (analyser.ip.indexToKey(result_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_values.at(@intCast(i), analyser.ip));
+        const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_values.at(@intCast(i), analyser.ip));
+        const result = try analyser.resolveFixedWidthIntegerBinaryValue(
+            tag,
+            lhs_element,
+            rhs_element,
+            result_vector.child,
+        );
+        value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(result_vector.child) else try analyser.ip.getUnknown(result_vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn floatRemainderValue(comptime T: type, tag: std.zig.BuiltinFn.Tag, lhs: f128, rhs: f128) ?f128 {
     const a: T = @floatCast(lhs);
     const b: T = @floatCast(rhs);
@@ -5941,7 +5991,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
                 const value = switch (tree.nodeTag(node)) {
-                    .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
+                    .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null) orelse
+                        try analyser.resolveVectorFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
                     else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveFloatBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveVectorBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
@@ -6014,7 +6065,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 const rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (!rhs_ty.is_type_val) {
                     const value = if (tag == .shl_sat)
-                        try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex())
+                        try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex()) orelse
+                            try analyser.resolveVectorFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex())
                     else
                         try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty);
                     if (value) |resolved| return resolved;
