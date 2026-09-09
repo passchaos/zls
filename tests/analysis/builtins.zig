@@ -363,6 +363,10 @@ const enum_tag_name_len = enum_tag_name.len;
 //    ^^^^^^^^^^^^^^^^^ (usize)(6)
 const enum_from_int: IntEnum = @enumFromInt(5);
 //    ^^^^^^^^^^^^^ (IntEnum)()
+const WideEnum = enum(u128) { low = 1, high = 170141183460469231731687303715884105728 };
+const wide_enum_from_int: WideEnum = @enumFromInt(170141183460469231731687303715884105728);
+const wide_enum_to_int = @intFromEnum(wide_enum_from_int);
+//    ^^^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
 
 const panic = @panic("foo");
 //    ^^^^^ (noreturn)()

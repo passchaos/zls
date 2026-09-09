@@ -2004,6 +2004,21 @@ test "generic function with comptime enum switch" {
 
 test "generic function with comptime intFromEnum" {
     try testCompletion(
+        \\const Mode = enum(u128) { low = 1, high = 170141183460469231731687303715884105728 };
+        \\fn Select(comptime raw: u128) type {
+        \\    const mode: Mode = @enumFromInt(raw);
+        \\    return if (mode == .high and @intFromEnum(mode) == raw)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(170141183460469231731687303715884105728) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\const Mode = enum(u8) { fast = 3, safe = 7 };
         \\fn Select(comptime mode: Mode) type {
         \\    return if (mode == .safe)

@@ -2074,7 +2074,7 @@ fn resolveEnumValueTag(
             var buffer: [2]Ast.Node.Index = undefined;
             const params = tree.builtinCallParams(&buffer, node_handle.node).?;
             if (params.len != 1) return null;
-            const int_value = try analyser.resolveIntegerLiteral(i128, .of(params[0], node_handle.handle)) orelse return null;
+            const int_value = try analyser.resolveIntegerLiteral(i256, .of(params[0], node_handle.handle)) orelse return null;
             break :tag try analyser.resolveEnumTagFromIntValue(enum_type, int_value) orelse return null;
         },
         else => return null,
@@ -2128,7 +2128,7 @@ fn resolveEnumTagIntValue(
         break :blk try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
     };
 
-    var next_value: ?i128 = 0;
+    var next_value: ?i256 = 0;
     for (declaration.ast.members) |member| {
         const field = tree.fullContainerField(member) orelse continue;
         if (field.ast.value_expr.unwrap()) |value_expr| {
@@ -2136,18 +2136,13 @@ fn resolveEnumTagIntValue(
                 .node_handle = .of(value_expr, handle),
                 .container_type = enum_type,
             });
-            next_value = if (value_index) |index| analyser.ip.toInt(index, i128) else null;
+            next_value = if (value_index) |index| analyser.ip.toInt(index, i256) else null;
         }
 
         const field_name = try analyser.identifierTokenName(tree, field.ast.main_token) orelse continue;
         if (std.mem.eql(u8, field_name, tag)) {
             const value = next_value orelse return null;
-            const raw = if (value >= 0 and value <= std.math.maxInt(u64))
-                try analyser.ip.get(.{ .int_u64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
-            else if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64))
-                try analyser.ip.get(.{ .int_i64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
-            else
-                return null;
+            const raw = try analyser.internComptimeInt(value);
             var err_msg: ErrorMsg = undefined;
             const coerced = try analyser.ip.coerce(analyser.arena, tag_type, raw, builtin.target, &err_msg);
             if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
@@ -2155,7 +2150,7 @@ fn resolveEnumTagIntValue(
         }
 
         if (next_value) |value| {
-            next_value = std.math.add(i128, value, 1) catch null;
+            next_value = std.math.add(i256, value, 1) catch null;
         }
     }
     return null;
@@ -2164,7 +2159,7 @@ fn resolveEnumTagIntValue(
 fn resolveEnumTagFromIntValue(
     analyser: *Analyser,
     enum_type: Type,
-    int_value: i128,
+    int_value: i256,
 ) Error!?[]const u8 {
     const container = switch (enum_type.data) {
         .container => |container| container,
@@ -2177,7 +2172,7 @@ fn resolveEnumTagFromIntValue(
     const declaration = tree.fullContainerDecl(&buffer, node) orelse return null;
     if (tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return null;
 
-    var next_value: ?i128 = 0;
+    var next_value: ?i256 = 0;
     for (declaration.ast.members) |member| {
         const field = tree.fullContainerField(member) orelse continue;
         if (field.ast.value_expr.unwrap()) |value_expr| {
@@ -2185,13 +2180,13 @@ fn resolveEnumTagFromIntValue(
                 .node_handle = .of(value_expr, handle),
                 .container_type = enum_type,
             });
-            next_value = if (value_index) |index| analyser.ip.toInt(index, i128) else null;
+            next_value = if (value_index) |index| analyser.ip.toInt(index, i256) else null;
         }
 
         const tag = try analyser.identifierTokenName(tree, field.ast.main_token) orelse continue;
         if (next_value == int_value) return tag;
         if (next_value) |value| {
-            next_value = std.math.add(i128, value, 1) catch null;
+            next_value = std.math.add(i256, value, 1) catch null;
         }
     }
     return null;
