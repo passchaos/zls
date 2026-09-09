@@ -701,6 +701,23 @@ test "generic function with comptime vector arithmetic" {
     });
 }
 
+test "generic function with comptime vector comparison" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const lhs: @Vector(4, u8) = .{ 1, N, 3, 4 };
+        \\    const rhs: @Vector(4, u8) = .{ 1, 5, 2, 4 };
+        \\    return if (!@reduce(.And, lhs == rhs) and @reduce(.Or, lhs < rhs))
+        \\        struct { compared: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "compared", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {

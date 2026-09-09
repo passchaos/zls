@@ -86,6 +86,10 @@ const vector_mod_value = (@as(@Vector(2, u8), .{ 8, 10 }) % @as(@Vector(2, u8), 
 //    ^^^^^^^^^^^^^^^^ (u8)(2)
 const vector_float_div_value = (@as(@Vector(2, f32), .{ 8.0, 5.0 }) / @as(@Vector(2, f32), .{ 2.0, 2.0 }))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (f32)(2.5)
+const vector_equal_value = (@as(@Vector(2, u8), .{ 1, 2 }) == @as(@Vector(2, u8), .{ 1, 3 }))[0];
+//    ^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_less_value = (@as(@Vector(2, i8), .{ 1, 4 }) < @as(@Vector(2, i8), .{ 2, 3 }))[1];
+//    ^^^^^^^^^^^^^^^^^ (bool)(false)
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;

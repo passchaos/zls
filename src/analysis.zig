@@ -3124,6 +3124,53 @@ fn resolveComparisonValue(
     return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
 }
 
+fn resolveVectorComparisonValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (lhs_vector.len != rhs_vector.len) return null;
+    if (try analyser.resolvePeerTypesIP(lhs_vector.child, rhs_vector.child) == null) return null;
+
+    const result_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = lhs_vector.len,
+        .child = .bool_type,
+    } });
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    if (lhs_values == null or rhs_values == null) return Type.fromIP(analyser, result_type, null);
+    if (lhs_values.?.len != lhs_vector.len or rhs_values.?.len != rhs_vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const lhs_value = lhs_values.?.at(@intCast(i), analyser.ip);
+        const rhs_value = rhs_values.?.at(@intCast(i), analyser.ip);
+        const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_value);
+        const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_value);
+        const comparison = analyser.resolveComparisonValue(tag, lhs_element, rhs_element);
+        value.* = if (comparison) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(.bool_type) else try analyser.ip.getUnknown(.bool_type);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn resolveComparisonBool(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -5534,6 +5581,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 var lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
                 var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
+                if (try analyser.resolveVectorComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| {
+                    return value;
+                }
                 if (tree.nodeTag(node) == .equal_equal or tree.nodeTag(node) == .bang_equal) {
                     if (lhs_ty.data == .enum_value and rhs_ty.data != .enum_value) {
                         const enum_type = lhs_ty.data.enum_value.enum_type.*;
