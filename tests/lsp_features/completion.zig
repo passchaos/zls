@@ -580,6 +580,52 @@ test "generic function with comptime size builtins" {
     });
 }
 
+test "generic function with comptime value builtins" {
+    const cases = [_]struct { expression: []const u8, detail: []const u8 }{
+        .{ .expression = "@intFromBool(true)", .detail = "[1]u8" },
+        .{ .expression = "@intFromBool(false)", .detail = "[0]u8" },
+        .{ .expression = "@min(4, 7)", .detail = "[4]u8" },
+        .{ .expression = "@max(4, 7)", .detail = "[7]u8" },
+        .{ .expression = "@min(9, 4, 7)", .detail = "[4]u8" },
+        .{ .expression = "@max(4, 9, 7)", .detail = "[9]u8" },
+        .{ .expression = "@min(@as(u8, 4), 7)", .detail = "[4]u8" },
+        .{ .expression = "@clz(@as(u8, 0b00110000))", .detail = "[2]u8" },
+        .{ .expression = "@ctz(@as(u8, 0b00110000))", .detail = "[4]u8" },
+        .{ .expression = "@popCount(@as(u8, 0b00110000))", .detail = "[2]u8" },
+        .{ .expression = "@clz(@as(u13, 0b1_0000))", .detail = "[8]u8" },
+        .{ .expression = "@ctz(@as(u13, 0b1_0000))", .detail = "[4]u8" },
+        .{ .expression = "@popCount(@as(i8, -16))", .detail = "[4]u8" },
+        .{ .expression = "@clz(@as(u8, 0))", .detail = "[8]u8" },
+        .{ .expression = "@ctz(@as(u8, 0))", .detail = "[8]u8" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Buffer(comptime N: usize) type {{
+            \\    return struct {{ items: [N]u8 }};
+            \\}}
+            \\const buffer: Buffer({s}) = undefined;
+            \\const fields = buffer.<cursor>
+        , .{case.expression});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.detail },
+        });
+    }
+
+    try testCompletion(
+        \\fn Select(comptime N: comptime_int) type {
+        \\    return if (@min(N, -2) == -3)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-3) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime local constants" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

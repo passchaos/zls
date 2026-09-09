@@ -70,6 +70,9 @@ const bit_size_u13 = @bitSizeOf(u13);
 const byte_size_u13 = @sizeOf(u13);
 //    ^^^^^^^^^^^^^ (comptime_int)(2)
 
+const wide_clz = @clz(@as(u65535, 0));
+//    ^^^^^^^^ (u16)((unknown value))
+
 comptime {
     @compileLog(comptime_div);
 }

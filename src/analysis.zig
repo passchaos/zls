@@ -1910,6 +1910,51 @@ fn comptimeIntValue(analyser: *Analyser, value: u64) error{OutOfMemory}!Type {
     return Type.fromIP(analyser, .comptime_int_type, index);
 }
 
+fn resolveBitCountValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const index = payload.index orelse return null;
+    if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
+    const int_info = analyser.ip.intInfo(payload.type, builtin.target);
+    if (int_info.bits == 0 or int_info.bits > 128) return null;
+
+    const raw: u128 = switch (int_info.signedness) {
+        .unsigned => analyser.ip.toInt(index, u128) orelse return null,
+        .signed => signed: {
+            const signed_value = analyser.ip.toInt(index, i128) orelse return null;
+            const bits: u128 = @bitCast(signed_value);
+            const mask = if (int_info.bits == 128)
+                std.math.maxInt(u128)
+            else
+                (@as(u128, 1) << @intCast(int_info.bits)) - 1;
+            break :signed bits & mask;
+        },
+    };
+    const value: u64 = switch (tag) {
+        .clz => if (raw == 0) int_info.bits else @clz(raw) - (128 - int_info.bits),
+        .ctz => if (raw == 0) int_info.bits else @ctz(raw),
+        .pop_count => @popCount(raw),
+        else => return null,
+    };
+
+    const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, int_info.bits) + 1));
+    const result_type = try analyser.ip.get(.{ .int_type = .{
+        .signedness = .unsigned,
+        .bits = result_bits,
+    } });
+    const result_index = try analyser.ip.get(.{ .int_u64_value = .{
+        .ty = result_type,
+        .int = value,
+    } });
+    return Type.fromIP(analyser, result_type, result_index);
+}
+
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
     .{ "anyerror", .anyerror_type },
     .{ "anyframe", .anyframe_type },
@@ -2992,6 +3037,74 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         else => unreachable,
                     } orelse return Type.fromIP(analyser, .comptime_int_type, null);
                     return try analyser.comptimeIntValue(value);
+                },
+                .int_from_bool => {
+                    if (params.len != 1) return null;
+                    if (!analyser.evaluate_comptime_values) {
+                        return Type.fromIP(analyser, .u1_type, null);
+                    }
+                    const value = try analyser.resolveBoolValue(.of(params[0], handle)) orelse
+                        return Type.fromIP(analyser, .u1_type, null);
+                    return Type.fromIP(analyser, .u1_type, if (value) .one_u1 else .zero_u1);
+                },
+                .min, .max => |tag| {
+                    if (params.len < 2) return null;
+                    const resolved = try analyser.arena.alloc(Type, params.len);
+                    const types = try analyser.arena.alloc(InternPool.Index, params.len);
+                    for (params, resolved, types) |param, *value, *ty| {
+                        value.* = try analyser.resolveTypeOfNodeInternal(.of(param, handle)) orelse return null;
+                        if (value.is_type_val) return null;
+                        ty.* = (try value.typeOf(analyser)).ipIndex() orelse return null;
+                    }
+
+                    const result_type = try analyser.ip.resolvePeerTypes(types, builtin.target);
+                    if (result_type == .none) return null;
+                    if (!analyser.evaluate_comptime_values) {
+                        return Type.fromIP(analyser, result_type, null);
+                    }
+
+                    var selected = resolved[0];
+                    var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i128) orelse
+                        return Type.fromIP(analyser, result_type, null);
+                    for (resolved[1..]) |candidate| {
+                        const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i128) orelse
+                            return Type.fromIP(analyser, result_type, null);
+                        const prefer_candidate = switch (tag) {
+                            .min => candidate_value < selected_value,
+                            .max => candidate_value > selected_value,
+                            else => unreachable,
+                        };
+                        if (prefer_candidate) {
+                            selected = candidate;
+                            selected_value = candidate_value;
+                        }
+                    }
+                    const selected_index = selected.ipIndex().?;
+                    if (analyser.ip.typeOf(selected_index) == result_type) return selected;
+                    var err_msg: ErrorMsg = undefined;
+                    const coerced = try analyser.ip.coerce(analyser.arena, result_type, selected_index, builtin.target, &err_msg);
+                    if (coerced == .none or analyser.ip.isUnknown(coerced)) {
+                        return Type.fromIP(analyser, result_type, null);
+                    }
+                    return Type.fromIP(analyser, result_type, coerced);
+                },
+                .clz, .ctz, .pop_count => |tag| {
+                    if (params.len != 1) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (operand.is_type_val) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveBitCountValue(tag, operand)) |value| return value;
+                    }
+                    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+                    if (analyser.ip.zigTypeTag(operand_type) != .int) return null;
+                    const bits = analyser.ip.intInfo(operand_type, builtin.target).bits;
+                    if (bits == 0) return null;
+                    const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, bits) + 1));
+                    const result_type = try analyser.ip.get(.{ .int_type = .{
+                        .signedness = .unsigned,
+                        .bits = result_bits,
+                    } });
+                    return Type.fromIP(analyser, result_type, null);
                 },
                 .import => {
                     if (params.len == 0) return null;
