@@ -669,6 +669,7 @@ test "generic function with comptime size builtins" {
 
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
+        .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },
         .{ .expression = "@intFromFloat(@abs(@as(f32, -4.75)))", .detail = "[4]u8" },
         .{ .expression = "@min(@as(u128, 340282366920938463463374607431768211455), 7)", .detail = "[7]u8" },
         .{ .expression = "@bitReverse(@as(u8, 0b0000_0011))", .detail = "[192]u8" },

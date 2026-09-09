@@ -1778,6 +1778,21 @@ fn resolveFloatRoundingValue(
     return Type.fromIP(analyser, payload.type, result_index);
 }
 
+fn resolveSqrtValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const index = payload.index orelse return null;
+    const value = analyser.floatValue(index) orelse return null;
+    if (!std.math.isFinite(value) or value < 0) return null;
+    const result_index = try analyser.coerceFloatValue(
+        payload.type,
+        try analyser.ip.get(.{ .float_comptime_value = @sqrt(value) }),
+    ) orelse return null;
+    return Type.fromIP(analyser, payload.type, result_index);
+}
+
 fn floatFromIntValue(
     analyser: *Analyser,
     dest_ty: InternPool.Index,
@@ -4001,7 +4016,6 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[1], handle))) orelse return null;
                     return try ty.instanceTypeVal(analyser);
                 },
-                .sqrt,
                 .sin,
                 .cos,
                 .tan,
@@ -4018,6 +4032,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         else => return null,
                     };
                     if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
+                    return Type.fromIP(analyser, payload.type, null);
+                },
+                .sqrt => {
+                    if (params.len != 1) return null;
+                    const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
+                    const payload = switch (ty.data) {
+                        .ip_index => |payload| payload,
+                        else => return null,
+                    };
+                    if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
+                    if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(payload.type) != .vector) {
+                        if (try analyser.resolveSqrtValue(ty)) |value| return value;
+                    }
                     return Type.fromIP(analyser, payload.type, null);
                 },
                 .floor,
