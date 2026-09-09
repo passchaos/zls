@@ -130,6 +130,12 @@ const array_init_inferred_len_0 = [_]u8{};
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ ([0]u8)()
 const array_init_inferred_len_3 = [_]u8{ 1, 2, 3 };
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ ([3]u8)()
+const array_value = [_]u8{ 2, 4, 6 };
+const array_value_index = array_value[1];
+//    ^^^^^^^^^^^^^^^^^ (u8)(4)
+const explicit_array_value = [3]u8{ 3, 5, 7 };
+const explicit_array_value_index = explicit_array_value[2];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(7)
 
 //
 // Array concatenation

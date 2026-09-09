@@ -533,6 +533,38 @@ test "generic function with comptime tuple values" {
     });
 }
 
+test "generic function with comptime array values" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const inferred = [_]u8{ 2, N, 6 };
+        \\    const explicit = [3]u8{ 3, 5, 7 };
+        \\    return if (inferred[1] == 4 and explicit[2] == 7)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const values = [2]u8{ N, runtime };
+        \\    return if (values[0] == 4)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {

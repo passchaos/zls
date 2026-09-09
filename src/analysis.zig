@@ -1150,29 +1150,39 @@ pub fn resolveBracketAccessType(analyser: *Analyser, lhs: Type, rhs: BracketAcce
     return binding.type;
 }
 
-fn resolveTupleValueAt(analyser: *Analyser, ty: Type, index: u64) ?Type {
+fn resolveAggregateValueAt(analyser: *Analyser, ty: Type, index: u64) ?Type {
     if (!analyser.evaluate_comptime_values) return null;
     const payload = switch (ty.data) {
         .ip_index => |payload| payload,
         else => return null,
     };
-    const tuple = switch (analyser.ip.indexToKey(payload.type)) {
-        .tuple_type => |tuple| tuple,
+    const element_type = switch (analyser.ip.indexToKey(payload.type)) {
+        .tuple_type => |tuple| blk: {
+            if (index >= tuple.values.len) return null;
+            break :blk tuple.types.at(@intCast(index), analyser.ip);
+        },
+        .array_type => |array| blk: {
+            if (index >= array.len) return null;
+            break :blk array.child;
+        },
         else => return null,
     };
-    if (index >= tuple.values.len) return null;
     if (payload.index) |value_index| {
         if (analyser.ip.indexToKey(value_index) == .aggregate) {
             const aggregate = analyser.ip.indexToKey(value_index).aggregate;
             if (aggregate.ty != payload.type or index >= aggregate.values.len) return null;
             const value = aggregate.values.at(@intCast(index), analyser.ip);
             if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value)) return null;
-            return Type.fromIP(analyser, tuple.types.at(@intCast(index), analyser.ip), value);
+            return Type.fromIP(analyser, element_type, value);
         }
     }
+    const tuple = switch (analyser.ip.indexToKey(payload.type)) {
+        .tuple_type => |tuple| tuple,
+        else => return null,
+    };
     const value = tuple.values.at(@intCast(index), analyser.ip);
     if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value)) return null;
-    return Type.fromIP(analyser, tuple.types.at(@intCast(index), analyser.ip), value);
+    return Type.fromIP(analyser, element_type, value);
 }
 
 fn resolveStringSliceValue(
@@ -1196,6 +1206,32 @@ fn resolveStringSliceValue(
         },
         .is_const = true,
     };
+}
+
+fn resolveArrayValue(
+    analyser: *Analyser,
+    array_type: Type,
+    elements: []const Ast.Node.Index,
+    handle: *DocumentStore.Handle,
+) Error!?Type {
+    const type_index = array_type.ipIndex() orelse return null;
+    const array = switch (analyser.ip.indexToKey(type_index)) {
+        .array_type => |array| array,
+        else => return null,
+    };
+    if (array.len != elements.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, elements.len);
+    defer analyser.gpa.free(values);
+    for (elements, values) |element, *value| {
+        value.* = try analyser.resolveCoercedIPValue(array.child, .of(element, handle)) orelse
+            try analyser.ip.getUnknown(array.child);
+    }
+    const aggregate = try analyser.ip.get(.{ .aggregate = .{
+        .ty = type_index,
+        .values = try analyser.ip.getIndexSlice(values),
+    } });
+    return Type.fromIP(analyser, type_index, aggregate);
 }
 
 fn stringSentinel(analyser: *Analyser, string: Type) ?InternPool.Index {
@@ -1332,7 +1368,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
     }
     if (rhs == .single) {
         if (rhs.single) |index| {
-            if (analyser.resolveTupleValueAt(lhs_binding.type, index)) |value| {
+            if (analyser.resolveAggregateValueAt(lhs_binding.type, index)) |value| {
                 return .{ .type = value, .is_const = true };
             }
         }
@@ -1459,7 +1495,7 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
     }
     if (allDigits(name)) {
         const index = std.fmt.parseUnsigned(u64, name, 10) catch return null;
-        if (analyser.resolveTupleValueAt(ty, index)) |value| return value;
+        if (analyser.resolveAggregateValueAt(ty, index)) |value| return value;
     }
 
     const runtime_ty = ty.runtimeType(analyser);
@@ -4151,11 +4187,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const array_init_info = tree.fullArrayInit(&buffer, node).?;
 
             if (array_init_info.ast.type_expr.unwrap()) |type_expr| blk: {
-                const array_ty = try analyser.resolveTypeOfNode(.of(type_expr, handle)) orelse break :blk;
+                var array_ty = try analyser.resolveTypeOfNode(.of(type_expr, handle)) orelse break :blk;
                 if (array_ty.data == .array and array_ty.data.array.elem_count == null) {
-                    var ty = array_ty;
-                    ty.data.array.elem_count = array_init_info.ast.elements.len;
-                    return try ty.instanceTypeVal(analyser);
+                    const info = array_ty.data.array;
+                    array_ty = try Type.createArrayType(
+                        analyser,
+                        array_init_info.ast.elements.len,
+                        info.sentinel,
+                        info.elem_ty.*,
+                    );
+                }
+                if (analyser.evaluate_comptime_values) {
+                    if (try analyser.resolveArrayValue(array_ty, array_init_info.ast.elements, handle)) |value| {
+                        return value;
+                    }
                 }
                 return try array_ty.instanceTypeVal(analyser);
             }
