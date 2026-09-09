@@ -4183,6 +4183,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 length += slice.len - 2 + @intFromBool(i != 0);
             }
 
+            if (analyser.evaluate_comptime_values) {
+                const bytes = try analyser.arena.alloc(u8, length);
+                var offset: usize = 0;
+                for (start..end + 1, 0..) |token_index, i| {
+                    const slice = tree.tokenSlice(@intCast(token_index))[2..];
+                    if (i != 0) {
+                        bytes[offset] = '\n';
+                        offset += 1;
+                    }
+                    @memcpy(bytes[offset..][0..slice.len], slice);
+                    offset += slice.len;
+                }
+                std.debug.assert(offset == bytes.len);
+                return try analyser.stringValue(bytes);
+            }
             return try analyser.staticStringType(length);
         },
         .string_literal => {

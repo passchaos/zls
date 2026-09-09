@@ -769,6 +769,39 @@ test "generic function with comptime member reflection" {
     try testCompletion(
         \\const S = struct { field: u8 };
         \\fn Select(comptime T: type, comptime name: []const u8) type {
+        \\    return if (@hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S,
+        \\    \\field
+        \\) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\const S = struct { hello: u8, world: u8 };
+        \\fn Select(comptime T: type, comptime name: []const u8) type {
+        \\    return if (name.len == 11 and name[5] == '\n' and
+        \\        @hasField(T, name[0..5]) and @hasField(T, name[6..]))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S,
+        \\    \\hello
+        \\    \\world
+        \\) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type, comptime name: []const u8) type {
         \\    return if (@hasField(T, name[1..]))
         \\        struct { matched: u8 }
         \\    else
