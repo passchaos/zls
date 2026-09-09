@@ -34,9 +34,18 @@ store: *DocumentStore,
 ip: *InternPool,
 resolved_callsites: std.AutoHashMapUnmanaged(Declaration.Param, ?Type) = .empty,
 resolved_nodes: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
+resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
+resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
+resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
 /// avoid unnecessarily parsing number literals
 resolve_number_literal_values: bool,
+/// Evaluate basic comptime expressions instead of preserving only their type.
+evaluate_comptime_values: bool,
+/// Select a known branch while evaluating comptime control flow.
+evaluate_comptime_control_flow: bool,
+/// Scoped bindings must survive recursive resolution without an explicit container.
+generic_bindings: ?*const TokenToTypeMap,
 /// handle of the doc where the request originated
 root_handle: ?*DocumentStore.Handle,
 max_conditional_combos: usize = 200,
@@ -59,6 +68,9 @@ pub fn init(
         .ip = ip,
         .collect_callsite_references = true,
         .resolve_number_literal_values = false,
+        .evaluate_comptime_values = false,
+        .evaluate_comptime_control_flow = false,
+        .generic_bindings = null,
         .root_handle = root_handle,
     };
 }
@@ -66,6 +78,9 @@ pub fn init(
 pub fn deinit(self: *Analyser) void {
     self.resolved_callsites.deinit(self.gpa);
     self.resolved_nodes.deinit(self.gpa);
+    self.resolved_values.deinit(self.gpa);
+    self.resolved_control_flow_values.deinit(self.gpa);
+    self.resolving_specialized_nodes.deinit(self.gpa);
 }
 
 fn allocType(analyser: *Analyser, ty: Type) error{OutOfMemory}!*Type {
@@ -1449,8 +1464,16 @@ fn resolveCoercedIPValue(
 
 fn resolveInternPoolValue(analyser: *Analyser, options: ResolveOptions) Error!?InternPool.Index {
     const old_resolve_number_literal_values = analyser.resolve_number_literal_values;
+    const old_evaluate_comptime_values = analyser.evaluate_comptime_values;
+    const old_evaluate_comptime_control_flow = analyser.evaluate_comptime_control_flow;
     analyser.resolve_number_literal_values = true;
-    defer analyser.resolve_number_literal_values = old_resolve_number_literal_values;
+    analyser.evaluate_comptime_values = true;
+    analyser.evaluate_comptime_control_flow = true;
+    defer {
+        analyser.resolve_number_literal_values = old_resolve_number_literal_values;
+        analyser.evaluate_comptime_values = old_evaluate_comptime_values;
+        analyser.evaluate_comptime_control_flow = old_evaluate_comptime_control_flow;
+    }
 
     const resolved_length = try analyser.resolveTypeOfNode(options) orelse return null;
     switch (resolved_length.data) {
@@ -1459,9 +1482,326 @@ fn resolveInternPoolValue(analyser: *Analyser, options: ResolveOptions) Error!?I
     }
 }
 
+fn resolveComptimeValue(analyser: *Analyser, options: ResolveOptions) Error!?Type {
+    const old_resolve_number_literal_values = analyser.resolve_number_literal_values;
+    const old_evaluate_comptime_values = analyser.evaluate_comptime_values;
+    const old_evaluate_comptime_control_flow = analyser.evaluate_comptime_control_flow;
+    analyser.resolve_number_literal_values = true;
+    analyser.evaluate_comptime_values = true;
+    analyser.evaluate_comptime_control_flow = true;
+    defer {
+        analyser.resolve_number_literal_values = old_resolve_number_literal_values;
+        analyser.evaluate_comptime_values = old_evaluate_comptime_values;
+        analyser.evaluate_comptime_control_flow = old_evaluate_comptime_control_flow;
+    }
+
+    const value = try analyser.resolveTypeOfNode(options) orelse return null;
+    return switch (value.data) {
+        .ip_index => |payload| if (payload.index != null) value else null,
+        .enum_value => value,
+        else => null,
+    };
+}
+
+fn resolveEnumValueTag(
+    analyser: *Analyser,
+    enum_type: Type,
+    node_handle: NodeWithHandle,
+) Error!?[]const u8 {
+    if (!enum_type.isEnumType()) return null;
+    const tree = &node_handle.handle.tree;
+    const tag = switch (tree.nodeTag(node_handle.node)) {
+        .enum_literal => offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(node_handle.node)),
+        .field_access => tag: {
+            const lhs_node, const name_token = tree.nodeData(node_handle.node).node_and_token;
+            const lhs = try analyser.resolveTypeOfNodeInternal(.of(lhs_node, node_handle.handle)) orelse return null;
+            if (!lhs.eql(enum_type)) return null;
+            break :tag offsets.identifierTokenToNameSlice(tree, name_token);
+        },
+        else => return null,
+    };
+    const decl = try enum_type.lookupSymbol(analyser, tag) orelse return null;
+    if (decl.decl != .ast_node or !decl.handle.tree.nodeTag(decl.decl.ast_node).isContainerField()) return null;
+    return tag;
+}
+
+fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) error{OutOfMemory}!Type {
+    return .{
+        .data = .{ .enum_value = .{
+            .enum_type = try analyser.allocType(enum_type),
+            .tag = tag,
+        } },
+        .is_type_val = false,
+    };
+}
+
 fn resolveIntegerLiteral(analyser: *Analyser, comptime T: type, options: ResolveOptions) Error!?T {
     const ip_index = try analyser.resolveInternPoolValue(options) orelse return null;
     return analyser.ip.toInt(ip_index, T);
+}
+
+fn resolveBoolValue(analyser: *Analyser, options: ResolveOptions) Error!?bool {
+    return switch (try analyser.resolveInternPoolValue(options) orelse return null) {
+        .bool_true => true,
+        .bool_false => false,
+        else => null,
+    };
+}
+
+fn resolveIntegerBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_index = lhs_payload.index orelse return null;
+    const rhs_index = rhs_payload.index orelse return null;
+    const lhs_value = analyser.ip.toInt(lhs_index, i128) orelse return null;
+    const rhs_value = analyser.ip.toInt(rhs_index, i128) orelse return null;
+
+    const value: i128 = switch (tag) {
+        .add => std.math.add(i128, lhs_value, rhs_value) catch return null,
+        .sub => std.math.sub(i128, lhs_value, rhs_value) catch return null,
+        .mul => std.math.mul(i128, lhs_value, rhs_value) catch return null,
+        .div => std.math.divTrunc(i128, lhs_value, rhs_value) catch return null,
+        .mod => std.math.mod(i128, lhs_value, rhs_value) catch return null,
+        .bit_and => lhs_value & rhs_value,
+        .bit_xor => lhs_value ^ rhs_value,
+        .bit_or => lhs_value | rhs_value,
+        .shl => blk: {
+            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i128)) return null;
+            break :blk std.math.shlExact(i128, lhs_value, @intCast(rhs_value)) catch return null;
+        },
+        .shr => blk: {
+            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i128)) return null;
+            break :blk lhs_value >> @intCast(rhs_value);
+        },
+        else => return null,
+    };
+
+    const raw_value = if (value >= 0 and value <= std.math.maxInt(u64))
+        try analyser.ip.get(.{ .int_u64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
+    else if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64))
+        try analyser.ip.get(.{ .int_i64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
+    else
+        return null;
+
+    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    if (result_type == .comptime_int_type) {
+        return Type.fromIP(analyser, result_type, raw_value);
+    }
+
+    var err_msg: ErrorMsg = undefined;
+    const coerced = try analyser.ip.coerce(analyser.arena, result_type, raw_value, builtin.target, &err_msg);
+    if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
+    return Type.fromIP(analyser, result_type, coerced);
+}
+
+fn resolveComparisonValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) ?Type {
+    if (lhs.data == .enum_value and rhs.data == .enum_value) {
+        const lhs_value = lhs.data.enum_value;
+        const rhs_value = rhs.data.enum_value;
+        if (!lhs_value.enum_type.eql(rhs_value.enum_type.*)) return null;
+        const equal = std.mem.eql(u8, lhs_value.tag, rhs_value.tag);
+        return switch (tag) {
+            .equal_equal => Type.fromIP(analyser, .bool_type, if (equal) .bool_true else .bool_false),
+            .bang_equal => Type.fromIP(analyser, .bool_type, if (equal) .bool_false else .bool_true),
+            else => null,
+        };
+    }
+
+    const lhs_index = lhs.ipIndex();
+    const rhs_index = rhs.ipIndex();
+    if (lhs_index) |index| {
+        if (analyser.ip.isUndefined(index) or analyser.ip.isUnknown(index)) return null;
+    }
+    if (rhs_index) |index| {
+        if (analyser.ip.isUndefined(index) or analyser.ip.isUnknown(index)) return null;
+    }
+    const lhs_int = if (lhs_index) |index| analyser.ip.toInt(index, i128) else null;
+    const rhs_int = if (rhs_index) |index| analyser.ip.toInt(index, i128) else null;
+    const result = switch (tag) {
+        .equal_equal, .bang_equal => blk: {
+            const equal = if (lhs_int != null and rhs_int != null)
+                lhs_int.? == rhs_int.?
+            else if (lhs_index != null and rhs_index != null)
+                lhs_index.? == rhs_index.?
+            else if (lhs.is_type_val and rhs.is_type_val and lhs.data != .ip_index and rhs.data != .ip_index)
+                lhs.eql(rhs)
+            else
+                return null;
+            break :blk if (tag == .equal_equal) equal else !equal;
+        },
+        .less_than,
+        .greater_than,
+        .less_or_equal,
+        .greater_or_equal,
+        => blk: {
+            const lhs_value = lhs_int orelse return null;
+            const rhs_value = rhs_int orelse return null;
+            break :blk switch (tag) {
+                .less_than => lhs_value < rhs_value,
+                .greater_than => lhs_value > rhs_value,
+                .less_or_equal => lhs_value <= rhs_value,
+                .greater_or_equal => lhs_value >= rhs_value,
+                else => unreachable,
+            };
+        },
+        else => return null,
+    };
+    return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+}
+
+fn resolveComparisonBool(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) ?bool {
+    const result = analyser.resolveComparisonValue(tag, lhs, rhs) orelse return null;
+    return switch (result.ipIndex() orelse return null) {
+        .bool_true => true,
+        .bool_false => false,
+        else => null,
+    };
+}
+
+fn resolveBitNotValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const index = payload.index orelse return null;
+
+    if (payload.type == .comptime_int_type) {
+        const value = analyser.ip.toInt(index, i128) orelse return null;
+        const result = std.math.sub(i128, -1, value) catch return null;
+        const result_index = if (result >= 0 and result <= std.math.maxInt(u64))
+            try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+        else if (result >= std.math.minInt(i64) and result <= std.math.maxInt(i64))
+            try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+        else
+            return null;
+        return Type.fromIP(analyser, payload.type, result_index);
+    }
+
+    if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
+    const int_info = analyser.ip.intInfo(payload.type, builtin.target);
+    if (int_info.bits > 64) return null;
+
+    const result_index = switch (int_info.signedness) {
+        .unsigned => blk: {
+            const value = analyser.ip.toInt(index, u64) orelse return null;
+            const mask = if (int_info.bits == 64)
+                std.math.maxInt(u64)
+            else if (int_info.bits == 0)
+                0
+            else
+                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
+            break :blk try analyser.ip.get(.{
+                .int_u64_value = .{ .ty = payload.type, .int = (~value) & mask },
+            });
+        },
+        .signed => blk: {
+            const value = analyser.ip.toInt(index, i64) orelse return null;
+            const result = std.math.sub(i64, -1, value) catch return null;
+            break :blk if (result >= 0)
+                try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+            else
+                try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = result } });
+        },
+    };
+    return Type.fromIP(analyser, payload.type, result_index);
+}
+
+fn resolveNegationValue(
+    analyser: *Analyser,
+    operand: Type,
+    wrapping: bool,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const index = payload.index orelse return null;
+
+    if (payload.type == .comptime_int_type) {
+        const value = analyser.ip.toInt(index, i128) orelse return null;
+        const result = std.math.sub(i128, 0, value) catch return null;
+        const result_index = if (result >= 0 and result <= std.math.maxInt(u64))
+            try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+        else if (result >= std.math.minInt(i64) and result <= std.math.maxInt(i64))
+            try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+        else
+            return null;
+        return Type.fromIP(analyser, payload.type, result_index);
+    }
+
+    if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
+    const int_info = analyser.ip.intInfo(payload.type, builtin.target);
+    if (int_info.bits == 0 or int_info.bits > 64) return null;
+
+    const result_index = switch (int_info.signedness) {
+        .unsigned => blk: {
+            const value = analyser.ip.toInt(index, u64) orelse return null;
+            if (!wrapping) {
+                if (value != 0) return null;
+                break :blk try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = 0 } });
+            }
+            const mask = if (int_info.bits == 64)
+                std.math.maxInt(u64)
+            else
+                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
+            break :blk try analyser.ip.get(.{
+                .int_u64_value = .{ .ty = payload.type, .int = (0 -% value) & mask },
+            });
+        },
+        .signed => blk: {
+            const value = analyser.ip.toInt(index, i64) orelse return null;
+            if (!wrapping) {
+                const result = std.math.sub(i64, 0, value) catch return null;
+                const min = -(@as(i128, 1) << @intCast(int_info.bits - 1));
+                const max = (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1;
+                if (result < min or result > max) return null;
+                break :blk if (result >= 0)
+                    try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+                else
+                    try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = result } });
+            }
+
+            const raw: u64 = @bitCast(value);
+            const mask = if (int_info.bits == 64)
+                std.math.maxInt(u64)
+            else
+                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
+            const result_raw = (0 -% raw) & mask;
+            const sign_bit = @as(u64, 1) << @intCast(int_info.bits - 1);
+            const result: i64 = if (result_raw & sign_bit == 0)
+                @intCast(result_raw)
+            else if (int_info.bits == 64)
+                @bitCast(result_raw)
+            else
+                @intCast(@as(i128, result_raw) - (@as(i128, 1) << @intCast(int_info.bits)));
+            break :blk if (result >= 0)
+                try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
+            else
+                try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = result } });
+        },
+    };
+    return Type.fromIP(analyser, payload.type, result_index);
 }
 
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
@@ -1828,17 +2168,20 @@ fn resolveFunctionTypeFromCall(
     call: Ast.full.Call,
     func_ty: Type,
 ) Error!Type {
-    if (!func_ty.isGenericType()) {
+    if (!func_ty.isGenericType() and !func_ty.isGenericFunc()) {
         return func_ty;
     }
 
     const func_info = func_ty.data.function;
+    const func_tree = &func_info.handle.tree;
 
     var meta_params: TokenToTypeMap = switch (func_info.container_type.data) {
         .container => |info| try info.bound_params.clone(analyser.arena),
         else => .empty,
     };
     errdefer meta_params.deinit(analyser.arena);
+    var value_params = try meta_params.clone(analyser.arena);
+    errdefer value_params.deinit(analyser.arena);
 
     const has_self_param = call.ast.params.len + 1 == func_info.parameters.len and
         try analyser.isInstanceCall(handle, call, func_ty);
@@ -1846,27 +2189,115 @@ fn resolveFunctionTypeFromCall(
     const parameters = func_info.parameters[@intFromBool(has_self_param)..];
     const arguments = call.ast.params;
     const min_len = @min(parameters.len, arguments.len);
+    var has_comptime_value_bindings = false;
     for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
         const param_name_token = param.name_token orelse continue;
         const param_type = param.type;
-        if (!param_type.is_type_val) continue;
 
         const argument_type = (try analyser.resolveTypeOfNodeInternal(.of(arg, handle))) orelse continue;
-
         switch (param_type.data) {
             .ip_index => |info| {
-                if (info.index != .type_type) continue;
-                if (!argument_type.is_type_val) continue;
-                try meta_params.put(analyser.arena, .{ .token = param_name_token, .handle = func_info.handle }, argument_type);
+                if (info.index == .type_type and argument_type.is_type_val) {
+                    const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = func_info.handle };
+                    try meta_params.put(analyser.arena, token_handle, argument_type);
+                    try value_params.put(analyser.arena, token_handle, argument_type);
+                }
             },
             .anytype_parameter => |info| {
-                try meta_params.put(analyser.arena, info.token_handle, try argument_type.typeOf(analyser));
+                const argument_meta_type = try argument_type.typeOf(analyser);
+                try meta_params.put(analyser.arena, info.token_handle, argument_meta_type);
+                const parameter_token_handle: TokenWithHandle = .{
+                    .token = param_name_token,
+                    .handle = func_info.handle,
+                };
+                if (param.modifier == .comptime_param) {
+                    if (try analyser.resolveInternPoolValue(.of(arg, handle))) |argument_value| {
+                        try value_params.put(
+                            analyser.arena,
+                            parameter_token_handle,
+                            Type.fromIP(analyser, analyser.ip.typeOf(argument_value), argument_value),
+                        );
+                        has_comptime_value_bindings = true;
+                    } else {
+                        try value_params.put(analyser.arena, parameter_token_handle, argument_type);
+                    }
+                } else {
+                    try value_params.put(analyser.arena, parameter_token_handle, argument_type);
+                }
             },
             else => {},
         }
+
+        if (param_type.data != .anytype_parameter and
+            param.modifier == .comptime_param and
+            param_type.is_type_val and
+            param_type.ipIndex() != .type_type)
+        {
+            if (param_type.isEnumType()) {
+                const resolved_argument = try analyser.resolveComptimeValue(.of(arg, handle));
+                const tag = if (resolved_argument != null and
+                    resolved_argument.?.data == .enum_value and
+                    resolved_argument.?.data.enum_value.enum_type.eql(param_type))
+                    resolved_argument.?.data.enum_value.tag
+                else
+                    try analyser.resolveEnumValueTag(param_type, .of(arg, handle));
+                if (tag) |enum_tag| {
+                    try value_params.put(
+                        analyser.arena,
+                        .{ .token = param_name_token, .handle = func_info.handle },
+                        try analyser.enumValue(param_type, enum_tag),
+                    );
+                    has_comptime_value_bindings = true;
+                    continue;
+                }
+            }
+            const param_type_index = param_type.ipIndex() orelse continue;
+            const argument_value = try analyser.resolveInternPoolValue(.of(arg, handle)) orelse continue;
+            var err_msg: ErrorMsg = undefined;
+            const coerced_value = try analyser.ip.coerce(
+                analyser.arena,
+                param_type_index,
+                argument_value,
+                builtin.target,
+                &err_msg,
+            );
+            if (coerced_value == .none) continue;
+            // Some currently-supported coercions preserve the type but not the
+            // value. Keep the original comptime value in that case.
+            const bound_value = if (analyser.ip.isUnknown(coerced_value)) argument_value else coerced_value;
+            const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = func_info.handle };
+            const bound_type = Type.fromIP(analyser, analyser.ip.typeOf(bound_value), bound_value);
+            try meta_params.put(analyser.arena, token_handle, bound_type);
+            try value_params.put(analyser.arena, token_handle, bound_type);
+            has_comptime_value_bindings = true;
+        }
     }
 
-    return try analyser.resolveGenericType(func_ty, meta_params);
+    var resolved = try analyser.resolveGenericType(func_ty, meta_params);
+
+    // Type functions are initially analyzed without concrete arguments. Once
+    // the call binds those arguments, re-evaluate the return expression so
+    // comptime values can select branches and shape generated types.
+    if (has_comptime_value_bindings and
+        resolved.isTypeFunc() and
+        func_tree.nodeTag(func_info.fn_node) == .fn_decl)
+    {
+        const body = func_tree.nodeData(func_info.fn_node).node_and_node[1];
+        const return_node = findReturnStatement(func_tree, body);
+        if (return_node) |ret| {
+            if (func_tree.nodeData(ret).opt_node.unwrap()) |return_expr| {
+                const old_bindings = analyser.generic_bindings;
+                analyser.generic_bindings = &value_params;
+                defer analyser.generic_bindings = old_bindings;
+
+                if (try analyser.resolveTypeOfNodeUncached(.of(return_expr, func_info.handle))) |return_value| {
+                    resolved.data.function.return_value = try analyser.allocType(return_value);
+                }
+            }
+        }
+    }
+
+    return resolved;
 }
 
 const BreakIterator = struct {
@@ -1958,12 +2389,53 @@ pub fn resolveBindingOfNode(analyser: *Analyser, options: ResolveOptions) Error!
 }
 
 fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Error!?Binding {
+    const old_bindings = analyser.generic_bindings;
+    defer analyser.generic_bindings = old_bindings;
+
+    var merged_bindings: TokenToTypeMap = .empty;
+    if (options.container_type) |*container_type| {
+        if (container_type.data == .container) {
+            const bindings = &container_type.data.container.bound_params;
+            for (bindings.values()) |binding| {
+                if (!binding.hasKnownValue(analyser)) continue;
+                if (old_bindings) |outer_bindings| {
+                    merged_bindings = try outer_bindings.clone(analyser.arena);
+                    for (bindings.keys(), bindings.values()) |key, bound| {
+                        try merged_bindings.put(analyser.arena, key, bound);
+                    }
+                    analyser.generic_bindings = &merged_bindings;
+                } else {
+                    analyser.generic_bindings = bindings;
+                }
+                break;
+            }
+        }
+    }
+
+    // Specializations must not populate caches keyed only by the source node.
+    if (analyser.generic_bindings != null) {
+        const node_with_uri: NodeWithUri = .{
+            .node = options.node_handle.node,
+            .uri = options.node_handle.handle.uri,
+        };
+        const gop = try analyser.resolving_specialized_nodes.getOrPut(analyser.gpa, node_with_uri);
+        if (gop.found_existing) return null;
+        defer std.debug.assert(analyser.resolving_specialized_nodes.remove(node_with_uri));
+        return analyser.resolveBindingOfNodeUncached(options);
+    }
+
     const node_handle = options.node_handle;
     const node_with_uri: NodeWithUri = .{
         .node = node_handle.node,
         .uri = node_handle.handle.uri,
     };
-    const gop = try analyser.resolved_nodes.getOrPut(analyser.gpa, node_with_uri);
+    const cache = if (analyser.evaluate_comptime_control_flow)
+        &analyser.resolved_control_flow_values
+    else if (analyser.evaluate_comptime_values)
+        &analyser.resolved_values
+    else
+        &analyser.resolved_nodes;
+    const gop = try cache.getOrPut(analyser.gpa, node_with_uri);
     if (gop.found_existing) return gop.value_ptr.*;
 
     // we insert null before resolving the type so that a recursive definition doesn't result in an infinite loop
@@ -1971,7 +2443,7 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
 
     const binding = try analyser.resolveBindingOfNodeUncached(options);
     if (binding != null) {
-        analyser.resolved_nodes.getPtr(node_with_uri).?.* = binding;
+        cache.getPtr(node_with_uri).?.* = binding;
     }
 
     return binding;
@@ -1991,6 +2463,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         => {
             const var_decl = tree.fullVarDecl(node).?;
             const mut_token_tag = tree.tokenTag(var_decl.ast.mut_token);
+            const old_evaluate_comptime_values = analyser.evaluate_comptime_values;
+            if (mut_token_tag == .keyword_const and analyser.resolve_number_literal_values) {
+                analyser.evaluate_comptime_values = true;
+            }
+            defer analyser.evaluate_comptime_values = old_evaluate_comptime_values;
             var fallback_type: ?Type = null;
 
             if (var_decl.ast.type_node.unwrap()) |type_node| blk: {
@@ -2084,7 +2561,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             }
 
             const base = field.ast.type_expr.unwrap().?;
-            const base_type = (try analyser.resolveTypeOfNodeInternal(.of(base, handle))) orelse return null;
+            const base_type = (try analyser.resolveTypeOfNodeInternal(.{
+                .node_handle = .of(base, handle),
+                .container_type = options.container_type,
+            })) orelse return null;
             return try base_type.instanceTypeVal(analyser);
         },
         .@"comptime",
@@ -2168,11 +2648,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .array_type_sentinel,
         => {
             const array_info = tree.fullArrayType(node).?;
-
-            const elem_count = try analyser.resolveIntegerLiteral(u64, .of(array_info.ast.elem_count, handle));
+            const elem_count = try analyser.resolveIntegerLiteral(u64, .{
+                .node_handle = .of(array_info.ast.elem_count, handle),
+                .container_type = options.container_type,
+            });
             const sentinel = try analyser.resolveOptionalIPValue(array_info.ast.sentinel, handle);
 
-            const elem_ty = try analyser.resolveTypeOfNodeInternal(.of(array_info.ast.elem_type, handle)) orelse return null;
+            const elem_ty = try analyser.resolveTypeOfNodeInternal(.{
+                .node_handle = .of(array_info.ast.elem_type, handle),
+                .container_type = options.container_type,
+            }) orelse return null;
             if (!elem_ty.is_type_val) return null;
 
             return try Type.createArrayType(analyser, elem_count, sentinel, elem_ty);
@@ -2559,6 +3044,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 Type.fromIP(analyser, .unknown_type, null);
 
             const info: Type.Data.Function = .{
+                .fn_node = node,
                 .handle = handle,
                 .fn_token = fn_proto.ast.fn_token,
                 .container_type = try analyser.allocType(container_type),
@@ -2578,6 +3064,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         },
         .@"if", .if_simple => {
             const if_node = ast.fullIf(tree, node).?;
+            if (analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) {
+                if (try analyser.resolveBoolValue(.{
+                    .node_handle = .of(if_node.ast.cond_expr, handle),
+                    .container_type = options.container_type,
+                })) |condition| {
+                    const selected = if (condition)
+                        if_node.ast.then_expr
+                    else
+                        if_node.ast.else_expr.unwrap() orelse return Type.fromIP(analyser, .void_type, .void_value);
+                    return try analyser.resolveTypeOfNodeInternal(.{
+                        .node_handle = .of(selected, handle),
+                        .container_type = options.container_type,
+                    });
+                }
+            }
 
             var either_buffer: [2]Type.TypeWithDescriptor = undefined;
             var either: std.ArrayList(Type.TypeWithDescriptor) = .initBuffer(&either_buffer);
@@ -2596,6 +3097,75 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .switch_comma,
         => {
             const switch_node = tree.switchFull(node);
+
+            if ((analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) and
+                switch_node.label_token == null)
+            select: {
+                const condition = try analyser.resolveComptimeValue(.{
+                    .node_handle = .of(switch_node.ast.condition, handle),
+                    .container_type = options.container_type,
+                }) orelse break :select;
+
+                var else_target: ?Ast.Node.Index = null;
+                for (switch_node.ast.cases) |case| {
+                    const switch_case = tree.fullSwitchCase(case).?;
+                    if (switch_case.ast.values.len == 0) {
+                        else_target = switch_case.ast.target_expr;
+                        continue;
+                    }
+
+                    for (switch_case.ast.values) |case_value| {
+                        if (condition.data == .enum_value) {
+                            const enum_type = condition.data.enum_value.enum_type.*;
+                            const case_tag = try analyser.resolveEnumValueTag(enum_type, .of(case_value, handle)) orelse break :select;
+                            if (std.mem.eql(u8, condition.data.enum_value.tag, case_tag)) {
+                                return try analyser.resolveTypeOfNodeInternal(.{
+                                    .node_handle = .of(switch_case.ast.target_expr, handle),
+                                    .container_type = options.container_type,
+                                });
+                            }
+                            continue;
+                        }
+                        const matches = if (tree.nodeTag(case_value) == .switch_range) range: {
+                            const first, const last = tree.nodeData(case_value).node_and_node;
+                            const first_index = try analyser.resolveInternPoolValue(.{
+                                .node_handle = .of(first, handle),
+                                .container_type = options.container_type,
+                            }) orelse break :select;
+                            const last_index = try analyser.resolveInternPoolValue(.{
+                                .node_handle = .of(last, handle),
+                                .container_type = options.container_type,
+                            }) orelse break :select;
+                            const first_value = Type.fromIP(analyser, analyser.ip.typeOf(first_index), first_index);
+                            const last_value = Type.fromIP(analyser, analyser.ip.typeOf(last_index), last_index);
+                            const at_least_first = analyser.resolveComparisonBool(.greater_or_equal, condition, first_value) orelse break :select;
+                            const at_most_last = analyser.resolveComparisonBool(.less_or_equal, condition, last_value) orelse break :select;
+                            break :range at_least_first and at_most_last;
+                        } else equal: {
+                            const value_index = try analyser.resolveInternPoolValue(.{
+                                .node_handle = .of(case_value, handle),
+                                .container_type = options.container_type,
+                            }) orelse break :select;
+                            const value = Type.fromIP(analyser, analyser.ip.typeOf(value_index), value_index);
+                            break :equal analyser.resolveComparisonBool(.equal_equal, condition, value) orelse break :select;
+                        };
+
+                        if (matches) {
+                            return try analyser.resolveTypeOfNodeInternal(.{
+                                .node_handle = .of(switch_case.ast.target_expr, handle),
+                                .container_type = options.container_type,
+                            });
+                        }
+                    }
+                }
+
+                if (else_target) |target| {
+                    return try analyser.resolveTypeOfNodeInternal(.{
+                        .node_handle = .of(target, handle),
+                        .container_type = options.container_type,
+                    });
+                }
+            }
 
             var either: std.ArrayList(Type.TypeWithDescriptor) = .empty;
 
@@ -2721,7 +3291,25 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .less_or_equal,
         .greater_or_equal,
         => {
-            const lhs, _ = tree.nodeData(node).node_and_node;
+            const lhs, const rhs = tree.nodeData(node).node_and_node;
+            if (analyser.evaluate_comptime_values) {
+                var lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
+                var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
+                if (tree.nodeTag(node) == .equal_equal or tree.nodeTag(node) == .bang_equal) {
+                    if (lhs_ty.data == .enum_value and rhs_ty.data != .enum_value) {
+                        const enum_type = lhs_ty.data.enum_value.enum_type.*;
+                        if (try analyser.resolveEnumValueTag(enum_type, .of(rhs, handle))) |enum_tag| {
+                            rhs_ty = try analyser.enumValue(enum_type, enum_tag);
+                        }
+                    } else if (rhs_ty.data == .enum_value and lhs_ty.data != .enum_value) {
+                        const enum_type = rhs_ty.data.enum_value.enum_type.*;
+                        if (try analyser.resolveEnumValueTag(enum_type, .of(lhs, handle))) |enum_tag| {
+                            lhs_ty = try analyser.enumValue(enum_type, enum_tag);
+                        }
+                    }
+                }
+                if (analyser.resolveComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| return value;
+            }
 
             const ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse
                 return Type.fromIP(analyser, .bool_type, null);
@@ -2743,17 +3331,48 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             return Type.fromIP(analyser, .bool_type, null);
         },
 
-        .bool_and,
-        .bool_or,
-        .bool_not,
-        => return Type.fromIP(analyser, .bool_type, null),
+        .bool_and, .bool_or => |tag| {
+            if (analyser.evaluate_comptime_values) {
+                const lhs, const rhs = tree.nodeData(node).node_and_node;
+                const lhs_value = try analyser.resolveBoolValue(.of(lhs, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
+                switch (tag) {
+                    .bool_and => if (!lhs_value) return Type.fromIP(analyser, .bool_type, .bool_false),
+                    .bool_or => if (lhs_value) return Type.fromIP(analyser, .bool_type, .bool_true),
+                    else => unreachable,
+                }
+                const rhs_value = try analyser.resolveBoolValue(.of(rhs, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
+                const value = switch (tag) {
+                    .bool_and => lhs_value and rhs_value,
+                    .bool_or => lhs_value or rhs_value,
+                    else => unreachable,
+                };
+                return Type.fromIP(analyser, .bool_type, if (value) .bool_true else .bool_false);
+            }
+            return Type.fromIP(analyser, .bool_type, null);
+        },
+        .bool_not => {
+            if (analyser.evaluate_comptime_values) {
+                const operand = tree.nodeData(node).node;
+                const value = try analyser.resolveBoolValue(.of(operand, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
+                return Type.fromIP(analyser, .bool_type, if (value) .bool_false else .bool_true);
+            }
+            return Type.fromIP(analyser, .bool_type, null);
+        },
 
-        .bit_not,
-        .negation,
-        .negation_wrap,
-        => {
+        .bit_not => {
             const ty = try analyser.resolveTypeOfNodeInternal(.of(tree.nodeData(node).node, handle)) orelse return null;
             if (ty.is_type_val) return null;
+            if (analyser.evaluate_comptime_values) {
+                if (try analyser.resolveBitNotValue(ty)) |value| return value;
+            }
+            return ty.withoutIPIndex(analyser);
+        },
+        .negation, .negation_wrap => |tag| {
+            const ty = try analyser.resolveTypeOfNodeInternal(.of(tree.nodeData(node).node, handle)) orelse return null;
+            if (ty.is_type_val) return null;
+            if (analyser.evaluate_comptime_values) {
+                if (try analyser.resolveNegationValue(ty, tag == .negation_wrap)) |value| return value;
+            }
             return ty.withoutIPIndex(analyser);
         },
 
@@ -2822,7 +3441,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             return Type.fromIP(analyser, error_set_type, error_value);
         },
 
-        .char_literal => return Type.fromIP(analyser, .comptime_int_type, null),
+        .char_literal => {
+            if (!analyser.resolve_number_literal_values) {
+                return Type.fromIP(analyser, .comptime_int_type, null);
+            }
+            const bytes = offsets.tokenToSlice(tree, tree.nodeMainToken(node));
+            const value = switch (std.zig.parseCharLiteral(bytes)) {
+                .success => |codepoint| codepoint,
+                .failure => return Type.fromIP(analyser, .comptime_int_type, null),
+            };
+            const index = try analyser.ip.get(.{
+                .int_u64_value = .{ .ty = .comptime_int_type, .int = value },
+            });
+            return Type.fromIP(analyser, .comptime_int_type, index);
+        },
 
         .number_literal => {
             const bytes = offsets.tokenToSlice(tree, tree.nodeMainToken(node));
@@ -2903,6 +3535,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (lhs_ty.is_type_val) return null;
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
+            if (analyser.evaluate_comptime_values) {
+                if (try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| return value;
+            }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
             return analyser.resolvePeerTypes(lhs_ty, rhs_ty);
@@ -2914,6 +3549,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (lhs_ty.is_type_val) return null;
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
+            if (analyser.evaluate_comptime_values) {
+                if (try analyser.resolveIntegerBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;
+            }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
             if (lhs_ty.pointerSize(analyser)) |lhs_size| {
@@ -2931,6 +3569,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (lhs_ty.is_type_val) return null;
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
+            if (analyser.evaluate_comptime_values) {
+                if (try analyser.resolveIntegerBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
+            }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
             if (lhs_ty.pointerSize(analyser)) |lhs_size| {
@@ -2951,10 +3592,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .shl,
         .shl_sat,
         .shr,
-        => {
-            const lhs, _ = tree.nodeData(node).node_and_node;
+        => |tag| {
+            const lhs, const rhs = tree.nodeData(node).node_and_node;
             const lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
             if (lhs_ty.is_type_val) return null;
+            if (analyser.evaluate_comptime_values and tag != .shl_sat) {
+                const rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
+                if (!rhs_ty.is_type_val) {
+                    if (try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty)) |value| return value;
+                }
+            }
             return lhs_ty.withoutIPIndex(analyser);
         },
 
@@ -3093,6 +3740,22 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
             }
 
             const child = try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(name_token)) orelse return null;
+            const token_handle: TokenWithHandle = .{
+                .token = child.nameToken(),
+                .handle = child.handle,
+            };
+            if (analyser.generic_bindings) |bindings| {
+                if (bindings.get(token_handle)) |bound| {
+                    return .{ .type = bound, .is_const = true };
+                }
+            }
+            if (options.container_type) |container_type| {
+                if (container_type.data == .container) {
+                    if (container_type.data.container.bound_params.get(token_handle)) |bound| {
+                        return .{ .type = bound, .is_const = true };
+                    }
+                }
+            }
             const child_ty = try child.resolveType(analyser) orelse return null;
             return .{
                 .type = child_ty,
@@ -3117,6 +3780,21 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
             const lhs = (try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle))) orelse return null;
 
             const symbol = offsets.identifierTokenToNameSlice(tree, field_name);
+            if (analyser.evaluate_comptime_values and
+                lhs.type.is_type_val and
+                lhs.type.isEnumType())
+            {
+                const decl = try lhs.type.lookupSymbol(analyser, symbol);
+                if (decl != null and
+                    decl.?.decl == .ast_node and
+                    decl.?.handle.tree.nodeTag(decl.?.decl.ast_node).isContainerField())
+                {
+                    return .{
+                        .type = try analyser.enumValue(lhs.type, symbol),
+                        .is_const = true,
+                    };
+                }
+            }
 
             return try analyser.resolveFieldAccessBinding(lhs, symbol);
         },
@@ -3249,6 +3927,12 @@ pub const Type = struct {
         /// Branching types
         either: []const EitherEntry,
 
+        /// A comptime-known value of an AST-backed enum type.
+        enum_value: struct {
+            enum_type: *Type,
+            tag: []const u8,
+        },
+
         /// Primitive type: `u8`, `bool`, `type`, etc.
         /// Primitive value: `true`, `false`, `null`, `undefined`
         ip_index: struct {
@@ -3269,6 +3953,7 @@ pub const Type = struct {
         };
 
         pub const Function = struct {
+            fn_node: Ast.Node.Index,
             fn_token: Ast.TokenIndex,
             handle: *DocumentStore.Handle,
 
@@ -3452,6 +4137,7 @@ pub const Type = struct {
                     }
                 },
                 .function => |info| {
+                    std.hash.autoHash(hasher, info.fn_node);
                     std.hash.autoHash(hasher, info.fn_token);
                     hasher.update(info.handle.uri.raw);
                     info.container_type.hashWithHasher(hasher);
@@ -3476,6 +4162,10 @@ pub const Type = struct {
                         hasher.update(entry.descriptor);
                         entry.type_data.hashWithHasher(hasher);
                     }
+                },
+                .enum_value => |value| {
+                    value.enum_type.hashWithHasher(hasher);
+                    hasher.update(value.tag);
                 },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
@@ -3532,6 +4222,7 @@ pub const Type = struct {
                 },
                 .function => |a_info| {
                     const b_info = b.function;
+                    if (a_info.fn_node != b_info.fn_node) return false;
                     if (a_info.fn_token != b_info.fn_token) return false;
                     if (!a_info.handle.uri.eql(b_info.handle.uri)) return false;
                     if (!a_info.container_type.eql(b_info.container_type.*)) return false;
@@ -3563,6 +4254,11 @@ pub const Type = struct {
                         if (!std.mem.eql(u8, a_entry.descriptor, b_entry.descriptor)) return false;
                         if (!a_entry.type_data.eql(b_entry.type_data)) return false;
                     }
+                },
+                .enum_value => |a_value| {
+                    const b_value = b.enum_value;
+                    if (!a_value.enum_type.eql(b_value.enum_type.*)) return false;
+                    if (!std.mem.eql(u8, a_value.tag, b_value.tag)) return false;
                 },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;
@@ -3625,6 +4321,7 @@ pub const Type = struct {
                     }
                     return false;
                 },
+                .enum_value => |value| value.enum_type.data.isGeneric(),
                 .compile_error,
                 .ip_index,
                 => false,
@@ -3714,6 +4411,12 @@ pub const Type = struct {
                 .union_tag => |info| return .{
                     .union_tag = try analyser.allocType(try analyser.resolveGenericTypeInternal(info.*, bound_params, visiting)),
                 },
+                .enum_value => |value| return .{
+                    .enum_value = .{
+                        .enum_type = try analyser.allocType(try analyser.resolveGenericTypeInternal(value.enum_type.*, bound_params, visiting)),
+                        .tag = value.tag,
+                    },
+                },
                 .container => |info| return .{
                     .container = .{
                         .scope_handle = info.scope_handle,
@@ -3721,7 +4424,12 @@ pub const Type = struct {
                             var new_params: TokenToTypeMap = .empty;
                             try new_params.ensureTotalCapacity(analyser.arena, info.bound_params.count());
                             for (info.bound_params.keys(), info.bound_params.values()) |k, v| {
-                                const t = try analyser.resolveGenericTypeInternal(v, bound_params, visiting);
+                                const bound = bound_params.get(k) orelse v;
+                                // Re-specializing an enclosing type must not erase inner comptime values.
+                                const t = if (bound.hasKnownValue(analyser))
+                                    bound
+                                else
+                                    try analyser.resolveGenericTypeInternal(v, bound_params, visiting);
                                 new_params.putAssumeCapacity(k, t);
                             }
                             break :blk new_params;
@@ -3730,6 +4438,7 @@ pub const Type = struct {
                 },
                 .function => |info| return .{
                     .function = .{
+                        .fn_node = info.fn_node,
                         .fn_token = info.fn_token,
                         .handle = info.handle,
                         .container_type = try analyser.allocType(try analyser.resolveGenericTypeInternal(info.container_type.*, bound_params, visiting)),
@@ -3875,6 +4584,17 @@ pub const Type = struct {
         };
     }
 
+    fn hasKnownValue(self: Type, analyser: *Analyser) bool {
+        return switch (self.data) {
+            .enum_value => true,
+            .ip_index => |payload| if (payload.index) |index|
+                !analyser.ip.isUndefined(index) and !analyser.ip.isUnknown(index)
+            else
+                false,
+            else => false,
+        };
+    }
+
     fn withoutIPIndex(self: Type, analyser: *Analyser) Type {
         return switch (self.data) {
             .ip_index => |payload| fromIP(analyser, payload.type, null),
@@ -4007,6 +4727,7 @@ pub const Type = struct {
             .union_tag,
             .compile_error,
             .type_parameter,
+            .enum_value,
             .ip_index,
             => false,
         };
@@ -4026,6 +4747,7 @@ pub const Type = struct {
             .union_tag,
             .compile_error,
             .type_parameter,
+            .enum_value,
             .ip_index,
             => unreachable,
             .either => |entries| {
@@ -4226,6 +4948,10 @@ pub const Type = struct {
     pub fn typeOf(self: Type, analyser: *Analyser) error{OutOfMemory}!Type {
         if (self.is_type_val) {
             return fromIP(analyser, .type_type, .type_type);
+        }
+
+        if (self.data == .enum_value) {
+            return self.data.enum_value.enum_type.*;
         }
 
         if (self.data == .ip_index) {
@@ -4665,6 +5391,10 @@ pub const Type = struct {
                 try t.rawStringify(writer, analyser, options);
                 try writer.writeAll(").@\"union\".tag_type.?");
             },
+            .enum_value => |value| {
+                try writer.writeByte('.');
+                try writer.writeAll(value.tag);
+            },
             .container => |info| {
                 const scope_handle = info.scope_handle;
                 const handle = scope_handle.handle;
@@ -4724,16 +5454,13 @@ pub const Type = struct {
                             try writer.writeByte('(');
                             var it: ast.FnParamIterator = .init(&func, tree);
                             while (it.next()) |param| {
-                                const param_type_expr = param.type_expr orelse continue;
-                                if (!Analyser.isMetaType(tree, param_type_expr)) continue;
                                 const param_name_token = param.name_token orelse continue;
+                                const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = handle };
+                                const param_ty = info.bound_params.get(token_handle) orelse continue;
+                                if (!param_ty.is_type_val and !param_ty.hasKnownValue(analyser)) continue;
                                 if (!first) {
                                     try writer.writeByte(',');
                                 }
-                                const param_ty = try analyser.resolveGenericType(.{
-                                    .data = .{ .type_parameter = .{ .token = param_name_token, .handle = handle } },
-                                    .is_type_val = true,
-                                }, info.bound_params);
 
                                 try param_ty.rawStringify(writer, analyser, .{
                                     .referenced = referenced,
@@ -6262,11 +6989,28 @@ pub fn innermostContainer(analyser: *Analyser, handle: *DocumentStore.Handle, so
                 const func = tree.fullFnProto(&buf, function_node).?;
                 var it: ast.FnParamIterator = .init(&func, tree);
                 while (it.next()) |param| {
-                    const param_type_expr = param.type_expr orelse continue;
-                    if (!Analyser.isMetaType(tree, param_type_expr)) continue;
                     const param_name_token = param.name_token orelse continue;
                     const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = handle };
-                    const ty: Type = .{ .data = .{ .type_parameter = token_handle }, .is_type_val = true };
+                    if (analyser.generic_bindings) |bindings| {
+                        if (bindings.get(token_handle)) |bound| {
+                            try pending_meta_params.put(analyser.gpa, token_handle, bound);
+                            continue;
+                        }
+                    }
+
+                    const param_type_expr = param.type_expr orelse continue;
+                    const ty: Type = if (Analyser.isMetaType(tree, param_type_expr))
+                        .{ .data = .{ .type_parameter = token_handle }, .is_type_val = true }
+                    else blk: {
+                        const modifier = param.comptime_noalias orelse continue;
+                        if (tree.tokenTag(modifier) != .keyword_comptime) continue;
+                        const param_ty = analyser.resolveTypeOfNode(.of(param_type_expr, handle)) catch |err| switch (err) {
+                            error.Canceled => continue,
+                            error.OutOfMemory => return error.OutOfMemory,
+                        } orelse continue;
+                        if (!param_ty.is_type_val) continue;
+                        break :blk try param_ty.instanceTypeVal(analyser) orelse continue;
+                    };
                     try pending_meta_params.put(analyser.gpa, token_handle, ty);
                 }
             },

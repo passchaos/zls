@@ -382,6 +382,533 @@ test "generic function" {
     });
 }
 
+test "generic function with comptime value parameter" {
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const vector: Vector(4, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const vector: Vector(if (true) 4 else 2, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const vector: Vector(2 + 2, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const len = 4;
+        \\const vector: Vector(len, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const vector: Vector(1 / 0, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+    });
+}
+
+test "generic function with comptime anytype value parameter" {
+    try testCompletion(
+        \\fn Vector(comptime N: anytype, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const vector: Vector(4, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
+test "generic function with comptime field expressions" {
+    const cases = [_]struct { field_type: []const u8, detail: []const u8 }{
+        .{ .field_type = "[N + 1]T", .detail = "[5]u8" },
+        .{ .field_type = "[(N + 1) * 2]T", .detail = "[10]u8" },
+        .{ .field_type = "*[N]T", .detail = "*[4]u8" },
+        .{ .field_type = "?*[N + 1]T", .detail = "?*[5]u8" },
+        .{ .field_type = "[N - 1][N + 1]T", .detail = "[3][5]u8" },
+        .{ .field_type = "[if (N > 2) N else 2]T", .detail = "[4]u8" },
+        .{ .field_type = "[if (N < 2) 2 else N + 1]T", .detail = "[5]u8" },
+        .{ .field_type = "[@as(usize, N + 1)]T", .detail = "[5]u8" },
+        .{ .field_type = "@Vector(N, T)", .detail = "@Vector(4,u8)" },
+        .{ .field_type = "[N:N]T", .detail = "[4:4]u8" },
+        .{ .field_type = "error{}!*[N]T", .detail = "error{}!*[4]u8" },
+        .{ .field_type = "[comptime N + 1]T", .detail = "[5]u8" },
+        .{ .field_type = "(if (N > 2) [N]T else [2]u16)", .detail = "[4]u8" },
+        .{ .field_type = "[if (N > 2) N else @compileError(\"unselected\")]T", .detail = "[4]u8" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Vector(comptime N: usize, comptime T: type) type {{
+            \\    return struct {{ items: {s} }};
+            \\}}
+            \\const vector: Vector(4, u8) = undefined;
+            \\const items = vector.<cursor>
+        , .{case.field_type});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.detail },
+        });
+    }
+}
+
+test "generic function with comptime integer expressions" {
+    const cases = [_][]const u8{
+        "N + 2 == 8",
+        "N - 2 == 4",
+        "N * 2 == 12",
+        "N / 2 == 3",
+        "N % 4 == 2",
+        "(N & 3) == 2",
+        "(N ^ 3) == 5",
+        "(N | 1) == 7",
+        "(N << 1) == 12",
+        "(N >> 1) == 3",
+        "N != 5",
+        "N < 7",
+        "N <= 6",
+        "N > 5",
+        "N >= 6",
+        "!(N == 5)",
+    };
+    for (cases) |condition| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select(comptime N: usize) type {{
+            \\    return if ({s})
+            \\        struct {{ matched: u8 }}
+            \\    else
+            \\        struct {{ unmatched: u8 }};
+            \\}}
+            \\const selected: Select(6) = undefined;
+            \\const field = selected.<cursor>
+        , .{condition});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        });
+    }
+}
+
+test "generic function with comptime local constants" {
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    const length = N + 1;
+        \\    return struct { items: [length]T };
+        \\}
+        \\const vector: Vector(4, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct {
+        \\        const length: usize = N + 1;
+        \\        items: [length]T,
+        \\    };
+        \\}
+        \\const vector: Vector(4, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
+test "generic function with comptime nested container" {
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { inner: struct { items: [N + 1]T } };
+        \\}
+        \\const vector: Vector(4, u8) = undefined;
+        \\const items = vector.inner.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
+test "generic function with comptime nested calls" {
+    try testCompletion(
+        \\fn Inner(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N + 1]T };
+        \\}
+        \\fn Outer(comptime N: usize, comptime T: type) type {
+        \\    return struct { inner: Inner(N * 2, T) };
+        \\}
+        \\const vector: Outer(4, u8) = undefined;
+        \\const items = vector.inner.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
+test "generic function with comptime unknown field expressions" {
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N + 1]T };
+        \\}
+        \\const vector: Vector(undefined, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+    });
+    try testCompletion(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N / 0]T };
+        \\}
+        \\const vector: Vector(4, u8) = undefined;
+        \\const items = vector.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+    });
+}
+
+test "generic function with comptime condition" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    return if (enabled)
+        \\        struct { active: u8 }
+        \\    else
+        \\        struct { inactive: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "active", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    return if (enabled)
+        \\        struct { active: u8 }
+        \\    else
+        \\        struct { inactive: u8 };
+        \\}
+        \\const selected: Select(false) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "inactive", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime width: usize) type {
+        \\    return if (width == 4)
+        \\        struct { exact: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2 + 2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    return if (enabled and @compileError("unselected"))
+        \\        struct { active: u8 }
+        \\    else
+        \\        struct { inactive: u8 };
+        \\}
+        \\const selected: Select(false) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "inactive", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    return if (enabled or @compileError("unselected"))
+        \\        struct { active: u8 }
+        \\    else
+        \\        struct { inactive: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "active", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime width: usize) type {
+        \\    return if (width == width)
+        \\        struct { exact: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(undefined) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime bits: u8) type {
+        \\    return if (~bits == 0)
+        \\        struct { zero: u8 }
+        \\    else
+        \\        struct { nonzero: u8 };
+        \\}
+        \\const selected: Select(255) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "zero", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    return if (-%value == 255)
+        \\        struct { wrapped: u8 }
+        \\    else
+        \\        struct { other: u8 };
+        \\}
+        \\const selected: Select(1) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wrapped", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: i8) type {
+        \\    return if (@TypeOf(-value) == i8 and -value == -1)
+        \\        struct { negated: u8 }
+        \\    else
+        \\        struct { other: u8 };
+        \\}
+        \\const selected: Select(1) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "negated", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "generic function with comptime switch" {
+    const cases = [_]struct { value: []const u8, label: []const u8 }{
+        .{ .value = "0", .label = "zero" },
+        .{ .value = "4", .label = "even" },
+        .{ .value = "7", .label = "range" },
+        .{ .value = "9", .label = "fallback" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select(comptime N: usize) type {{
+            \\    return switch (N) {{
+            \\        0 => struct {{ zero: u8 }},
+            \\        2, 4 => struct {{ even: u8 }},
+            \\        5...8 => struct {{ range: u8 }},
+            \\        else => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select({s}) = undefined;
+            \\const field = selected.<cursor>
+        , .{case.value});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = case.label, .kind = .Field, .detail = "u8" },
+        });
+    }
+
+    try testCompletion(
+        \\fn Select(comptime N: usize) type {
+        \\    return switch (N) {
+        \\        0 => struct { zero: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(undefined) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "zero", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: u21) type {
+        \\    return switch (value) {
+        \\        'A' => struct { ascii: u8 },
+        \\        '界' => struct { unicode: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select('界') = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unicode", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "generic function with comptime enum switch" {
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return switch (mode) {
+        \\        .fast => struct { optimized: u8 },
+        \\        .safe => struct { checked: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(.fast) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optimized", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return if (mode == .safe)
+        \\        struct { checked: u8 }
+        \\    else
+        \\        struct { optimized: u8 };
+        \\}
+        \\const selected: Select(Mode.safe) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "checked", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return switch (mode) {
+        \\        Mode.fast => struct { optimized: u8 },
+        \\        Mode.safe => struct { checked: u8 },
+        \\    };
+        \\}
+        \\const mode = Mode.fast;
+        \\const selected: Select(mode) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optimized", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Inner(comptime mode: Mode) type {
+        \\    return if (mode == .safe)
+        \\        struct { checked: u8 }
+        \\    else
+        \\        struct { optimized: u8 };
+        \\}
+        \\fn Outer(comptime mode: Mode) type {
+        \\    return struct { inner: Inner(mode) };
+        \\}
+        \\const selected: Outer(.safe) = undefined;
+        \\const field = selected.inner.<cursor>
+    , &.{
+        .{ .label = "checked", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "enum declarations are not comptime enum values" {
+    try testCompletion(
+        \\const Mode = enum {
+        \\    fast,
+        \\    safe,
+        \\    const Settings = struct { enabled: bool };
+        \\};
+        \\const settings: Mode.Settings = undefined;
+        \\const field = settings.<cursor>
+    , &.{
+        .{ .label = "enabled", .kind = .Field, .detail = "bool" },
+    });
+}
+
+test "cross-file generic function with comptime enum switch" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    _ = try ctx.addDocument(.{ .source =
+        \\pub const Mode = enum { fast, safe };
+        \\pub fn Select(comptime mode: Mode) type {
+        \\    return switch (mode) {
+        \\        .fast => struct { optimized: u8 },
+        \\        .safe => struct { checked: u8 },
+        \\    };
+        \\}
+    });
+
+    const source =
+        \\const api = @import("Untitled-0.zig");
+        \\const selected: api.Select(api.Mode.safe) = undefined;
+        \\const field = selected.<cursor>
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
+    defer allocator.free(text);
+    const uri = try ctx.addDocument(.{ .source = text });
+
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })).?.completion_list;
+
+    var found_checked = false;
+    for (response.items) |item| {
+        if (std.mem.eql(u8, item.label, "optimized")) return error.MissingOrUnexpectedCompletions;
+        if (std.mem.eql(u8, item.label, "checked")) {
+            found_checked = true;
+            try std.testing.expectEqual(types.completion.Item.Kind.Field, item.kind.?);
+            try std.testing.expectEqualStrings("u8", item.detail.?);
+        }
+    }
+    try std.testing.expect(found_checked);
+}
+
+test "generic function with comptime optional condition" {
+    try testCompletion(
+        \\fn Select(comptime value: ?usize) type {
+        \\    return if (value == null)
+        \\        struct { none: u8 }
+        \\    else
+        \\        struct { some: u8 };
+        \\}
+        \\const selected: Select(null) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "none", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: ?usize) type {
+        \\    return if (value != null)
+        \\        struct { some: u8 }
+        \\    else
+        \\        struct { none: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "some", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "nested generic function" {
     try testCompletion(
         \\fn ArrayList(comptime T: type) type {
@@ -3392,16 +3919,27 @@ test "label" {
     , &.{
         .{ .label = "blk", .kind = .Text }, // idk what kind this should be
     });
-    // TODO: the AST for this only contains the comptime block so the label isn't completed
-    // try testCompletion(
-    //     \\comptime {
-    //     \\    sw: switch (0) {
-    //     \\        else => break :<cursor>,
-    //     \\    }
-    //     \\}
-    // , &.{
-    //     .{ .label = "sw", .kind = .Text },
-    // });
+    try testCompletion(
+        \\comptime {
+        \\    sw: switch (0) {
+        \\        else => break :<cursor>,
+        \\    }
+        \\}
+    , &.{
+        .{ .label = "sw", .kind = .Text },
+    });
+    try testCompletion(
+        \\comptime {
+        \\    closed: {
+        \\        break :closed;
+        \\    }
+        \\    active: switch (0) {
+        \\        else => break :<cursor>,
+        \\    }
+        \\}
+    , &.{
+        .{ .label = "active", .kind = .Text },
+    });
 
     try testCompletion(
         \\const S = struct { alpha: u32 };

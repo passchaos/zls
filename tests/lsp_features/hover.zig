@@ -664,6 +664,41 @@ test "generic type" {
     );
 }
 
+test "generic type with comptime values" {
+    try testHover(
+        \\fn Vector(comptime N: usize, comptime T: type) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const vector<cursor>: Vector(4, u8) = undefined;
+    ,
+        \\```zig
+        \\const vector: Vector(4, u8) = undefined
+        \\```
+        \\```zig
+        \\(Vector(4,u8))
+        \\```
+        \\
+        \\Go to [Vector](untitled:///Untitled-0.zig#L1)
+    );
+
+    try testHover(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return struct {};
+        \\}
+        \\const selected<cursor>: Select(.safe) = undefined;
+    ,
+        \\```zig
+        \\const selected: Select(.safe) = undefined
+        \\```
+        \\```zig
+        \\(Select(.safe))
+        \\```
+        \\
+        \\Go to [Select](untitled:///Untitled-0.zig#L2)
+    );
+}
+
 test "block label" {
     try testHover(
         \\const foo: i32 = undefined;
@@ -1059,7 +1094,7 @@ test "var decl comments" {
         \\const foo = 0 + 0
         \\```
         \\```zig
-        \\(comptime_int)
+        \\(comptime_int = 0)
         \\```
         \\
         \\this is a comment

@@ -205,6 +205,11 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
                 try typeToCompletion(builder, t.*);
             }
         },
+        .enum_value => |value| {
+            var enum_instance = value.enum_type.*;
+            enum_instance.is_type_val = false;
+            try typeToCompletion(builder, enum_instance);
+        },
         .function,
         .error_union,
         .union_tag,
@@ -500,6 +505,72 @@ fn completeLabel(builder: *Builder) error{OutOfMemory}!void {
     defer tracy_zone.end();
 
     try Analyser.iterateLabels(builder.orig_handle, builder.source_index, labelDeclToCompletion, builder);
+    if (builder.completions.map.count() != 0) return;
+
+    const tree = &builder.orig_handle.tree;
+    var scope_labels: std.ArrayList(?Ast.TokenIndex) = .empty;
+    defer scope_labels.deinit(builder.arena);
+
+    for (tree.tokens.items(.tag), 0..) |tag, token_usize| {
+        const token: Ast.TokenIndex = @intCast(token_usize);
+        if (tree.tokenStart(token) >= builder.source_index) break;
+        switch (tag) {
+            .l_brace => try scope_labels.append(builder.arena, labelBeforeScopeBrace(tree, token)),
+            .r_brace => _ = scope_labels.pop(),
+            else => {},
+        }
+    }
+
+    for (scope_labels.items) |label_token| {
+        const token = label_token orelse continue;
+        try builder.completions.append(builder.arena, .{
+            .label = tree.tokenSlice(token),
+            .kind = .Text,
+        });
+    }
+}
+
+fn labelBeforeScopeBrace(tree: *const Ast, lbrace: Ast.TokenIndex) ?Ast.TokenIndex {
+    if (lbrace >= 2 and
+        tree.tokenTag(lbrace - 2) == .identifier and
+        tree.tokenTag(lbrace - 1) == .colon)
+    {
+        return lbrace - 2;
+    }
+
+    var paren_depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var brace_depth: usize = 0;
+    var token = lbrace;
+    while (token > 0) {
+        token -= 1;
+        switch (tree.tokenTag(token)) {
+            .r_paren => paren_depth += 1,
+            .l_paren => {
+                if (paren_depth == 0) return null;
+                paren_depth -= 1;
+            },
+            .r_bracket => bracket_depth += 1,
+            .l_bracket => {
+                if (bracket_depth == 0) return null;
+                bracket_depth -= 1;
+            },
+            .r_brace => brace_depth += 1,
+            .l_brace => {
+                if (brace_depth == 0) return null;
+                brace_depth -= 1;
+            },
+            .keyword_for, .keyword_while, .keyword_switch => {
+                if (paren_depth != 0 or bracket_depth != 0 or brace_depth != 0) continue;
+                if (token < 2 or
+                    tree.tokenTag(token - 2) != .identifier or
+                    tree.tokenTag(token - 1) != .colon) return null;
+                return token - 2;
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 fn populateSnippedCompletions(builder: *Builder, kind: enum { generic, top_level }) error{OutOfMemory}!void {
@@ -1085,7 +1156,6 @@ pub fn completionAtIndex(
     }
 
     const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, false);
-
     switch (pos_context) {
         .builtin => try completeBuiltin(&builder),
         .var_access, .empty => try completeGlobal(&builder),

@@ -255,6 +255,51 @@ const anytype_2_u8_u16 = anytypeFn2(@as(u8, 42), @as(u16, 42));
 const anytype_2_i8_i16 = anytypeFn2(@as(i8, 42), @as(i16, 42));
 //    ^^^^^^^^^^^^^^^^ (i8)() TODO this should be `i16`
 
+fn FixedVector(comptime N: usize, comptime T: type) type {
+    return struct {
+        const length = N + 1;
+        items: [length]T,
+        pointer: ?*[N]T,
+        conditional: [if (N > 2) N else 2]T,
+    };
+}
+
+const unknown_vector: FixedVector(undefined, u32) = undefined;
+const unknown_values_before = unknown_vector.items;
+//    ^^^^^^^^^^^^^^^^^^^^^ ([?]u32)()
+
+const first_vector: FixedVector(4, u8) = undefined;
+const first_values = first_vector.items;
+//    ^^^^^^^^^^^^ ([5]u8)()
+const first_pointer = first_vector.pointer;
+//    ^^^^^^^^^^^^^ (?*[4]u8)()
+const first_conditional = first_vector.conditional;
+//    ^^^^^^^^^^^^^^^^^ ([4]u8)()
+
+const second_vector: FixedVector(1, u16) = undefined;
+const second_values = second_vector.items;
+//    ^^^^^^^^^^^^^ ([2]u16)()
+const second_pointer = second_vector.pointer;
+//    ^^^^^^^^^^^^^^ (?*[1]u16)()
+const second_conditional = second_vector.conditional;
+//    ^^^^^^^^^^^^^^^^^^ ([2]u16)()
+
+const first_values_again = first_vector.items;
+//    ^^^^^^^^^^^^^^^^^^ ([5]u8)()
+
+fn FixedArray(comptime N: usize, comptime T: type) type {
+    return [N + 1]T;
+}
+
+const fixed_array: FixedArray(4, u8) = undefined;
+//    ^^^^^^^^^^^ ([5]u8)()
+
+const selected_length = if (true) 4 else 2;
+const selected_length_copy = selected_length + 0;
+//    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)((unknown value))
+const selected_array: FixedArray(selected_length, u8) = undefined;
+//    ^^^^^^^^^^^^^^ ([5]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
