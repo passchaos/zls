@@ -435,6 +435,29 @@ test "generic function with comptime value parameter" {
     });
 }
 
+test "generic function with comptime string length" {
+    try testCompletion(
+        \\fn Buffer(comptime N: usize) type {
+        \\    return struct { items: [N]u8 };
+        \\}
+        \\const buffer: Buffer("hello".len) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime N: usize) type {
+        \\    return struct { items: [N]u8 };
+        \\}
+        \\const name = "界";
+        \\const buffer: Buffer(name.len) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with comptime anytype value parameter" {
     try testCompletion(
         \\fn Vector(comptime N: anytype, comptime T: type) type {
