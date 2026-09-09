@@ -1804,6 +1804,112 @@ fn resolveNegationValue(
     return Type.fromIP(analyser, payload.type, result_index);
 }
 
+fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
+    if (!ty.is_type_val) return null;
+    return switch (ty.data) {
+        .pointer => |info| switch (info.size) {
+            .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
+            .one, .many, .c => builtin.target.ptrBitWidth(),
+        },
+        .array => |info| blk: {
+            const declared_len = info.elem_count orelse break :blk null;
+            const len = std.math.add(u64, declared_len, @intFromBool(info.sentinel != .none)) catch break :blk null;
+            if (len == 0) break :blk 0;
+            const elem_bits = analyser.resolveTypeBitSize(info.elem_ty.*) orelse break :blk null;
+            const elem_bytes = analyser.resolveTypeByteSize(info.elem_ty.*) orelse break :blk null;
+            const preceding_bits = std.math.mul(u64, len - 1, std.math.mul(u64, elem_bytes, 8) catch break :blk null) catch break :blk null;
+            break :blk std.math.add(u64, preceding_bits, elem_bits) catch null;
+        },
+        .ip_index => |payload| blk: {
+            const type_index = payload.index orelse break :blk null;
+            const type_tag = analyser.ip.zigTypeTag(type_index) orelse break :blk null;
+            break :blk switch (type_tag) {
+                .int => analyser.ip.intInfo(type_index, builtin.target).bits,
+                .float => analyser.ip.floatBits(type_index, builtin.target),
+                .bool => 1,
+                .void, .noreturn => 0,
+                .pointer => switch (analyser.ip.indexToKey(type_index).pointer_type.flags.size) {
+                    .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
+                    .one, .many, .c => builtin.target.ptrBitWidth(),
+                },
+                .array => array: {
+                    const info = analyser.ip.indexToKey(type_index).array_type;
+                    const len = std.math.add(u64, info.len, @intFromBool(info.sentinel != .none)) catch break :array null;
+                    if (len == 0) break :array 0;
+                    const elem_ty = Type.fromIP(analyser, .type_type, info.child);
+                    const elem_bits = analyser.resolveTypeBitSize(elem_ty) orelse break :array null;
+                    const elem_bytes = analyser.resolveTypeByteSize(elem_ty) orelse break :array null;
+                    const preceding_bits = std.math.mul(u64, len - 1, std.math.mul(u64, elem_bytes, 8) catch break :array null) catch break :array null;
+                    break :array std.math.add(u64, preceding_bits, elem_bits) catch null;
+                },
+                .vector => vector: {
+                    const info = analyser.ip.indexToKey(type_index).vector_type;
+                    const elem_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.child)) orelse break :vector null;
+                    break :vector std.math.mul(u64, info.len, elem_bits) catch null;
+                },
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
+    if (!ty.is_type_val) return null;
+    return switch (ty.data) {
+        .pointer => |info| switch (info.size) {
+            .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
+            .one, .many, .c => builtin.target.ptrBitWidth() / 8,
+        },
+        .array => |info| blk: {
+            const declared_len = info.elem_count orelse break :blk null;
+            const len = std.math.add(u64, declared_len, @intFromBool(info.sentinel != .none)) catch break :blk null;
+            const elem_bytes = analyser.resolveTypeByteSize(info.elem_ty.*) orelse break :blk null;
+            break :blk std.math.mul(u64, len, elem_bytes) catch null;
+        },
+        .ip_index => |payload| blk: {
+            const type_index = payload.index orelse break :blk null;
+            const type_tag = analyser.ip.zigTypeTag(type_index) orelse break :blk null;
+            break :blk switch (type_tag) {
+                .int => (@as(u64, analyser.ip.intInfo(type_index, builtin.target).bits) + 7) / 8,
+                .float => switch (type_index) {
+                    .f80_type => @sizeOf(f80),
+                    .c_longdouble_type => builtin.target.cTypeByteSize(.longdouble),
+                    else => (@as(u64, analyser.ip.floatBits(type_index, builtin.target)) + 7) / 8,
+                },
+                .bool => 1,
+                .void, .noreturn => 0,
+                .pointer => switch (analyser.ip.indexToKey(type_index).pointer_type.flags.size) {
+                    .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
+                    .one, .many, .c => builtin.target.ptrBitWidth() / 8,
+                },
+                .array => array: {
+                    const info = analyser.ip.indexToKey(type_index).array_type;
+                    const len = std.math.add(u64, info.len, @intFromBool(info.sentinel != .none)) catch break :array null;
+                    const elem_bytes = analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.child)) orelse break :array null;
+                    break :array std.math.mul(u64, len, elem_bytes) catch null;
+                },
+                .vector => vector: {
+                    const info = analyser.ip.indexToKey(type_index).vector_type;
+                    const elem_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.child)) orelse break :vector null;
+                    const total_bits = std.math.mul(u64, info.len, elem_bits) catch break :vector null;
+                    const byte_count = std.math.divCeil(u64, total_bits, 8) catch break :vector null;
+                    break :vector if (byte_count == 0) 0 else std.math.ceilPowerOfTwo(u64, byte_count) catch null;
+                },
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn comptimeIntValue(analyser: *Analyser, value: u64) error{OutOfMemory}!Type {
+    const index = try analyser.ip.get(.{
+        .int_u64_value = .{ .ty = .comptime_int_type, .int = value },
+    });
+    return Type.fromIP(analyser, .comptime_int_type, index);
+}
+
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
     .{ "anyerror", .anyerror_type },
     .{ "anyframe", .anyframe_type },
@@ -2873,6 +2979,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (params.len < 1) return null;
                     var resolved_type = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
                     return try resolved_type.typeOf(analyser);
+                },
+                .bit_size_of, .size_of => |tag| {
+                    if (params.len != 1) return null;
+                    if (!analyser.evaluate_comptime_values) {
+                        return Type.fromIP(analyser, .comptime_int_type, null);
+                    }
+                    const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    const value = switch (tag) {
+                        .bit_size_of => analyser.resolveTypeBitSize(ty),
+                        .size_of => analyser.resolveTypeByteSize(ty),
+                        else => unreachable,
+                    } orelse return Type.fromIP(analyser, .comptime_int_type, null);
+                    return try analyser.comptimeIntValue(value);
                 },
                 .import => {
                     if (params.len == 0) return null;

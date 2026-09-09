@@ -516,6 +516,70 @@ test "generic function with comptime integer expressions" {
     }
 }
 
+test "generic function with comptime size builtins" {
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bits: [@bitSizeOf(T)]u8, bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const buffer: Buffer(u13) = undefined;
+        \\const bits = buffer.<cursor>
+    , &.{
+        .{ .label = "bits", .kind = .Field, .detail = "[13]u8" },
+        .{ .label = "bytes", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bits: [@bitSizeOf(T)]u8, bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const buffer: Buffer([3]u5) = undefined;
+        \\const bits = buffer.<cursor>
+    , &.{
+        .{ .label = "bits", .kind = .Field, .detail = "[21]u8" },
+        .{ .label = "bytes", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bits: [@bitSizeOf(T)]u8, bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const buffer: Buffer([3:0]u13) = undefined;
+        \\const fields = buffer.<cursor>
+    , &.{
+        .{ .label = "bits", .kind = .Field, .detail = "[61]u8" },
+        .{ .label = "bytes", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bits: [@bitSizeOf(T)]u8, bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const vector: Buffer(@Vector(3, u13)) = undefined;
+        \\const slice: Buffer([]u8) = undefined;
+        \\const vector_fields = vector.<cursor>
+    , &.{
+        .{ .label = "bits", .kind = .Field, .detail = "[39]u8" },
+        .{ .label = "bytes", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    const pointer_bits = @bitSizeOf(usize);
+    const source =
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bits: [@bitSizeOf(T)]u8, bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const buffer: Buffer([]u8) = undefined;
+        \\const fields = buffer.<cursor>
+    ;
+    const slice_bits = try std.fmt.allocPrint(allocator, "[{}]u8", .{pointer_bits * 2});
+    defer allocator.free(slice_bits);
+    const slice_bytes = try std.fmt.allocPrint(allocator, "[{}]u8", .{@sizeOf(usize) * 2});
+    defer allocator.free(slice_bytes);
+    try testCompletion(source, &.{
+        .{ .label = "bits", .kind = .Field, .detail = slice_bits },
+        .{ .label = "bytes", .kind = .Field, .detail = slice_bytes },
+    });
+}
+
 test "generic function with comptime local constants" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

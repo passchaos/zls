@@ -64,6 +64,12 @@ const escaped_char = '\n';
 const unicode_char = '界';
 //    ^^^^^^^^^^^^ (comptime_int)(30028)
 
+const bit_size_u13 = @bitSizeOf(u13);
+//    ^^^^^^^^^^^^ (comptime_int)(13)
+
+const byte_size_u13 = @sizeOf(u13);
+//    ^^^^^^^^^^^^^ (comptime_int)(2)
+
 comptime {
     @compileLog(comptime_div);
 }
