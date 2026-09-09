@@ -2169,6 +2169,37 @@ fn resolveFloatMulAddValue(
     return Type.fromIP(analyser, result_type, result_index);
 }
 
+fn resolveFloatVectorMulAddValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    a: InternPool.Index,
+    b: InternPool.Index,
+    c: InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const vector = switch (analyser.ip.indexToKey(result_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(vector.child) != .float) return null;
+    const a_values = analyser.aggregateValues(Type.fromIP(analyser, result_type, a)) orelse return null;
+    const b_values = analyser.aggregateValues(Type.fromIP(analyser, result_type, b)) orelse return null;
+    const c_values = analyser.aggregateValues(Type.fromIP(analyser, result_type, c)) orelse return null;
+    if (a_values.len != vector.len or b_values.len != vector.len or c_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const result = try analyser.resolveFloatMulAddValue(
+            vector.child,
+            a_values.at(@intCast(i), analyser.ip),
+            b_values.at(@intCast(i), analyser.ip),
+            c_values.at(@intCast(i), analyser.ip),
+        );
+        value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn floatFromIntValue(
     analyser: *Analyser,
     dest_ty: InternPool.Index,
@@ -5043,12 +5074,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     const result_type = ty.ipIndex() orelse return null;
                     const result = try ty.instanceTypeVal(analyser) orelse return null;
-                    if (!analyser.evaluate_comptime_values or analyser.ip.zigTypeTag(result_type) == .vector) {
-                        return result;
-                    }
+                    if (!analyser.evaluate_comptime_values) return result;
                     const a = try analyser.resolveCoercedIPValue(result_type, .of(params[1], handle)) orelse return result;
                     const b = try analyser.resolveCoercedIPValue(result_type, .of(params[2], handle)) orelse return result;
                     const c = try analyser.resolveCoercedIPValue(result_type, .of(params[3], handle)) orelse return result;
+                    if (analyser.ip.zigTypeTag(result_type) == .vector) {
+                        return try analyser.resolveFloatVectorMulAddValue(result_type, a, b, c) orelse result;
+                    }
                     return try analyser.resolveFloatMulAddValue(result_type, a, b, c) orelse result;
                 },
 

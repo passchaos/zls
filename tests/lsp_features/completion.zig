@@ -1371,6 +1371,21 @@ test "generic function with comptime value builtins" {
 
     try testCompletion(
         \\fn Select(comptime value: f32) type {
+        \\    const T = @Vector(2, f32);
+        \\    const result = @mulAdd(T, @as(T, .{ value, 3.0 }), @as(T, .{ 4.0, 5.0 }), @as(T, .{ -1.0, 2.0 }));
+        \\    return if (result[0] == 9 and result[1] == 17)
+        \\        struct { fused: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "fused", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: f32) type {
         \\    return if (value + 2 == 4.5 and 7 - @as(f64, value) == 4.5 and
         \\        value * 4 == 10 and 9 / @as(f64, value - 0.5) == 4.5)
         \\        struct { selected: u8 }

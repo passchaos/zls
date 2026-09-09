@@ -383,6 +383,14 @@ const mul_add_f32_value = @mulAdd(f32, 2.5, 4.0, -1.0);
 //    ^^^^^^^^^^^^^^^^^ (f32)(9)
 const mul_add_f64_value = @mulAdd(f64, -2.0, 4.0, 1.0);
 //    ^^^^^^^^^^^^^^^^^ (f64)(-7)
+const vector_mul_add = @mulAdd(
+    @Vector(2, f32),
+    @as(@Vector(2, f32), .{ 2.5, 3.0 }),
+    @as(@Vector(2, f32), .{ 4.0, 5.0 }),
+    @as(@Vector(2, f32), .{ -1.0, 2.0 }),
+);
+const vector_mul_add_value = vector_mul_add[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (f32)(17)
 const floor_value = @floor(@as(f32, -2.75));
 //    ^^^^^^^^^^^ (f32)(-3)
 const ceil_value = @ceil(@as(f64, -2.75));
