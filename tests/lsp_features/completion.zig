@@ -677,6 +677,30 @@ test "generic function with comptime vector select" {
     });
 }
 
+test "generic function with comptime vector arithmetic" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const lhs: @Vector(4, u8) = @splat(N);
+        \\    const rhs: @Vector(4, u8) = @splat(2);
+        \\    const sum = lhs + rhs;
+        \\    const difference = lhs - rhs;
+        \\    const product = lhs * rhs;
+        \\    const quotient = lhs / rhs;
+        \\    const remainder = lhs % @as(@Vector(4, u8), @splat(3));
+        \\    const float_quotient = @as(@Vector(2, f32), .{ 8.0, 5.0 }) / @as(@Vector(2, f32), @splat(2.0));
+        \\    return if (sum[0] == 6 and @reduce(.Add, sum) == 24 and difference[1] == 2 and
+        \\        product[2] == 8 and quotient[3] == 2 and remainder[0] == 1 and float_quotient[1] == 2.5)
+        \\        struct { vector: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "vector", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {

@@ -74,6 +74,19 @@ const bit_xor_u8_i16 = runtime_u8 ^ runtime_i16;
 const bit_not_u8 = ~runtime_u8;
 //    ^^^^^^^^^^ (u8)()
 
+const vector_add_value = (@as(@Vector(2, u8), .{ 1, 2 }) + @as(@Vector(2, u8), .{ 3, 4 }))[1];
+//    ^^^^^^^^^^^^^^^^ (u8)(6)
+const vector_sub_value = (@as(@Vector(2, i8), .{ 7, -2 }) - @as(@Vector(2, i8), .{ 3, 4 }))[1];
+//    ^^^^^^^^^^^^^^^^ (i8)(-6)
+const vector_mul_value = (@as(@Vector(2, u8), .{ 3, 4 }) * @as(@Vector(2, u8), .{ 5, 6 }))[1];
+//    ^^^^^^^^^^^^^^^^ (u8)(24)
+const vector_div_value = (@as(@Vector(2, u8), .{ 8, 9 }) / @as(@Vector(2, u8), .{ 2, 3 }))[1];
+//    ^^^^^^^^^^^^^^^^ (u8)(3)
+const vector_mod_value = (@as(@Vector(2, u8), .{ 8, 10 }) % @as(@Vector(2, u8), .{ 3, 4 }))[1];
+//    ^^^^^^^^^^^^^^^^ (u8)(2)
+const vector_float_div_value = (@as(@Vector(2, f32), .{ 8.0, 5.0 }) / @as(@Vector(2, f32), .{ 2.0, 2.0 }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (f32)(2.5)
+
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;
 var runtime_u16: u16 = 16;
