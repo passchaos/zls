@@ -449,6 +449,18 @@ const shl_exact_u128_value = @shlExact(@as(u128, 1), 127);
 //    ^^^^^^^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
 const shr_exact_u128_value = @shrExact(@as(u128, 170141183460469231731687303715884105728), 127);
 //    ^^^^^^^^^^^^^^^^^^^^ (u128)(1)
+const vector_div_trunc_value = @divTrunc(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(-2)
+const vector_div_floor_value = @divFloor(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(-3)
+const vector_div_exact_value = @divExact(@as(@Vector(2, i8), .{ 6, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(4)
+const vector_mod_value = @mod(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];
+//    ^^^^^^^^^^^^^^^^ (i8)(2)
+const vector_rem_value = @rem(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];
+//    ^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_float_div_floor_value = @divFloor(@as(@Vector(2, f32), .{ -7.5, 8.0 }), @as(@Vector(2, f32), .{ 2.0, 2.0 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-4)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

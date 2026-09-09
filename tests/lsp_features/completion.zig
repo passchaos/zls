@@ -1415,6 +1415,26 @@ test "generic function with comptime division builtins" {
     });
 
     try testCompletion(
+        \\fn Select(comptime N: i8) type {
+        \\    const lhs: @Vector(2, i8) = .{ N, 8 };
+        \\    const rhs: @Vector(2, i8) = .{ 3, 2 };
+        \\    const float_lhs: @Vector(2, f32) = .{ -7.5, 8.0 };
+        \\    const float_rhs: @Vector(2, f32) = .{ 2.0, 2.0 };
+        \\    return if (@divTrunc(lhs, rhs)[0] == -2 and @divFloor(lhs, rhs)[0] == -3 and
+        \\        @divExact(@as(@Vector(2, i8), .{ 6, 8 }), rhs)[1] == 4 and
+        \\        @mod(lhs, rhs)[0] == 2 and @rem(lhs, rhs)[0] == -1 and
+        \\        @divFloor(float_lhs, float_rhs)[0] == -4)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime value: f32) type {
         \\    return if (@min(value, 4) == 2.5 and @max(4, value) == 4 and
         \\        @divTrunc(-value * 3, 2) == -3 and @divFloor(-value * 3, 2) == -4 and

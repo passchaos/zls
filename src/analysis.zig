@@ -2822,6 +2822,51 @@ fn resolveFloatDivisionValue(
     return Type.fromIP(analyser, result_type, result_index);
 }
 
+fn resolveVectorDivisionValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (lhs_vector.len != rhs_vector.len) return null;
+    const lhs_values = analyser.aggregateValues(lhs) orelse return null;
+    const rhs_values = analyser.aggregateValues(rhs) orelse return null;
+    if (lhs_values.len != lhs_vector.len or rhs_values.len != rhs_vector.len) return null;
+
+    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const result_vector = switch (analyser.ip.indexToKey(result_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_values.at(@intCast(i), analyser.ip));
+        const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_values.at(@intCast(i), analyser.ip));
+        const result = try analyser.resolveIntegerDivisionValue(tag, lhs_element, rhs_element) orelse
+            try analyser.resolveFloatDivisionValue(tag, lhs_element, rhs_element) orelse
+            try analyser.resolveFloatRemainderValue(tag, lhs_element, rhs_element);
+        value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(result_vector.child) else try analyser.ip.getUnknown(result_vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn resolveFixedWidthIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -5286,7 +5331,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (analyser.evaluate_comptime_values) {
                         if (try analyser.resolveIntegerDivisionValue(tag, lhs, rhs) orelse
                             try analyser.resolveFloatDivisionValue(tag, lhs, rhs) orelse
-                            try analyser.resolveFloatRemainderValue(tag, lhs, rhs)) |value| return value;
+                            try analyser.resolveFloatRemainderValue(tag, lhs, rhs) orelse
+                            try analyser.resolveVectorDivisionValue(tag, lhs, rhs)) |value| return value;
                     }
                     lhs = lhs.withoutIPIndex(analyser);
                     rhs = rhs.withoutIPIndex(analyser);
