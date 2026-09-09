@@ -970,6 +970,31 @@ test "generic function with comptime unknown field expressions" {
 
 test "generic function with comptime condition" {
     try testCompletion(
+        \\fn Select(comptime name: []const u8) type {
+        \\    return if (name.len == 5 and name[0] == 'f')
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select("field") = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\fn Select(comptime name: []const u8) type {
+        \\    return if (name[0] == 'f')
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select("other") = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime enabled: bool) type {
         \\    return if (enabled)
         \\        struct { active: u8 }

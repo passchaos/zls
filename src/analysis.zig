@@ -1203,6 +1203,23 @@ fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index)
 }
 
 pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: BracketAccess) error{OutOfMemory}!?Binding {
+    if (analyser.evaluate_comptime_values and lhs_binding.type.data == .string_value) {
+        const bytes = lhs_binding.type.data.string_value.bytes;
+        switch (rhs) {
+            .single => |index| if (index != null and index.? < bytes.len) {
+                const byte = bytes[@intCast(index.?)];
+                const value = try analyser.ip.get(.{
+                    .int_u64_value = .{ .ty = .u8_type, .int = byte },
+                });
+                return .{
+                    .type = Type.fromIP(analyser, .u8_type, value),
+                    .is_const = true,
+                };
+            },
+            .open, .range => {},
+        }
+    }
+
     const lhs = lhs_binding.type.runtimeType(analyser);
     if (lhs.is_type_val) return null;
 
