@@ -4139,23 +4139,52 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
 
                     var selected = resolved[0];
-                    var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
-                        return Type.fromIP(analyser, result_type, null);
-                    for (resolved[1..]) |candidate| {
-                        const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
-                            return Type.fromIP(analyser, result_type, null);
-                        const prefer_candidate = switch (tag) {
-                            .min => candidate_value < selected_value,
-                            .max => candidate_value > selected_value,
-                            else => unreachable,
-                        };
-                        if (prefer_candidate) {
-                            selected = candidate;
-                            selected_value = candidate_value;
-                        }
+                    switch (analyser.ip.zigTypeTag(result_type) orelse return Type.fromIP(analyser, result_type, null)) {
+                        .int, .comptime_int => {
+                            var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
+                                return Type.fromIP(analyser, result_type, null);
+                            for (resolved[1..]) |candidate| {
+                                const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
+                                    return Type.fromIP(analyser, result_type, null);
+                                const prefer_candidate = switch (tag) {
+                                    .min => candidate_value < selected_value,
+                                    .max => candidate_value > selected_value,
+                                    else => unreachable,
+                                };
+                                if (prefer_candidate) {
+                                    selected = candidate;
+                                    selected_value = candidate_value;
+                                }
+                            }
+                        },
+                        .float, .comptime_float => {
+                            var selected_value = analyser.floatValue(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
+                                return Type.fromIP(analyser, result_type, null);
+                            if (!std.math.isFinite(selected_value)) return Type.fromIP(analyser, result_type, null);
+                            for (resolved[1..]) |candidate| {
+                                const candidate_value = analyser.floatValue(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
+                                    return Type.fromIP(analyser, result_type, null);
+                                if (!std.math.isFinite(candidate_value)) return Type.fromIP(analyser, result_type, null);
+                                const prefer_candidate = switch (tag) {
+                                    .min => candidate_value < selected_value,
+                                    .max => candidate_value > selected_value,
+                                    else => unreachable,
+                                };
+                                if (prefer_candidate) {
+                                    selected = candidate;
+                                    selected_value = candidate_value;
+                                }
+                            }
+                        },
+                        else => return Type.fromIP(analyser, result_type, null),
                     }
                     const selected_index = selected.ipIndex().?;
                     if (analyser.ip.typeOf(selected_index) == result_type) return selected;
+                    if (analyser.ip.zigTypeTag(result_type) == .float) {
+                        const coerced = try analyser.coerceFloatValue(result_type, selected_index) orelse
+                            return Type.fromIP(analyser, result_type, null);
+                        return Type.fromIP(analyser, result_type, coerced);
+                    }
                     var err_msg: ErrorMsg = undefined;
                     const coerced = try analyser.ip.coerce(analyser.arena, result_type, selected_index, builtin.target, &err_msg);
                     if (coerced == .none or analyser.ip.isUnknown(coerced)) {

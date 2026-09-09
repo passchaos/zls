@@ -846,6 +846,21 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "direct", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime low: f32, comptime high: f64) type {
+        \\    const minimum: i8 = @intFromFloat(@min(low, high));
+        \\    const maximum: i8 = @intFromFloat(@max(-low, -high));
+        \\    return if (minimum == 2 and maximum == -2)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5, 4.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {

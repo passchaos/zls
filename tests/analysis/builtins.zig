@@ -214,6 +214,10 @@ const float_less_than = @as(f64, -42.5) < @as(f32, 42.5);
 //    ^^^^^^^^^^^^^^^ (bool)(true)
 const float_signed_zero_equal = @as(f32, -0.0) == @as(f64, 0.0);
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const float_min_value = @min(@as(f32, 2.5), @as(f64, 4.5));
+//    ^^^^^^^^^^^^^^^ (f64)(2.5)
+const float_max_value = @max(@as(f32, -2.5), @as(f64, -4.5));
+//    ^^^^^^^^^^^^^^^ (f64)(-2.5)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);
