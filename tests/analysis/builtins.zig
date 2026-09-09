@@ -95,6 +95,14 @@ const reduce_bool_or_value = @reduce(.Or, @as(@Vector(3, bool), @splat(false)));
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const reduce_bool_xor_value = @reduce(.Xor, @as(@Vector(3, bool), @splat(true)));
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const reduce_float_add_value = @reduce(.Add, @as(@Vector(4, f32), @splat(2.5)));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (f32)(10)
+const reduce_float_mul_value = @reduce(.Mul, @as(@Vector(3, f64), @splat(-2.0)));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (f64)(-8)
+const reduce_float_min_zero = @reduce(.Min, @as(@Vector(2, f32), .{ 0.0, -0.0 }));
+//    ^^^^^^^^^^^^^^^^^^^^^ (f32)(-0)
+const reduce_float_max_zero = @reduce(.Max, @as(@Vector(2, f64), .{ -0.0, 0.0 }));
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(0)
 
 const invalid_builtin_00 = @sqrt(null);
 //    ^^^^^^^^^^^^^^^^^^ (unknown)()

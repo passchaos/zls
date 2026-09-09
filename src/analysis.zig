@@ -1258,6 +1258,45 @@ fn resolveSplatValue(
     } });
 }
 
+fn resolveAggregateLiteralValue(
+    analyser: *Analyser,
+    aggregate_type: InternPool.Index,
+    options: ResolveOptions,
+) Error!?InternPool.Index {
+    const tree = &options.node_handle.handle.tree;
+    switch (tree.nodeTag(options.node_handle.node)) {
+        .array_init_one,
+        .array_init_one_comma,
+        .array_init_dot_two,
+        .array_init_dot_two_comma,
+        .array_init_dot,
+        .array_init_dot_comma,
+        .array_init,
+        .array_init_comma,
+        => {},
+        else => return null,
+    }
+    var buffer: [2]Ast.Node.Index = undefined;
+    const array_init = tree.fullArrayInit(&buffer, options.node_handle.node).?;
+    const child_type, const len = switch (analyser.ip.indexToKey(aggregate_type)) {
+        .array_type => |array| .{ array.child, array.len },
+        .vector_type => |vector| .{ vector.child, vector.len },
+        else => return null,
+    };
+    if (len != array_init.ast.elements.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, array_init.ast.elements.len);
+    defer analyser.gpa.free(values);
+    for (array_init.ast.elements, values) |element, *value| {
+        value.* = try analyser.resolveCoercedIPValue(child_type, .of(element, options.node_handle.handle)) orelse
+            try analyser.ip.getUnknown(child_type);
+    }
+    return try analyser.ip.get(.{ .aggregate = .{
+        .ty = aggregate_type,
+        .values = try analyser.ip.getIndexSlice(values),
+    } });
+}
+
 fn aggregateValues(analyser: *Analyser, value: Type) ?InternPool.Index.Slice {
     const payload = switch (value.data) {
         .ip_index => |payload| payload,
@@ -1773,6 +1812,7 @@ fn resolveCoercedIPValue(
     var value_options = options;
     var integer_cast: ?std.zig.BuiltinFn.Tag = null;
     const tree = &options.node_handle.handle.tree;
+    if (try analyser.resolveAggregateLiteralValue(ip_ty, options)) |value| return value;
     switch (tree.nodeTag(options.node_handle.node)) {
         .builtin_call,
         .builtin_call_comma,
@@ -2759,6 +2799,29 @@ fn resolveReduceOperation(
     };
 }
 
+fn floatReduceValue(
+    comptime T: type,
+    analyser: *Analyser,
+    operation: std.builtin.ReduceOp,
+    values: InternPool.Index.Slice,
+) ?f128 {
+    var result: T = @floatCast(analyser.floatValue(values.at(0, analyser.ip)) orelse return null);
+    if (!std.math.isFinite(result)) return null;
+    for (1..values.len) |i| {
+        const value: T = @floatCast(analyser.floatValue(values.at(@intCast(i), analyser.ip)) orelse return null);
+        if (!std.math.isFinite(value)) return null;
+        result = switch (operation) {
+            .Min => @min(result, value),
+            .Max => @max(result, value),
+            .Add => result + value,
+            .Mul => result * value,
+            else => return null,
+        };
+        if (!std.math.isFinite(result)) return null;
+    }
+    return @floatCast(result);
+}
+
 fn resolveReduceValue(
     analyser: *Analyser,
     operation: std.builtin.ReduceOp,
@@ -2797,6 +2860,21 @@ fn resolveReduceValue(
             };
         }
         return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+    }
+    if (analyser.ip.zigTypeTag(vector.child) == .float) {
+        const result = switch (vector.child) {
+            .f16_type => floatReduceValue(f16, analyser, operation, values),
+            .f32_type => floatReduceValue(f32, analyser, operation, values),
+            .f64_type => floatReduceValue(f64, analyser, operation, values),
+            .f80_type => floatReduceValue(f80, analyser, operation, values),
+            .f128_type => floatReduceValue(f128, analyser, operation, values),
+            else => null,
+        } orelse return null;
+        const result_index = try analyser.coerceFloatValue(
+            vector.child,
+            try analyser.ip.get(.{ .float_comptime_value = result }),
+        ) orelse return null;
+        return Type.fromIP(analyser, vector.child, result_index);
     }
 
     if (analyser.ip.zigTypeTag(vector.child) != .int) return null;

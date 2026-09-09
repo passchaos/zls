@@ -617,6 +617,25 @@ test "generic function with comptime integer and boolean reductions" {
     });
 }
 
+test "generic function with comptime float reductions" {
+    try testCompletion(
+        \\fn Select(comptime value: f32) type {
+        \\    const values: @Vector(4, f32) = @splat(value);
+        \\    return if (@reduce(.Add, values) == 10 and
+        \\        @reduce(.Mul, @as(@Vector(3, f64), @splat(-2.0))) == -8 and
+        \\        @reduce(.Min, @as(@Vector(2, f32), .{ 0.0, -0.0 })) == -0.0 and
+        \\        @reduce(.Max, @as(@Vector(2, f64), .{ -0.0, 0.0 })) == 0.0)
+        \\        struct { reduced: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {
