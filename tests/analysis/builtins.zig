@@ -192,6 +192,14 @@ const bit_cast_i8_value: i8 = @bitCast(@as(u8, 255));
 //    ^^^^^^^^^^^^^^^^^ (i8)(-1)
 const bit_cast_u8_value: u8 = @bitCast(@as(i8, -1));
 //    ^^^^^^^^^^^^^^^^^ (u8)(255)
+const float_coercion_value: f32 = @as(f32, 42.75);
+//    ^^^^^^^^^^^^^^^^^^^^ (f32)(42.75)
+const negative_float_value: f64 = -@as(f64, 42.75);
+//    ^^^^^^^^^^^^^^^^^^^^ (f64)(-42.75)
+const int_from_float_u8_value: u8 = @intFromFloat(@as(f32, 42.75));
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(42)
+const int_from_float_i8_value: i8 = @intFromFloat(@as(f64, -42.75));
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-42)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

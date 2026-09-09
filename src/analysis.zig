@@ -1656,7 +1656,8 @@ fn resolveCoercedIPValue(
             const name = tree.tokenSlice(tree.nodeMainToken(options.node_handle.node));
             if (std.mem.eql(u8, name, "@intCast") or
                 std.mem.eql(u8, name, "@truncate") or
-                std.mem.eql(u8, name, "@bitCast"))
+                std.mem.eql(u8, name, "@bitCast") or
+                std.mem.eql(u8, name, "@intFromFloat"))
             {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, options.node_handle.node).?;
@@ -1666,6 +1667,8 @@ fn resolveCoercedIPValue(
                     .truncate
                 else if (std.mem.eql(u8, name, "@bitCast"))
                     .bit_cast
+                else if (std.mem.eql(u8, name, "@intFromFloat"))
+                    .int_from_float
                 else
                     .int_cast;
             }
@@ -1675,12 +1678,21 @@ fn resolveCoercedIPValue(
 
     const ip_index = try analyser.resolveInternPoolValue(value_options) orelse return null;
     if (analyser.ip.isUndefined(ip_index)) return null;
+    const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
     if (integer_cast) |tag| {
         if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
-        const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
+        if (tag == .int_from_float) {
+            if (source_tag != .float and source_tag != .comptime_float) return null;
+            return try analyser.intFromFloatValue(ip_ty, ip_index);
+        }
         if (source_tag != .int and source_tag != .comptime_int) return null;
         if (tag == .truncate) return try analyser.truncateIntValue(ip_ty, ip_index);
         if (tag == .bit_cast) return try analyser.bitCastIntValue(ip_ty, ip_index);
+    }
+    if (analyser.ip.zigTypeTag(ip_ty) == .float and
+        (source_tag == .float or source_tag == .comptime_float))
+    {
+        if (try analyser.coerceFloatValue(ip_ty, ip_index)) |coerced| return coerced;
     }
 
     var arena_allocator: std.heap.ArenaAllocator = .init(analyser.gpa);
@@ -1693,6 +1705,74 @@ fn resolveCoercedIPValue(
     if (new_index == .none) return null;
     if (analyser.ip.isUnknown(new_index)) return null;
     return new_index;
+}
+
+fn coerceFloatValue(
+    analyser: *Analyser,
+    dest_ty: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const float_value: f128 = switch (analyser.ip.indexToKey(value)) {
+        .float_16_value => |float| @floatCast(float),
+        .float_32_value => |float| @floatCast(float),
+        .float_64_value => |float| @floatCast(float),
+        .float_80_value => |float| @floatCast(float),
+        .float_128_value, .float_comptime_value => |float| float,
+        else => return null,
+    };
+    return switch (dest_ty) {
+        .f16_type => try analyser.ip.get(.{ .float_16_value = @floatCast(float_value) }),
+        .f32_type => try analyser.ip.get(.{ .float_32_value = @floatCast(float_value) }),
+        .f64_type => try analyser.ip.get(.{ .float_64_value = @floatCast(float_value) }),
+        .f80_type => try analyser.ip.get(.{ .float_80_value = @floatCast(float_value) }),
+        .f128_type => try analyser.ip.get(.{ .float_128_value = float_value }),
+        else => null,
+    };
+}
+
+fn intFromFloatValue(
+    analyser: *Analyser,
+    dest_ty: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const info = analyser.ip.intInfo(dest_ty, builtin.target);
+    if (info.bits > 64) return null;
+    const float_value: f128 = switch (analyser.ip.indexToKey(value)) {
+        .float_16_value => |float| @floatCast(float),
+        .float_32_value => |float| @floatCast(float),
+        .float_64_value => |float| @floatCast(float),
+        .float_80_value => |float| @floatCast(float),
+        .float_128_value, .float_comptime_value => |float| float,
+        else => return null,
+    };
+    if (!std.math.isFinite(float_value)) return null;
+    const truncated = @trunc(float_value);
+    return switch (info.signedness) {
+        .unsigned => unsigned: {
+            const max = if (info.bits == 64)
+                std.math.maxInt(u64)
+            else if (info.bits == 0)
+                0
+            else
+                (@as(u64, 1) << @intCast(info.bits)) - 1;
+            if (truncated < 0 or truncated > @as(f128, @floatFromInt(max))) return null;
+            break :unsigned try analyser.ip.get(.{ .int_u64_value = .{
+                .ty = dest_ty,
+                .int = @intFromFloat(truncated),
+            } });
+        },
+        .signed => signed: {
+            if (info.bits == 0) return null;
+            const min = -(@as(i128, 1) << @intCast(info.bits - 1));
+            const max = (@as(i128, 1) << @intCast(info.bits - 1)) - 1;
+            if (truncated < @as(f128, @floatFromInt(min)) or truncated > @as(f128, @floatFromInt(max))) return null;
+            const int_value: i64 = @intFromFloat(truncated);
+            break :signed if (int_value >= 0)
+                try analyser.ip.get(.{ .int_u64_value = .{ .ty = dest_ty, .int = @intCast(int_value) } })
+            else
+                try analyser.ip.get(.{ .int_i64_value = .{ .ty = dest_ty, .int = int_value } });
+        },
+    };
 }
 
 fn bitCastIntValue(
@@ -2338,6 +2418,19 @@ fn resolveNegationValue(
         else => return null,
     };
     const index = payload.index orelse return null;
+    if (analyser.ip.zigTypeTag(payload.type) == .float or payload.type == .comptime_float_type) {
+        if (wrapping) return null;
+        const result_index = switch (analyser.ip.indexToKey(index)) {
+            .float_16_value => |value| try analyser.ip.get(.{ .float_16_value = -value }),
+            .float_32_value => |value| try analyser.ip.get(.{ .float_32_value = -value }),
+            .float_64_value => |value| try analyser.ip.get(.{ .float_64_value = -value }),
+            .float_80_value => |value| try analyser.ip.get(.{ .float_80_value = -value }),
+            .float_128_value => |value| try analyser.ip.get(.{ .float_128_value = -value }),
+            .float_comptime_value => |value| try analyser.ip.get(.{ .float_comptime_value = -value }),
+            else => return null,
+        };
+        return Type.fromIP(analyser, payload.type, result_index);
+    }
 
     if (payload.type == .comptime_int_type) {
         const value = analyser.ip.toInt(index, i128) orelse return null;

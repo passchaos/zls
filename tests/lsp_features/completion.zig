@@ -781,6 +781,19 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "direct", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime positive: u8, comptime negative: i8) type {
+        \\    return if (positive == 42 and negative == -42)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(@intFromFloat(@as(f32, 42.75)), @intFromFloat(@as(f64, -42.75))) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {
