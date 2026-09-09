@@ -1424,6 +1424,66 @@ test "generic function with comptime enum switch" {
 
 test "generic function with comptime intFromEnum" {
     try testCompletion(
+        \\const Mode = enum(u8) { fast = 3, safe = 7 };
+        \\fn Select(comptime raw: u8) type {
+        \\    const mode: Mode = @enumFromInt(raw);
+        \\    return if (mode == .safe and @tagName(mode)[0] == 's')
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\const Mode = enum(i8) { negative = -4, zero = 0, positive };
+        \\fn Select(comptime raw: i8) type {
+        \\    const mode: Mode = @enumFromInt(raw);
+        \\    return switch (mode) {
+        \\        .negative => struct { matched: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(-4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\const Mode = enum { zero, one, two };
+        \\fn Select(comptime raw: u8) type {
+        \\    const mode: Mode = @enumFromInt(raw);
+        \\    return if (mode == .two)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\const Mode = enum(u8) { first, second, _ };
+        \\fn Select(comptime raw: u8) type {
+        \\    const mode: Mode = @enumFromInt(raw);
+        \\    return switch (mode) {
+        \\        .first => struct { first: u8 },
+        \\        .second => struct { second: u8 },
+        \\        _ => struct { other: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(42) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "u8" },
+        .{ .label = "second", .kind = .Field, .detail = "u8" },
+        .{ .label = "other", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\const Mode = enum { zero, one, two };
         \\fn Buffer(comptime mode: Mode) type {
         \\    return struct { items: [@intFromEnum(mode)]u8 };

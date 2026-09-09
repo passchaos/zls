@@ -193,6 +193,8 @@ const enum_tag_name = @tagName(IntEnum.second);
 //    ^^^^^^^^^^^^^ (*const [6:0]u8)()
 const enum_tag_name_len = enum_tag_name.len;
 //    ^^^^^^^^^^^^^^^^^ (usize)(6)
+const enum_from_int: IntEnum = @enumFromInt(5);
+//    ^^^^^^^^^^^^^ (IntEnum)()
 
 const panic = @panic("foo");
 //    ^^^^^ (noreturn)()

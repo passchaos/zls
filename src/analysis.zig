@@ -1716,6 +1716,18 @@ fn resolveEnumValueTag(
             if (!lhs.eql(enum_type)) return null;
             break :tag offsets.identifierTokenToNameSlice(tree, name_token);
         },
+        .builtin_call,
+        .builtin_call_comma,
+        .builtin_call_two,
+        .builtin_call_two_comma,
+        => tag: {
+            if (!std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node_handle.node)), "@enumFromInt")) return null;
+            var buffer: [2]Ast.Node.Index = undefined;
+            const params = tree.builtinCallParams(&buffer, node_handle.node).?;
+            if (params.len != 1) return null;
+            const int_value = try analyser.resolveIntegerLiteral(i128, .of(params[0], node_handle.handle)) orelse return null;
+            break :tag try analyser.resolveEnumTagFromIntValue(enum_type, int_value) orelse return null;
+        },
         else => return null,
     };
     const decl = try enum_type.lookupSymbol(analyser, tag) orelse return null;
@@ -1793,6 +1805,42 @@ fn resolveEnumTagIntValue(
             return coerced;
         }
 
+        if (next_value) |value| {
+            next_value = std.math.add(i128, value, 1) catch null;
+        }
+    }
+    return null;
+}
+
+fn resolveEnumTagFromIntValue(
+    analyser: *Analyser,
+    enum_type: Type,
+    int_value: i128,
+) Error!?[]const u8 {
+    const container = switch (enum_type.data) {
+        .container => |container| container,
+        else => return null,
+    };
+    const handle = container.scope_handle.handle;
+    const tree = &handle.tree;
+    const node = container.scope_handle.toNode();
+    var buffer: [2]Ast.Node.Index = undefined;
+    const declaration = tree.fullContainerDecl(&buffer, node) orelse return null;
+    if (tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return null;
+
+    var next_value: ?i128 = 0;
+    for (declaration.ast.members) |member| {
+        const field = tree.fullContainerField(member) orelse continue;
+        if (field.ast.value_expr.unwrap()) |value_expr| {
+            const value_index = try analyser.resolveInternPoolValue(.{
+                .node_handle = .of(value_expr, handle),
+                .container_type = enum_type,
+            });
+            next_value = if (value_index) |index| analyser.ip.toInt(index, i128) else null;
+        }
+
+        const tag = offsets.identifierTokenToNameSlice(tree, field.ast.main_token);
+        if (next_value == int_value) return tag;
         if (next_value) |value| {
             next_value = std.math.add(i128, value, 1) catch null;
         }
