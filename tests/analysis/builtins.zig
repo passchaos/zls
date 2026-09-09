@@ -250,6 +250,22 @@ const sqrt_f32_value = @sqrt(@as(f32, 9.0));
 //    ^^^^^^^^^^^^^^ (f32)(3)
 const sqrt_f64_negative_zero = @sqrt(@as(f64, -0.0));
 //    ^^^^^^^^^^^^^^^^^^^^^^ (f64)(-0)
+const sin_f32_value = @sin(@as(f32, 0.0));
+//    ^^^^^^^^^^^^^ (f32)(0)
+const cos_f64_value = @cos(@as(f64, 0.0));
+//    ^^^^^^^^^^^^^ (f64)(1)
+const tan_f32_value = @tan(@as(f32, 0.0));
+//    ^^^^^^^^^^^^^ (f32)(0)
+const exp_f64_value = @exp(@as(f64, 0.0));
+//    ^^^^^^^^^^^^^ (f64)(1)
+const exp2_f32_value = @exp2(@as(f32, 3.0));
+//    ^^^^^^^^^^^^^^ (f32)(8)
+const log_f64_value = @log(@as(f64, 1.0));
+//    ^^^^^^^^^^^^^ (f64)(0)
+const log2_f32_value = @log2(@as(f32, 8.0));
+//    ^^^^^^^^^^^^^^ (f32)(3)
+const log10_f64_value = @log10(@as(f64, 100.0));
+//    ^^^^^^^^^^^^^^^ (f64)(2)
 const float_mod_value = @mod(@as(f32, -7.5), @as(f64, 5.0));
 //    ^^^^^^^^^^^^^^^ (f64)(2.5)
 const float_rem_value = @rem(@as(f32, -7.5), @as(f64, 5.0));

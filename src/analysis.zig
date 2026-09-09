@@ -1784,17 +1784,50 @@ fn resolveFloatRoundingValue(
     return Type.fromIP(analyser, payload.type, result_index);
 }
 
-fn resolveSqrtValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+fn floatUnaryBuiltinValue(
+    comptime T: type,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: f128,
+) ?f128 {
+    const value: T = @floatCast(operand);
+    if (!std.math.isFinite(value)) return null;
+    const result: T = switch (tag) {
+        .sin => @sin(value),
+        .cos => @cos(value),
+        .tan => @tan(value),
+        .exp => @exp(value),
+        .exp2 => @exp2(value),
+        .log => @log(value),
+        .log2 => @log2(value),
+        .log10 => @log10(value),
+        .sqrt => @sqrt(value),
+        else => return null,
+    };
+    if (!std.math.isFinite(result)) return null;
+    return @floatCast(result);
+}
+
+fn resolveFloatUnaryBuiltinValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
     const payload = switch (operand.data) {
         .ip_index => |payload| payload,
         else => return null,
     };
-    const index = payload.index orelse return null;
-    const value = analyser.floatValue(index) orelse return null;
-    if (!std.math.isFinite(value) or value < 0) return null;
+    const value = analyser.floatValue(payload.index orelse return null) orelse return null;
+    const result = switch (payload.type) {
+        .f16_type => floatUnaryBuiltinValue(f16, tag, value),
+        .f32_type => floatUnaryBuiltinValue(f32, tag, value),
+        .f64_type => floatUnaryBuiltinValue(f64, tag, value),
+        .f80_type => floatUnaryBuiltinValue(f80, tag, value),
+        .f128_type, .comptime_float_type => floatUnaryBuiltinValue(f128, tag, value),
+        else => null,
+    } orelse return null;
     const result_index = try analyser.coerceFloatValue(
         payload.type,
-        try analyser.ip.get(.{ .float_comptime_value = @sqrt(value) }),
+        try analyser.ip.get(.{ .float_comptime_value = result }),
     ) orelse return null;
     return Type.fromIP(analyser, payload.type, result_index);
 }
@@ -4090,17 +4123,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .log,
                 .log2,
                 .log10,
-                => {
-                    if (params.len != 1) return null;
-                    const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
-                    const payload = switch (ty.data) {
-                        .ip_index => |payload| payload,
-                        else => return null,
-                    };
-                    if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
-                    return Type.fromIP(analyser, payload.type, null);
-                },
-                .sqrt => {
+                .sqrt,
+                => |tag| {
                     if (params.len != 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
                     const payload = switch (ty.data) {
@@ -4109,7 +4133,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     };
                     if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
                     if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(payload.type) != .vector) {
-                        if (try analyser.resolveSqrtValue(ty)) |value| return value;
+                        if (try analyser.resolveFloatUnaryBuiltinValue(tag, ty)) |value| return value;
                     }
                     return Type.fromIP(analyser, payload.type, null);
                 },

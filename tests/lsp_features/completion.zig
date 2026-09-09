@@ -880,6 +880,22 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime zero32: f32, comptime zero64: f64) type {
+        \\    return if (@sin(zero32) == 0 and @cos(zero64) == 1 and @tan(zero32) == 0 and
+        \\        @exp(zero64) == 1 and @exp2(@as(f32, 3.0)) == 8 and
+        \\        @log(@as(f64, 1.0)) == 0 and @log2(@as(f32, 8.0)) == 3 and
+        \\        @log10(@as(f64, 100.0)) == 2)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(0.0, 0.0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {
