@@ -1270,6 +1270,19 @@ test "generic function with comptime unknown field expressions" {
 
 test "generic function with comptime condition" {
     try testCompletion(
+        \\fn Select(comptime lhs: f32, comptime rhs: f64) type {
+        \\    return if (lhs == rhs and -42.5 < lhs and @as(f32, -0.0) == @as(f64, 0.0))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(42.5, 42.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime value: u128) type {
         \\    return if (value > 5 and value == 340282366920938463463374607431768211455)
         \\        struct { matched: u8 }

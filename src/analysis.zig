@@ -1729,14 +1729,7 @@ fn coerceFloatValue(
     dest_ty: InternPool.Index,
     value: InternPool.Index,
 ) error{OutOfMemory}!?InternPool.Index {
-    const float_value: f128 = switch (analyser.ip.indexToKey(value)) {
-        .float_16_value => |float| @floatCast(float),
-        .float_32_value => |float| @floatCast(float),
-        .float_64_value => |float| @floatCast(float),
-        .float_80_value => |float| @floatCast(float),
-        .float_128_value, .float_comptime_value => |float| float,
-        else => return null,
-    };
+    const float_value = analyser.floatValue(value) orelse return null;
     return switch (dest_ty) {
         .f16_type => try analyser.ip.get(.{ .float_16_value = @floatCast(float_value) }),
         .f32_type => try analyser.ip.get(.{ .float_32_value = @floatCast(float_value) }),
@@ -1744,6 +1737,17 @@ fn coerceFloatValue(
         .f80_type => try analyser.ip.get(.{ .float_80_value = @floatCast(float_value) }),
         .f128_type => try analyser.ip.get(.{ .float_128_value = float_value }),
         else => null,
+    };
+}
+
+fn floatValue(analyser: *Analyser, value: InternPool.Index) ?f128 {
+    return switch (analyser.ip.indexToKey(value)) {
+        .float_16_value => |float| @floatCast(float),
+        .float_32_value => |float| @floatCast(float),
+        .float_64_value => |float| @floatCast(float),
+        .float_80_value => |float| @floatCast(float),
+        .float_128_value, .float_comptime_value => |float| float,
+        else => return null,
     };
 }
 
@@ -1769,14 +1773,7 @@ fn intFromFloatValue(
 ) error{OutOfMemory}!?InternPool.Index {
     const info = analyser.ip.intInfo(dest_ty, builtin.target);
     if (info.bits > 64) return null;
-    const float_value: f128 = switch (analyser.ip.indexToKey(value)) {
-        .float_16_value => |float| @floatCast(float),
-        .float_32_value => |float| @floatCast(float),
-        .float_64_value => |float| @floatCast(float),
-        .float_80_value => |float| @floatCast(float),
-        .float_128_value, .float_comptime_value => |float| float,
-        else => return null,
-    };
+    const float_value = analyser.floatValue(value) orelse return null;
     if (!std.math.isFinite(float_value)) return null;
     const truncated = @trunc(float_value);
     return switch (info.signedness) {
@@ -2346,10 +2343,14 @@ fn resolveComparisonValue(
     }
     const lhs_int = if (lhs_index) |index| analyser.ip.toInt(index, i256) else null;
     const rhs_int = if (rhs_index) |index| analyser.ip.toInt(index, i256) else null;
+    const lhs_float = if (lhs_index) |index| analyser.floatValue(index) else null;
+    const rhs_float = if (rhs_index) |index| analyser.floatValue(index) else null;
     const result = switch (tag) {
         .equal_equal, .bang_equal => blk: {
             const equal = if (lhs_int != null and rhs_int != null)
                 lhs_int.? == rhs_int.?
+            else if (lhs_float != null and rhs_float != null)
+                lhs_float.? == rhs_float.?
             else if (lhs_index != null and rhs_index != null)
                 lhs_index.? == rhs_index.?
             else if (lhs.is_type_val and rhs.is_type_val and lhs.data != .ip_index and rhs.data != .ip_index)
@@ -2363,15 +2364,25 @@ fn resolveComparisonValue(
         .less_or_equal,
         .greater_or_equal,
         => blk: {
-            const lhs_value = lhs_int orelse return null;
-            const rhs_value = rhs_int orelse return null;
-            break :blk switch (tag) {
-                .less_than => lhs_value < rhs_value,
-                .greater_than => lhs_value > rhs_value,
-                .less_or_equal => lhs_value <= rhs_value,
-                .greater_or_equal => lhs_value >= rhs_value,
-                else => unreachable,
-            };
+            if (lhs_int != null and rhs_int != null) {
+                break :blk switch (tag) {
+                    .less_than => lhs_int.? < rhs_int.?,
+                    .greater_than => lhs_int.? > rhs_int.?,
+                    .less_or_equal => lhs_int.? <= rhs_int.?,
+                    .greater_or_equal => lhs_int.? >= rhs_int.?,
+                    else => unreachable,
+                };
+            }
+            if (lhs_float != null and rhs_float != null) {
+                break :blk switch (tag) {
+                    .less_than => lhs_float.? < rhs_float.?,
+                    .greater_than => lhs_float.? > rhs_float.?,
+                    .less_or_equal => lhs_float.? <= rhs_float.?,
+                    .greater_or_equal => lhs_float.? >= rhs_float.?,
+                    else => unreachable,
+                };
+            }
+            return null;
         },
         else => return null,
     };

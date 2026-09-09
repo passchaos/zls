@@ -208,6 +208,12 @@ const float_cast_f32_value: f32 = @floatCast(@as(f64, 42.75));
 //    ^^^^^^^^^^^^^^^^^^^^ (f32)(42.75)
 const float_cast_f64_value: f64 = @floatCast(@as(f32, -42.75));
 //    ^^^^^^^^^^^^^^^^^^^^ (f64)(-42.75)
+const float_equal = @as(f32, 42.5) == @as(f64, 42.5);
+//    ^^^^^^^^^^^ (bool)(true)
+const float_less_than = @as(f64, -42.5) < @as(f32, 42.5);
+//    ^^^^^^^^^^^^^^^ (bool)(true)
+const float_signed_zero_equal = @as(f32, -0.0) == @as(f64, 0.0);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);
