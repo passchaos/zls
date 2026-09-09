@@ -1665,8 +1665,7 @@ fn resolveCoercedIPValue(
         else => {},
     }
 
-    const ty = try analyser.resolveTypeOfNode(value_options) orelse return null;
-    const ip_index = ty.ipIndex() orelse return null;
+    const ip_index = try analyser.resolveInternPoolValue(value_options) orelse return null;
     if (analyser.ip.isUndefined(ip_index)) return null;
     if (integer_cast) |tag| {
         if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
@@ -3076,6 +3075,54 @@ fn resolveFunctionTypeFromCall(
     for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
         const param_name_token = param.name_token orelse continue;
         const param_type = param.type;
+        const parameter_token_handle: TokenWithHandle = .{
+            .token = param_name_token,
+            .handle = func_info.handle,
+        };
+
+        if (param_type.data != .anytype_parameter and
+            param.modifier == .comptime_param and
+            param_type.is_type_val and
+            (param_type.ipIndex() != null or param_type.isEnumType()) and
+            param_type.ipIndex() != .type_type)
+        {
+            var bound_value: ?Type = null;
+            if (param_type.isEnumType()) {
+                const resolved_argument = try analyser.resolveComptimeValue(.of(arg, handle));
+                const tag = if (resolved_argument != null and
+                    resolved_argument.?.data == .enum_value and
+                    resolved_argument.?.data.enum_value.enum_type.eql(param_type))
+                    resolved_argument.?.data.enum_value.tag
+                else
+                    try analyser.resolveEnumValueTag(param_type, .of(arg, handle));
+                if (tag) |enum_tag| {
+                    bound_value = try analyser.enumValue(param_type, enum_tag);
+                }
+            } else if (param_type.ipIndex()) |param_type_index| {
+                if (try analyser.resolveInternPoolValue(.of(arg, handle))) |argument_value| {
+                    var err_msg: ErrorMsg = undefined;
+                    const coerced_value = try analyser.ip.coerce(
+                        analyser.arena,
+                        param_type_index,
+                        argument_value,
+                        builtin.target,
+                        &err_msg,
+                    );
+                    if (coerced_value != .none) {
+                        const value = if (analyser.ip.isUnknown(coerced_value)) argument_value else coerced_value;
+                        bound_value = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
+                    }
+                } else if (try analyser.resolveCoercedIPValue(param_type_index, .of(arg, handle))) |value| {
+                    bound_value = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
+                }
+            }
+            if (bound_value) |value| {
+                try meta_params.put(analyser.arena, parameter_token_handle, value);
+                try value_params.put(analyser.arena, parameter_token_handle, value);
+                has_callsite_bindings = true;
+                continue;
+            }
+        }
 
         const argument_type = (try analyser.resolveTypeOfNodeInternal(.of(arg, handle))) orelse continue;
         switch (param_type.data) {
@@ -3091,10 +3138,6 @@ fn resolveFunctionTypeFromCall(
                 const argument_meta_type = try argument_type.typeOf(analyser);
                 try meta_params.put(analyser.arena, info.token_handle, argument_meta_type);
                 has_callsite_bindings = true;
-                const parameter_token_handle: TokenWithHandle = .{
-                    .token = param_name_token,
-                    .handle = func_info.handle,
-                };
                 if (param.modifier == .comptime_param) {
                     if (try analyser.resolveInternPoolValue(.of(arg, handle))) |argument_value| {
                         try value_params.put(
@@ -3128,50 +3171,7 @@ fn resolveFunctionTypeFromCall(
             }
         }
 
-        if (param_type.data != .anytype_parameter and
-            param.modifier == .comptime_param and
-            param_type.is_type_val and
-            (param_type.ipIndex() != null or param_type.isEnumType()) and
-            param_type.ipIndex() != .type_type)
-        {
-            if (param_type.isEnumType()) {
-                const resolved_argument = try analyser.resolveComptimeValue(.of(arg, handle));
-                const tag = if (resolved_argument != null and
-                    resolved_argument.?.data == .enum_value and
-                    resolved_argument.?.data.enum_value.enum_type.eql(param_type))
-                    resolved_argument.?.data.enum_value.tag
-                else
-                    try analyser.resolveEnumValueTag(param_type, .of(arg, handle));
-                if (tag) |enum_tag| {
-                    try value_params.put(
-                        analyser.arena,
-                        .{ .token = param_name_token, .handle = func_info.handle },
-                        try analyser.enumValue(param_type, enum_tag),
-                    );
-                    has_callsite_bindings = true;
-                    continue;
-                }
-            }
-            const param_type_index = param_type.ipIndex() orelse continue;
-            const argument_value = try analyser.resolveInternPoolValue(.of(arg, handle)) orelse continue;
-            var err_msg: ErrorMsg = undefined;
-            const coerced_value = try analyser.ip.coerce(
-                analyser.arena,
-                param_type_index,
-                argument_value,
-                builtin.target,
-                &err_msg,
-            );
-            if (coerced_value == .none) continue;
-            // Some currently-supported coercions preserve the type but not the
-            // value. Keep the original comptime value in that case.
-            const bound_value = if (analyser.ip.isUnknown(coerced_value)) argument_value else coerced_value;
-            const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = func_info.handle };
-            const bound_type = Type.fromIP(analyser, analyser.ip.typeOf(bound_value), bound_value);
-            try meta_params.put(analyser.arena, token_handle, bound_type);
-            try value_params.put(analyser.arena, token_handle, bound_type);
-            has_callsite_bindings = true;
-        } else if (param.modifier == .comptime_param and
+        if (param.modifier == .comptime_param and
             param_type.isOptionalType(analyser) and
             argument_type.ipIndex() != null and
             analyser.ip.isNull(argument_type.ipIndex().?))

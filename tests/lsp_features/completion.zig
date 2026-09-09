@@ -743,6 +743,20 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Buffers(comptime cast_value: u8, comptime truncate_value: u8) type {
+        \\    return struct {
+        \\        casted: [cast_value]u8,
+        \\        truncated: [truncate_value]u8,
+        \\    };
+        \\}
+        \\const buffers: Buffers(@intCast(4), @truncate(@as(u16, 0x104))) = undefined;
+        \\const fields = buffers.<cursor>
+    , &.{
+        .{ .label = "casted", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "truncated", .kind = .Field, .detail = "[4]u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {
@@ -1467,6 +1481,20 @@ test "generic function with comptime enum switch" {
 }
 
 test "generic function with comptime intFromEnum" {
+    try testCompletion(
+        \\const Mode = enum(u8) { fast = 3, safe = 7 };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return if (mode == .safe)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(@enumFromInt(7)) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
     try testCompletion(
         \\const Mode = enum(u8) { fast = 3, safe = 7 };
         \\fn Select(comptime raw: u8) type {
