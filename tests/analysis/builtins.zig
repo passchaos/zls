@@ -75,6 +75,26 @@ const vector_builtin_13 = @round(some_vector);
 const splat_value: @Vector(4, u8) = @splat(7);
 const splat_value_index = splat_value[2];
 //    ^^^^^^^^^^^^^^^^^ (u8)(7)
+const reduce_add_value = @reduce(.Add, @as(@Vector(4, u8), @splat(250)));
+//    ^^^^^^^^^^^^^^^^ (u8)(232)
+const reduce_mul_value = @reduce(.Mul, @as(@Vector(4, u8), @splat(4)));
+//    ^^^^^^^^^^^^^^^^ (u8)(0)
+const reduce_and_value = @reduce(.And, @as(@Vector(3, u8), @splat(11)));
+//    ^^^^^^^^^^^^^^^^ (u8)(11)
+const reduce_or_value = @reduce(.Or, @as(@Vector(3, u8), @splat(11)));
+//    ^^^^^^^^^^^^^^^ (u8)(11)
+const reduce_xor_value = @reduce(.Xor, @as(@Vector(4, u8), @splat(11)));
+//    ^^^^^^^^^^^^^^^^ (u8)(0)
+const reduce_min_value = @reduce(.Min, @as(@Vector(3, i8), @splat(-5)));
+//    ^^^^^^^^^^^^^^^^ (i8)(-5)
+const reduce_max_value = @reduce(.Max, @as(@Vector(3, i8), @splat(-5)));
+//    ^^^^^^^^^^^^^^^^ (i8)(-5)
+const reduce_bool_and_value = @reduce(.And, @as(@Vector(3, bool), @splat(true)));
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const reduce_bool_or_value = @reduce(.Or, @as(@Vector(3, bool), @splat(false)));
+//    ^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const reduce_bool_xor_value = @reduce(.Xor, @as(@Vector(3, bool), @splat(true)));
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 
 const invalid_builtin_00 = @sqrt(null);
 //    ^^^^^^^^^^^^^^^^^^ (unknown)()

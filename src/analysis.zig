@@ -2743,6 +2743,79 @@ fn resolveOverflowValue(
     return try analyser.overflowTupleValue(result_type, result_value, overflowed);
 }
 
+fn resolveReduceOperation(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?std.builtin.ReduceOp {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) == .enum_literal) {
+        const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+        return std.meta.stringToEnum(std.builtin.ReduceOp, name);
+    }
+    const value = try analyser.resolveTypeOfNodeInternal(.of(node_handle.node, node_handle.handle)) orelse return null;
+    return switch (value.data) {
+        .enum_value => |enum_value| std.meta.stringToEnum(std.builtin.ReduceOp, enum_value.tag),
+        else => null,
+    };
+}
+
+fn resolveReduceValue(
+    analyser: *Analyser,
+    operation: std.builtin.ReduceOp,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (vector.len == 0) return null;
+    const values = analyser.aggregateValues(operand) orelse return null;
+    if (values.len != vector.len) return null;
+
+    if (vector.child == .bool_type) {
+        if (operation != .And and operation != .Or and operation != .Xor) return null;
+        var result = switch (values.at(0, analyser.ip)) {
+            .bool_true => true,
+            .bool_false => false,
+            else => return null,
+        };
+        for (1..values.len) |i| {
+            const value = switch (values.at(@intCast(i), analyser.ip)) {
+                .bool_true => true,
+                .bool_false => false,
+                else => return null,
+            };
+            result = switch (operation) {
+                .And => result and value,
+                .Or => result or value,
+                .Xor => result != value,
+                else => unreachable,
+            };
+        }
+        return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+    }
+
+    if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
+    var result = Type.fromIP(analyser, vector.child, values.at(0, analyser.ip));
+    for (1..values.len) |i| {
+        const candidate = Type.fromIP(analyser, vector.child, values.at(@intCast(i), analyser.ip));
+        result = switch (operation) {
+            .Add => try analyser.resolveFixedWidthIntegerBinaryValue(.add_wrap, result, candidate, vector.child),
+            .Mul => try analyser.resolveFixedWidthIntegerBinaryValue(.mul_wrap, result, candidate, vector.child),
+            .And => try analyser.resolveIntegerBinaryValue(.bit_and, result, candidate),
+            .Or => try analyser.resolveIntegerBinaryValue(.bit_or, result, candidate),
+            .Xor => try analyser.resolveIntegerBinaryValue(.bit_xor, result, candidate),
+            .Min => if (analyser.resolveComparisonBool(.less_than, candidate, result) orelse return null) candidate else result,
+            .Max => if (analyser.resolveComparisonBool(.greater_than, candidate, result) orelse return null) candidate else result,
+        } orelse return null;
+    }
+    return result;
+}
+
 fn resolveIntegerDivisionValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -4796,6 +4869,25 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     };
                     const tuple_type = try Type.createTupleType(analyser, &element_types);
                     return try tuple_type.instanceUnchecked(analyser);
+                },
+                .reduce => {
+                    if (params.len != 2) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
+                    const payload = switch (operand.data) {
+                        .ip_index => |payload| payload,
+                        else => return null,
+                    };
+                    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+                        .vector_type => |vector| vector,
+                        else => return null,
+                    };
+                    if (analyser.evaluate_comptime_values) {
+                        const operation = try analyser.resolveReduceOperation(.of(params[0], handle));
+                        if (operation) |op| {
+                            if (try analyser.resolveReduceValue(op, operand)) |value| return value;
+                        }
+                    }
+                    return Type.fromIP(analyser, vector.child, null);
                 },
                 .has_field, .has_decl => |tag| {
                     if (params.len != 2) return null;

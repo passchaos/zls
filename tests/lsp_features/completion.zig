@@ -596,6 +596,27 @@ test "generic function with comptime splat value" {
     });
 }
 
+test "generic function with comptime integer and boolean reductions" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const integers: @Vector(4, u8) = @splat(N);
+        \\    const truths: @Vector(3, bool) = @splat(true);
+        \\    const falses: @Vector(3, bool) = @splat(false);
+        \\    return if (@reduce(.Add, integers) == 232 and @reduce(.Mul, @as(@Vector(4, u8), @splat(4))) == 0 and
+        \\        @reduce(.And, integers) == N and @reduce(.Or, integers) == N and @reduce(.Xor, integers) == 0 and
+        \\        @reduce(.Min, integers) == N and @reduce(.Max, integers) == N and
+        \\        @reduce(.And, truths) and !@reduce(.Or, falses) and @reduce(.Xor, truths))
+        \\        struct { reduced: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(250) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {
