@@ -1150,6 +1150,29 @@ pub fn resolveBracketAccessType(analyser: *Analyser, lhs: Type, rhs: BracketAcce
     return binding.type;
 }
 
+fn resolveStringSliceValue(
+    analyser: *Analyser,
+    lhs_binding: Binding,
+    rhs: BracketAccess,
+    bytes: []const u8,
+) error{OutOfMemory}!?Binding {
+    const old_evaluate_comptime_values = analyser.evaluate_comptime_values;
+    analyser.evaluate_comptime_values = false;
+    defer analyser.evaluate_comptime_values = old_evaluate_comptime_values;
+
+    const sliced = try analyser.resolveBracketAccess(lhs_binding, rhs) orelse return null;
+    return .{
+        .type = .{
+            .data = .{ .string_value = .{
+                .string_type = try analyser.allocType(try sliced.type.typeOf(analyser)),
+                .bytes = bytes,
+            } },
+            .is_type_val = false,
+        },
+        .is_const = true,
+    };
+}
+
 // TODO: copy indexing logic from Zig compiler to InternPool, and then delete bracketAccessTypeFromIPIndex
 fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index) error{OutOfMemory}!Type {
     std.debug.assert(analyser.ip.typeOf(ip_index) == .type_type);
@@ -1216,7 +1239,26 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                     .is_const = true,
                 };
             },
-            .open, .range => {},
+            .open => |access| if (access.start != null and
+                access.start.? <= bytes.len and
+                access.sentinel == .none)
+            {
+                return analyser.resolveStringSliceValue(
+                    lhs_binding,
+                    rhs,
+                    bytes[@intCast(access.start.?)..],
+                );
+            },
+            .range => |access| if (access.bounds != null and access.sentinel == .none) {
+                const start, const end = access.bounds.?;
+                if (start <= end and end <= bytes.len) {
+                    return analyser.resolveStringSliceValue(
+                        lhs_binding,
+                        rhs,
+                        bytes[@intCast(start)..@intCast(end)],
+                    );
+                }
+            },
         }
     }
 
@@ -1333,6 +1375,13 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
 }
 
 pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) error{OutOfMemory}!?Type {
+    if (ty.data == .string_value and std.mem.eql(u8, "len", name)) {
+        const index = try analyser.ip.get(.{
+            .int_u64_value = .{ .ty = .usize_type, .int = ty.data.string_value.bytes.len },
+        });
+        return Type.fromIP(analyser, .usize_type, index);
+    }
+
     const runtime_ty = ty.runtimeType(analyser);
     if (runtime_ty.is_type_val)
         return null;
@@ -2225,15 +2274,20 @@ fn staticStringType(analyser: *Analyser, len: u64) error{OutOfMemory}!Type {
     return Type.fromIP(analyser, pointer_type, null);
 }
 
-fn stringValue(analyser: *Analyser, bytes: []const u8) error{OutOfMemory}!Type {
-    const string_type = try analyser.staticStringType(bytes.len);
+fn stringValueWithType(analyser: *Analyser, bytes: []const u8, string_type: Type) error{OutOfMemory}!Type {
+    std.debug.assert(string_type.is_type_val);
     return .{
         .data = .{ .string_value = .{
-            .string_type = try analyser.allocType(try string_type.typeOf(analyser)),
+            .string_type = try analyser.allocType(string_type),
             .bytes = bytes,
         } },
         .is_type_val = false,
     };
+}
+
+fn stringValue(analyser: *Analyser, bytes: []const u8) error{OutOfMemory}!Type {
+    const string_type = try analyser.staticStringType(bytes.len);
+    return analyser.stringValueWithType(bytes, try string_type.typeOf(analyser));
 }
 
 fn resolveBitCountValue(
@@ -2722,10 +2776,14 @@ fn resolveFunctionTypeFromCall(
 
         if (param.modifier == .comptime_param) {
             if (try analyser.resolveStringLiteral(.of(arg, handle))) |bytes| {
+                const string_type = if (param_type.data == .anytype_parameter)
+                    try argument_type.typeOf(analyser)
+                else
+                    param_type;
                 try value_params.put(
                     analyser.arena,
                     .{ .token = param_name_token, .handle = func_info.handle },
-                    try analyser.stringValue(bytes),
+                    try analyser.stringValueWithType(bytes, string_type),
                 );
                 has_callsite_bindings = true;
                 continue;
@@ -5357,7 +5415,14 @@ pub const Type = struct {
                 result.is_type_val = false;
                 break :blk result;
             },
-            .string_value => |value| Type.fromIP(analyser, value.string_type.ipIndex().?, null),
+            .string_value => |value| blk: {
+                if (value.string_type.ipIndex()) |index| {
+                    break :blk Type.fromIP(analyser, index, null);
+                }
+                var result = value.string_type.*;
+                result.is_type_val = false;
+                break :blk result;
+            },
             else => self,
         };
     }
