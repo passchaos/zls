@@ -274,6 +274,12 @@ const float_mod_value = @mod(@as(f32, -7.5), @as(f64, 5.0));
 //    ^^^^^^^^^^^^^^^ (f64)(2.5)
 const float_rem_value = @rem(@as(f32, -7.5), @as(f64, 5.0));
 //    ^^^^^^^^^^^^^^^ (f64)(-2.5)
+const float_div_trunc_value = @divTrunc(@as(f32, -7.5), @as(f64, 2.0));
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(-3)
+const float_div_floor_value = @divFloor(@as(f32, -7.5), @as(f64, 2.0));
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(-4)
+const float_div_exact_value = @divExact(@as(f32, 8.0), @as(f64, 2.0));
+//    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

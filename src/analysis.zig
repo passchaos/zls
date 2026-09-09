@@ -2388,6 +2388,49 @@ fn resolveFloatRemainderValue(
     return Type.fromIP(analyser, result_type, result_index);
 }
 
+fn floatDivisionValue(comptime T: type, tag: std.zig.BuiltinFn.Tag, lhs: f128, rhs: f128) ?f128 {
+    const numerator: T = @floatCast(lhs);
+    const denominator: T = @floatCast(rhs);
+    if (!std.math.isFinite(numerator) or !std.math.isFinite(denominator) or denominator == 0) return null;
+    const result: T = switch (tag) {
+        .div_trunc, .div_exact => @divTrunc(numerator, denominator),
+        .div_floor => @divFloor(numerator, denominator),
+        else => return null,
+    };
+    if (!std.math.isFinite(result)) return null;
+    if (tag == .div_exact and result * denominator != numerator) return null;
+    return @floatCast(result);
+}
+
+fn resolveFloatDivisionValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_index = lhs.ipIndex() orelse return null;
+    const rhs_index = rhs.ipIndex() orelse return null;
+    const lhs_value = analyser.floatValue(lhs_index) orelse return null;
+    const rhs_value = analyser.floatValue(rhs_index) orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(
+        analyser.ip.typeOf(lhs_index),
+        analyser.ip.typeOf(rhs_index),
+    ) orelse return null;
+    const result = switch (result_type) {
+        .f16_type => floatDivisionValue(f16, tag, lhs_value, rhs_value),
+        .f32_type => floatDivisionValue(f32, tag, lhs_value, rhs_value),
+        .f64_type => floatDivisionValue(f64, tag, lhs_value, rhs_value),
+        .f80_type => floatDivisionValue(f80, tag, lhs_value, rhs_value),
+        .f128_type, .comptime_float_type => floatDivisionValue(f128, tag, lhs_value, rhs_value),
+        else => null,
+    } orelse return null;
+    const result_index = try analyser.coerceFloatValue(
+        result_type,
+        try analyser.ip.get(.{ .float_comptime_value = result }),
+    ) orelse return null;
+    return Type.fromIP(analyser, result_type, result_index);
+}
+
 fn resolveFixedWidthIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -4482,6 +4525,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (lhs.is_type_val or rhs.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
                         if (try analyser.resolveIntegerDivisionValue(tag, lhs, rhs) orelse
+                            try analyser.resolveFloatDivisionValue(tag, lhs, rhs) orelse
                             try analyser.resolveFloatRemainderValue(tag, lhs, rhs)) |value| return value;
                     }
                     lhs = lhs.withoutIPIndex(analyser);

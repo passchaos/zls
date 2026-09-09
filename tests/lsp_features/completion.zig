@@ -949,6 +949,20 @@ test "generic function with comptime division builtins" {
     });
 
     try testCompletion(
+        \\fn Select(comptime lhs: f32, comptime rhs: f64) type {
+        \\    return if (@divTrunc(lhs, rhs) == -3 and @divFloor(lhs, rhs) == -4 and
+        \\        @divExact(@as(f32, 8.0), rhs) == 4)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-7.5, 2.0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime N: comptime_int) type {
         \\    return if (@divTrunc(N, 3) == -2 and @divFloor(N, 3) == -3 and @mod(N, 3) == 2 and @rem(N, 3) == -1)
         \\        struct { matched: u8 }
@@ -969,6 +983,20 @@ test "generic function with comptime division builtins" {
         \\        struct { fallback: u8 };
         \\}
         \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime lhs: f32, comptime rhs: f64) type {
+        \\    return if (@divExact(lhs, rhs) == 2)
+        \\        struct { exact: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(5.0, 2.0) = undefined;
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "exact", .kind = .Field, .detail = "u8" },
