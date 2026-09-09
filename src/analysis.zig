@@ -2376,12 +2376,13 @@ fn resolveFunctionTypeFromCall(
     call: Ast.full.Call,
     func_ty: Type,
 ) Error!Type {
-    if (!func_ty.isGenericType() and !func_ty.isGenericFunc()) {
-        return func_ty;
-    }
-
     const func_info = func_ty.data.function;
     const func_tree = &func_info.handle.tree;
+    const can_evaluate_type_function = func_ty.isTypeFunc() and
+        func_tree.nodeTag(func_info.fn_node) == .fn_decl;
+    if (!func_ty.isGenericType() and !func_ty.isGenericFunc() and !can_evaluate_type_function) {
+        return func_ty;
+    }
 
     var meta_params: TokenToTypeMap = switch (func_info.container_type.data) {
         .container => |info| try info.bound_params.clone(analyser.arena),
@@ -2487,10 +2488,7 @@ fn resolveFunctionTypeFromCall(
     // Type functions are initially analyzed without concrete arguments. Once
     // the call binds those arguments, re-evaluate the return expression so
     // comptime values can select branches and shape generated types.
-    if (has_callsite_bindings and
-        resolved.isTypeFunc() and
-        func_tree.nodeTag(func_info.fn_node) == .fn_decl)
-    {
+    if (resolved.isTypeFunc() and can_evaluate_type_function) {
         const body = func_tree.nodeData(func_info.fn_node).node_and_node[1];
         const return_node = findReturnStatement(func_tree, body);
         if (return_node) |ret| {
@@ -3134,6 +3132,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const value = try analyser.resolveBoolValue(.of(params[0], handle)) orelse
                         return Type.fromIP(analyser, .u1_type, null);
                     return Type.fromIP(analyser, .u1_type, if (value) .one_u1 else .zero_u1);
+                },
+                .in_comptime => {
+                    if (params.len != 0) return null;
+                    if (analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) {
+                        return Type.fromIP(analyser, .bool_type, .bool_true);
+                    }
+                    return Type.fromIP(analyser, .bool_type, null);
                 },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;

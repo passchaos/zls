@@ -1184,6 +1184,29 @@ test "generic function with comptime optional condition" {
     });
 }
 
+test "zero-parameter type function comptime evaluation" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    return if (@inComptime())
+        \\        struct { comptime_only: u8 }
+        \\    else
+        \\        struct { runtime_only: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "comptime_only", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Recursive() type {
+        \\    return Recursive();
+        \\}
+        \\const selected: Recursive() = undefined;
+        \\const field = selected.<cursor>
+    , &.{});
+}
+
 test "nested generic function" {
     try testCompletion(
         \\fn ArrayList(comptime T: type) type {

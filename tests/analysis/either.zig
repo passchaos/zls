@@ -13,6 +13,12 @@ const compile_error_and_type: if (true) @compileError("Foo") else i32 = 1;
 const type_and_compile_error: if (true) i32 else @compileError("Foo") = 1;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (either type)()
 
+fn runtimeInComptime() bool {
+    return @inComptime();
+}
+const runtime_in_comptime = runtimeInComptime();
+//    ^^^^^^^^^^^^^^^^^^^ (bool)((unknown value))
+
 const StructU32 = struct {
     field: u32 = 42,
     fn function(self: @This()) @This() {

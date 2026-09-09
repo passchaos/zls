@@ -300,6 +300,13 @@ const selected_length_copy = selected_length + 0;
 const selected_array: FixedArray(selected_length, u8) = undefined;
 //    ^^^^^^^^^^^^^^ ([5]u8)()
 
+fn ZeroParameterArray() type {
+    return [@intFromBool(@inComptime())]u8;
+}
+
+const zero_parameter_array: ZeroParameterArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([1]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
