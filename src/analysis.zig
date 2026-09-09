@@ -1234,6 +1234,36 @@ fn resolveArrayValue(
     return Type.fromIP(analyser, type_index, aggregate);
 }
 
+fn aggregateValues(analyser: *Analyser, value: Type) ?InternPool.Index.Slice {
+    const payload = switch (value.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const value_index = payload.index orelse return null;
+    const aggregate = switch (analyser.ip.indexToKey(value_index)) {
+        .aggregate => |aggregate| aggregate,
+        else => return null,
+    };
+    if (aggregate.ty != payload.type) return null;
+    return aggregate.values;
+}
+
+fn aggregateValue(
+    analyser: *Analyser,
+    result: Type,
+    values: []const InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const payload = switch (result.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const aggregate = try analyser.ip.get(.{ .aggregate = .{
+        .ty = payload.type,
+        .values = try analyser.ip.getIndexSlice(values),
+    } });
+    return Type.fromIP(analyser, payload.type, aggregate);
+}
+
 fn stringSentinel(analyser: *Analyser, string: Type) ?InternPool.Index {
     const runtime_type = string.runtimeType(analyser);
     const pointer_info = switch (runtime_type.data) {
@@ -5532,6 +5562,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
                 return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
             }
+            if (analyser.evaluate_comptime_values and mult_lit != null) {
+                if (analyser.aggregateValues(elem_ty)) |source_values| {
+                    const source = try source_values.dupe(analyser.gpa, analyser.ip);
+                    defer analyser.gpa.free(source);
+                    const multiplier = std.math.cast(usize, mult_lit.?) orelse return result;
+                    const len = std.math.mul(usize, source.len, multiplier) catch return result;
+                    const values = try analyser.gpa.alloc(InternPool.Index, len);
+                    defer analyser.gpa.free(values);
+                    for (0..multiplier) |i| {
+                        @memcpy(values[i * source.len ..][0..source.len], source);
+                    }
+                    return try analyser.aggregateValue(result, values) orelse result;
+                }
+            }
             return result;
         },
         .array_cat => {
@@ -5553,6 +5597,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     r_elem_ty.data.string_value.bytes,
                 });
                 return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+            }
+            if (analyser.evaluate_comptime_values) {
+                const lhs_values = analyser.aggregateValues(l_elem_ty);
+                const rhs_values = analyser.aggregateValues(r_elem_ty);
+                if (lhs_values != null and rhs_values != null) {
+                    const left = try lhs_values.?.dupe(analyser.gpa, analyser.ip);
+                    defer analyser.gpa.free(left);
+                    const right = try rhs_values.?.dupe(analyser.gpa, analyser.ip);
+                    defer analyser.gpa.free(right);
+                    const values = try analyser.gpa.alloc(InternPool.Index, left.len + right.len);
+                    defer analyser.gpa.free(values);
+                    @memcpy(values[0..left.len], left);
+                    @memcpy(values[left.len..], right);
+                    return try analyser.aggregateValue(result, values) orelse result;
+                }
             }
             return result;
         },

@@ -155,6 +155,8 @@ const array_cat_3 = [1]u8{0} ++ [1]u8{1};
 
 const array_cat_4 = &[2]u8{ 0, 1 } ++ &[3]u8{ 2, 3, 4 };
 //    ^^^^^^^^^^^ (*const [5]u8)()
+const array_cat_value = ([_]u8{ 1, 2 } ++ [_]u8{ 3, 4 })[2];
+//    ^^^^^^^^^^^^^^^ (u8)(3)
 
 //
 // Array multiplication
@@ -168,6 +170,8 @@ const array_mult_1 = [1]u8{0} ** 2;
 
 const array_mult_2 = &[3]u8{ 0, 1, 2 } ** 2;
 //    ^^^^^^^^^^^^ (*const [6]u8)()
+const array_mult_value = ([_]u8{ 2, 4 } ** 3)[4];
+//    ^^^^^^^^^^^^^^^^ (u8)(2)
 
 const array = [_:0]u8{ 1, 2, 3, 4 };
 //    ^^^^^ ([4:0]u8)()

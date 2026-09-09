@@ -563,6 +563,21 @@ test "generic function with comptime array values" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const joined = [_]u8{ 1, N } ++ [_]u8{ 3, 4 };
+        \\    const repeated = [_]u8{ N, 6 } ** 3;
+        \\    return if (joined[2] == 3 and repeated[4] == N)
+        \\        struct { composed: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "composed", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime overflow builtins" {
