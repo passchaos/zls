@@ -502,6 +502,37 @@ test "generic function with comptime field expressions" {
     }
 }
 
+test "generic function with comptime tuple values" {
+    try testCompletion(
+        \\fn Select(comptime N: usize) type {
+        \\    const tuple = .{ N + 1, N == 4 };
+        \\    return if (tuple[0] == 5 and tuple[1])
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: usize) type {
+        \\    const tuple = .{ N, runtime };
+        \\    return if (tuple.@"0" == 4)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime integer expressions" {
     const cases = [_][]const u8{
         "N + 2 == 8",

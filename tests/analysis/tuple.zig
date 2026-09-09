@@ -60,6 +60,12 @@ const inferred_tuple_field_access_2 = inferred_tuple.@"2";
 const inferred_tuple_len = inferred_tuple.len;
 //    ^^^^^^^^^^^^^^^^^^ (usize)(2)
 
+const value_tuple = .{ @as(u8, 4), true };
+const value_tuple_array_access = value_tuple[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(4)
+const value_tuple_field_access = value_tuple.@"1";
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+
 comptime {
     const inferred_tuple_0, const inferred_tuple_1 = inferred_tuple;
     //    ^^^^^^^^^^^^^^^^ (i64)()

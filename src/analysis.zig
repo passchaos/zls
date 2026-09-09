@@ -1150,6 +1150,22 @@ pub fn resolveBracketAccessType(analyser: *Analyser, lhs: Type, rhs: BracketAcce
     return binding.type;
 }
 
+fn resolveTupleValueAt(analyser: *Analyser, ty: Type, index: u64) ?Type {
+    if (!analyser.evaluate_comptime_values) return null;
+    const payload = switch (ty.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const tuple = switch (analyser.ip.indexToKey(payload.type)) {
+        .tuple_type => |tuple| tuple,
+        else => return null,
+    };
+    if (index >= tuple.values.len) return null;
+    const value = tuple.values.at(@intCast(index), analyser.ip);
+    if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value)) return null;
+    return Type.fromIP(analyser, tuple.types.at(@intCast(index), analyser.ip), value);
+}
+
 fn resolveStringSliceValue(
     analyser: *Analyser,
     lhs_binding: Binding,
@@ -1305,6 +1321,13 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
             },
         }
     }
+    if (rhs == .single) {
+        if (rhs.single) |index| {
+            if (analyser.resolveTupleValueAt(lhs_binding.type, index)) |value| {
+                return .{ .type = value, .is_const = true };
+            }
+        }
+    }
 
     const lhs = lhs_binding.type.runtimeType(analyser);
     if (lhs.is_type_val) return null;
@@ -1424,6 +1447,10 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
             .int_u64_value = .{ .ty = .usize_type, .int = ty.data.string_value.bytes.len },
         });
         return Type.fromIP(analyser, .usize_type, index);
+    }
+    if (allDigits(name)) {
+        const index = std.fmt.parseUnsigned(u64, name, 10) catch return null;
+        if (analyser.resolveTupleValueAt(ty, index)) |value| return value;
     }
 
     const runtime_ty = ty.runtimeType(analyser);
@@ -4036,6 +4063,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const elem_ty_slice = try analyser.arena.alloc(Type, array_init_info.ast.elements.len);
             for (elem_ty_slice, array_init_info.ast.elements) |*elem_ty, element| {
                 elem_ty.* = try analyser.resolveTypeOfNodeInternal(.of(element, handle)) orelse return null;
+            }
+            if (analyser.evaluate_comptime_values) {
+                if (try Type.createTupleValue(analyser, elem_ty_slice)) |tuple| return tuple;
+            }
+            for (elem_ty_slice) |*elem_ty| {
                 elem_ty.* = try elem_ty.typeOf(analyser);
             }
             const tuple_ty = try Type.createTupleType(analyser, elem_ty_slice);
@@ -5775,6 +5807,29 @@ pub const Type = struct {
             return .{ .tuple = elem_tys };
         }
 
+        fn createTupleValue(analyser: *Analyser, elements: []Type) !?Type {
+            const types = try analyser.gpa.alloc(InternPool.Index, elements.len);
+            defer analyser.gpa.free(types);
+            const values = try analyser.gpa.alloc(InternPool.Index, elements.len);
+            defer analyser.gpa.free(values);
+
+            for (elements, types, values) |element, *ty, *value| {
+                ty.* = (try element.typeOf(analyser)).ipIndex() orelse return null;
+                value.* = element.ipIndex() orelse .none;
+                if (value.* != .none and
+                    (analyser.ip.isUndefined(value.*) or analyser.ip.isUnknown(value.*)))
+                {
+                    value.* = .none;
+                }
+            }
+
+            const tuple_type = try analyser.ip.get(.{ .tuple_type = .{
+                .types = try analyser.ip.getIndexSlice(types),
+                .values = try analyser.ip.getIndexSlice(values),
+            } });
+            return Type.fromIP(analyser, tuple_type, null);
+        }
+
         fn createOptional(analyser: *Analyser, child_ty: Type) !Data {
             std.debug.assert(child_ty.is_type_val);
             if (child_ty.ipIndex()) |payload_type| {
@@ -6247,6 +6302,10 @@ pub const Type = struct {
             .data = try Data.createTuple(analyser, elem_tys),
             .is_type_val = true,
         };
+    }
+
+    fn createTupleValue(analyser: *Analyser, elements: []Type) !?Type {
+        return Data.createTupleValue(analyser, elements);
     }
 
     fn createOptionalType(analyser: *Analyser, child_ty: Type) !Type {
