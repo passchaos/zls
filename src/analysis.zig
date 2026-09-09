@@ -4128,10 +4128,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
 
                     var selected = resolved[0];
-                    var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i128) orelse
+                    var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
                         return Type.fromIP(analyser, result_type, null);
                     for (resolved[1..]) |candidate| {
-                        const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i128) orelse
+                        const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
                             return Type.fromIP(analyser, result_type, null);
                         const prefer_candidate = switch (tag) {
                             .min => candidate_value < selected_value,
