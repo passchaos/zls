@@ -2580,19 +2580,15 @@ fn resolveFunctionTypeFromCall(
     // Type functions are initially analyzed without concrete arguments. Once
     // the call binds those arguments, re-evaluate the return expression so
     // comptime values can select branches and shape generated types.
-    if (resolved.isTypeFunc() and can_evaluate_type_function) {
-        const body = func_tree.nodeData(func_info.fn_node).node_and_node[1];
-        const return_node = findReturnStatement(func_tree, body);
-        if (return_node) |ret| {
-            if (func_tree.nodeData(ret).opt_node.unwrap()) |return_expr| {
-                const old_bindings = analyser.generic_bindings;
-                analyser.generic_bindings = &value_params;
-                defer analyser.generic_bindings = old_bindings;
+    if ((has_callsite_bindings or can_evaluate_type_function) and
+        func_tree.nodeTag(func_info.fn_node) == .fn_decl)
+    {
+        const old_bindings = analyser.generic_bindings;
+        analyser.generic_bindings = &value_params;
+        defer analyser.generic_bindings = old_bindings;
 
-                if (try analyser.resolveTypeOfNodeInternal(.of(return_expr, func_info.handle))) |return_value| {
-                    resolved.data.function.return_value = try analyser.allocType(return_value);
-                }
-            }
+        if (try analyser.resolveReturnValueOfFuncNode(func_info.handle, func_info.fn_node)) |return_value| {
+            resolved.data.function.return_value = try analyser.allocType(return_value);
         }
     }
 
@@ -3204,10 +3200,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return Type.fromIP(analyser, result_ty, null);
                 },
                 .TypeOf => {
-                    // TODO Do peer type resolution, we just keep the first for now.
-
                     if (params.len < 1) return null;
-                    var resolved_type = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
+                    var resolved_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    for (params[1..]) |param| {
+                        const candidate = try analyser.resolveTypeOfNodeInternal(.of(param, handle)) orelse return .unknown_type;
+                        resolved_type = try analyser.resolvePeerTypes(resolved_type, candidate) orelse return .unknown_type;
+                    }
                     return try resolved_type.typeOf(analyser);
                 },
                 .bit_size_of, .size_of => |tag| {

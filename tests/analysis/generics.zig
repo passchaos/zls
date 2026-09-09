@@ -33,11 +33,10 @@ const baz_call = Foo(i32).baz(u8, -42, 42);
 
 // TODO this should be `fn (U: type, u8, U) anytype`
 const qux_fn = Foo(u8).qux;
-//    ^^^^^^ (fn (type, u8, U) u8)()
+//    ^^^^^^ (fn (type, u8, U) (unknown type))()
 
-// TODO this should be `i32`
 const qux_call = Foo(u8).qux(i32, 42, -42);
-//    ^^^^^^^^ (u8)()
+//    ^^^^^^^^ (i32)()
 
 fn fizz(T: type) ?fn () error{}!struct { ??T } {
     return null;
@@ -251,9 +250,19 @@ fn anytypeFn2(a: anytype, b: anytype) @TypeOf(a, b) {
     return a + b;
 }
 const anytype_2_u8_u16 = anytypeFn2(@as(u8, 42), @as(u16, 42));
-//    ^^^^^^^^^^^^^^^^ (u8)() TODO this should be `u16`
+//    ^^^^^^^^^^^^^^^^ (u16)()
 const anytype_2_i8_i16 = anytypeFn2(@as(i8, 42), @as(i16, 42));
-//    ^^^^^^^^^^^^^^^^ (i8)() TODO this should be `i16`
+//    ^^^^^^^^^^^^^^^^ (i16)()
+
+fn peerType(comptime T: type, comptime U: type) type {
+    return @TypeOf(@as(T, undefined), @as(U, undefined));
+}
+const peer_optional: peerType(?u8, u8) = undefined;
+//    ^^^^^^^^^^^^^ (?u8)()
+const peer_error_union: peerType(error{Bad}!u8, u8) = undefined;
+//    ^^^^^^^^^^^^^^^^ (error{Bad}!u8)()
+const peer_incompatible: peerType(u8, bool) = undefined;
+//    ^^^^^^^^^^^^^^^^^ ((unknown type))()
 
 fn FixedVector(comptime N: usize, comptime T: type) type {
     return struct {
