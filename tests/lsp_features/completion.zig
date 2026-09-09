@@ -795,6 +795,24 @@ test "generic function with comptime value builtins" {
     });
 
     try testCompletion(
+        \\fn Select(comptime cast_value: u129, comptime bit_value: u128) type {
+        \\    const casted: u128 = @intCast(cast_value);
+        \\    const truncated: u128 = @truncate((@as(u256, 1) << 128) | 5);
+        \\    const signed: i128 = @bitCast(bit_value);
+        \\    const unsigned: u128 = @bitCast(signed);
+        \\    return if (casted == 170141183460469231731687303715884105728 and truncated == 5 and
+        \\        signed == -170141183460469231731687303715884105728 and unsigned == bit_value)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(170141183460469231731687303715884105728, 170141183460469231731687303715884105728) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Buffers(comptime cast_value: u8, comptime truncate_value: u8) type {
         \\    return struct {
         \\        casted: [cast_value]u8,

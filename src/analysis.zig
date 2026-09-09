@@ -1944,36 +1944,36 @@ fn bitCastIntValue(
     if (analyser.ip.zigTypeTag(source_ty) != .int) return null;
     const dest_info = analyser.ip.intInfo(dest_ty, builtin.target);
     const source_info = analyser.ip.intInfo(source_ty, builtin.target);
-    if (dest_info.bits != source_info.bits or dest_info.bits > 64) return null;
+    if (dest_info.bits != source_info.bits or dest_info.bits > 128) return null;
 
-    const raw: u64 = switch (source_info.signedness) {
-        .unsigned => analyser.ip.toInt(value, u64) orelse return null,
+    const raw: u128 = switch (source_info.signedness) {
+        .unsigned => analyser.ip.toInt(value, u128) orelse return null,
         .signed => signed: {
-            const signed_value = analyser.ip.toInt(value, i64) orelse return null;
-            const bits: u64 = @bitCast(signed_value);
-            const mask = if (source_info.bits == 64)
-                std.math.maxInt(u64)
+            const signed_value = analyser.ip.toInt(value, i128) orelse return null;
+            const bits: u128 = @bitCast(signed_value);
+            const mask = if (source_info.bits == 128)
+                std.math.maxInt(u128)
             else if (source_info.bits == 0)
                 0
             else
-                (@as(u64, 1) << @intCast(source_info.bits)) - 1;
+                (@as(u128, 1) << @intCast(source_info.bits)) - 1;
             break :signed bits & mask;
         },
     };
 
-    return switch (dest_info.signedness) {
-        .unsigned => try analyser.ip.get(.{ .int_u64_value = .{ .ty = dest_ty, .int = raw } }),
+    const result: i256 = switch (dest_info.signedness) {
+        .unsigned => @intCast(raw),
         .signed => signed: {
-            if (dest_info.bits == 0 or raw & (@as(u64, 1) << @intCast(dest_info.bits - 1)) == 0) {
-                break :signed try analyser.ip.get(.{ .int_u64_value = .{ .ty = dest_ty, .int = raw } });
+            if (dest_info.bits == 0 or raw & (@as(u128, 1) << @intCast(dest_info.bits - 1)) == 0) {
+                break :signed @intCast(raw);
             }
-            const signed_value: i64 = if (dest_info.bits == 64)
-                @bitCast(raw)
+            break :signed if (dest_info.bits == 128)
+                @as(i128, @bitCast(raw))
             else
-                @intCast(@as(i128, raw) - (@as(i128, 1) << @intCast(dest_info.bits)));
-            break :signed try analyser.ip.get(.{ .int_i64_value = .{ .ty = dest_ty, .int = signed_value } });
+                @as(i256, @intCast(raw)) - (@as(i256, 1) << @intCast(dest_info.bits));
         },
     };
+    return (try analyser.intValueWithType(dest_ty, result) orelse return null).ipIndex();
 }
 
 fn truncateIntValue(
@@ -1983,7 +1983,7 @@ fn truncateIntValue(
 ) error{OutOfMemory}!?InternPool.Index {
     if (analyser.ip.zigTypeTag(dest_ty) != .int) return null;
     const info = analyser.ip.intInfo(dest_ty, builtin.target);
-    if (info.bits > 64) return null;
+    if (info.bits > 128) return null;
     const source_ty = analyser.ip.typeOf(value);
     if (analyser.ip.zigTypeTag(source_ty) == .int and
         analyser.ip.intInfo(source_ty, builtin.target).signedness != info.signedness)
@@ -1991,42 +1991,30 @@ fn truncateIntValue(
         return null;
     }
 
-    const raw: u128 = if (analyser.ip.toInt(value, u128)) |unsigned|
+    const raw: u256 = if (analyser.ip.toInt(value, u256)) |unsigned|
         unsigned
-    else if (analyser.ip.toInt(value, i128)) |signed|
+    else if (analyser.ip.toInt(value, i256)) |signed|
         @bitCast(signed)
     else
         return null;
-    const mask: u128 = if (info.bits == 64)
-        std.math.maxInt(u64)
+    const mask: u256 = if (info.bits == 128)
+        std.math.maxInt(u128)
     else if (info.bits == 0)
         0
     else
-        (@as(u128, 1) << @intCast(info.bits)) - 1;
-    const truncated: u64 = @intCast(raw & mask);
+        (@as(u256, 1) << @intCast(info.bits)) - 1;
+    const truncated = raw & mask;
 
-    return switch (info.signedness) {
-        .unsigned => try analyser.ip.get(.{ .int_u64_value = .{
-            .ty = dest_ty,
-            .int = truncated,
-        } }),
+    const result: i256 = switch (info.signedness) {
+        .unsigned => @intCast(truncated),
         .signed => signed: {
-            if (info.bits == 0 or truncated & (@as(u64, 1) << @intCast(info.bits - 1)) == 0) {
-                break :signed try analyser.ip.get(.{ .int_u64_value = .{
-                    .ty = dest_ty,
-                    .int = truncated,
-                } });
+            if (info.bits == 0 or truncated & (@as(u256, 1) << @intCast(info.bits - 1)) == 0) {
+                break :signed @intCast(truncated);
             }
-            const signed_value: i64 = if (info.bits == 64)
-                @bitCast(truncated)
-            else
-                @intCast(@as(i128, truncated) - (@as(i128, 1) << @intCast(info.bits)));
-            break :signed try analyser.ip.get(.{ .int_i64_value = .{
-                .ty = dest_ty,
-                .int = signed_value,
-            } });
+            break :signed @as(i256, @intCast(truncated)) - (@as(i256, 1) << @intCast(info.bits));
         },
     };
+    return (try analyser.intValueWithType(dest_ty, result) orelse return null).ipIndex();
 }
 
 fn resolveInternPoolValue(analyser: *Analyser, options: ResolveOptions) Error!?InternPool.Index {
