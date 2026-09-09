@@ -788,6 +788,26 @@ test "generic function with comptime vector wrapping and saturating arithmetic" 
     });
 }
 
+test "generic function with comptime vector shifts" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const values: @Vector(2, u8) = .{ N, 12 };
+        \\    const signed: @Vector(2, i8) = .{ -4, -12 };
+        \\    const shifts: @Vector(2, u3) = @splat(2);
+        \\    const exact: @Vector(2, u8) = .{ 4, 12 };
+        \\    return if ((values << shifts)[0] == 12 and (signed >> shifts)[0] == -1 and
+        \\        @shlExact(exact, shifts)[0] == 16 and @shrExact(exact, shifts)[1] == 3)
+        \\        struct { shifted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(3) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "shifted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

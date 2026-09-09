@@ -3912,6 +3912,54 @@ fn resolveExactShiftValue(
     return analyser.intValueWithType(payload.type, result);
 }
 
+const VectorShiftOperation = enum { shl, shr, shl_exact, shr_exact };
+
+fn resolveVectorShiftValue(
+    analyser: *Analyser,
+    operation: VectorShiftOperation,
+    operand: Type,
+    shift_operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const shift_payload = switch (shift_operand.data) {
+        .ip_index => |shift_value| shift_value,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const shift_vector = switch (analyser.ip.indexToKey(shift_payload.type)) {
+        .vector_type => |shift_vector| shift_vector,
+        else => return null,
+    };
+    if (vector.len != shift_vector.len) return null;
+    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
+    const shift_values = analyser.aggregateValues(shift_operand) orelse return Type.fromIP(analyser, payload.type, null);
+    if (source_values.len != vector.len or shift_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const shift_element = Type.fromIP(analyser, shift_vector.child, shift_values.at(@intCast(i), analyser.ip));
+        const resolved = switch (operation) {
+            .shl => try analyser.resolveIntegerBinaryValue(.shl, element, shift_element),
+            .shr => try analyser.resolveIntegerBinaryValue(.shr, element, shift_element),
+            .shl_exact => try analyser.resolveExactShiftValue(.shl_exact, element, shift_element),
+            .shr_exact => try analyser.resolveExactShiftValue(.shr_exact, element, shift_element),
+        };
+        if ((operation == .shl_exact or operation == .shr_exact) and resolved == null) {
+            return Type.fromIP(analyser, payload.type, null);
+        }
+        value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+}
+
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
     .{ "anyerror", .anyerror_type },
     .{ "anyframe", .anyframe_type },
@@ -5346,7 +5394,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         const shift_operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse
                             return operand.withoutIPIndex(analyser);
                         if (!shift_operand.is_type_val) {
-                            if (try analyser.resolveExactShiftValue(tag, operand, shift_operand)) |value| return value;
+                            if (operand.ipIndex()) |index| {
+                                if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+                                    const operation: VectorShiftOperation = if (tag == .shl_exact) .shl_exact else .shr_exact;
+                                    if (try analyser.resolveVectorShiftValue(operation, operand, shift_operand)) |value| return value;
+                                } else if (try analyser.resolveExactShiftValue(tag, operand, shift_operand)) |value| {
+                                    return value;
+                                }
+                            }
                         }
                     }
                     return operand.withoutIPIndex(analyser);
@@ -6199,7 +6254,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex()) orelse
                             try analyser.resolveVectorFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex())
                     else
-                        try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty);
+                        try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty) orelse
+                            try analyser.resolveVectorShiftValue(if (tag == .shl) .shl else .shr, lhs_ty, rhs_ty);
                     if (value) |resolved| return resolved;
                 }
             }

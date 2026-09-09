@@ -112,6 +112,14 @@ const vector_mul_sat_value = (@as(@Vector(2, i8), @splat(127)) *| @as(@Vector(2,
 //    ^^^^^^^^^^^^^^^^^^^^ (i8)(127)
 const vector_shl_sat_value = (@as(@Vector(2, u8), @splat(0x40)) <<| @as(@Vector(2, u3), @splat(2)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const vector_shl_value = (@as(@Vector(2, u8), .{ 3, 12 }) << @as(@Vector(2, u3), @splat(2)))[0];
+//    ^^^^^^^^^^^^^^^^ (u8)(12)
+const vector_shr_value = (@as(@Vector(2, i8), .{ -4, -12 }) >> @as(@Vector(2, u3), @splat(2)))[0];
+//    ^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_shl_exact_value = @shlExact(@as(@Vector(2, u8), .{ 4, 12 }), @as(@Vector(2, u3), @splat(2)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(16)
+const vector_shr_exact_value = @shrExact(@as(@Vector(2, u8), .{ 4, 12 }), @as(@Vector(2, u3), @splat(2)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(3)
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;
