@@ -1165,6 +1165,10 @@ fn resolveAggregateValueAt(analyser: *Analyser, ty: Type, index: u64) ?Type {
             if (index >= array.len) return null;
             break :blk array.child;
         },
+        .vector_type => |vector| blk: {
+            if (index >= vector.len) return null;
+            break :blk vector.child;
+        },
         else => return null,
     };
     if (payload.index) |value_index| {
@@ -1232,6 +1236,26 @@ fn resolveArrayValue(
         .values = try analyser.ip.getIndexSlice(values),
     } });
     return Type.fromIP(analyser, type_index, aggregate);
+}
+
+fn resolveSplatValue(
+    analyser: *Analyser,
+    vector_type: InternPool.Index,
+    options: ResolveOptions,
+) Error!?InternPool.Index {
+    const vector = switch (analyser.ip.indexToKey(vector_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const scalar = try analyser.resolveCoercedIPValue(vector.child, options) orelse return null;
+    if (analyser.ip.isUndefined(scalar) or analyser.ip.isUnknown(scalar)) return null;
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    @memset(values, scalar);
+    return try analyser.ip.get(.{ .aggregate = .{
+        .ty = vector_type,
+        .values = try analyser.ip.getIndexSlice(values),
+    } });
 }
 
 fn aggregateValues(analyser: *Analyser, value: Type) ?InternPool.Index.Slice {
@@ -1761,7 +1785,8 @@ fn resolveCoercedIPValue(
                 std.mem.eql(u8, name, "@bitCast") or
                 std.mem.eql(u8, name, "@intFromFloat") or
                 std.mem.eql(u8, name, "@floatFromInt") or
-                std.mem.eql(u8, name, "@floatCast"))
+                std.mem.eql(u8, name, "@floatCast") or
+                std.mem.eql(u8, name, "@splat"))
             {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, options.node_handle.node).?;
@@ -1777,6 +1802,8 @@ fn resolveCoercedIPValue(
                     .float_from_int
                 else if (std.mem.eql(u8, name, "@floatCast"))
                     .float_cast
+                else if (std.mem.eql(u8, name, "@splat"))
+                    .splat
                 else
                     .int_cast;
             }
@@ -1788,6 +1815,9 @@ fn resolveCoercedIPValue(
     if (analyser.ip.isUndefined(ip_index)) return null;
     const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
     if (integer_cast) |tag| {
+        if (tag == .splat) {
+            return try analyser.resolveSplatValue(ip_ty, value_options);
+        }
         if (tag == .int_from_float) {
             if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
             if (source_tag != .float and source_tag != .comptime_float) return null;

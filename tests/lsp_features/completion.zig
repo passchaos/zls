@@ -580,6 +580,22 @@ test "generic function with comptime array values" {
     });
 }
 
+test "generic function with comptime splat value" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const values: @Vector(4, u8) = @splat(N);
+        \\    return if (values[3] == 7)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {

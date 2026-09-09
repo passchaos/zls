@@ -72,6 +72,9 @@ const vector_builtin_12 = @trunc(some_vector);
 //    ^^^^^^^^^^^^^^^^^ (@Vector(4,f32))()
 const vector_builtin_13 = @round(some_vector);
 //    ^^^^^^^^^^^^^^^^^ (@Vector(4,f32))()
+const splat_value: @Vector(4, u8) = @splat(7);
+const splat_value_index = splat_value[2];
+//    ^^^^^^^^^^^^^^^^^ (u8)(7)
 
 const invalid_builtin_00 = @sqrt(null);
 //    ^^^^^^^^^^^^^^^^^^ (unknown)()
