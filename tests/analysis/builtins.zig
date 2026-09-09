@@ -376,6 +376,24 @@ const float_min_negative_zero = @min(@as(f32, 0.0), @as(f32, -0.0));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-0)
 const float_max_positive_zero = @max(@as(f64, -0.0), @as(f64, 0.0));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (f64)(0)
+const vector_min = @min(
+    @as(@Vector(2, i8), .{ 4, -2 }),
+    @as(@Vector(2, i8), .{ 3, 7 }),
+    @as(@Vector(2, i8), .{ 5, 1 }),
+);
+const vector_min_value = vector_min[0];
+//    ^^^^^^^^^^^^^^^^ (i8)(3)
+const vector_max = @max(
+    @as(@Vector(2, i8), .{ 4, -2 }),
+    @as(@Vector(2, i8), .{ 3, 7 }),
+    @as(@Vector(2, i8), .{ 5, 1 }),
+);
+const vector_max_value = vector_max[1];
+//    ^^^^^^^^^^^^^^^^ (i8)(7)
+const vector_min_zero = @min(@as(@Vector(2, f32), .{ 0.0, 2.0 }), @as(@Vector(2, f32), .{ -0.0, 3.0 }))[0];
+//    ^^^^^^^^^^^^^^^ (f32)(-0)
+const vector_max_zero = @max(@as(@Vector(2, f32), .{ -0.0, 2.0 }), @as(@Vector(2, f32), .{ 0.0, 3.0 }))[0];
+//    ^^^^^^^^^^^^^^^ (f32)(0)
 const float_add_value = @as(f32, 6.0) + @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(8)
 const float_sub_value = @as(f32, 6.0) - @as(f64, 2.0);

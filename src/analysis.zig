@@ -3454,6 +3454,66 @@ fn resolveVectorComparisonValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn resolveVectorMinMaxValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operands: []const Type,
+    result_type: InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const result_vector = switch (analyser.ip.indexToKey(result_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const result_values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+    defer analyser.gpa.free(result_values);
+
+    for (result_values, 0..) |*result_value, i| {
+        var selected: ?Type = null;
+        for (operands) |operand| {
+            const payload = switch (operand.data) {
+                .ip_index => |payload| payload,
+                else => return null,
+            };
+            const vector = switch (analyser.ip.indexToKey(payload.type)) {
+                .vector_type => |vector| vector,
+                else => return null,
+            };
+            if (vector.len != result_vector.len) return null;
+            const values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, result_type, null);
+            const candidate = Type.fromIP(analyser, vector.child, values.at(@intCast(i), analyser.ip));
+            if (selected == null) {
+                selected = candidate;
+                continue;
+            }
+            const prefer_candidate = switch (tag) {
+                .min => analyser.resolveComparisonBool(.less_than, candidate, selected.?) orelse return Type.fromIP(analyser, result_type, null),
+                .max => analyser.resolveComparisonBool(.greater_than, candidate, selected.?) orelse return Type.fromIP(analyser, result_type, null),
+                else => return null,
+            };
+            if (prefer_candidate) {
+                selected = candidate;
+            } else if (analyser.floatValue(candidate.ipIndex() orelse .none)) |candidate_float| {
+                const selected_float = analyser.floatValue(selected.?.ipIndex() orelse .none) orelse return null;
+                if (candidate_float == 0 and selected_float == 0) {
+                    if ((tag == .min and std.math.signbit(candidate_float) and !std.math.signbit(selected_float)) or
+                        (tag == .max and !std.math.signbit(candidate_float) and std.math.signbit(selected_float)))
+                    {
+                        selected = candidate;
+                    }
+                }
+            }
+        }
+        const selected_index = selected.?.ipIndex() orelse return Type.fromIP(analyser, result_type, null);
+        result_value.* = if (analyser.ip.zigTypeTag(result_vector.child) == .float)
+            try analyser.coerceNumericToFloatValue(result_vector.child, selected_index) orelse
+                try analyser.ip.getUnknown(result_vector.child)
+        else
+            try analyser.coerceIP(result_vector.child, selected_index) orelse
+                try analyser.ip.getUnknown(result_vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), result_values);
+}
+
 fn resolveComparisonBool(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -5337,6 +5397,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (result_type == .none) return null;
                     if (!analyser.evaluate_comptime_values) {
                         return Type.fromIP(analyser, result_type, null);
+                    }
+                    if (analyser.ip.zigTypeTag(result_type) == .vector) {
+                        return try analyser.resolveVectorMinMaxValue(tag, resolved, result_type) orelse
+                            Type.fromIP(analyser, result_type, null);
                     }
 
                     var selected = resolved[0];

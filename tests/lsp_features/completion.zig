@@ -1876,6 +1876,29 @@ test "generic function with comptime member reflection" {
     });
 }
 
+test "generic function with comptime vector min max" {
+    try testCompletion(
+        \\fn Select(comptime N: i8) type {
+        \\    const a: @Vector(2, i8) = .{ N, -2 };
+        \\    const b: @Vector(2, i8) = .{ 3, 7 };
+        \\    const c: @Vector(2, i8) = .{ 5, 1 };
+        \\    const minimum = @min(a, b, c);
+        \\    const maximum = @max(a, b, c);
+        \\    const min_zero = @min(@as(@Vector(2, f32), .{ 0.0, 2.0 }), @as(@Vector(2, f32), .{ -0.0, 3.0 }));
+        \\    const max_zero = @max(@as(@Vector(2, f32), .{ -0.0, 2.0 }), @as(@Vector(2, f32), .{ 0.0, 3.0 }));
+        \\    return if (minimum[0] == 3 and minimum[1] == -2 and maximum[0] == 5 and maximum[1] == 7 and
+        \\        min_zero[0] == -0.0 and max_zero[0] == 0.0)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime local constants" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {
