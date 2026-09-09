@@ -2278,6 +2278,48 @@ fn resolveFloatBinaryValue(
     return Type.fromIP(analyser, result_type, result_index);
 }
 
+fn floatRemainderValue(comptime T: type, tag: std.zig.BuiltinFn.Tag, lhs: f128, rhs: f128) ?f128 {
+    const a: T = @floatCast(lhs);
+    const b: T = @floatCast(rhs);
+    if (!std.math.isFinite(a) or !std.math.isFinite(b) or b == 0) return null;
+    const result: T = switch (tag) {
+        .mod => @mod(a, b),
+        .rem => @rem(a, b),
+        else => return null,
+    };
+    if (!std.math.isFinite(result)) return null;
+    return @floatCast(result);
+}
+
+fn resolveFloatRemainderValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_index = lhs.ipIndex() orelse return null;
+    const rhs_index = rhs.ipIndex() orelse return null;
+    const lhs_value = analyser.floatValue(lhs_index) orelse return null;
+    const rhs_value = analyser.floatValue(rhs_index) orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(
+        analyser.ip.typeOf(lhs_index),
+        analyser.ip.typeOf(rhs_index),
+    ) orelse return null;
+    const result = switch (result_type) {
+        .f16_type => floatRemainderValue(f16, tag, lhs_value, rhs_value),
+        .f32_type => floatRemainderValue(f32, tag, lhs_value, rhs_value),
+        .f64_type => floatRemainderValue(f64, tag, lhs_value, rhs_value),
+        .f80_type => floatRemainderValue(f80, tag, lhs_value, rhs_value),
+        .f128_type, .comptime_float_type => floatRemainderValue(f128, tag, lhs_value, rhs_value),
+        else => null,
+    } orelse return null;
+    const result_index = try analyser.coerceFloatValue(
+        result_type,
+        try analyser.ip.get(.{ .float_comptime_value = result }),
+    ) orelse return null;
+    return Type.fromIP(analyser, result_type, result_index);
+}
+
 fn resolveFixedWidthIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -4368,7 +4410,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     var rhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     if (lhs.is_type_val or rhs.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveIntegerDivisionValue(tag, lhs, rhs)) |value| return value;
+                        if (try analyser.resolveIntegerDivisionValue(tag, lhs, rhs) orelse
+                            try analyser.resolveFloatRemainderValue(tag, lhs, rhs)) |value| return value;
                     }
                     lhs = lhs.withoutIPIndex(analyser);
                     rhs = rhs.withoutIPIndex(analyser);

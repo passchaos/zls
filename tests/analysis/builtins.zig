@@ -250,6 +250,10 @@ const sqrt_f32_value = @sqrt(@as(f32, 9.0));
 //    ^^^^^^^^^^^^^^ (f32)(3)
 const sqrt_f64_negative_zero = @sqrt(@as(f64, -0.0));
 //    ^^^^^^^^^^^^^^^^^^^^^^ (f64)(-0)
+const float_mod_value = @mod(@as(f32, -7.5), @as(f64, 5.0));
+//    ^^^^^^^^^^^^^^^ (f64)(2.5)
+const float_rem_value = @rem(@as(f32, -7.5), @as(f64, 5.0));
+//    ^^^^^^^^^^^^^^^ (f64)(-2.5)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

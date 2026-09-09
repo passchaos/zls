@@ -905,6 +905,21 @@ test "generic function with comptime division builtins" {
     }
 
     try testCompletion(
+        \\fn Select(comptime lhs: f32, comptime rhs: f64) type {
+        \\    const modulo: u8 = @intFromFloat(@mod(lhs, rhs));
+        \\    const remainder: i8 = @intFromFloat(@rem(-lhs, rhs));
+        \\    return if (modulo == 2 and remainder == -2)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7.5, 5.0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime N: comptime_int) type {
         \\    return if (@divTrunc(N, 3) == -2 and @divFloor(N, 3) == -3 and @mod(N, 3) == 2 and @rem(N, 3) == -1)
         \\        struct { matched: u8 }
