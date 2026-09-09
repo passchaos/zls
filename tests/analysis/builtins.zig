@@ -182,6 +182,12 @@ const byte_swap_u24_value = @byteSwap(@as(u24, 0x123456));
 //    ^^^^^^^^^^^^^^^^^^^ (u24)(5649426)
 const byte_swap_i16_value = @byteSwap(@as(i16, 0x1234));
 //    ^^^^^^^^^^^^^^^^^^^ (i16)(13330)
+const int_cast_i8_value: i8 = @intCast(@as(i16, -42));
+//    ^^^^^^^^^^^^^^^^^ (i8)(-42)
+const truncate_u8_value: u8 = @truncate(@as(u16, 0x1ff));
+//    ^^^^^^^^^^^^^^^^^ (u8)(255)
+const truncate_i8_value: i8 = @truncate(@as(i16, -1));
+//    ^^^^^^^^^^^^^^^^^ (i8)(-1)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

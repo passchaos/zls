@@ -728,6 +728,21 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime cast_value: u16, comptime truncate_value: u16) type {
+        \\    const narrowed: u8 = @intCast(cast_value);
+        \\    const truncated: u8 = @truncate(truncate_value);
+        \\    return if (narrowed == 42 and truncated == 42)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(42, 0x12a) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {
