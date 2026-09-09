@@ -4085,6 +4085,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const lhs = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
 
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse return null;
+                    if (analyser.evaluate_comptime_values and lhs.isEnumType()) {
+                        const decl = try analyser.lookupSymbolContainer(lhs, field_name, .field);
+                        if (decl != null) return try analyser.enumValue(lhs, field_name);
+                    }
 
                     return try analyser.resolveFieldAccess(lhs, field_name);
                 },
