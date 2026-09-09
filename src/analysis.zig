@@ -2557,11 +2557,11 @@ fn resolveIntegerDivisionValue(
         .ip_index => |payload| payload,
         else => return null,
     };
-    const lhs_value = analyser.ip.toInt(lhs_payload.index orelse return null, i128) orelse return null;
-    const rhs_value = analyser.ip.toInt(rhs_payload.index orelse return null, i128) orelse return null;
-    if (rhs_value == 0 or (lhs_value == std.math.minInt(i128) and rhs_value == -1)) return null;
+    const lhs_value = analyser.ip.toInt(lhs_payload.index orelse return null, i256) orelse return null;
+    const rhs_value = analyser.ip.toInt(rhs_payload.index orelse return null, i256) orelse return null;
+    if (rhs_value == 0 or (lhs_value == std.math.minInt(i256) and rhs_value == -1)) return null;
 
-    const value: i128 = switch (tag) {
+    const value: i256 = switch (tag) {
         .div_trunc => @divTrunc(lhs_value, rhs_value),
         .div_floor => @divFloor(lhs_value, rhs_value),
         .div_exact => blk: {
@@ -2574,12 +2574,7 @@ fn resolveIntegerDivisionValue(
     };
 
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
-    const raw_value = if (value >= 0 and value <= std.math.maxInt(u64))
-        try analyser.ip.get(.{ .int_u64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
-    else if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64))
-        try analyser.ip.get(.{ .int_i64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
-    else
-        return null;
+    const raw_value = try analyser.internComptimeInt(value);
     if (result_type == .comptime_int_type) return Type.fromIP(analyser, result_type, raw_value);
 
     var err_msg: ErrorMsg = undefined;

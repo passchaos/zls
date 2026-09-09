@@ -1064,6 +1064,22 @@ test "generic function with comptime division builtins" {
         .{ .label = "exact", .kind = .Field, .detail = "u8" },
         .{ .label = "fallback", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime N: u128) type {
+        \\    return if (@divTrunc(N, 2) == 85070591730234615865843651857942052864 and
+        \\        @divFloor(N, 2) == 85070591730234615865843651857942052864 and
+        \\        @divExact(N, 2) == 85070591730234615865843651857942052864 and
+        \\        @mod(N, 7) == 2 and @rem(N, 7) == 2)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(170141183460469231731687303715884105728) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime member reflection" {
