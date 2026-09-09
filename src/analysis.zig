@@ -1832,6 +1832,41 @@ fn resolveFloatUnaryBuiltinValue(
     return Type.fromIP(analyser, payload.type, result_index);
 }
 
+fn floatMulAddValue(comptime T: type, a: f128, b: f128, c: f128) ?f128 {
+    const lhs: T = @floatCast(a);
+    const rhs: T = @floatCast(b);
+    const addend: T = @floatCast(c);
+    if (!std.math.isFinite(lhs) or !std.math.isFinite(rhs) or !std.math.isFinite(addend)) return null;
+    const result: T = @mulAdd(T, lhs, rhs, addend);
+    if (!std.math.isFinite(result)) return null;
+    return @floatCast(result);
+}
+
+fn resolveFloatMulAddValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    a: InternPool.Index,
+    b: InternPool.Index,
+    c: InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const a_value = analyser.floatValue(a) orelse return null;
+    const b_value = analyser.floatValue(b) orelse return null;
+    const c_value = analyser.floatValue(c) orelse return null;
+    const result = switch (result_type) {
+        .f16_type => floatMulAddValue(f16, a_value, b_value, c_value),
+        .f32_type => floatMulAddValue(f32, a_value, b_value, c_value),
+        .f64_type => floatMulAddValue(f64, a_value, b_value, c_value),
+        .f80_type => floatMulAddValue(f80, a_value, b_value, c_value),
+        .f128_type, .comptime_float_type => floatMulAddValue(f128, a_value, b_value, c_value),
+        else => null,
+    } orelse return null;
+    const result_index = try analyser.coerceFloatValue(
+        result_type,
+        try analyser.ip.get(.{ .float_comptime_value = result }),
+    ) orelse return null;
+    return Type.fromIP(analyser, result_type, result_index);
+}
+
 fn floatFromIntValue(
     analyser: *Analyser,
     dest_ty: InternPool.Index,
@@ -4102,12 +4137,24 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .atomic_load,
                 .atomic_rmw,
                 .@"extern",
-                .mul_add,
                 .union_init,
                 => {
                     if (params.len < 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
                     return try ty.instanceTypeVal(analyser);
+                },
+                .mul_add => {
+                    if (params.len != 4) return null;
+                    const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    const result_type = ty.ipIndex() orelse return null;
+                    const result = try ty.instanceTypeVal(analyser) orelse return null;
+                    if (!analyser.evaluate_comptime_values or analyser.ip.zigTypeTag(result_type) == .vector) {
+                        return result;
+                    }
+                    const a = try analyser.resolveCoercedIPValue(result_type, .of(params[1], handle)) orelse return result;
+                    const b = try analyser.resolveCoercedIPValue(result_type, .of(params[2], handle)) orelse return result;
+                    const c = try analyser.resolveCoercedIPValue(result_type, .of(params[3], handle)) orelse return result;
+                    return try analyser.resolveFloatMulAddValue(result_type, a, b, c) orelse result;
                 },
 
                 .c_va_arg => {

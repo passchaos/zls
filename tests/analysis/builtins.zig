@@ -238,6 +238,10 @@ const float_mul_value = @as(f32, 6.0) * @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(12)
 const float_div_value = @as(f32, 6.0) / @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(3)
+const mul_add_f32_value = @mulAdd(f32, 2.5, 4.0, -1.0);
+//    ^^^^^^^^^^^^^^^^^ (f32)(9)
+const mul_add_f64_value = @mulAdd(f64, -2.0, 4.0, 1.0);
+//    ^^^^^^^^^^^^^^^^^ (f64)(-7)
 const floor_value = @floor(@as(f32, -2.75));
 //    ^^^^^^^^^^^ (f32)(-3)
 const ceil_value = @ceil(@as(f64, -2.75));

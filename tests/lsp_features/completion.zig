@@ -896,6 +896,19 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime a: f32, comptime b: f32, comptime c: f32) type {
+        \\    return if (@mulAdd(f32, a, b, c) == 9)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5, 4.0, -1.0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {
