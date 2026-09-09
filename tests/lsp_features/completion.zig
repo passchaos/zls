@@ -533,6 +533,42 @@ test "generic function with comptime tuple values" {
     });
 }
 
+test "generic function with comptime overflow builtins" {
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    const add = @addWithOverflow(value, 10);
+        \\    const sub = @subWithOverflow(@as(u8, 2), 3);
+        \\    const mul = @mulWithOverflow(@as(i8, 40), 4);
+        \\    const shl = @shlWithOverflow(@as(u8, 0x40), 2);
+        \\    const no_overflow = @addWithOverflow(@as(u8, 2), 3);
+        \\    return if (add[0] == 4 and add[1] == 1 and sub[0] == 255 and sub[1] == 1 and
+        \\        mul[0] == -96 and mul[1] == 1 and shl[0] == 0 and shl[1] == 1 and
+        \\        no_overflow[0] == 5 and no_overflow[1] == 0)
+        \\        struct { overflowed: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(250) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "overflowed", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: u128) type {
+        \\    const result = @addWithOverflow(value, 1);
+        \\    return if (result[0] == 0 and result[1] == 1)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(340282366920938463463374607431768211455) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime integer expressions" {
     const cases = [_][]const u8{
         "N + 2 == 8",

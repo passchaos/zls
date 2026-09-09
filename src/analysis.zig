@@ -1161,6 +1161,15 @@ fn resolveTupleValueAt(analyser: *Analyser, ty: Type, index: u64) ?Type {
         else => return null,
     };
     if (index >= tuple.values.len) return null;
+    if (payload.index) |value_index| {
+        if (analyser.ip.indexToKey(value_index) == .aggregate) {
+            const aggregate = analyser.ip.indexToKey(value_index).aggregate;
+            if (aggregate.ty != payload.type or index >= aggregate.values.len) return null;
+            const value = aggregate.values.at(@intCast(index), analyser.ip);
+            if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value)) return null;
+            return Type.fromIP(analyser, tuple.types.at(@intCast(index), analyser.ip), value);
+        }
+    }
     const value = tuple.values.at(@intCast(index), analyser.ip);
     if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value)) return null;
     return Type.fromIP(analyser, tuple.types.at(@intCast(index), analyser.ip), value);
@@ -2545,6 +2554,97 @@ fn resolveFixedWidthIntegerBinaryValue(
         },
     };
     return analyser.intValueWithType(result_type, value);
+}
+
+fn overflowTupleValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    result_value: InternPool.Index,
+    overflowed: bool,
+) error{OutOfMemory}!Type {
+    const tuple_type = try analyser.ip.get(.{ .tuple_type = .{
+        .types = try analyser.ip.getIndexSlice(&.{ result_type, .u1_type }),
+        .values = try analyser.ip.getIndexSlice(&.{ .none, .none }),
+    } });
+    const aggregate = try analyser.ip.get(.{ .aggregate = .{
+        .ty = tuple_type,
+        .values = try analyser.ip.getIndexSlice(&.{
+            result_value,
+            if (overflowed) .one_u1 else .zero_u1,
+        }),
+    } });
+    return Type.fromIP(analyser, tuple_type, aggregate);
+}
+
+fn resolveOverflowValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_index = lhs.ipIndex() orelse return null;
+    const rhs_index = rhs.ipIndex() orelse return null;
+    const result_type = if (tag == .shl_with_overflow)
+        analyser.ip.typeOf(lhs_index)
+    else
+        try analyser.resolvePeerTypesIP(
+            analyser.ip.typeOf(lhs_index),
+            analyser.ip.typeOf(rhs_index),
+        ) orelse return null;
+    if (analyser.ip.zigTypeTag(result_type) != .int) return null;
+    const info = analyser.ip.intInfo(result_type, builtin.target);
+    if (info.bits == 0 or info.bits > 128) return null;
+
+    const result: i256, const overflowed = switch (info.signedness) {
+        .unsigned => unsigned: {
+            const a: u256 = analyser.ip.toInt(lhs_index, u128) orelse return null;
+            const b: u256 = analyser.ip.toInt(rhs_index, u128) orelse return null;
+            const modulus = @as(u256, 1) << @intCast(info.bits);
+            const max = modulus - 1;
+            const mathematical: u256 = switch (tag) {
+                .add_with_overflow => a + b,
+                .sub_with_overflow => if (a >= b) a - b else a + modulus - b,
+                .mul_with_overflow => a * b,
+                .shl_with_overflow => blk: {
+                    if (b >= info.bits) return null;
+                    break :blk a << @intCast(b);
+                },
+                else => return null,
+            };
+            const overflow = switch (tag) {
+                .sub_with_overflow => a < b,
+                else => mathematical > max,
+            };
+            break :unsigned .{ @as(i256, @intCast(mathematical & max)), overflow };
+        },
+        .signed => signed: {
+            const a: i256 = analyser.ip.toInt(lhs_index, i128) orelse return null;
+            const b: i256 = analyser.ip.toInt(rhs_index, i128) orelse return null;
+            const min = -(@as(i256, 1) << @intCast(info.bits - 1));
+            const max = (@as(i256, 1) << @intCast(info.bits - 1)) - 1;
+            const mathematical: i256 = switch (tag) {
+                .add_with_overflow => a + b,
+                .sub_with_overflow => a - b,
+                .mul_with_overflow => a * b,
+                .shl_with_overflow => blk: {
+                    if (b < 0 or b >= info.bits) return null;
+                    break :blk a * (@as(i256, 1) << @intCast(b));
+                },
+                else => return null,
+            };
+            const modulus = @as(u256, 1) << @intCast(info.bits);
+            const mask = modulus - 1;
+            const raw = @as(u256, @bitCast(mathematical)) & mask;
+            const sign_bit = @as(u256, 1) << @intCast(info.bits - 1);
+            const wrapped: i256 = if (raw & sign_bit == 0)
+                @intCast(raw)
+            else
+                @as(i256, @intCast(raw)) - @as(i256, @intCast(modulus));
+            break :signed .{ wrapped, mathematical < min or mathematical > max };
+        },
+    };
+    const result_value = (try analyser.intValueWithType(result_type, result) orelse return null).ipIndex().?;
+    return try analyser.overflowTupleValue(result_type, result_value, overflowed);
 }
 
 fn resolveIntegerDivisionValue(
@@ -4562,6 +4662,35 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         }
                     }
                     return operand.withoutIPIndex(analyser);
+                },
+                .add_with_overflow,
+                .sub_with_overflow,
+                .mul_with_overflow,
+                .shl_with_overflow,
+                => |tag| {
+                    if (params.len != 2) return null;
+                    const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
+                    if (lhs.is_type_val or rhs.is_type_val) return null;
+                    const lhs_index = lhs.ipIndex() orelse return null;
+                    const rhs_index = rhs.ipIndex() orelse return null;
+                    const result_type = if (tag == .shl_with_overflow)
+                        analyser.ip.typeOf(lhs_index)
+                    else
+                        try analyser.resolvePeerTypesIP(
+                            analyser.ip.typeOf(lhs_index),
+                            analyser.ip.typeOf(rhs_index),
+                        ) orelse return null;
+                    if (analyser.ip.zigTypeTag(result_type) != .int) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveOverflowValue(tag, lhs, rhs)) |value| return value;
+                    }
+                    var element_types = [_]Type{
+                        Type.fromIP(analyser, .type_type, result_type),
+                        Type.fromIP(analyser, .type_type, .u1_type),
+                    };
+                    const tuple_type = try Type.createTupleType(analyser, &element_types);
+                    return try tuple_type.instanceUnchecked(analyser);
                 },
                 .has_field, .has_decl => |tag| {
                     if (params.len != 2) return null;
