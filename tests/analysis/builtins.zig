@@ -103,6 +103,14 @@ const reduce_float_min_zero = @reduce(.Min, @as(@Vector(2, f32), .{ 0.0, -0.0 })
 //    ^^^^^^^^^^^^^^^^^^^^^ (f32)(-0)
 const reduce_float_max_zero = @reduce(.Max, @as(@Vector(2, f64), .{ -0.0, 0.0 }));
 //    ^^^^^^^^^^^^^^^^^^^^^ (f64)(0)
+const select_value = @select(
+    u8,
+    @as(@Vector(4, bool), .{ true, false, true, false }),
+    @as(@Vector(4, u8), .{ 1, 2, 3, 4 }),
+    @as(@Vector(4, u8), .{ 5, 6, 7, 8 }),
+);
+const select_value_index = select_value[1];
+//    ^^^^^^^^^^^^^^^^^^ (u8)(6)
 
 const invalid_builtin_00 = @sqrt(null);
 //    ^^^^^^^^^^^^^^^^^^ (unknown)()

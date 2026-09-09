@@ -636,6 +636,47 @@ test "generic function with comptime float reductions" {
     });
 }
 
+test "generic function with comptime vector select" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const values = @select(
+        \\        u8,
+        \\        @as(@Vector(4, bool), .{ true, false, true, false }),
+        \\        @as(@Vector(4, u8), .{ 1, N, 3, N }),
+        \\        @as(@Vector(4, u8), .{ N, 6, N, 8 }),
+        \\    );
+        \\    return if (values[0] == 1 and values[1] == 6 and values[2] == 3 and values[3] == 8)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(42) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const values = @select(
+        \\        u8,
+        \\        @as(@Vector(2, bool), .{ true, false }),
+        \\        @as(@Vector(2, u8), .{ N, runtime }),
+        \\        @as(@Vector(2, u8), .{ runtime, N + 1 }),
+        \\    );
+        \\    return if (values[0] == 4 and values[1] == 5)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {

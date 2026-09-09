@@ -2894,6 +2894,64 @@ fn resolveReduceValue(
     return result;
 }
 
+fn resolveSelectValue(
+    analyser: *Analyser,
+    element_type: InternPool.Index,
+    predicate: Type,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const predicate_payload = switch (predicate.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const predicate_vector = switch (analyser.ip.indexToKey(predicate_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (predicate_vector.child != .bool_type or
+        predicate_vector.len != lhs_vector.len or
+        predicate_vector.len != rhs_vector.len or
+        lhs_vector.child != element_type or
+        rhs_vector.child != element_type) return null;
+
+    const result_type = lhs_payload.type;
+    const predicate_values = analyser.aggregateValues(predicate);
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    if (predicate_values == null or lhs_values == null or rhs_values == null) {
+        return Type.fromIP(analyser, result_type, null);
+    }
+
+    const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const predicate_value = predicate_values.?.at(@intCast(i), analyser.ip);
+        value.* = switch (predicate_value) {
+            .bool_true => lhs_values.?.at(@intCast(i), analyser.ip),
+            .bool_false => rhs_values.?.at(@intCast(i), analyser.ip),
+            else => try analyser.ip.getUnknown(element_type),
+        };
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn resolveIntegerDivisionValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -4966,6 +5024,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         }
                     }
                     return Type.fromIP(analyser, vector.child, null);
+                },
+                .select => {
+                    if (params.len != 4) return null;
+                    const element = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (!element.is_type_val) return null;
+                    const element_type = element.ipIndex() orelse return null;
+                    const predicate = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
+                    const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[2], handle)) orelse return null;
+                    const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[3], handle)) orelse return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveSelectValue(element_type, predicate, lhs, rhs)) |value| return value;
+                    }
+                    return try analyser.resolveSelectValue(element_type, predicate.withoutIPIndex(analyser), lhs.withoutIPIndex(analyser), rhs.withoutIPIndex(analyser));
                 },
                 .has_field, .has_decl => |tag| {
                     if (params.len != 2) return null;
