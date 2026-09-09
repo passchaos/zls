@@ -342,6 +342,14 @@ const wide_mod_value = @mod(@as(u128, 170141183460469231731687303715884105728), 
 //    ^^^^^^^^^^^^^^ (u128)(2)
 const wide_rem_value = @rem(@as(u128, 170141183460469231731687303715884105728), 7);
 //    ^^^^^^^^^^^^^^ (u128)(2)
+const shl_exact_u8_value = @shlExact(@as(u8, 3), 2);
+//    ^^^^^^^^^^^^^^^^^^ (u8)(12)
+const shr_exact_i8_value = @shrExact(@as(i8, -12), 2);
+//    ^^^^^^^^^^^^^^^^^^ (i8)(-3)
+const shl_exact_u128_value = @shlExact(@as(u128, 1), 127);
+//    ^^^^^^^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
+const shr_exact_u128_value = @shrExact(@as(u128, 170141183460469231731687303715884105728), 127);
+//    ^^^^^^^^^^^^^^^^^^^^ (u128)(1)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

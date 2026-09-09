@@ -556,6 +556,34 @@ test "generic function with full-width comptime integer expressions" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime N: u128) type {
+        \\    return if (@shlExact(N, 1) == 170141183460469231731687303715884105728 and
+        \\        @shrExact(N, 126) == 1)
+        \\        struct { shifted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(85070591730234615865843651857942052864) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "shifted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    return if (@shrExact(N, 1) == 1)
+        \\        struct { exact: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(3) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with wrapping and saturating comptime integers" {
@@ -693,6 +721,8 @@ test "generic function with comptime value builtins" {
         .{ .expression = "@min(@as(u128, 340282366920938463463374607431768211455), 7)", .detail = "[7]u8" },
         .{ .expression = "@bitReverse(@as(u8, 0b0000_0011))", .detail = "[192]u8" },
         .{ .expression = "@byteSwap(@as(u16, 0x1234))", .detail = "[13330]u8" },
+        .{ .expression = "@shlExact(@as(u8, 3), 2)", .detail = "[12]u8" },
+        .{ .expression = "@shrExact(@as(u8, 12), 2)", .detail = "[3]u8" },
         .{ .expression = "@intFromBool(true)", .detail = "[1]u8" },
         .{ .expression = "@intFromBool(false)", .detail = "[0]u8" },
         .{ .expression = "@min(4, 7)", .detail = "[4]u8" },

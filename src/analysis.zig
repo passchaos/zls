@@ -3078,6 +3078,44 @@ fn resolveBitPermutationValue(
     return analyser.intValueWithType(payload.type, result);
 }
 
+fn resolveExactShiftValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+    shift_operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const index = payload.index orelse return null;
+    const value = analyser.ip.toInt(index, i256) orelse return null;
+    const shift_index = shift_operand.ipIndex() orelse return null;
+    const shift = analyser.ip.toInt(shift_index, u16) orelse return null;
+
+    const type_tag = analyser.ip.zigTypeTag(payload.type) orelse return null;
+    if (type_tag != .int and type_tag != .comptime_int) return null;
+    if (type_tag == .int) {
+        const info = analyser.ip.intInfo(payload.type, builtin.target);
+        if (info.bits == 0 or info.bits > 128 or shift >= info.bits) return null;
+    }
+    if (shift >= @bitSizeOf(i256)) return null;
+
+    const result: i256 = switch (tag) {
+        .shl_exact => std.math.shlExact(i256, value, @intCast(shift)) catch return null,
+        .shr_exact => blk: {
+            const discarded_mask = if (shift == 0)
+                0
+            else
+                (@as(u256, 1) << @intCast(shift)) - 1;
+            if (@as(u256, @bitCast(value)) & discarded_mask != 0) return null;
+            break :blk value >> @intCast(shift);
+        },
+        else => return null,
+    };
+    return analyser.intValueWithType(payload.type, result);
+}
+
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
     .{ "anyerror", .anyerror_type },
     .{ "anyframe", .anyframe_type },
@@ -4484,6 +4522,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     lhs = lhs.withoutIPIndex(analyser);
                     rhs = rhs.withoutIPIndex(analyser);
                     return analyser.resolvePeerTypes(lhs, rhs);
+                },
+                .shl_exact, .shr_exact => |tag| {
+                    if (params.len != 2) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (operand.is_type_val) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        const shift_operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse
+                            return operand.withoutIPIndex(analyser);
+                        if (!shift_operand.is_type_val) {
+                            if (try analyser.resolveExactShiftValue(tag, operand, shift_operand)) |value| return value;
+                        }
+                    }
+                    return operand.withoutIPIndex(analyser);
                 },
                 .has_field, .has_decl => |tag| {
                     if (params.len != 2) return null;
