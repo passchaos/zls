@@ -1978,6 +1978,7 @@ fn floatUnaryBuiltinValue(
     const value: T = @floatCast(operand);
     if (!std.math.isFinite(value)) return null;
     const result: T = switch (tag) {
+        .abs => @abs(value),
         .sin => @sin(value),
         .cos => @cos(value),
         .tan => @tan(value),
@@ -2016,6 +2017,37 @@ fn resolveFloatUnaryBuiltinValue(
         try analyser.ip.get(.{ .float_comptime_value = result }),
     ) orelse return null;
     return Type.fromIP(analyser, payload.type, result_index);
+}
+
+fn resolveFloatVectorUnaryValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(vector.child) != .float) return null;
+    const source_values = analyser.aggregateValues(operand) orelse return null;
+    if (source_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const source = source_values.at(@intCast(i), analyser.ip);
+        const element = Type.fromIP(analyser, vector.child, source);
+        const result = switch (tag) {
+            .floor, .ceil, .trunc, .round => try analyser.resolveFloatRoundingValue(tag, element),
+            else => try analyser.resolveFloatUnaryBuiltinValue(tag, element),
+        };
+        value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
 fn floatMulAddValue(comptime T: type, a: f128, b: f128, c: f128) ?f128 {
@@ -4750,8 +4782,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         else => return null,
                     };
                     if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
-                    if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(payload.type) != .vector) {
-                        if (try analyser.resolveFloatUnaryBuiltinValue(tag, ty)) |value| return value;
+                    if (analyser.evaluate_comptime_values) {
+                        if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+                            if (try analyser.resolveFloatVectorUnaryValue(tag, ty)) |value| return value;
+                        } else if (try analyser.resolveFloatUnaryBuiltinValue(tag, ty)) |value| {
+                            return value;
+                        }
                     }
                     return Type.fromIP(analyser, payload.type, null);
                 },
@@ -4767,8 +4803,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         else => return null,
                     };
                     if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
-                    if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(payload.type) != .vector) {
-                        if (try analyser.resolveFloatRoundingValue(tag, ty)) |value| return value;
+                    if (analyser.evaluate_comptime_values) {
+                        if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+                            if (try analyser.resolveFloatVectorUnaryValue(tag, ty)) |value| return value;
+                        } else if (try analyser.resolveFloatRoundingValue(tag, ty)) |value| {
+                            return value;
+                        }
                     }
                     return Type.fromIP(analyser, payload.type, null);
                 },
@@ -4824,6 +4864,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                             ) orelse return Type.fromIP(analyser, result_ty, null);
                             return Type.fromIP(analyser, result_ty, result_index);
                         }
+                    } else if (analyser.evaluate_comptime_values and scalar_tag == .float) {
+                        if (try analyser.resolveFloatVectorUnaryValue(.abs, ty)) |value| return value;
                     }
 
                     return Type.fromIP(analyser, result_ty, null);

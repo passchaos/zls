@@ -103,6 +103,34 @@ const reduce_float_min_zero = @reduce(.Min, @as(@Vector(2, f32), .{ 0.0, -0.0 })
 //    ^^^^^^^^^^^^^^^^^^^^^ (f32)(-0)
 const reduce_float_max_zero = @reduce(.Max, @as(@Vector(2, f64), .{ -0.0, 0.0 }));
 //    ^^^^^^^^^^^^^^^^^^^^^ (f64)(0)
+const vector_sqrt_value = @sqrt(@as(@Vector(2, f32), .{ 4.0, 9.0 }))[1];
+//    ^^^^^^^^^^^^^^^^^ (f32)(3)
+const vector_sin_value = @sin(@as(@Vector(2, f32), @splat(0.0)))[0];
+//    ^^^^^^^^^^^^^^^^ (f32)(0)
+const vector_cos_value = @cos(@as(@Vector(2, f64), @splat(0.0)))[1];
+//    ^^^^^^^^^^^^^^^^ (f64)(1)
+const vector_tan_value = @tan(@as(@Vector(2, f32), @splat(0.0)))[0];
+//    ^^^^^^^^^^^^^^^^ (f32)(0)
+const vector_exp_value = @exp(@as(@Vector(2, f64), @splat(0.0)))[1];
+//    ^^^^^^^^^^^^^^^^ (f64)(1)
+const vector_exp2_value = @exp2(@as(@Vector(2, f32), @splat(3.0)))[0];
+//    ^^^^^^^^^^^^^^^^^ (f32)(8)
+const vector_log_value = @log(@as(@Vector(2, f64), @splat(1.0)))[1];
+//    ^^^^^^^^^^^^^^^^ (f64)(0)
+const vector_log2_value = @log2(@as(@Vector(2, f32), @splat(8.0)))[0];
+//    ^^^^^^^^^^^^^^^^^ (f32)(3)
+const vector_log10_value = @log10(@as(@Vector(2, f64), @splat(100.0)))[1];
+//    ^^^^^^^^^^^^^^^^^^ (f64)(2)
+const vector_abs_value = @abs(@as(@Vector(2, f32), @splat(-4.5)))[0];
+//    ^^^^^^^^^^^^^^^^ (f32)(4.5)
+const vector_floor_value = @floor(@as(@Vector(2, f64), @splat(-2.5)))[1];
+//    ^^^^^^^^^^^^^^^^^^ (f64)(-3)
+const vector_ceil_value = @ceil(@as(@Vector(2, f32), @splat(-2.5)))[0];
+//    ^^^^^^^^^^^^^^^^^ (f32)(-2)
+const vector_trunc_value = @trunc(@as(@Vector(2, f64), @splat(-2.5)))[1];
+//    ^^^^^^^^^^^^^^^^^^ (f64)(-2)
+const vector_round_value = @round(@as(@Vector(2, f32), @splat(-2.5)))[0];
+//    ^^^^^^^^^^^^^^^^^^ (f32)(-3)
 const select_value = @select(
     u8,
     @as(@Vector(4, bool), .{ true, false, true, false }),

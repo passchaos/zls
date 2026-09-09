@@ -636,6 +636,29 @@ test "generic function with comptime float reductions" {
     });
 }
 
+test "generic function with comptime vector float builtins" {
+    try testCompletion(
+        \\fn Select(comptime value: f32) type {
+        \\    const values: @Vector(2, f32) = @splat(value);
+        \\    const negative_values: @Vector(2, f32) = @splat(-value);
+        \\    return if (@sqrt(@as(@Vector(2, f32), @splat(9.0)))[0] == 3 and
+        \\        @sin(@as(@Vector(2, f32), @splat(0.0)))[1] == 0 and @cos(@as(@Vector(2, f32), @splat(0.0)))[0] == 1 and
+        \\        @tan(@as(@Vector(2, f32), @splat(0.0)))[1] == 0 and @exp(@as(@Vector(2, f32), @splat(0.0)))[0] == 1 and
+        \\        @exp2(@as(@Vector(2, f32), @splat(3.0)))[1] == 8 and @log(@as(@Vector(2, f32), @splat(1.0)))[0] == 0 and
+        \\        @log2(@as(@Vector(2, f32), @splat(8.0)))[1] == 3 and @log10(@as(@Vector(2, f32), @splat(100.0)))[0] == 2 and
+        \\        @abs(negative_values)[0] == 2.5 and @floor(negative_values)[1] == -3 and @ceil(negative_values)[0] == -2 and
+        \\        @trunc(negative_values)[1] == -2 and @round(negative_values)[0] == -3)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector select" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {
