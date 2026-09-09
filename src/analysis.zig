@@ -1736,6 +1736,7 @@ fn coerceFloatValue(
         .f64_type => try analyser.ip.get(.{ .float_64_value = @floatCast(float_value) }),
         .f80_type => try analyser.ip.get(.{ .float_80_value = @floatCast(float_value) }),
         .f128_type => try analyser.ip.get(.{ .float_128_value = float_value }),
+        .comptime_float_type => try analyser.ip.get(.{ .float_comptime_value = float_value }),
         else => null,
     };
 }
@@ -2184,6 +2185,50 @@ fn resolveIntegerBinaryValue(
     const coerced = try analyser.ip.coerce(analyser.arena, result_type, raw_value, builtin.target, &err_msg);
     if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
     return Type.fromIP(analyser, result_type, coerced);
+}
+
+fn floatBinaryValue(comptime T: type, tag: Ast.Node.Tag, lhs: f128, rhs: f128) ?f128 {
+    const a: T = @floatCast(lhs);
+    const b: T = @floatCast(rhs);
+    if (!std.math.isFinite(a) or !std.math.isFinite(b)) return null;
+    const result: T = switch (tag) {
+        .add => a + b,
+        .sub => a - b,
+        .mul => a * b,
+        .div => if (b == 0) return null else a / b,
+        else => return null,
+    };
+    if (!std.math.isFinite(result)) return null;
+    return @floatCast(result);
+}
+
+fn resolveFloatBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_index = lhs.ipIndex() orelse return null;
+    const rhs_index = rhs.ipIndex() orelse return null;
+    const lhs_value = analyser.floatValue(lhs_index) orelse return null;
+    const rhs_value = analyser.floatValue(rhs_index) orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(
+        analyser.ip.typeOf(lhs_index),
+        analyser.ip.typeOf(rhs_index),
+    ) orelse return null;
+    const result = switch (result_type) {
+        .f16_type => floatBinaryValue(f16, tag, lhs_value, rhs_value),
+        .f32_type => floatBinaryValue(f32, tag, lhs_value, rhs_value),
+        .f64_type => floatBinaryValue(f64, tag, lhs_value, rhs_value),
+        .f80_type => floatBinaryValue(f80, tag, lhs_value, rhs_value),
+        .f128_type, .comptime_float_type => floatBinaryValue(f128, tag, lhs_value, rhs_value),
+        else => null,
+    } orelse return null;
+    const result_index = try analyser.coerceFloatValue(
+        result_type,
+        try analyser.ip.get(.{ .float_comptime_value = result }),
+    ) orelse return null;
+    return Type.fromIP(analyser, result_type, result_index);
 }
 
 fn resolveFixedWidthIntegerBinaryValue(
@@ -3286,7 +3331,9 @@ fn resolveFunctionTypeFromCall(
                     bound_value = try analyser.enumValue(param_type, enum_tag);
                 }
             } else if (param_type.ipIndex()) |param_type_index| {
-                if (try analyser.resolveInternPoolValue(.of(arg, handle))) |argument_value| {
+                if (try analyser.resolveCoercedIPValue(param_type_index, .of(arg, handle))) |value| {
+                    bound_value = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
+                } else if (try analyser.resolveInternPoolValue(.of(arg, handle))) |argument_value| {
                     var err_msg: ErrorMsg = undefined;
                     const coerced_value = try analyser.ip.coerce(
                         analyser.arena,
@@ -3299,8 +3346,6 @@ fn resolveFunctionTypeFromCall(
                         const value = if (analyser.ip.isUnknown(coerced_value)) argument_value else coerced_value;
                         bound_value = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
                     }
-                } else if (try analyser.resolveCoercedIPValue(param_type_index, .of(arg, handle))) |value| {
-                    bound_value = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
                 }
             }
             if (bound_value) |value| {
@@ -4926,7 +4971,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 const value = switch (tree.nodeTag(node)) {
                     .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
-                    else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
+                    else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
+                        try analyser.resolveFloatBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
                 };
                 if (value) |resolved| return resolved;
             }
@@ -4942,7 +4988,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.resolveIntegerBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;
+                if (try analyser.resolveIntegerBinaryValue(.add, lhs_ty, rhs_ty) orelse
+                    try analyser.resolveFloatBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
@@ -4962,7 +5009,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.resolveIntegerBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
+                if (try analyser.resolveIntegerBinaryValue(.sub, lhs_ty, rhs_ty) orelse
+                    try analyser.resolveFloatBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);

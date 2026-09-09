@@ -218,6 +218,14 @@ const float_min_value = @min(@as(f32, 2.5), @as(f64, 4.5));
 //    ^^^^^^^^^^^^^^^ (f64)(2.5)
 const float_max_value = @max(@as(f32, -2.5), @as(f64, -4.5));
 //    ^^^^^^^^^^^^^^^ (f64)(-2.5)
+const float_add_value = @as(f32, 6.0) + @as(f64, 2.0);
+//    ^^^^^^^^^^^^^^^ (f64)(8)
+const float_sub_value = @as(f32, 6.0) - @as(f64, 2.0);
+//    ^^^^^^^^^^^^^^^ (f64)(4)
+const float_mul_value = @as(f32, 6.0) * @as(f64, 2.0);
+//    ^^^^^^^^^^^^^^^ (f64)(12)
+const float_div_value = @as(f32, 6.0) / @as(f64, 2.0);
+//    ^^^^^^^^^^^^^^^ (f64)(3)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);
