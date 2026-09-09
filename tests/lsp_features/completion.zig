@@ -628,6 +628,65 @@ test "generic function with comptime value builtins" {
     });
 }
 
+test "generic function with comptime member reflection" {
+    try testCompletion(
+        \\const S = struct { field: u8, const decl = 1; };
+        \\fn Select(comptime T: type) type {
+        \\    return if (@hasField(T, "field") and @hasDecl(T, "decl"))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const E = enum { tag, const decl = 1; };
+        \\fn Select(comptime T: type) type {
+        \\    return if (@hasField(T, "tag") and !@hasDecl(T, "tag") and @hasDecl(T, "decl"))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(E) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type) type {
+        \\    return if (@hasField(T, "missing") or @hasDecl(T, "missing"))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type, comptime name: []const u8) type {
+        \\    return if (@hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S, undefined) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime local constants" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

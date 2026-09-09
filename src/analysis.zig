@@ -2340,7 +2340,7 @@ fn resolveFunctionTypeFromCall(
     const parameters = func_info.parameters[@intFromBool(has_self_param)..];
     const arguments = call.ast.params;
     const min_len = @min(parameters.len, arguments.len);
-    var has_comptime_value_bindings = false;
+    var has_callsite_bindings = false;
     for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
         const param_name_token = param.name_token orelse continue;
         const param_type = param.type;
@@ -2352,11 +2352,13 @@ fn resolveFunctionTypeFromCall(
                     const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = func_info.handle };
                     try meta_params.put(analyser.arena, token_handle, argument_type);
                     try value_params.put(analyser.arena, token_handle, argument_type);
+                    has_callsite_bindings = true;
                 }
             },
             .anytype_parameter => |info| {
                 const argument_meta_type = try argument_type.typeOf(analyser);
                 try meta_params.put(analyser.arena, info.token_handle, argument_meta_type);
+                has_callsite_bindings = true;
                 const parameter_token_handle: TokenWithHandle = .{
                     .token = param_name_token,
                     .handle = func_info.handle,
@@ -2368,7 +2370,6 @@ fn resolveFunctionTypeFromCall(
                             parameter_token_handle,
                             Type.fromIP(analyser, analyser.ip.typeOf(argument_value), argument_value),
                         );
-                        has_comptime_value_bindings = true;
                     } else {
                         try value_params.put(analyser.arena, parameter_token_handle, argument_type);
                     }
@@ -2398,7 +2399,7 @@ fn resolveFunctionTypeFromCall(
                         .{ .token = param_name_token, .handle = func_info.handle },
                         try analyser.enumValue(param_type, enum_tag),
                     );
-                    has_comptime_value_bindings = true;
+                    has_callsite_bindings = true;
                     continue;
                 }
             }
@@ -2420,7 +2421,7 @@ fn resolveFunctionTypeFromCall(
             const bound_type = Type.fromIP(analyser, analyser.ip.typeOf(bound_value), bound_value);
             try meta_params.put(analyser.arena, token_handle, bound_type);
             try value_params.put(analyser.arena, token_handle, bound_type);
-            has_comptime_value_bindings = true;
+            has_callsite_bindings = true;
         }
     }
 
@@ -2429,7 +2430,7 @@ fn resolveFunctionTypeFromCall(
     // Type functions are initially analyzed without concrete arguments. Once
     // the call binds those arguments, re-evaluate the return expression so
     // comptime values can select branches and shape generated types.
-    if (has_comptime_value_bindings and
+    if (has_callsite_bindings and
         resolved.isTypeFunc() and
         func_tree.nodeTag(func_info.fn_node) == .fn_decl)
     {
@@ -2441,7 +2442,7 @@ fn resolveFunctionTypeFromCall(
                 analyser.generic_bindings = &value_params;
                 defer analyser.generic_bindings = old_bindings;
 
-                if (try analyser.resolveTypeOfNodeUncached(.of(return_expr, func_info.handle))) |return_value| {
+                if (try analyser.resolveTypeOfNodeInternal(.of(return_expr, func_info.handle))) |return_value| {
                     resolved.data.function.return_value = try analyser.allocType(return_value);
                 }
             }
@@ -3135,6 +3136,24 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .bits = result_bits,
                     } });
                     return Type.fromIP(analyser, result_type, null);
+                },
+                .has_field, .has_decl => |tag| {
+                    if (params.len != 2) return null;
+                    if (!analyser.evaluate_comptime_values) {
+                        return Type.fromIP(analyser, .bool_type, null);
+                    }
+                    const container_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse
+                        return Type.fromIP(analyser, .bool_type, null);
+                    if (!container_type.is_type_val) return Type.fromIP(analyser, .bool_type, null);
+                    const name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse
+                        return Type.fromIP(analyser, .bool_type, null);
+                    const kind: DocumentScope.DeclarationLookup.Kind = switch (tag) {
+                        .has_field => .field,
+                        .has_decl => .other,
+                        else => unreachable,
+                    };
+                    const found = try lookupSymbolContainer(container_type, name, kind) != null;
+                    return Type.fromIP(analyser, .bool_type, if (found) .bool_true else .bool_false);
                 },
                 .import => {
                     if (params.len == 0) return null;
