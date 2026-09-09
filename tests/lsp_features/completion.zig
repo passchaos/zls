@@ -740,6 +740,20 @@ test "generic function with comptime value builtins" {
 
     try testCompletion(
         \\fn Select(comptime value: u128) type {
+        \\    return if (@bitReverse(value) == 170141183460469231731687303715884105728 and
+        \\        @byteSwap(@as(u128, 0x0123456789abcdef0011223344556677)) == 158709475186131821931889503309083779841)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(1) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: u128) type {
         \\    const maximum = @max(value, 7);
         \\    return if (maximum == 340282366920938463463374607431768211455)
         \\        struct { selected: u8 }

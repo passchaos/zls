@@ -190,6 +190,12 @@ const byte_swap_u24_value = @byteSwap(@as(u24, 0x123456));
 //    ^^^^^^^^^^^^^^^^^^^ (u24)(5649426)
 const byte_swap_i16_value = @byteSwap(@as(i16, 0x1234));
 //    ^^^^^^^^^^^^^^^^^^^ (i16)(13330)
+const bit_reverse_u128_value = @bitReverse(@as(u128, 1));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
+const bit_reverse_i128_value = @bitReverse(@as(i128, 1));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i128)(-170141183460469231731687303715884105728)
+const byte_swap_u128_value = @byteSwap(@as(u128, 0x0123456789abcdef0011223344556677));
+//    ^^^^^^^^^^^^^^^^^^^^ (u128)(158709475186131821931889503309083779841)
 const int_cast_i8_value: i8 = @intCast(@as(i16, -42));
 //    ^^^^^^^^^^^^^^^^^ (i8)(-42)
 const truncate_u8_value: u8 = @truncate(@as(u16, 0x1ff));
