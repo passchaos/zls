@@ -4037,7 +4037,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         },
                         .has_decl => false,
                         else => unreachable,
-                    } else try lookupSymbolContainer(container_type, name, kind) != null;
+                    } else try analyser.lookupSymbolContainer(container_type, name, kind) != null;
                     return Type.fromIP(analyser, .bool_type, if (found) .bool_true else .bool_false);
                 },
                 .import => {
@@ -6501,13 +6501,13 @@ pub const Type = struct {
         }
         if (self.is_type_val) {
             if (self.isEnumType() or self.isTaggedUnion()) {
-                if (try lookupSymbolContainer(self, symbol, .field)) |decl| {
+                if (try analyser.lookupSymbolContainer(self, symbol, .field)) |decl| {
                     return decl;
                 }
             }
-            return try lookupSymbolContainer(self, symbol, .other);
+            return try analyser.lookupSymbolContainer(self, symbol, .other);
         } else {
-            if (try lookupSymbolContainer(self, symbol, .other)) |decl| {
+            if (try analyser.lookupSymbolContainer(self, symbol, .other)) |decl| {
                 const ty = try decl.resolveType(analyser) orelse return null;
                 const func_type = try analyser.resolveFuncProtoOfCallable(ty) orelse return null;
                 if (analyser.firstParamIs(func_type, try self.typeOf(analyser))) {
@@ -6517,7 +6517,7 @@ pub const Type = struct {
             if (self.isEnumType()) {
                 return null;
             }
-            return try lookupSymbolContainer(self, symbol, .field);
+            return try analyser.lookupSymbolContainer(self, symbol, .field);
         }
     }
 
@@ -8344,7 +8344,33 @@ pub fn lookupSymbolGlobal(
     return null;
 }
 
+fn identifierTokenMatches(
+    analyser: *Analyser,
+    tree: *const Ast,
+    token: Ast.TokenIndex,
+    expected: []const u8,
+) error{OutOfMemory}!bool {
+    const raw = tree.tokenSlice(token);
+    if (!std.mem.startsWith(u8, raw, "@\"")) {
+        return std.mem.eql(u8, offsets.identifierTokenToNameSlice(tree, token), expected);
+    }
+
+    var discarding_writer: std.Io.Writer.Discarding = .init(&.{});
+    const parsed = std.zig.string_literal.parseWrite(&discarding_writer.writer, raw[1..]) catch |err| switch (err) {
+        error.WriteFailed => unreachable,
+    };
+    if (parsed != .success or discarding_writer.count != expected.len) return false;
+
+    const decoded = try analyser.arena.alloc(u8, discarding_writer.count);
+    var writer: std.Io.Writer = .fixed(decoded);
+    const decoded_result = std.zig.string_literal.parseWrite(&writer, raw[1..]) catch |err| switch (err) {
+        error.WriteFailed => unreachable,
+    };
+    return decoded_result == .success and std.mem.eql(u8, decoded, expected);
+}
+
 pub fn lookupSymbolContainer(
+    analyser: *Analyser,
     container_type: Type,
     symbol: []const u8,
     kind: DocumentScope.DeclarationLookup.Kind,
@@ -8364,6 +8390,18 @@ pub fn lookupSymbolContainer(
     }).unwrap()) |decl_index| {
         const decl = document_scope.declarations.get(@intFromEnum(decl_index));
         return .{ .decl = decl, .handle = handle, .container_type = container_type };
+    }
+
+    for (document_scope.getScopeDeclarationsConst(container_scope.scope)) |decl_index| {
+        const index = @intFromEnum(decl_index);
+        const lookup = document_scope.declaration_lookup_map.keys()[index];
+        if (lookup.kind != kind) continue;
+        if (std.mem.findScalar(u8, lookup.name, '\\') == null) continue;
+
+        const decl = document_scope.declarations.get(index);
+        if (try analyser.identifierTokenMatches(&handle.tree, decl.nameToken(&handle.tree), symbol)) {
+            return .{ .decl = decl, .handle = handle, .container_type = container_type };
+        }
     }
 
     return null;
