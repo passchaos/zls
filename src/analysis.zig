@@ -841,6 +841,48 @@ fn findReturnStatement(tree: *const Ast, body: Ast.Node.Index) ?Ast.Node.Index {
     return findReturnStatementInternal(tree, body, &already_found);
 }
 
+const KnownReturn = union(enum) {
+    expression: Ast.Node.Index,
+    continues,
+    unknown,
+};
+
+fn findKnownReturnExpression(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) Error!KnownReturn {
+    const tree = &handle.tree;
+    return switch (tree.nodeTag(node)) {
+        .@"return" => if (tree.nodeData(node).opt_node.unwrap()) |expression|
+            .{ .expression = expression }
+        else
+            .unknown,
+        .block, .block_semicolon, .block_two, .block_two_semicolon => blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const statements = tree.blockStatements(&buffer, node) orelse break :blk .unknown;
+            for (statements) |statement| {
+                switch (try analyser.findKnownReturnExpression(handle, statement)) {
+                    .expression => |expression| break :blk .{ .expression = expression },
+                    .unknown => break :blk .unknown,
+                    .continues => {},
+                }
+            }
+            break :blk .continues;
+        },
+        .@"if", .if_simple => blk: {
+            const if_node = ast.fullIf(tree, node).?;
+            const condition = try analyser.resolveIfConditionValue(.of(if_node.ast.cond_expr, handle)) orelse break :blk .unknown;
+            if (condition) {
+                break :blk try analyser.findKnownReturnExpression(handle, if_node.ast.then_expr);
+            }
+            const else_expr = if_node.ast.else_expr.unwrap() orelse break :blk .continues;
+            break :blk try analyser.findKnownReturnExpression(handle, else_expr);
+        },
+        else => if (findReturnStatement(tree, node) != null) .unknown else .continues,
+    };
+}
+
 /// if `func_type_param` is callable, returns an instance of the return type.
 /// otherwise, returns null.
 pub fn resolveReturnType(analyser: *Analyser, func_type_param: Type) error{OutOfMemory}!?Type {
@@ -863,6 +905,12 @@ fn resolveReturnValueOfFuncNode(
     if (isTypeFunction(tree, fn_proto)) {
         if (!has_body) return .unknown_type;
         const body = tree.nodeData(func_node).node_and_node[1];
+        if (analyser.generic_bindings != null) {
+            return switch (try analyser.findKnownReturnExpression(handle, body)) {
+                .expression => |expression| try analyser.resolveTypeOfNodeInternal(.of(expression, handle)) orelse .unknown_type,
+                .continues, .unknown => .unknown_type,
+            };
+        }
         // If this is a type function and it only contains a single return statement that returns
         // a container declaration, we will return that declaration.
         const return_node = findReturnStatement(tree, body) orelse return .unknown_type;
@@ -1631,6 +1679,21 @@ fn resolveBoolValue(analyser: *Analyser, options: ResolveOptions) Error!?bool {
     return switch (try analyser.resolveInternPoolValue(options) orelse return null) {
         .bool_true => true,
         .bool_false => false,
+        else => null,
+    };
+}
+
+fn resolveIfConditionValue(analyser: *Analyser, options: ResolveOptions) Error!?bool {
+    const value = try analyser.resolveComptimeValue(options) orelse return null;
+    if (value.data != .ip_index) return null;
+    return switch (analyser.ip.indexToKey(value.data.ip_index.index.?)) {
+        .simple_value => |simple| switch (simple) {
+            .bool_true => true,
+            .bool_false => false,
+            else => null,
+        },
+        .null_value => false,
+        .optional_value => true,
         else => null,
     };
 }
@@ -3647,7 +3710,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .@"if", .if_simple => {
             const if_node = ast.fullIf(tree, node).?;
             if (analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) {
-                if (try analyser.resolveBoolValue(.{
+                if (try analyser.resolveIfConditionValue(.{
                     .node_handle = .of(if_node.ast.cond_expr, handle),
                     .container_type = options.container_type,
                 })) |condition| {

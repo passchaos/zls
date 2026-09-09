@@ -1443,6 +1443,64 @@ test "zero-parameter type function comptime evaluation" {
         \\const selected: Recursive() = undefined;
         \\const field = selected.<cursor>
     , &.{});
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    if (enabled) {
+        \\        const marker = 1;
+        \\        _ = marker;
+        \\    } else return struct { inactive: u8 };
+        \\    return struct { active: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "active", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    if (enabled) return struct { active: u8 } else return struct { inactive: u8 };
+        \\}
+        \\const selected: Select(false) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "inactive", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "type function with comptime early returns" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    if (enabled) return struct { active: u8 };
+        \\    return struct { inactive: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "active", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: usize) type {
+        \\    if (value == 1) return struct { one: u8 };
+        \\    if (value == 2) return struct { two: u8 };
+        \\    return struct { other: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "two", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    if (enabled) return struct { active: u8 };
+        \\    return struct { inactive: u8 };
+        \\}
+        \\const selected: Select(undefined) = undefined;
+        \\const field = selected.<cursor>
+    , &.{});
 }
 
 test "nested generic function" {
