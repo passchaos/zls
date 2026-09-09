@@ -1617,6 +1617,51 @@ fn resolveIntegerBinaryValue(
     return Type.fromIP(analyser, result_type, coerced);
 }
 
+fn resolveIntegerDivisionValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_value = analyser.ip.toInt(lhs_payload.index orelse return null, i128) orelse return null;
+    const rhs_value = analyser.ip.toInt(rhs_payload.index orelse return null, i128) orelse return null;
+    if (rhs_value == 0 or (lhs_value == std.math.minInt(i128) and rhs_value == -1)) return null;
+
+    const value: i128 = switch (tag) {
+        .div_trunc => @divTrunc(lhs_value, rhs_value),
+        .div_floor => @divFloor(lhs_value, rhs_value),
+        .div_exact => blk: {
+            if (@rem(lhs_value, rhs_value) != 0) return null;
+            break :blk @divTrunc(lhs_value, rhs_value);
+        },
+        .mod => @mod(lhs_value, rhs_value),
+        .rem => @rem(lhs_value, rhs_value),
+        else => return null,
+    };
+
+    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const raw_value = if (value >= 0 and value <= std.math.maxInt(u64))
+        try analyser.ip.get(.{ .int_u64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
+    else if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64))
+        try analyser.ip.get(.{ .int_i64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
+    else
+        return null;
+    if (result_type == .comptime_int_type) return Type.fromIP(analyser, result_type, raw_value);
+
+    var err_msg: ErrorMsg = undefined;
+    const coerced = try analyser.ip.coerce(analyser.arena, result_type, raw_value, builtin.target, &err_msg);
+    if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
+    return Type.fromIP(analyser, result_type, coerced);
+}
+
 fn resolveComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -3148,6 +3193,18 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .bits = result_bits,
                     } });
                     return Type.fromIP(analyser, result_type, null);
+                },
+                .div_trunc, .div_floor, .div_exact, .mod, .rem => |tag| {
+                    if (params.len != 2) return null;
+                    var lhs = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    var rhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
+                    if (lhs.is_type_val or rhs.is_type_val) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveIntegerDivisionValue(tag, lhs, rhs)) |value| return value;
+                    }
+                    lhs = lhs.withoutIPIndex(analyser);
+                    rhs = rhs.withoutIPIndex(analyser);
+                    return analyser.resolvePeerTypes(lhs, rhs);
                 },
                 .has_field, .has_decl => |tag| {
                     if (params.len != 2) return null;

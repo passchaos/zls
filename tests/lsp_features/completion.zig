@@ -628,6 +628,56 @@ test "generic function with comptime value builtins" {
     });
 }
 
+test "generic function with comptime division builtins" {
+    const cases = [_]struct { expression: []const u8, detail: []const u8 }{
+        .{ .expression = "@divTrunc(7, 3)", .detail = "[2]u8" },
+        .{ .expression = "@divFloor(7, 3)", .detail = "[2]u8" },
+        .{ .expression = "@divExact(8, 2)", .detail = "[4]u8" },
+        .{ .expression = "@mod(7, 3)", .detail = "[1]u8" },
+        .{ .expression = "@rem(7, 3)", .detail = "[1]u8" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Buffer(comptime N: usize) type {{
+            \\    return struct {{ items: [N]u8 }};
+            \\}}
+            \\const buffer: Buffer({s}) = undefined;
+            \\const fields = buffer.<cursor>
+        , .{case.expression});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.detail },
+        });
+    }
+
+    try testCompletion(
+        \\fn Select(comptime N: comptime_int) type {
+        \\    return if (@divTrunc(N, 3) == -2 and @divFloor(N, 3) == -3 and @mod(N, 3) == 2 and @rem(N, 3) == -1)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime N: comptime_int) type {
+        \\    return if (@divExact(N, 3) == 2)
+        \\        struct { exact: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime member reflection" {
     try testCompletion(
         \\const S = struct { field: u8, const decl = 1; };
