@@ -2050,6 +2050,90 @@ fn resolveFloatVectorUnaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
+fn resolveAbsValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const operand_type = payload.type;
+    const scalar_tag = analyser.ip.zigTypeTag(operand_type) orelse return null;
+    const result_type = switch (scalar_tag) {
+        .comptime_float, .float, .comptime_int => operand_type,
+        .int => if (analyser.ip.isSignedInt(operand_type, builtin.target))
+            try analyser.ip.toUnsigned(operand_type, builtin.target)
+        else
+            operand_type,
+        else => return null,
+    };
+    const operand_index = payload.index orelse return null;
+    if (scalar_tag == .comptime_int) {
+        const value = analyser.ip.toInt(operand_index, i256) orelse return null;
+        const magnitude = if (value >= 0) value else std.math.sub(i256, 0, value) catch return null;
+        return analyser.intValueWithType(result_type, magnitude);
+    }
+    if (scalar_tag == .int) {
+        const info = analyser.ip.intInfo(operand_type, builtin.target);
+        if (info.bits > 128) return null;
+        const magnitude: i256 = switch (info.signedness) {
+            .unsigned => @intCast(analyser.ip.toInt(operand_index, u128) orelse return null),
+            .signed => magnitude: {
+                const value = analyser.ip.toInt(operand_index, i128) orelse return null;
+                break :magnitude if (value >= 0) value else -@as(i256, value);
+            },
+        };
+        return analyser.intValueWithType(result_type, magnitude);
+    }
+    const value = analyser.floatValue(operand_index) orelse return null;
+    if (!std.math.isFinite(value)) return null;
+    const result_index = try analyser.coerceFloatValue(
+        result_type,
+        try analyser.ip.get(.{ .float_comptime_value = @abs(value) }),
+    ) orelse return null;
+    return Type.fromIP(analyser, result_type, result_index);
+}
+
+const VectorUnaryOperation = enum { bit_not, negate, negate_wrap, abs };
+
+fn resolveVectorUnaryValue(
+    analyser: *Analyser,
+    operation: VectorUnaryOperation,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const result_type = if (operation == .abs and analyser.ip.zigTypeTag(vector.child) == .int and
+        analyser.ip.isSignedInt(vector.child, builtin.target))
+        try analyser.ip.toUnsigned(payload.type, builtin.target)
+    else
+        payload.type;
+    const result_vector = switch (analyser.ip.indexToKey(result_type)) {
+        .vector_type => |result_vector| result_vector,
+        else => return null,
+    };
+    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, result_type, null);
+    if (source_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const resolved = switch (operation) {
+            .bit_not => try analyser.resolveBitNotValue(element),
+            .negate => try analyser.resolveNegationValue(element, false),
+            .negate_wrap => try analyser.resolveNegationValue(element, true),
+            .abs => try analyser.resolveAbsValue(element),
+        };
+        value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(result_vector.child) else try analyser.ip.getUnknown(result_vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn floatMulAddValue(comptime T: type, a: f128, b: f128, c: f128) ?f128 {
     const lhs: T = @floatCast(a);
     const rhs: T = @floatCast(b);
@@ -4834,38 +4918,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                             operand_ty,
                         else => return null,
                     };
-                    if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(operand_ty) != .vector) {
-                        const operand_index = payload.index orelse return Type.fromIP(analyser, result_ty, null);
-                        if (scalar_tag == .comptime_int) {
-                            const value = analyser.ip.toInt(operand_index, i256) orelse return Type.fromIP(analyser, result_ty, null);
-                            const magnitude = if (value >= 0) value else std.math.sub(i256, 0, value) catch
-                                return Type.fromIP(analyser, result_ty, null);
-                            return try analyser.intValueWithType(result_ty, magnitude) orelse
-                                Type.fromIP(analyser, result_ty, null);
-                        } else if (scalar_tag == .int) {
-                            const info = analyser.ip.intInfo(scalar_ty, builtin.target);
-                            if (info.bits <= 128) {
-                                const magnitude: i256 = switch (info.signedness) {
-                                    .unsigned => @intCast(analyser.ip.toInt(operand_index, u128) orelse return Type.fromIP(analyser, result_ty, null)),
-                                    .signed => magnitude: {
-                                        const value = analyser.ip.toInt(operand_index, i128) orelse return Type.fromIP(analyser, result_ty, null);
-                                        break :magnitude if (value >= 0) value else -@as(i256, value);
-                                    },
-                                };
-                                return try analyser.intValueWithType(result_ty, magnitude) orelse
-                                    Type.fromIP(analyser, result_ty, null);
-                            }
-                        } else if (scalar_tag == .float or scalar_tag == .comptime_float) {
-                            const value = analyser.floatValue(operand_index) orelse return Type.fromIP(analyser, result_ty, null);
-                            if (!std.math.isFinite(value)) return Type.fromIP(analyser, result_ty, null);
-                            const result_index = try analyser.coerceFloatValue(
-                                result_ty,
-                                try analyser.ip.get(.{ .float_comptime_value = @abs(value) }),
-                            ) orelse return Type.fromIP(analyser, result_ty, null);
-                            return Type.fromIP(analyser, result_ty, result_index);
+                    if (analyser.evaluate_comptime_values) {
+                        if (analyser.ip.zigTypeTag(operand_ty) == .vector) {
+                            if (try analyser.resolveVectorUnaryValue(.abs, ty)) |value| return value;
+                        } else if (try analyser.resolveAbsValue(ty)) |value| {
+                            return value;
                         }
-                    } else if (analyser.evaluate_comptime_values and scalar_tag == .float) {
-                        if (try analyser.resolveFloatVectorUnaryValue(.abs, ty)) |value| return value;
                     }
 
                     return Type.fromIP(analyser, result_ty, null);
@@ -5694,7 +5752,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const ty = try analyser.resolveTypeOfNodeInternal(.of(tree.nodeData(node).node, handle)) orelse return null;
             if (ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.resolveBitNotValue(ty)) |value| return value;
+                if (ty.ipIndex()) |index| {
+                    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+                        if (try analyser.resolveVectorUnaryValue(.bit_not, ty)) |value| return value;
+                    } else if (try analyser.resolveBitNotValue(ty)) |value| {
+                        return value;
+                    }
+                }
             }
             return ty.withoutIPIndex(analyser);
         },
@@ -5702,7 +5766,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const ty = try analyser.resolveTypeOfNodeInternal(.of(tree.nodeData(node).node, handle)) orelse return null;
             if (ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.resolveNegationValue(ty, tag == .negation_wrap)) |value| return value;
+                if (ty.ipIndex()) |index| {
+                    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+                        const operation: VectorUnaryOperation = if (tag == .negation_wrap) .negate_wrap else .negate;
+                        if (try analyser.resolveVectorUnaryValue(operation, ty)) |value| return value;
+                    } else if (try analyser.resolveNegationValue(ty, tag == .negation_wrap)) |value| {
+                        return value;
+                    }
+                }
             }
             return ty.withoutIPIndex(analyser);
         },

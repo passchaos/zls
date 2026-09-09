@@ -90,6 +90,14 @@ const vector_equal_value = (@as(@Vector(2, u8), .{ 1, 2 }) == @as(@Vector(2, u8)
 //    ^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_less_value = (@as(@Vector(2, i8), .{ 1, 4 }) < @as(@Vector(2, i8), .{ 2, 3 }))[1];
 //    ^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_bit_not_value = (~@as(@Vector(2, u8), .{ 0, 255 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const vector_negation_value = (-@as(@Vector(2, i8), .{ 3, -4 }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (i8)(4)
+const vector_wrapping_negation_value = (-%@as(@Vector(2, u8), .{ 1, 2 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const vector_float_negation_value = (-@as(@Vector(2, f32), .{ 2.5, -4.5 }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(4.5)
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;

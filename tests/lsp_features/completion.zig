@@ -724,6 +724,26 @@ test "generic function with comptime vector arithmetic" {
     });
 }
 
+test "generic function with comptime vector unary operators" {
+    try testCompletion(
+        \\fn Select(comptime N: i8) type {
+        \\    const signed: @Vector(2, i8) = .{ N, -128 };
+        \\    const unsigned: @Vector(2, u8) = .{ 1, 2 };
+        \\    const floats: @Vector(2, f32) = .{ 2.5, -4.5 };
+        \\    return if (@abs(signed)[0] == 4 and @abs(signed)[1] == 128 and
+        \\        (-signed)[0] == 4 and (-%signed)[1] == -128 and
+        \\        (~unsigned)[0] == 254 and (-floats)[1] == 4.5)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

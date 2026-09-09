@@ -252,6 +252,8 @@ const abs_vector_i8 = @abs(@as(@Vector(4, i8), undefined));
 //    ^^^^^^^^^^^^^ (@Vector(4,u8))()
 const abs_vector_u8 = @abs(@as(@Vector(4, u8), undefined));
 //    ^^^^^^^^^^^^^ (@Vector(4,u8))()
+const abs_vector_i8_value = @abs(@as(@Vector(2, i8), .{ -128, 4 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(128)
 
 const abs_comptime_value = @abs(-42);
 //    ^^^^^^^^^^^^^^^^^^ (comptime_int)(42)
