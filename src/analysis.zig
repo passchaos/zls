@@ -1886,9 +1886,9 @@ fn floatFromIntValue(
     dest_ty: InternPool.Index,
     value: InternPool.Index,
 ) error{OutOfMemory}!?InternPool.Index {
-    const float_value: f128 = if (analyser.ip.toInt(value, i64)) |signed|
+    const float_value: f128 = if (analyser.ip.toInt(value, i128)) |signed|
         @floatFromInt(signed)
-    else if (analyser.ip.toInt(value, u64)) |unsigned|
+    else if (analyser.ip.toInt(value, u128)) |unsigned|
         @floatFromInt(unsigned)
     else
         return null;
@@ -1902,34 +1902,25 @@ fn intFromFloatValue(
     value: InternPool.Index,
 ) error{OutOfMemory}!?InternPool.Index {
     const info = analyser.ip.intInfo(dest_ty, builtin.target);
-    if (info.bits > 64) return null;
+    if (info.bits > 128) return null;
     const float_value = analyser.floatValue(value) orelse return null;
     if (!std.math.isFinite(float_value)) return null;
     const truncated = @trunc(float_value);
     return switch (info.signedness) {
         .unsigned => unsigned: {
-            const max = if (info.bits == 64)
-                std.math.maxInt(u64)
-            else if (info.bits == 0)
-                0
-            else
-                (@as(u64, 1) << @intCast(info.bits)) - 1;
-            if (truncated < 0 or truncated > @as(f128, @floatFromInt(max))) return null;
-            break :unsigned try analyser.ip.get(.{ .int_u64_value = .{
-                .ty = dest_ty,
-                .int = @intFromFloat(truncated),
-            } });
+            const upper_bound = std.math.ldexp(@as(f128, 1), info.bits);
+            if (truncated < 0 or truncated >= upper_bound) return null;
+            const int_value: u128 = @intFromFloat(truncated);
+            const result = try analyser.intValueWithType(dest_ty, @intCast(int_value));
+            break :unsigned (result orelse return null).ipIndex().?;
         },
         .signed => signed: {
             if (info.bits == 0) return null;
-            const min = -(@as(i128, 1) << @intCast(info.bits - 1));
-            const max = (@as(i128, 1) << @intCast(info.bits - 1)) - 1;
-            if (truncated < @as(f128, @floatFromInt(min)) or truncated > @as(f128, @floatFromInt(max))) return null;
-            const int_value: i64 = @intFromFloat(truncated);
-            break :signed if (int_value >= 0)
-                try analyser.ip.get(.{ .int_u64_value = .{ .ty = dest_ty, .int = @intCast(int_value) } })
-            else
-                try analyser.ip.get(.{ .int_i64_value = .{ .ty = dest_ty, .int = int_value } });
+            const magnitude_bound = std.math.ldexp(@as(f128, 1), info.bits - 1);
+            if (truncated < -magnitude_bound or truncated >= magnitude_bound) return null;
+            const int_value: i128 = @intFromFloat(truncated);
+            const result = try analyser.intValueWithType(dest_ty, int_value);
+            break :signed (result orelse return null).ipIndex().?;
         },
     };
 }

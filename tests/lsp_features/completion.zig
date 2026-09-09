@@ -879,6 +879,25 @@ test "generic function with comptime value builtins" {
     });
 
     try testCompletion(
+        \\fn Select(comptime positive: u128, comptime negative: i128) type {
+        \\    const positive_float: f128 = @floatFromInt(positive);
+        \\    const negative_float: f128 = @floatFromInt(negative);
+        \\    const positive_int: u128 = @intFromFloat(positive_float + 0.75);
+        \\    const negative_int: i128 = @intFromFloat(negative_float - 0.75);
+        \\    return if (positive_float == @as(f128, 18446744073709551616.0) and
+        \\        negative_float == @as(f128, -18446744073709551616.0) and
+        \\        positive_int == positive and negative_int == negative)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(18446744073709551616, -18446744073709551616) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime value: f64) type {
         \\    const narrowed: f32 = @floatCast(value);
         \\    const as_int: u8 = @intFromFloat(narrowed);

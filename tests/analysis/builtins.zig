@@ -226,6 +226,14 @@ const float_from_int_f32_value: f32 = @floatFromInt(@as(u16, 42));
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(42)
 const float_from_int_f64_value: f64 = @floatFromInt(@as(i16, -42));
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (f64)(-42)
+const float_from_int_u128_value: f128 = @floatFromInt(@as(u128, 18446744073709551616));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (f128)(18446744073709552000)
+const float_from_int_i128_value: f128 = @floatFromInt(@as(i128, -18446744073709551616));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (f128)(-18446744073709552000)
+const int_from_float_u128_value: u128 = @intFromFloat(@as(f128, 18446744073709551616.75));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u128)(18446744073709551616)
+const int_from_float_i128_value: i128 = @intFromFloat(@as(f128, -18446744073709551616.75));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i128)(-18446744073709551616)
 const float_cast_f32_value: f32 = @floatCast(@as(f64, 42.75));
 //    ^^^^^^^^^^^^^^^^^^^^ (f32)(42.75)
 const float_cast_f64_value: f64 = @floatCast(@as(f32, -42.75));
