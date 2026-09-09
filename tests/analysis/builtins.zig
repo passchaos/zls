@@ -188,6 +188,10 @@ const truncate_u8_value: u8 = @truncate(@as(u16, 0x1ff));
 //    ^^^^^^^^^^^^^^^^^ (u8)(255)
 const truncate_i8_value: i8 = @truncate(@as(i16, -1));
 //    ^^^^^^^^^^^^^^^^^ (i8)(-1)
+const bit_cast_i8_value: i8 = @bitCast(@as(u8, 255));
+//    ^^^^^^^^^^^^^^^^^ (i8)(-1)
+const bit_cast_u8_value: u8 = @bitCast(@as(i8, -1));
+//    ^^^^^^^^^^^^^^^^^ (u8)(255)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

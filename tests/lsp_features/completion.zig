@@ -757,6 +757,30 @@ test "generic function with comptime value builtins" {
         .{ .label = "casted", .kind = .Field, .detail = "[4]u8" },
         .{ .label = "truncated", .kind = .Field, .detail = "[4]u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    const signed: i8 = @bitCast(value);
+        \\    const unsigned: u8 = @bitCast(signed);
+        \\    return if (signed == -1 and unsigned == 255)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(255) = undefined;
+        \\const fields = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\fn Direct(comptime value: i8) type {
+        \\    return if (value == -1) struct { direct: u8 } else struct { fallback: u8 };
+        \\}
+        \\const direct: Direct(@bitCast(@as(u8, 255))) = undefined;
+        \\const fields = direct.<cursor>
+    , &.{
+        .{ .label = "direct", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {

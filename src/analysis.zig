@@ -1654,12 +1654,20 @@ fn resolveCoercedIPValue(
         .builtin_call_two_comma,
         => {
             const name = tree.tokenSlice(tree.nodeMainToken(options.node_handle.node));
-            if (std.mem.eql(u8, name, "@intCast") or std.mem.eql(u8, name, "@truncate")) {
+            if (std.mem.eql(u8, name, "@intCast") or
+                std.mem.eql(u8, name, "@truncate") or
+                std.mem.eql(u8, name, "@bitCast"))
+            {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, options.node_handle.node).?;
                 if (params.len != 1) return null;
                 value_options.node_handle.node = params[0];
-                integer_cast = if (std.mem.eql(u8, name, "@truncate")) .truncate else .int_cast;
+                integer_cast = if (std.mem.eql(u8, name, "@truncate"))
+                    .truncate
+                else if (std.mem.eql(u8, name, "@bitCast"))
+                    .bit_cast
+                else
+                    .int_cast;
             }
         },
         else => {},
@@ -1672,6 +1680,7 @@ fn resolveCoercedIPValue(
         const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
         if (source_tag != .int and source_tag != .comptime_int) return null;
         if (tag == .truncate) return try analyser.truncateIntValue(ip_ty, ip_index);
+        if (tag == .bit_cast) return try analyser.bitCastIntValue(ip_ty, ip_index);
     }
 
     var arena_allocator: std.heap.ArenaAllocator = .init(analyser.gpa);
@@ -1684,6 +1693,48 @@ fn resolveCoercedIPValue(
     if (new_index == .none) return null;
     if (analyser.ip.isUnknown(new_index)) return null;
     return new_index;
+}
+
+fn bitCastIntValue(
+    analyser: *Analyser,
+    dest_ty: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    if (analyser.ip.zigTypeTag(dest_ty) != .int) return null;
+    const source_ty = analyser.ip.typeOf(value);
+    if (analyser.ip.zigTypeTag(source_ty) != .int) return null;
+    const dest_info = analyser.ip.intInfo(dest_ty, builtin.target);
+    const source_info = analyser.ip.intInfo(source_ty, builtin.target);
+    if (dest_info.bits != source_info.bits or dest_info.bits > 64) return null;
+
+    const raw: u64 = switch (source_info.signedness) {
+        .unsigned => analyser.ip.toInt(value, u64) orelse return null,
+        .signed => signed: {
+            const signed_value = analyser.ip.toInt(value, i64) orelse return null;
+            const bits: u64 = @bitCast(signed_value);
+            const mask = if (source_info.bits == 64)
+                std.math.maxInt(u64)
+            else if (source_info.bits == 0)
+                0
+            else
+                (@as(u64, 1) << @intCast(source_info.bits)) - 1;
+            break :signed bits & mask;
+        },
+    };
+
+    return switch (dest_info.signedness) {
+        .unsigned => try analyser.ip.get(.{ .int_u64_value = .{ .ty = dest_ty, .int = raw } }),
+        .signed => signed: {
+            if (dest_info.bits == 0 or raw & (@as(u64, 1) << @intCast(dest_info.bits - 1)) == 0) {
+                break :signed try analyser.ip.get(.{ .int_u64_value = .{ .ty = dest_ty, .int = raw } });
+            }
+            const signed_value: i64 = if (dest_info.bits == 64)
+                @bitCast(raw)
+            else
+                @intCast(@as(i128, raw) - (@as(i128, 1) << @intCast(dest_info.bits)));
+            break :signed try analyser.ip.get(.{ .int_i64_value = .{ .ty = dest_ty, .int = signed_value } });
+        },
+    };
 }
 
 fn truncateIntValue(
