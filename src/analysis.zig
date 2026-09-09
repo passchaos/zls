@@ -2278,6 +2278,20 @@ fn internComptimeInt(analyser: *Analyser, value: i256) error{OutOfMemory}!Intern
     return analyser.ip.getBigInt(.comptime_int_type, big_int.toConst());
 }
 
+fn intValueWithType(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    value: i256,
+) error{OutOfMemory}!?Type {
+    const raw_value = try analyser.internComptimeInt(value);
+    if (result_type == .comptime_int_type) return Type.fromIP(analyser, result_type, raw_value);
+
+    var err_msg: ErrorMsg = undefined;
+    const coerced = try analyser.ip.coerce(analyser.arena, result_type, raw_value, builtin.target, &err_msg);
+    if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
+    return Type.fromIP(analyser, result_type, coerced);
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2317,17 +2331,8 @@ fn resolveIntegerBinaryValue(
         else => return null,
     };
 
-    const raw_value = try analyser.internComptimeInt(value);
-
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
-    if (result_type == .comptime_int_type) {
-        return Type.fromIP(analyser, result_type, raw_value);
-    }
-
-    var err_msg: ErrorMsg = undefined;
-    const coerced = try analyser.ip.coerce(analyser.arena, result_type, raw_value, builtin.target, &err_msg);
-    if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
-    return Type.fromIP(analyser, result_type, coerced);
+    return analyser.intValueWithType(result_type, value);
 }
 
 fn floatBinaryValue(comptime T: type, tag: Ast.Node.Tag, lhs: f128, rhs: f128) ?f128 {
@@ -2574,13 +2579,7 @@ fn resolveIntegerDivisionValue(
     };
 
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
-    const raw_value = try analyser.internComptimeInt(value);
-    if (result_type == .comptime_int_type) return Type.fromIP(analyser, result_type, raw_value);
-
-    var err_msg: ErrorMsg = undefined;
-    const coerced = try analyser.ip.coerce(analyser.arena, result_type, raw_value, builtin.target, &err_msg);
-    if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
-    return Type.fromIP(analyser, result_type, coerced);
+    return analyser.intValueWithType(result_type, value);
 }
 
 fn resolveComparisonValue(
@@ -2697,44 +2696,32 @@ fn resolveBitNotValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Ty
     const index = payload.index orelse return null;
 
     if (payload.type == .comptime_int_type) {
-        const value = analyser.ip.toInt(index, i128) orelse return null;
-        const result = std.math.sub(i128, -1, value) catch return null;
-        const result_index = if (result >= 0 and result <= std.math.maxInt(u64))
-            try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-        else if (result >= std.math.minInt(i64) and result <= std.math.maxInt(i64))
-            try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-        else
-            return null;
-        return Type.fromIP(analyser, payload.type, result_index);
+        const value = analyser.ip.toInt(index, i256) orelse return null;
+        const result = std.math.sub(i256, -1, value) catch return null;
+        return analyser.intValueWithType(payload.type, result);
     }
 
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
-    if (int_info.bits > 64) return null;
+    if (int_info.bits > 128) return null;
 
-    const result_index = switch (int_info.signedness) {
+    const result: i256 = switch (int_info.signedness) {
         .unsigned => blk: {
-            const value = analyser.ip.toInt(index, u64) orelse return null;
-            const mask = if (int_info.bits == 64)
-                std.math.maxInt(u64)
+            const value = analyser.ip.toInt(index, u128) orelse return null;
+            const mask = if (int_info.bits == 128)
+                std.math.maxInt(u128)
             else if (int_info.bits == 0)
                 0
             else
-                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
-            break :blk try analyser.ip.get(.{
-                .int_u64_value = .{ .ty = payload.type, .int = (~value) & mask },
-            });
+                (@as(u128, 1) << @intCast(int_info.bits)) - 1;
+            break :blk @intCast((~value) & mask);
         },
         .signed => blk: {
-            const value = analyser.ip.toInt(index, i64) orelse return null;
-            const result = std.math.sub(i64, -1, value) catch return null;
-            break :blk if (result >= 0)
-                try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-            else
-                try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = result } });
+            const value = analyser.ip.toInt(index, i128) orelse return null;
+            break :blk -@as(i256, value) - 1;
         },
     };
-    return Type.fromIP(analyser, payload.type, result_index);
+    return analyser.intValueWithType(payload.type, result);
 }
 
 fn resolveNegationValue(
@@ -2762,69 +2749,48 @@ fn resolveNegationValue(
     }
 
     if (payload.type == .comptime_int_type) {
-        const value = analyser.ip.toInt(index, i128) orelse return null;
-        const result = std.math.sub(i128, 0, value) catch return null;
-        const result_index = if (result >= 0 and result <= std.math.maxInt(u64))
-            try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-        else if (result >= std.math.minInt(i64) and result <= std.math.maxInt(i64))
-            try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-        else
-            return null;
-        return Type.fromIP(analyser, payload.type, result_index);
+        const value = analyser.ip.toInt(index, i256) orelse return null;
+        const result = std.math.sub(i256, 0, value) catch return null;
+        return analyser.intValueWithType(payload.type, result);
     }
 
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
-    if (int_info.bits == 0 or int_info.bits > 64) return null;
+    if (int_info.bits == 0 or int_info.bits > 128) return null;
 
-    const result_index = switch (int_info.signedness) {
+    const result: i256 = switch (int_info.signedness) {
         .unsigned => blk: {
-            const value = analyser.ip.toInt(index, u64) orelse return null;
+            const value = analyser.ip.toInt(index, u128) orelse return null;
             if (!wrapping) {
                 if (value != 0) return null;
-                break :blk try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = 0 } });
+                break :blk 0;
             }
-            const mask = if (int_info.bits == 64)
-                std.math.maxInt(u64)
+            const mask = if (int_info.bits == 128)
+                std.math.maxInt(u128)
             else
-                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
-            break :blk try analyser.ip.get(.{
-                .int_u64_value = .{ .ty = payload.type, .int = (0 -% value) & mask },
-            });
+                (@as(u128, 1) << @intCast(int_info.bits)) - 1;
+            break :blk @intCast((0 -% value) & mask);
         },
         .signed => blk: {
-            const value = analyser.ip.toInt(index, i64) orelse return null;
+            const value = analyser.ip.toInt(index, i128) orelse return null;
             if (!wrapping) {
-                const result = std.math.sub(i64, 0, value) catch return null;
-                const min = -(@as(i128, 1) << @intCast(int_info.bits - 1));
-                const max = (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1;
-                if (result < min or result > max) return null;
-                break :blk if (result >= 0)
-                    try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-                else
-                    try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = result } });
+                break :blk -@as(i256, value);
             }
 
-            const raw: u64 = @bitCast(value);
-            const mask = if (int_info.bits == 64)
-                std.math.maxInt(u64)
+            const raw: u128 = @bitCast(value);
+            const mask = if (int_info.bits == 128)
+                std.math.maxInt(u128)
             else
-                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
+                (@as(u128, 1) << @intCast(int_info.bits)) - 1;
             const result_raw = (0 -% raw) & mask;
-            const sign_bit = @as(u64, 1) << @intCast(int_info.bits - 1);
-            const result: i64 = if (result_raw & sign_bit == 0)
+            const sign_bit = @as(u128, 1) << @intCast(int_info.bits - 1);
+            break :blk if (result_raw & sign_bit == 0)
                 @intCast(result_raw)
-            else if (int_info.bits == 64)
-                @bitCast(result_raw)
             else
-                @intCast(@as(i128, result_raw) - (@as(i128, 1) << @intCast(int_info.bits)));
-            break :blk if (result >= 0)
-                try analyser.ip.get(.{ .int_u64_value = .{ .ty = payload.type, .int = @intCast(result) } })
-            else
-                try analyser.ip.get(.{ .int_i64_value = .{ .ty = payload.type, .int = result } });
+                @as(i256, @intCast(result_raw)) - (@as(i256, 1) << @intCast(int_info.bits));
         },
     };
-    return Type.fromIP(analyser, payload.type, result_index);
+    return analyser.intValueWithType(payload.type, result);
 }
 
 fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
@@ -4292,30 +4258,23 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(operand_ty) != .vector) {
                         const operand_index = payload.index orelse return Type.fromIP(analyser, result_ty, null);
                         if (scalar_tag == .comptime_int) {
-                            const value = analyser.ip.toInt(operand_index, i128) orelse return Type.fromIP(analyser, result_ty, null);
-                            const magnitude: u128 = if (value >= 0) @intCast(value) else @intCast(-(value + 1) + 1);
-                            if (magnitude <= std.math.maxInt(u64)) {
-                                const result_index = try analyser.ip.get(.{ .int_u64_value = .{
-                                    .ty = result_ty,
-                                    .int = @intCast(magnitude),
-                                } });
-                                return Type.fromIP(analyser, result_ty, result_index);
-                            }
+                            const value = analyser.ip.toInt(operand_index, i256) orelse return Type.fromIP(analyser, result_ty, null);
+                            const magnitude = if (value >= 0) value else std.math.sub(i256, 0, value) catch
+                                return Type.fromIP(analyser, result_ty, null);
+                            return try analyser.intValueWithType(result_ty, magnitude) orelse
+                                Type.fromIP(analyser, result_ty, null);
                         } else if (scalar_tag == .int) {
                             const info = analyser.ip.intInfo(scalar_ty, builtin.target);
-                            if (info.bits <= 64) {
-                                const magnitude: u64 = switch (info.signedness) {
-                                    .unsigned => analyser.ip.toInt(operand_index, u64) orelse return Type.fromIP(analyser, result_ty, null),
+                            if (info.bits <= 128) {
+                                const magnitude: i256 = switch (info.signedness) {
+                                    .unsigned => @intCast(analyser.ip.toInt(operand_index, u128) orelse return Type.fromIP(analyser, result_ty, null)),
                                     .signed => magnitude: {
-                                        const value = analyser.ip.toInt(operand_index, i64) orelse return Type.fromIP(analyser, result_ty, null);
-                                        break :magnitude if (value >= 0) @intCast(value) else @intCast(-(value + 1) + 1);
+                                        const value = analyser.ip.toInt(operand_index, i128) orelse return Type.fromIP(analyser, result_ty, null);
+                                        break :magnitude if (value >= 0) value else -@as(i256, value);
                                     },
                                 };
-                                const result_index = try analyser.ip.get(.{ .int_u64_value = .{
-                                    .ty = result_ty,
-                                    .int = magnitude,
-                                } });
-                                return Type.fromIP(analyser, result_ty, result_index);
+                                return try analyser.intValueWithType(result_ty, magnitude) orelse
+                                    Type.fromIP(analyser, result_ty, null);
                             }
                         } else if (scalar_tag == .float or scalar_tag == .comptime_float) {
                             const value = analyser.floatValue(operand_index) orelse return Type.fromIP(analyser, result_ty, null);

@@ -1687,6 +1687,20 @@ test "generic function with comptime condition" {
     });
 
     try testCompletion(
+        \\fn Select(comptime signed: i128, comptime unsigned: u128) type {
+        \\    return if (@abs(signed) == 170141183460469231731687303715884105728 and
+        \\        -%signed == signed and ~unsigned == 170141183460469231731687303715884105727)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-170141183460469231731687303715884105728, 170141183460469231731687303715884105728) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime enabled: bool, comptime T: type) type {
         \\    return if (enabled == true and T != u16)
         \\        struct { matched: u8 }

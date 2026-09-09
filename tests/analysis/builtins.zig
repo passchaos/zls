@@ -170,6 +170,8 @@ const abs_comptime_value = @abs(-42);
 //    ^^^^^^^^^^^^^^^^^^ (comptime_int)(42)
 const abs_i8_value = @abs(@as(i8, -128));
 //    ^^^^^^^^^^^^ (u8)(128)
+const abs_i128_value = @abs(@as(i128, -170141183460469231731687303715884105728));
+//    ^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
 const abs_u8_value = @abs(@as(u8, 42));
 //    ^^^^^^^^^^^^ (u8)(42)
 const abs_comptime_float_value = @abs(-42.75);
