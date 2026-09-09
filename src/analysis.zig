@@ -2485,67 +2485,65 @@ fn resolveFixedWidthIntegerBinaryValue(
         try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     if (analyser.ip.zigTypeTag(result_type) != .int) return null;
     const int_info = analyser.ip.intInfo(result_type, builtin.target);
-    if (int_info.bits == 0 or int_info.bits > 64) return null;
+    if (int_info.bits == 0 or int_info.bits > 128) return null;
 
-    const result_index = switch (int_info.signedness) {
+    const value: i256 = switch (int_info.signedness) {
         .unsigned => unsigned: {
             const a = analyser.ip.toInt(lhs_index, u128) orelse return null;
             const b = analyser.ip.toInt(rhs_index, u128) orelse return null;
-            const max: u128 = (@as(u128, 1) << @intCast(int_info.bits)) - 1;
-            const value: u128 = switch (tag) {
-                .add_wrap => (a + b) & max,
-                .sub_wrap => (a -% b) & max,
-                .mul_wrap => (a * b) & max,
-                .add_sat => @min(a + b, max),
-                .sub_sat => a -| b,
-                .mul_sat => @min(a * b, max),
+            const a_wide: u256 = a;
+            const b_wide: u256 = b;
+            const modulus = @as(u256, 1) << @intCast(int_info.bits);
+            const max = modulus - 1;
+            const result: u256 = switch (tag) {
+                .add_wrap => (a_wide + b_wide) & max,
+                .sub_wrap => (a_wide + modulus - b_wide) & max,
+                .mul_wrap => (a_wide * b_wide) & max,
+                .add_sat => @min(a_wide + b_wide, max),
+                .sub_sat => if (a_wide >= b_wide) a_wide - b_wide else 0,
+                .mul_sat => @min(a_wide * b_wide, max),
                 .shl_sat => blk: {
-                    if (b >= int_info.bits) return null;
-                    break :blk @min(a << @intCast(b), max);
+                    if (b_wide >= int_info.bits) return null;
+                    break :blk @min(a_wide << @intCast(b_wide), max);
                 },
                 else => return null,
             };
-            break :unsigned try analyser.ip.get(.{ .int_u64_value = .{
-                .ty = result_type,
-                .int = @intCast(value),
-            } });
+            break :unsigned @intCast(result);
         },
         .signed => signed: {
             const a = analyser.ip.toInt(lhs_index, i128) orelse return null;
             const b = analyser.ip.toInt(rhs_index, i128) orelse return null;
-            const min = -(@as(i128, 1) << @intCast(int_info.bits - 1));
-            const max = (@as(i128, 1) << @intCast(int_info.bits - 1)) - 1;
-            const mathematical: i128 = switch (tag) {
-                .add_wrap, .add_sat => a + b,
-                .sub_wrap, .sub_sat => a - b,
-                .mul_wrap, .mul_sat => a * b,
+            const a_wide: i256 = a;
+            const b_wide: i256 = b;
+            const min = -(@as(i256, 1) << @intCast(int_info.bits - 1));
+            const max = (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1;
+            const mathematical: i256 = switch (tag) {
+                .add_wrap, .add_sat => a_wide + b_wide,
+                .sub_wrap, .sub_sat => a_wide - b_wide,
+                .mul_wrap, .mul_sat => a_wide * b_wide,
                 .shl_sat => blk: {
-                    if (b < 0 or b >= int_info.bits) return null;
-                    break :blk a * (@as(i128, 1) << @intCast(b));
+                    if (b_wide < 0 or b_wide >= int_info.bits) return null;
+                    break :blk a_wide * (@as(i256, 1) << @intCast(b_wide));
                 },
                 else => return null,
             };
-            const value: i128 = switch (tag) {
+            break :signed switch (tag) {
                 .add_sat, .sub_sat, .mul_sat, .shl_sat => std.math.clamp(mathematical, min, max),
                 .add_wrap, .sub_wrap, .mul_wrap => blk: {
-                    const modulus = @as(u128, 1) << @intCast(int_info.bits);
+                    const modulus = @as(u256, 1) << @intCast(int_info.bits);
                     const mask = modulus - 1;
-                    const raw = @as(u128, @bitCast(mathematical)) & mask;
-                    const sign_bit = @as(u128, 1) << @intCast(int_info.bits - 1);
+                    const raw = @as(u256, @bitCast(mathematical)) & mask;
+                    const sign_bit = @as(u256, 1) << @intCast(int_info.bits - 1);
                     break :blk if (raw & sign_bit == 0)
                         @intCast(raw)
                     else
-                        @intCast(@as(i256, raw) - @as(i256, modulus));
+                        @as(i256, @intCast(raw)) - @as(i256, @intCast(modulus));
                 },
                 else => return null,
             };
-            break :signed if (value >= 0)
-                try analyser.ip.get(.{ .int_u64_value = .{ .ty = result_type, .int = @intCast(value) } })
-            else
-                try analyser.ip.get(.{ .int_i64_value = .{ .ty = result_type, .int = @intCast(value) } });
         },
     };
-    return Type.fromIP(analyser, result_type, result_index);
+    return analyser.intValueWithType(result_type, value);
 }
 
 fn resolveIntegerDivisionValue(
