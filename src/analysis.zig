@@ -1690,6 +1690,7 @@ fn resolveIfConditionValue(analyser: *Analyser, options: ResolveOptions) Error!?
         .simple_value => |simple| switch (simple) {
             .bool_true => true,
             .bool_false => false,
+            .null_value => false,
             else => null,
         },
         .null_value => false,
@@ -2678,6 +2679,7 @@ fn resolveFunctionTypeFromCall(
         if (param_type.data != .anytype_parameter and
             param.modifier == .comptime_param and
             param_type.is_type_val and
+            (param_type.ipIndex() != null or param_type.isEnumType()) and
             param_type.ipIndex() != .type_type)
         {
             if (param_type.isEnumType()) {
@@ -2717,11 +2719,19 @@ fn resolveFunctionTypeFromCall(
             try meta_params.put(analyser.arena, token_handle, bound_type);
             try value_params.put(analyser.arena, token_handle, bound_type);
             has_callsite_bindings = true;
+        } else if (param.modifier == .comptime_param and
+            param_type.isOptionalType(analyser) and
+            argument_type.ipIndex() != null and
+            analyser.ip.isNull(argument_type.ipIndex().?))
+        {
+            const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = func_info.handle };
+            try meta_params.put(analyser.arena, token_handle, argument_type);
+            try value_params.put(analyser.arena, token_handle, argument_type);
+            has_callsite_bindings = true;
         }
     }
 
     var resolved = try analyser.resolveGenericType(func_ty, meta_params);
-
     // Type functions are initially analyzed without concrete arguments. Once
     // the call binds those arguments, re-evaluate the return expression so
     // comptime values can select branches and shape generated types.
@@ -2921,6 +2931,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
                 if (mut_token_tag == .keyword_const) num: {
                     const init_node = var_decl.ast.init_node.unwrap() orelse break :num;
+                    if (decl_type.isEnumType()) {
+                        if (try analyser.resolveEnumValueTag(decl_type, .of(init_node, handle))) |tag| {
+                            return try analyser.enumValue(decl_type, tag);
+                        }
+                    }
                     const ip_ty = decl_type.ipIndex() orelse break :num;
                     const ip_index = try analyser.resolveCoercedIPValue(ip_ty, .of(init_node, handle)) orelse break :num;
                     return Type.fromIP(analyser, analyser.ip.typeOf(ip_index), ip_index);
@@ -5719,6 +5734,18 @@ pub const Type = struct {
         }
     }
 
+    fn isOptionalType(self: Type, analyser: *Analyser) bool {
+        if (!self.is_type_val) return false;
+        return switch (self.data) {
+            .optional => true,
+            .ip_index => |payload| if (payload.index) |index|
+                analyser.ip.zigTypeTag(index) == .optional
+            else
+                false,
+            else => false,
+        };
+    }
+
     pub fn resolveDeclLiteralResultType(ty: Type) Type {
         var result_type = ty;
         while (true) {
@@ -5726,6 +5753,7 @@ pub const Type = struct {
                 .optional => |child_ty| child_ty.*,
                 .error_union => |info| info.payload.*,
                 .pointer => |child_ty| child_ty.elem_ty.*,
+                .enum_value => |value| value.enum_type.*,
                 else => return result_type,
             };
         }
@@ -6093,6 +6121,9 @@ pub const Type = struct {
                                 const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = handle };
                                 const param_ty = info.bound_params.get(token_handle) orelse continue;
                                 if (!param_ty.is_type_val and !param_ty.hasKnownValue(analyser)) continue;
+                                if (param_ty.ipIndex()) |index| {
+                                    if (analyser.ip.isNull(index)) continue;
+                                }
                                 if (!first) {
                                     try writer.writeByte(',');
                                 }
@@ -8075,7 +8106,11 @@ pub fn resolveExpressionTypeFromAncestors(
                 return null;
             };
 
-            return try analyser.resolveTypeOfNode(.of(ancestor_switch.ast.condition, handle));
+            const condition = try analyser.resolveTypeOfNode(.of(ancestor_switch.ast.condition, handle)) orelse return null;
+            if (condition.data == .enum_value) {
+                return try condition.data.enum_value.enum_type.instanceTypeVal(analyser);
+            }
+            return condition;
         },
 
         .@"break" => {

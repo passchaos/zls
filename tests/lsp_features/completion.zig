@@ -1132,6 +1132,37 @@ test "generic function with comptime enum switch" {
     try testCompletion(
         \\const Mode = enum { fast, safe };
         \\fn Select(comptime mode: Mode) type {
+        \\    return if (mode == .safe)
+        \\        struct { checked: u8 }
+        \\    else
+        \\        struct { optimized: u8 };
+        \\}
+        \\var mode: Mode = .safe;
+        \\const selected: Select(mode) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "checked", .kind = .Field, .detail = "u8" },
+        .{ .label = "optimized", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return if (mode == .safe)
+        \\        struct { checked: u8 }
+        \\    else
+        \\        struct { optimized: u8 };
+        \\}
+        \\const mode: Mode = .safe;
+        \\const selected: Select(mode) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "checked", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
         \\    return switch (mode) {
         \\        Mode.fast => struct { optimized: u8 },
         \\        Mode.safe => struct { checked: u8 },
@@ -1501,6 +1532,17 @@ test "type function with comptime early returns" {
         \\const selected: Select(undefined) = undefined;
         \\const field = selected.<cursor>
     , &.{});
+
+    try testCompletion(
+        \\fn Select(comptime value: ?usize) type {
+        \\    if (value) |_| return struct { some: u8 };
+        \\    return struct { none: u8 };
+        \\}
+        \\const selected: Select(null) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "none", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "nested generic function" {

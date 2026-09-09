@@ -1713,7 +1713,11 @@ fn collectContainerNodes(
     const token_index = switch (dot_context.type_info) {
         .identifier_token_index => |token| token,
         .expr_node_index => |node| {
-            if (try builder.analyser.resolveTypeOfNode(.of(node, handle))) |ty| {
+            if (try builder.analyser.resolveTypeOfNode(.of(node, handle))) |resolved| {
+                const ty = if (resolved.data == .enum_value)
+                    try resolved.data.enum_value.enum_type.instanceTypeVal(builder.analyser) orelse resolved
+                else
+                    resolved;
                 _ = try ty.getAllTypesWithHandlesArraySet(builder.analyser, &types_with_handles);
             }
             return types_with_handles.keys();
