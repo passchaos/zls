@@ -659,6 +659,28 @@ test "generic function with comptime vector float builtins" {
     });
 }
 
+test "generic function with comptime vector numeric casts" {
+    try testCompletion(
+        \\fn Select(comptime N: i16) type {
+        \\    const ints: @Vector(2, i8) = @intFromFloat(@as(@Vector(2, f32), .{ -2.75, 4.5 }));
+        \\    const floats: @Vector(2, f32) = @floatFromInt(@as(@Vector(2, i16), .{ N, 5 }));
+        \\    const narrowed: @Vector(2, f16) = @floatCast(@as(@Vector(2, f32), .{ 2.5, 4.5 }));
+        \\    const casted: @Vector(2, u8) = @intCast(@as(@Vector(2, u16), .{ 4, 7 }));
+        \\    const truncated: @Vector(2, u8) = @truncate(@as(@Vector(2, u16), .{ 0x104, 0x107 }));
+        \\    return if (ints[0] == -2 and ints[1] == 4 and floats[0] == -3 and floats[1] == 5 and
+        \\        narrowed[0] == 2.5 and narrowed[1] == 4.5 and casted[0] == 4 and casted[1] == 7 and
+        \\        truncated[0] == 4 and truncated[1] == 7)
+        \\        struct { converted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-3) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "converted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector bit builtins" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

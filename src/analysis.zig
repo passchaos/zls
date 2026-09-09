@@ -1258,6 +1258,44 @@ fn resolveSplatValue(
     } });
 }
 
+fn resolveVectorCastValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    dest_type: InternPool.Index,
+    source: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const dest_vector = switch (analyser.ip.indexToKey(dest_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const source_type = analyser.ip.typeOf(source);
+    const source_vector = switch (analyser.ip.indexToKey(source_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (dest_vector.len != source_vector.len) return null;
+    const source_values = analyser.aggregateValues(Type.fromIP(analyser, source_type, source)) orelse return null;
+    if (source_values.len != source_vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, dest_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const source_value = source_values.at(@intCast(i), analyser.ip);
+        value.* = switch (tag) {
+            .int_from_float => try analyser.intFromFloatValue(dest_vector.child, source_value),
+            .float_from_int => try analyser.floatFromIntValue(dest_vector.child, source_value),
+            .float_cast => try analyser.coerceFloatValue(dest_vector.child, source_value),
+            .truncate => try analyser.truncateIntValue(dest_vector.child, source_value),
+            .int_cast => try analyser.coerceIP(dest_vector.child, source_value),
+            else => return null,
+        } orelse try analyser.ip.getUnknown(dest_vector.child);
+    }
+    return try analyser.ip.get(.{ .aggregate = .{
+        .ty = dest_type,
+        .values = try analyser.ip.getIndexSlice(values),
+    } });
+}
+
 fn resolveAggregateLiteralValue(
     analyser: *Analyser,
     aggregate_type: InternPool.Index,
@@ -1857,6 +1895,9 @@ fn resolveCoercedIPValue(
     if (integer_cast) |tag| {
         if (tag == .splat) {
             return try analyser.resolveSplatValue(ip_ty, value_options);
+        }
+        if (analyser.ip.zigTypeTag(ip_ty) == .vector and source_tag == .vector) {
+            return try analyser.resolveVectorCastValue(tag, ip_ty, ip_index);
         }
         if (tag == .int_from_float) {
             if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;

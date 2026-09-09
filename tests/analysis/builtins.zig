@@ -313,6 +313,21 @@ const bit_cast_i128_value: i128 = @bitCast(@as(u128, 170141183460469231731687303
 //    ^^^^^^^^^^^^^^^^^^^ (i128)(-170141183460469231731687303715884105728)
 const bit_cast_u128_value: u128 = @bitCast(bit_cast_i128_value);
 //    ^^^^^^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
+const vector_int_from_float: @Vector(2, i8) = @intFromFloat(@as(@Vector(2, f32), .{ -2.75, 4.5 }));
+const vector_int_from_float_value = vector_int_from_float[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(4)
+const vector_float_from_int: @Vector(2, f32) = @floatFromInt(@as(@Vector(2, i16), .{ -3, 5 }));
+const vector_float_from_int_value = vector_float_from_int[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-3)
+const vector_float_cast: @Vector(2, f16) = @floatCast(@as(@Vector(2, f32), .{ 2.5, 4.5 }));
+const vector_float_cast_value = vector_float_cast[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (f16)(4.5)
+const vector_int_cast: @Vector(2, u8) = @intCast(@as(@Vector(2, u16), .{ 4, 7 }));
+const vector_int_cast_value = vector_int_cast[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(4)
+const vector_truncate: @Vector(2, u8) = @truncate(@as(@Vector(2, u16), .{ 0x104, 0x107 }));
+const vector_truncate_value = vector_truncate[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(7)
 const float_coercion_value: f32 = @as(f32, 42.75);
 //    ^^^^^^^^^^^^^^^^^^^^ (f32)(42.75)
 const negative_float_value: f64 = -@as(f64, 42.75);
