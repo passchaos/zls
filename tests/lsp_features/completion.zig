@@ -797,6 +797,35 @@ test "generic function with comptime division builtins" {
 
 test "generic function with comptime member reflection" {
     try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type, comptime name: anytype) type {
+        \\    return if (@TypeOf(name) == []const u8 and @hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const name = @as([]const u8, "field");
+        \\const selected: Select(S, name) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type, comptime name: anytype) type {
+        \\    return if (@TypeOf(name) == [:0]const u8 and name.len == 5 and
+        \\        name[name.len] == 0 and @hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S, @as([:0]const u8, "field")) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\const S = struct { ababab: u8 };
         \\fn Select(comptime T: type, comptime name: anytype) type {
         \\    return if (@TypeOf(name) == *const [6:0]u8 and @hasField(T, name))

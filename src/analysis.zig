@@ -2492,6 +2492,24 @@ fn stringValue(analyser: *Analyser, bytes: []const u8) error{OutOfMemory}!Type {
     return analyser.stringValueWithType(bytes, try string_type.typeOf(analyser));
 }
 
+fn isStringSliceType(analyser: *Analyser, ty: Type) bool {
+    if (!ty.is_type_val) return false;
+    return switch (ty.data) {
+        .pointer => |info| info.size == .slice and
+            info.is_const and
+            (info.sentinel == .none or info.sentinel == .zero_u8) and
+            info.elem_ty.ipIndex() == .u8_type,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+            .pointer_type => |info| info.flags.size == .slice and
+                info.flags.is_const and
+                (info.sentinel == .none or info.sentinel == .zero_u8) and
+                info.elem_type == .u8_type,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
     if (!ty.is_type_val) return false;
     return switch (ty.data) {
@@ -3691,6 +3709,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .as => {
                     if (params.len < 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
+                    if (analyser.evaluate_comptime_values and
+                        params.len >= 2 and
+                        analyser.isStringSliceType(ty))
+                    {
+                        const operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
+                        if (operand.data == .string_value) {
+                            return try analyser.stringValueWithType(operand.data.string_value.bytes, ty);
+                        }
+                    }
                     num: {
                         if (params.len < 2) break :num;
                         const ip_ty = ty.ipIndex() orelse break :num;
