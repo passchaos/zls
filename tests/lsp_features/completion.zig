@@ -1504,6 +1504,40 @@ test "generic function with comptime errorName" {
     });
 }
 
+test "generic function with comptime typeName" {
+    try testCompletion(
+        \\const Fields = struct { @"[]const u8": u8 };
+        \\fn Select(comptime T: type) type {
+        \\    const name = @typeName(T);
+        \\    return if (@TypeOf(name) == *const [10:0]u8 and name[0] == '[' and
+        \\        @hasField(Fields, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select([]const u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Fields = struct { u16: u8 };
+        \\fn Select(comptime T: type) type {
+        \\    const name = @typeName(?T);
+        \\    return if (@TypeOf(name) == *const [4:0]u8 and name[0] == '?' and
+        \\        @hasField(Fields, name[1..]))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "enum declarations are not comptime enum values" {
     try testCompletion(
         \\const Mode = enum {

@@ -223,7 +223,7 @@ const type_info = @typeInfo(u8);
 //    ^^^^^^^^^ (Type)()
 
 const type_name = @typeName(u8);
-//    ^^^^^^^^^ (*const [?:0]u8)()
+//    ^^^^^^^^^ (*const [2:0]u8)()
 
 const tag_name = @tagName(type_enum_literal);
 //    ^^^^^^^^ ([:0]const u8)()

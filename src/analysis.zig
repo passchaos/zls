@@ -2319,6 +2319,65 @@ fn stringValue(analyser: *Analyser, bytes: []const u8) error{OutOfMemory}!Type {
     return analyser.stringValueWithType(bytes, try string_type.typeOf(analyser));
 }
 
+fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
+    if (!ty.is_type_val) return false;
+    return switch (ty.data) {
+        .pointer => |info| analyser.canResolveTypeName(info.elem_ty.*),
+        .array => |info| info.elem_count != null and
+            info.sentinel != .unknown_unknown and
+            analyser.canResolveTypeName(info.elem_ty.*),
+        .optional => |child_ty| analyser.canResolveTypeName(child_ty.*),
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+            .simple_type => |simple| switch (simple) {
+                .empty_struct_type,
+                .null_type,
+                .undefined_type,
+                .enum_literal_type,
+                .unknown,
+                .generic_poison,
+                => false,
+                .f16,
+                .f32,
+                .f64,
+                .f80,
+                .f128,
+                .usize,
+                .isize,
+                .c_char,
+                .c_short,
+                .c_ushort,
+                .c_int,
+                .c_uint,
+                .c_long,
+                .c_ulong,
+                .c_longlong,
+                .c_ulonglong,
+                .c_longdouble,
+                .anyopaque,
+                .bool,
+                .void,
+                .type,
+                .anyerror,
+                .comptime_int,
+                .comptime_float,
+                .noreturn,
+                .anyframe_type,
+                => true,
+                else => false,
+            },
+            .int_type => true,
+            .pointer_type => |info| info.sentinel != .unknown_unknown and
+                analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.elem_type)),
+            .array_type => |info| info.sentinel != .unknown_unknown and
+                analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
+            .optional_type => |info| analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.payload_type)),
+            .vector_type => |info| analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
+            else => false,
+        },
+        else => false,
+    };
+}
+
 fn resolveBitCountValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -3603,6 +3662,18 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         error_value.error_tag_name,
                     );
                     return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+                },
+                .type_name => {
+                    if (params.len != 1) return null;
+                    const fallback = try analyser.resolveLangrefType(
+                        version_data.builtins.get(call_name).?.return_type,
+                    );
+                    if (!analyser.evaluate_comptime_values) return fallback;
+
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return fallback;
+                    if (!analyser.canResolveTypeName(operand)) return fallback;
+                    const bytes = try operand.stringifyTypeVal(analyser, .{ .truncate_container_decls = false });
+                    return try analyser.stringValue(bytes);
                 },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
