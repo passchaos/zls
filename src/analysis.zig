@@ -2467,6 +2467,65 @@ fn resolveBitCountValue(
     return Type.fromIP(analyser, result_type, result_index);
 }
 
+fn resolveBitPermutationValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const index = payload.index orelse return null;
+    if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
+    const int_info = analyser.ip.intInfo(payload.type, builtin.target);
+    if (int_info.bits > 64) return null;
+    if (tag == .byte_swap and int_info.bits % 8 != 0) return null;
+
+    const raw: u64 = switch (int_info.signedness) {
+        .unsigned => analyser.ip.toInt(index, u64) orelse return null,
+        .signed => signed: {
+            const value = analyser.ip.toInt(index, i64) orelse return null;
+            const bits: u64 = @bitCast(value);
+            const mask = if (int_info.bits == 64)
+                std.math.maxInt(u64)
+            else if (int_info.bits == 0)
+                0
+            else
+                (@as(u64, 1) << @intCast(int_info.bits)) - 1;
+            break :signed bits & mask;
+        },
+    };
+    const result_raw = switch (tag) {
+        .bit_reverse => if (int_info.bits == 0) 0 else @bitReverse(raw) >> @intCast(64 - int_info.bits),
+        .byte_swap => if (int_info.bits == 0) 0 else @byteSwap(raw) >> @intCast(64 - int_info.bits),
+        else => return null,
+    };
+    const result_index = switch (int_info.signedness) {
+        .unsigned => try analyser.ip.get(.{ .int_u64_value = .{
+            .ty = payload.type,
+            .int = result_raw,
+        } }),
+        .signed => signed: {
+            if (int_info.bits == 0 or result_raw & (@as(u64, 1) << @intCast(int_info.bits - 1)) == 0) {
+                break :signed try analyser.ip.get(.{ .int_u64_value = .{
+                    .ty = payload.type,
+                    .int = result_raw,
+                } });
+            }
+            const value: i64 = if (int_info.bits == 64)
+                @bitCast(result_raw)
+            else
+                @intCast(@as(i128, result_raw) - (@as(i128, 1) << @intCast(int_info.bits)));
+            break :signed try analyser.ip.get(.{ .int_i64_value = .{
+                .ty = payload.type,
+                .int = value,
+            } });
+        },
+    };
+    return Type.fromIP(analyser, payload.type, result_index);
+}
+
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
     .{ "anyerror", .anyerror_type },
     .{ "anyframe", .anyframe_type },
@@ -3777,6 +3836,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .bits = result_bits,
                     } });
                     return Type.fromIP(analyser, result_type, null);
+                },
+                .bit_reverse, .byte_swap => |tag| {
+                    if (params.len != 1) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (operand.is_type_val) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveBitPermutationValue(tag, operand)) |value| return value;
+                    }
+                    return operand.withoutIPIndex(analyser);
                 },
                 .div_trunc, .div_floor, .div_exact, .mod, .rem => |tag| {
                     if (params.len != 2) return null;

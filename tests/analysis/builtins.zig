@@ -172,6 +172,16 @@ const abs_i8_value = @abs(@as(i8, -128));
 //    ^^^^^^^^^^^^ (u8)(128)
 const abs_u8_value = @abs(@as(u8, 42));
 //    ^^^^^^^^^^^^ (u8)(42)
+const bit_reverse_u8_value = @bitReverse(@as(u8, 0b0000_0011));
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(192)
+const bit_reverse_i8_value = @bitReverse(@as(i8, 1));
+//    ^^^^^^^^^^^^^^^^^^^^ (i8)(-128)
+const byte_swap_u16_value = @byteSwap(@as(u16, 0x1234));
+//    ^^^^^^^^^^^^^^^^^^^ (u16)(13330)
+const byte_swap_u24_value = @byteSwap(@as(u24, 0x123456));
+//    ^^^^^^^^^^^^^^^^^^^ (u24)(5649426)
+const byte_swap_i16_value = @byteSwap(@as(i16, 0x1234));
+//    ^^^^^^^^^^^^^^^^^^^ (i16)(13330)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);

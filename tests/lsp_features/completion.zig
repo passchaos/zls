@@ -669,6 +669,8 @@ test "generic function with comptime size builtins" {
 
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
+        .{ .expression = "@bitReverse(@as(u8, 0b0000_0011))", .detail = "[192]u8" },
+        .{ .expression = "@byteSwap(@as(u16, 0x1234))", .detail = "[13330]u8" },
         .{ .expression = "@intFromBool(true)", .detail = "[1]u8" },
         .{ .expression = "@intFromBool(false)", .detail = "[0]u8" },
         .{ .expression = "@min(4, 7)", .detail = "[4]u8" },
@@ -709,6 +711,19 @@ test "generic function with comptime value builtins" {
         \\        struct { fallback: u8 };
         \\}
         \\const selected: Select(-3) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime value: i8) type {
+        \\    return if (@bitReverse(value) == -128 and @byteSwap(value) == 1)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(1) = undefined;
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
