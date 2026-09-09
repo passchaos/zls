@@ -1390,6 +1390,20 @@ test "generic function with comptime switch" {
 test "generic function with comptime enum switch" {
     try testCompletion(
         \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: anytype) type {
+        \\    return if (@TypeOf(mode) == Mode and mode == .safe and @tagName(mode)[0] == 's')
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(@as(Mode, .safe)) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
         \\fn Select(comptime mode: Mode) type {
         \\    return switch (mode) {
         \\        .fast => struct { optimized: u8 },

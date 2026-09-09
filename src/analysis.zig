@@ -3139,12 +3139,8 @@ fn resolveFunctionTypeFromCall(
                 try meta_params.put(analyser.arena, info.token_handle, argument_meta_type);
                 has_callsite_bindings = true;
                 if (param.modifier == .comptime_param) {
-                    if (try analyser.resolveInternPoolValue(.of(arg, handle))) |argument_value| {
-                        try value_params.put(
-                            analyser.arena,
-                            parameter_token_handle,
-                            Type.fromIP(analyser, analyser.ip.typeOf(argument_value), argument_value),
-                        );
+                    if (try analyser.resolveComptimeValue(.of(arg, handle))) |argument_value| {
+                        try value_params.put(analyser.arena, parameter_token_handle, argument_value);
                     } else {
                         try value_params.put(analyser.arena, parameter_token_handle, argument_type);
                     }
@@ -3709,6 +3705,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .as => {
                     if (params.len < 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
+                    if (analyser.evaluate_comptime_values and params.len >= 2 and ty.isEnumType()) {
+                        if (try analyser.resolveEnumValueTag(ty, .of(params[1], handle))) |tag| {
+                            return try analyser.enumValue(ty, tag);
+                        }
+                    }
                     if (analyser.evaluate_comptime_values and
                         params.len >= 2 and
                         analyser.isStringSliceType(ty))
