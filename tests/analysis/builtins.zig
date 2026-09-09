@@ -173,6 +173,13 @@ const abs_i8_value = @abs(@as(i8, -128));
 const abs_u8_value = @abs(@as(u8, 42));
 //    ^^^^^^^^^^^^ (u8)(42)
 
+const IntEnum = enum(u8) { first = 4, second };
+const int_from_enum = @intFromEnum(IntEnum.second);
+//    ^^^^^^^^^^^^^ (u8)(5)
+const InferredEnum = enum { zero, one, two };
+const int_from_inferred_enum = @intFromEnum(InferredEnum.two);
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u2)(2)
+
 const panic = @panic("foo");
 //    ^^^^^ (noreturn)()
 const trap = @trap();

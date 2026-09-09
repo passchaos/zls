@@ -1533,14 +1533,81 @@ fn resolveEnumValueTag(
     return tag;
 }
 
-fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) error{OutOfMemory}!Type {
+fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) Error!Type {
     return .{
         .data = .{ .enum_value = .{
             .enum_type = try analyser.allocType(enum_type),
             .tag = tag,
+            .int_value = try analyser.resolveEnumTagIntValue(enum_type, tag),
         } },
         .is_type_val = false,
     };
+}
+
+fn resolveEnumTagIntValue(
+    analyser: *Analyser,
+    enum_type: Type,
+    tag: []const u8,
+) Error!?InternPool.Index {
+    const container = switch (enum_type.data) {
+        .container => |container| container,
+        else => return null,
+    };
+    const handle = container.scope_handle.handle;
+    const tree = &handle.tree;
+    const node = container.scope_handle.toNode();
+    var buffer: [2]Ast.Node.Index = undefined;
+    const declaration = tree.fullContainerDecl(&buffer, node) orelse return null;
+    if (tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return null;
+
+    var field_count: u32 = 0;
+    for (declaration.ast.members) |member| {
+        if (tree.fullContainerField(member) != null) field_count += 1;
+    }
+    if (field_count == 0) return null;
+
+    const tag_type = if (declaration.ast.arg.unwrap()) |arg| blk: {
+        const resolved = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(arg, handle),
+            .container_type = enum_type,
+        }) orelse return null;
+        break :blk resolved.ipIndex() orelse return null;
+    } else blk: {
+        const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
+        break :blk try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+    };
+
+    var next_value: ?i128 = 0;
+    for (declaration.ast.members) |member| {
+        const field = tree.fullContainerField(member) orelse continue;
+        if (field.ast.value_expr.unwrap()) |value_expr| {
+            const value_index = try analyser.resolveInternPoolValue(.{
+                .node_handle = .of(value_expr, handle),
+                .container_type = enum_type,
+            });
+            next_value = if (value_index) |index| analyser.ip.toInt(index, i128) else null;
+        }
+
+        const field_name = offsets.identifierTokenToNameSlice(tree, field.ast.main_token);
+        if (std.mem.eql(u8, field_name, tag)) {
+            const value = next_value orelse return null;
+            const raw = if (value >= 0 and value <= std.math.maxInt(u64))
+                try analyser.ip.get(.{ .int_u64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
+            else if (value >= std.math.minInt(i64) and value <= std.math.maxInt(i64))
+                try analyser.ip.get(.{ .int_i64_value = .{ .ty = .comptime_int_type, .int = @intCast(value) } })
+            else
+                return null;
+            var err_msg: ErrorMsg = undefined;
+            const coerced = try analyser.ip.coerce(analyser.arena, tag_type, raw, builtin.target, &err_msg);
+            if (coerced == .none or analyser.ip.isUnknown(coerced)) return null;
+            return coerced;
+        }
+
+        if (next_value) |value| {
+            next_value = std.math.add(i128, value, 1) catch null;
+        }
+    }
+    return null;
 }
 
 fn tupleFieldCount(analyser: *Analyser, ty: Type) ?usize {
@@ -3237,6 +3304,39 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                     return Type.fromIP(analyser, .bool_type, null);
                 },
+                .int_from_enum => {
+                    if (params.len != 1) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (operand.data == .enum_value) {
+                        const int_value = operand.data.enum_value.int_value orelse return .unknown_type;
+                        return Type.fromIP(analyser, analyser.ip.typeOf(int_value), int_value);
+                    }
+                    const enum_type = if (operand.is_type_val) operand else try operand.typeOf(analyser);
+                    const container = switch (enum_type.data) {
+                        .container => |container| container,
+                        else => return .unknown_type,
+                    };
+                    const enum_tree = &container.scope_handle.handle.tree;
+                    const enum_node = container.scope_handle.toNode();
+                    var enum_buffer: [2]Ast.Node.Index = undefined;
+                    const declaration = enum_tree.fullContainerDecl(&enum_buffer, enum_node) orelse return .unknown_type;
+                    if (enum_tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return .unknown_type;
+                    if (declaration.ast.arg.unwrap()) |arg| {
+                        const tag_type = try analyser.resolveTypeOfNodeInternal(.{
+                            .node_handle = .of(arg, container.scope_handle.handle),
+                            .container_type = enum_type,
+                        }) orelse return .unknown_type;
+                        return try tag_type.instanceTypeVal(analyser) orelse .unknown_type;
+                    }
+                    var field_count: u32 = 0;
+                    for (declaration.ast.members) |member| {
+                        if (enum_tree.fullContainerField(member) != null) field_count += 1;
+                    }
+                    if (field_count == 0) return .unknown_type;
+                    const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
+                    const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+                    return Type.fromIP(analyser, tag_type, null);
+                },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
                     const resolved = try analyser.arena.alloc(Type, params.len);
@@ -4398,6 +4498,7 @@ pub const Type = struct {
         enum_value: struct {
             enum_type: *Type,
             tag: []const u8,
+            int_value: ?InternPool.Index,
         },
 
         /// Primitive type: `u8`, `bool`, `type`, etc.
@@ -4633,6 +4734,7 @@ pub const Type = struct {
                 .enum_value => |value| {
                     value.enum_type.hashWithHasher(hasher);
                     hasher.update(value.tag);
+                    std.hash.autoHash(hasher, value.int_value);
                 },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
@@ -4726,6 +4828,7 @@ pub const Type = struct {
                     const b_value = b.enum_value;
                     if (!a_value.enum_type.eql(b_value.enum_type.*)) return false;
                     if (!std.mem.eql(u8, a_value.tag, b_value.tag)) return false;
+                    if (a_value.int_value != b_value.int_value) return false;
                 },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;
@@ -4882,6 +4985,7 @@ pub const Type = struct {
                     .enum_value = .{
                         .enum_type = try analyser.allocType(try analyser.resolveGenericTypeInternal(value.enum_type.*, bound_params, visiting)),
                         .tag = value.tag,
+                        .int_value = value.int_value,
                     },
                 },
                 .container => |info| return .{

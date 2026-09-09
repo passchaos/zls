@@ -1147,6 +1147,59 @@ test "generic function with comptime enum switch" {
     });
 }
 
+test "generic function with comptime intFromEnum" {
+    try testCompletion(
+        \\const Mode = enum { zero, one, two };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    return struct { items: [@intFromEnum(mode)]u8 };
+        \\}
+        \\const buffer: Buffer(.two) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum(u8) { first = 4, second, third = 9 };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    return struct { items: [@intFromEnum(mode)]u8 };
+        \\}
+        \\const mode = Mode.second;
+        \\const buffer: Buffer(mode) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum(i8) { negative = -4, zero = 0 };
+        \\fn Select(comptime mode: Mode) type {
+        \\    return if (@intFromEnum(mode) == -4)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(.negative) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Only = enum { value };
+        \\fn Select(comptime value: Only) type {
+        \\    return if (@TypeOf(@intFromEnum(value)) == u0 and @intFromEnum(value) == 0)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(.value) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "enum declarations are not comptime enum values" {
     try testCompletion(
         \\const Mode = enum {
