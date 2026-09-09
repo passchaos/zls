@@ -1530,6 +1530,19 @@ fn resolveArrayMult(analyser: *Analyser, ty: Type, mult: ?u64) Error!?Type {
     return try array_ty.instanceUnchecked(analyser);
 }
 
+fn resolveArrayMultExpression(analyser: *Analyser, operand: Type, mult: ?u64) Error!?Type {
+    var elem_ty = operand.runtimeType(analyser);
+    blk: {
+        elem_ty = elem_ty.pointerElementType(analyser, .one) orelse break :blk;
+        elem_ty = try elem_ty.instanceUnchecked(analyser);
+        elem_ty = try analyser.resolveArrayMult(elem_ty, mult) orelse return null;
+        elem_ty = try elem_ty.typeOf(analyser);
+        const pointer_ty = try Type.createPointerType(analyser, .one, .none, true, elem_ty);
+        return try pointer_ty.instanceUnchecked(analyser);
+    }
+    return try analyser.resolveArrayMult(elem_ty, mult);
+}
+
 fn resolveArrayCat(analyser: *Analyser, l_ty: Type, r_ty: Type) Error!?Type {
     if (l_ty.is_type_val) return null;
     if (r_ty.is_type_val) return null;
@@ -1553,6 +1566,22 @@ fn resolveArrayCat(analyser: *Analyser, l_ty: Type, r_ty: Type) Error!?Type {
     };
     const array_ty = try Type.createArrayType(analyser, elem_count, sentinel, l_elem_ty);
     return try array_ty.instanceUnchecked(analyser);
+}
+
+fn resolveArrayCatExpression(analyser: *Analyser, lhs: Type, rhs: Type) Error!?Type {
+    var l_elem_ty = lhs.runtimeType(analyser);
+    var r_elem_ty = rhs.runtimeType(analyser);
+    blk: {
+        l_elem_ty = l_elem_ty.pointerElementType(analyser, .one) orelse break :blk;
+        r_elem_ty = r_elem_ty.pointerElementType(analyser, .one) orelse break :blk;
+        l_elem_ty = try l_elem_ty.instanceUnchecked(analyser);
+        r_elem_ty = try r_elem_ty.instanceUnchecked(analyser);
+        var elem_ty = try analyser.resolveArrayCat(l_elem_ty, r_elem_ty) orelse return null;
+        elem_ty = try elem_ty.typeOf(analyser);
+        const pointer_ty = try Type.createPointerType(analyser, .one, .none, true, elem_ty);
+        return try pointer_ty.instanceUnchecked(analyser);
+    }
+    return try analyser.resolveArrayCat(l_elem_ty, r_elem_ty);
 }
 
 fn resolveOptionalIPValue(
@@ -4415,10 +4444,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .array_mult => {
             const elem_idx, const mult_idx = tree.nodeData(node).node_and_node;
 
-            var elem_ty = try analyser.resolveTypeOfNodeInternal(.of(elem_idx, handle)) orelse return null;
+            const elem_ty = try analyser.resolveTypeOfNodeInternal(.of(elem_idx, handle)) orelse return null;
             if (elem_ty.is_type_val) return null;
 
             const mult_lit = try analyser.resolveIntegerLiteral(u64, .of(mult_idx, handle));
+            const result = try analyser.resolveArrayMultExpression(elem_ty, mult_lit) orelse return null;
             if (analyser.evaluate_comptime_values and
                 elem_ty.data == .string_value and
                 mult_lit != null)
@@ -4431,29 +4461,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const offset = i * source.len;
                     @memcpy(bytes[offset..][0..source.len], source);
                 }
-                return try analyser.stringValue(bytes);
+                return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
             }
-
-            blk: {
-                elem_ty = elem_ty.pointerElementType(analyser, .one) orelse break :blk;
-                elem_ty = try elem_ty.instanceUnchecked(analyser);
-                elem_ty = try analyser.resolveArrayMult(elem_ty, mult_lit) orelse return null;
-                elem_ty = try elem_ty.typeOf(analyser);
-                const pointer_ty = try Type.createPointerType(analyser, .one, .none, true, elem_ty);
-                return try pointer_ty.instanceUnchecked(analyser);
-            }
-
-            return try analyser.resolveArrayMult(elem_ty, mult_lit);
+            return result;
         },
         .array_cat => {
             const l_elem_idx, const r_elem_idx = tree.nodeData(node).node_and_node;
 
-            var l_elem_ty = try analyser.resolveTypeOfNodeInternal(.of(l_elem_idx, handle)) orelse return null;
+            const l_elem_ty = try analyser.resolveTypeOfNodeInternal(.of(l_elem_idx, handle)) orelse return null;
             if (l_elem_ty.is_type_val) return null;
 
-            var r_elem_ty = try analyser.resolveTypeOfNodeInternal(.of(r_elem_idx, handle)) orelse return null;
+            const r_elem_ty = try analyser.resolveTypeOfNodeInternal(.of(r_elem_idx, handle)) orelse return null;
             if (r_elem_ty.is_type_val) return null;
 
+            const result = try analyser.resolveArrayCatExpression(l_elem_ty, r_elem_ty) orelse return null;
             if (analyser.evaluate_comptime_values and
                 l_elem_ty.data == .string_value and
                 r_elem_ty.data == .string_value)
@@ -4462,21 +4483,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     l_elem_ty.data.string_value.bytes,
                     r_elem_ty.data.string_value.bytes,
                 });
-                return try analyser.stringValue(bytes);
+                return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
             }
-
-            blk: {
-                l_elem_ty = l_elem_ty.pointerElementType(analyser, .one) orelse break :blk;
-                r_elem_ty = r_elem_ty.pointerElementType(analyser, .one) orelse break :blk;
-                l_elem_ty = try l_elem_ty.instanceUnchecked(analyser);
-                r_elem_ty = try r_elem_ty.instanceUnchecked(analyser);
-                var elem_ty = try analyser.resolveArrayCat(l_elem_ty, r_elem_ty) orelse return null;
-                elem_ty = try elem_ty.typeOf(analyser);
-                const pointer_ty = try Type.createPointerType(analyser, .one, .none, true, elem_ty);
-                return try pointer_ty.instanceUnchecked(analyser);
-            }
-
-            return try analyser.resolveArrayCat(l_elem_ty, r_elem_ty);
+            return result;
         },
 
         .assign_mul,

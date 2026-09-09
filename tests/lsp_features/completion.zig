@@ -794,6 +794,23 @@ test "generic function with comptime member reflection" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
+    try testCompletion(
+        \\const S = struct { aa: u8, ab: u8 };
+        \\fn Select(comptime T: type) type {
+        \\    const repeated = "ab"[0..1] ** 2;
+        \\    const joined = "ab"[0..1] ++ "ab"[1..2];
+        \\    return if (@TypeOf(repeated) == *const [2]u8 and
+        \\        @TypeOf(joined) == *const [2]u8 and
+        \\        @hasField(T, repeated) and @hasField(T, joined))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
 
     try testCompletion(
         \\const S = struct { field: u8 };
