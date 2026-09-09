@@ -4419,6 +4419,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (elem_ty.is_type_val) return null;
 
             const mult_lit = try analyser.resolveIntegerLiteral(u64, .of(mult_idx, handle));
+            if (analyser.evaluate_comptime_values and
+                elem_ty.data == .string_value and
+                mult_lit != null)
+            {
+                const source = elem_ty.data.string_value.bytes;
+                const multiplier = std.math.cast(usize, mult_lit.?) orelse return null;
+                const len = std.math.mul(usize, source.len, multiplier) catch return null;
+                const bytes = try analyser.arena.alloc(u8, len);
+                for (0..multiplier) |i| {
+                    const offset = i * source.len;
+                    @memcpy(bytes[offset..][0..source.len], source);
+                }
+                return try analyser.stringValue(bytes);
+            }
 
             blk: {
                 elem_ty = elem_ty.pointerElementType(analyser, .one) orelse break :blk;
