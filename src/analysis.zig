@@ -1658,7 +1658,8 @@ fn resolveCoercedIPValue(
                 std.mem.eql(u8, name, "@truncate") or
                 std.mem.eql(u8, name, "@bitCast") or
                 std.mem.eql(u8, name, "@intFromFloat") or
-                std.mem.eql(u8, name, "@floatFromInt"))
+                std.mem.eql(u8, name, "@floatFromInt") or
+                std.mem.eql(u8, name, "@floatCast"))
             {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, options.node_handle.node).?;
@@ -1672,6 +1673,8 @@ fn resolveCoercedIPValue(
                     .int_from_float
                 else if (std.mem.eql(u8, name, "@floatFromInt"))
                     .float_from_int
+                else if (std.mem.eql(u8, name, "@floatCast"))
+                    .float_cast
                 else
                     .int_cast;
             }
@@ -1692,6 +1695,11 @@ fn resolveCoercedIPValue(
             if (analyser.ip.zigTypeTag(ip_ty) != .float) return null;
             if (source_tag != .int and source_tag != .comptime_int) return null;
             return try analyser.floatFromIntValue(ip_ty, ip_index);
+        }
+        if (tag == .float_cast) {
+            if (analyser.ip.zigTypeTag(ip_ty) != .float) return null;
+            if (source_tag != .float and source_tag != .comptime_float) return null;
+            return try analyser.coerceFloatValue(ip_ty, ip_index);
         }
         if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
         if (source_tag != .int and source_tag != .comptime_int) return null;

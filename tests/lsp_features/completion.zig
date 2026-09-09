@@ -809,6 +809,28 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime value: f64) type {
+        \\    const narrowed: f32 = @floatCast(value);
+        \\    const as_int: u8 = @intFromFloat(narrowed);
+        \\    return if (as_int == 42) struct { selected: u8 } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(42.75) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\fn Select(comptime value: f32) type {
+        \\    const as_int: i8 = @intFromFloat(value);
+        \\    return if (as_int == -42) struct { direct: u8 } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(@floatCast(@as(f64, -42.75))) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "direct", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {

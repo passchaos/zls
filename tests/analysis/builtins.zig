@@ -204,6 +204,10 @@ const float_from_int_f32_value: f32 = @floatFromInt(@as(u16, 42));
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(42)
 const float_from_int_f64_value: f64 = @floatFromInt(@as(i16, -42));
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (f64)(-42)
+const float_cast_f32_value: f32 = @floatCast(@as(f64, 42.75));
+//    ^^^^^^^^^^^^^^^^^^^^ (f32)(42.75)
+const float_cast_f64_value: f64 = @floatCast(@as(f32, -42.75));
+//    ^^^^^^^^^^^^^^^^^^^^ (f64)(-42.75)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);
