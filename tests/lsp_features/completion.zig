@@ -597,6 +597,8 @@ test "generic function with comptime value builtins" {
         .{ .expression = "@popCount(@as(i8, -16))", .detail = "[4]u8" },
         .{ .expression = "@clz(@as(u8, 0))", .detail = "[8]u8" },
         .{ .expression = "@ctz(@as(u8, 0))", .detail = "[8]u8" },
+        .{ .expression = "@abs(-4)", .detail = "[4]u8" },
+        .{ .expression = "@abs(@as(i8, -4))", .detail = "[4]u8" },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(allocator,

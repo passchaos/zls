@@ -3015,6 +3015,36 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                             operand_ty,
                         else => return null,
                     };
+                    if (analyser.evaluate_comptime_values and analyser.ip.zigTypeTag(operand_ty) != .vector) {
+                        const operand_index = payload.index orelse return Type.fromIP(analyser, result_ty, null);
+                        if (scalar_tag == .comptime_int) {
+                            const value = analyser.ip.toInt(operand_index, i128) orelse return Type.fromIP(analyser, result_ty, null);
+                            const magnitude: u128 = if (value >= 0) @intCast(value) else @intCast(-(value + 1) + 1);
+                            if (magnitude <= std.math.maxInt(u64)) {
+                                const result_index = try analyser.ip.get(.{ .int_u64_value = .{
+                                    .ty = result_ty,
+                                    .int = @intCast(magnitude),
+                                } });
+                                return Type.fromIP(analyser, result_ty, result_index);
+                            }
+                        } else if (scalar_tag == .int) {
+                            const info = analyser.ip.intInfo(scalar_ty, builtin.target);
+                            if (info.bits <= 64) {
+                                const magnitude: u64 = switch (info.signedness) {
+                                    .unsigned => analyser.ip.toInt(operand_index, u64) orelse return Type.fromIP(analyser, result_ty, null),
+                                    .signed => magnitude: {
+                                        const value = analyser.ip.toInt(operand_index, i64) orelse return Type.fromIP(analyser, result_ty, null);
+                                        break :magnitude if (value >= 0) @intCast(value) else @intCast(-(value + 1) + 1);
+                                    },
+                                };
+                                const result_index = try analyser.ip.get(.{ .int_u64_value = .{
+                                    .ty = result_ty,
+                                    .int = magnitude,
+                                } });
+                                return Type.fromIP(analyser, result_ty, result_index);
+                            }
+                        }
+                    }
 
                     return Type.fromIP(analyser, result_ty, null);
                 },

@@ -166,6 +166,13 @@ const abs_vector_i8 = @abs(@as(@Vector(4, i8), undefined));
 const abs_vector_u8 = @abs(@as(@Vector(4, u8), undefined));
 //    ^^^^^^^^^^^^^ (@Vector(4,u8))()
 
+const abs_comptime_value = @abs(-42);
+//    ^^^^^^^^^^^^^^^^^^ (comptime_int)(42)
+const abs_i8_value = @abs(@as(i8, -128));
+//    ^^^^^^^^^^^^ (u8)(128)
+const abs_u8_value = @abs(@as(u8, 42));
+//    ^^^^^^^^^^^^ (u8)(42)
+
 const panic = @panic("foo");
 //    ^^^^^ (noreturn)()
 const trap = @trap();
