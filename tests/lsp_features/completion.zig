@@ -861,6 +861,23 @@ test "generic function with comptime value builtins" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime value: f64) type {
+        \\    const floored: i8 = @intFromFloat(@floor(value));
+        \\    const ceiled: i8 = @intFromFloat(@ceil(value));
+        \\    const truncated: i8 = @intFromFloat(@trunc(value));
+        \\    const rounded: i8 = @intFromFloat(@round(value));
+        \\    return if (floored == -3 and ceiled == -2 and truncated == -2 and rounded == -3)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-2.75) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime division builtins" {

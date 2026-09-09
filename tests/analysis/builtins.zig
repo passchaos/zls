@@ -226,6 +226,14 @@ const float_mul_value = @as(f32, 6.0) * @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(12)
 const float_div_value = @as(f32, 6.0) / @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(3)
+const floor_value = @floor(@as(f32, -2.75));
+//    ^^^^^^^^^^^ (f32)(-3)
+const ceil_value = @ceil(@as(f64, -2.75));
+//    ^^^^^^^^^^ (f64)(-2)
+const trunc_value = @trunc(@as(f32, -2.75));
+//    ^^^^^^^^^^^ (f32)(-2)
+const round_value = @round(@as(f64, -2.75));
+//    ^^^^^^^^^^^ (f64)(-3)
 
 const IntEnum = enum(u8) { first = 4, second };
 const int_from_enum = @intFromEnum(IntEnum.second);
