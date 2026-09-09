@@ -3548,6 +3548,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (params.len != 1) return null;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     if (operand.data == .enum_value) {
+                        if (analyser.evaluate_comptime_values) {
+                            return try analyser.stringValue(operand.data.enum_value.tag);
+                        }
                         return try analyser.staticStringType(operand.data.enum_value.tag.len);
                     }
                     return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);

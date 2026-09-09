@@ -1359,6 +1359,22 @@ test "generic function with comptime intFromEnum" {
 test "generic function with comptime enum tagName length" {
     try testCompletion(
         \\const Mode = enum { fast, safety };
+        \\const Fields = struct { fast: u8, safety: u8 };
+        \\fn Select(comptime mode: Mode) type {
+        \\    const name = @tagName(mode);
+        \\    return if (name[0] == 's' and @hasField(Fields, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(.safety) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safety };
         \\fn Buffer(comptime mode: Mode) type {
         \\    return struct { name: [@tagName(mode).len]u8 };
         \\}
