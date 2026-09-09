@@ -1752,6 +1752,12 @@ fn floatValue(analyser: *Analyser, value: InternPool.Index) ?f128 {
     };
 }
 
+fn exactFloatFromInt(analyser: *Analyser, value: InternPool.Index) ?f128 {
+    if (analyser.ip.toInt(value, i64)) |signed| return @floatFromInt(signed);
+    if (analyser.ip.toInt(value, u64)) |unsigned| return @floatFromInt(unsigned);
+    return null;
+}
+
 fn resolveFloatRoundingValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -2431,12 +2437,19 @@ fn resolveComparisonValue(
     const rhs_int = if (rhs_index) |index| analyser.ip.toInt(index, i256) else null;
     const lhs_float = if (lhs_index) |index| analyser.floatValue(index) else null;
     const rhs_float = if (rhs_index) |index| analyser.floatValue(index) else null;
+    const lhs_numeric_float = lhs_float orelse if (lhs_index) |index| analyser.exactFloatFromInt(index) else null;
+    const rhs_numeric_float = rhs_float orelse if (rhs_index) |index| analyser.exactFloatFromInt(index) else null;
     const result = switch (tag) {
         .equal_equal, .bang_equal => blk: {
             const equal = if (lhs_int != null and rhs_int != null)
                 lhs_int.? == rhs_int.?
             else if (lhs_float != null and rhs_float != null)
                 lhs_float.? == rhs_float.?
+            else if (lhs_float != null or rhs_float != null)
+                if (lhs_numeric_float != null and rhs_numeric_float != null)
+                    lhs_numeric_float.? == rhs_numeric_float.?
+                else
+                    return null
             else if (lhs_index != null and rhs_index != null)
                 lhs_index.? == rhs_index.?
             else if (lhs.is_type_val and rhs.is_type_val and lhs.data != .ip_index and rhs.data != .ip_index)
@@ -2465,6 +2478,17 @@ fn resolveComparisonValue(
                     .greater_than => lhs_float.? > rhs_float.?,
                     .less_or_equal => lhs_float.? <= rhs_float.?,
                     .greater_or_equal => lhs_float.? >= rhs_float.?,
+                    else => unreachable,
+                };
+            }
+            if ((lhs_float != null or rhs_float != null) and
+                lhs_numeric_float != null and rhs_numeric_float != null)
+            {
+                break :blk switch (tag) {
+                    .less_than => lhs_numeric_float.? < rhs_numeric_float.?,
+                    .greater_than => lhs_numeric_float.? > rhs_numeric_float.?,
+                    .less_or_equal => lhs_numeric_float.? <= rhs_numeric_float.?,
+                    .greater_or_equal => lhs_numeric_float.? >= rhs_numeric_float.?,
                     else => unreachable,
                 };
             }
