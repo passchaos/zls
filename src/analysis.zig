@@ -3715,6 +3715,44 @@ fn resolveBitCountValue(
     return Type.fromIP(analyser, result_type, result_index);
 }
 
+fn resolveVectorBitCountValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
+    const bits = analyser.ip.intInfo(vector.child, builtin.target).bits;
+    if (bits == 0) return null;
+    const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, bits) + 1));
+    const result_child = try analyser.ip.get(.{ .int_type = .{
+        .signedness = .unsigned,
+        .bits = result_bits,
+    } });
+    const result_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = vector.len,
+        .child = result_child,
+    } });
+    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, result_type, null);
+    if (source_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const resolved = try analyser.resolveBitCountValue(tag, element);
+        value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(result_child) else try analyser.ip.getUnknown(result_child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn resolveBitPermutationValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -3762,6 +3800,33 @@ fn resolveBitPermutationValue(
         },
     };
     return analyser.intValueWithType(payload.type, result);
+}
+
+fn resolveVectorBitPermutationValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
+    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
+    if (source_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const resolved = try analyser.resolveBitPermutationValue(tag, element);
+        value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
 fn resolveExactShiftValue(
@@ -5171,17 +5236,31 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     if (operand.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveBitCountValue(tag, operand)) |value| return value;
+                        if (operand.ipIndex()) |index| {
+                            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+                                if (try analyser.resolveVectorBitCountValue(tag, operand)) |value| return value;
+                            } else if (try analyser.resolveBitCountValue(tag, operand)) |value| {
+                                return value;
+                            }
+                        }
                     }
                     const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
-                    if (analyser.ip.zigTypeTag(operand_type) != .int) return null;
-                    const bits = analyser.ip.intInfo(operand_type, builtin.target).bits;
+                    const scalar_type = analyser.ip.scalarType(operand_type);
+                    if (analyser.ip.zigTypeTag(scalar_type) != .int) return null;
+                    const bits = analyser.ip.intInfo(scalar_type, builtin.target).bits;
                     if (bits == 0) return null;
                     const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, bits) + 1));
-                    const result_type = try analyser.ip.get(.{ .int_type = .{
+                    const result_child = try analyser.ip.get(.{ .int_type = .{
                         .signedness = .unsigned,
                         .bits = result_bits,
                     } });
+                    const result_type = if (analyser.ip.zigTypeTag(operand_type) == .vector)
+                        try analyser.ip.get(.{ .vector_type = .{
+                            .len = analyser.ip.vectorLen(operand_type),
+                            .child = result_child,
+                        } })
+                    else
+                        result_child;
                     return Type.fromIP(analyser, result_type, null);
                 },
                 .bit_reverse, .byte_swap => |tag| {
@@ -5189,7 +5268,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     if (operand.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveBitPermutationValue(tag, operand)) |value| return value;
+                        if (operand.ipIndex()) |index| {
+                            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+                                if (try analyser.resolveVectorBitPermutationValue(tag, operand)) |value| return value;
+                            } else if (try analyser.resolveBitPermutationValue(tag, operand)) |value| {
+                                return value;
+                            }
+                        }
                     }
                     return operand.withoutIPIndex(analyser);
                 },

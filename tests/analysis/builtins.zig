@@ -131,6 +131,16 @@ const vector_trunc_value = @trunc(@as(@Vector(2, f64), @splat(-2.5)))[1];
 //    ^^^^^^^^^^^^^^^^^^ (f64)(-2)
 const vector_round_value = @round(@as(@Vector(2, f32), @splat(-2.5)))[0];
 //    ^^^^^^^^^^^^^^^^^^ (f32)(-3)
+const vector_clz_value = @clz(@as(@Vector(2, u8), .{ 0b00110000, 1 }))[0];
+//    ^^^^^^^^^^^^^^^^ (u4)(2)
+const vector_ctz_value = @ctz(@as(@Vector(2, u8), .{ 0b00110000, 1 }))[1];
+//    ^^^^^^^^^^^^^^^^ (u4)(0)
+const vector_pop_count_value = @popCount(@as(@Vector(2, i8), .{ -16, 1 }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u4)(4)
+const vector_bit_reverse_value = @bitReverse(@as(@Vector(2, u8), .{ 0b00110000, 1 }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(128)
+const vector_byte_swap_value = @byteSwap(@as(@Vector(2, u16), .{ 0x1234, 0xabcd }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u16)(13330)
 const select_value = @select(
     u8,
     @as(@Vector(4, bool), .{ true, false, true, false }),

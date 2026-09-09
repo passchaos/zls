@@ -659,6 +659,26 @@ test "generic function with comptime vector float builtins" {
     });
 }
 
+test "generic function with comptime vector bit builtins" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const values: @Vector(2, u8) = .{ N, 1 };
+        \\    const signed: @Vector(2, i8) = .{ -16, 1 };
+        \\    const words: @Vector(2, u16) = .{ 0x1234, 0xabcd };
+        \\    return if (@clz(values)[0] == 2 and @ctz(values)[1] == 0 and
+        \\        @popCount(signed)[0] == 4 and @bitReverse(values)[1] == 128 and
+        \\        @byteSwap(words)[0] == 0x3412)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(0b00110000) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector select" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {
