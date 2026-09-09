@@ -1248,6 +1248,54 @@ test "generic function with comptime optional condition" {
     });
 }
 
+test "generic function with comptime optional payload" {
+    try testCompletion(
+        \\fn Buffer(comptime value: ?usize) type {
+        \\    return struct { items: [value orelse 4]u8 };
+        \\}
+        \\const buffer: Buffer(null) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime value: ?usize) type {
+        \\    return struct {
+        \\        fallback: [value orelse 4]u8,
+        \\        unwrapped: [value.?]u8,
+        \\        short_circuit: [value orelse @compileError("unselected")]u8,
+        \\    };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "fallback", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "unwrapped", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "short_circuit", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime value: ?usize) type {
+        \\    return struct { items: [(value orelse 3) + 1]u8 };
+        \\}
+        \\const buffer: Buffer(null) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime value: ?usize) type {
+        \\    return struct { items: [value orelse 4]u8 };
+        \\}
+        \\const buffer: Buffer(undefined) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+    });
+}
+
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
         \\fn Select() type {

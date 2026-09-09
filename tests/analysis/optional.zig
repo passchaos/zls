@@ -35,7 +35,7 @@ fn orelse_0() void {
 fn orelse_1() void {
     const foo: ?i32 = 5;
     const bar = foo orelse foo;
-    //    ^^^ (?i32)()
+    //    ^^^ (i32)(5)
     _ = bar;
 }
 

@@ -898,7 +898,15 @@ pub fn resolveOptionalUnwrap(analyser: *Analyser, optional: Type) error{OutOfMem
             return null;
         },
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
-            .optional_type => |optional_info| return Type.fromIP(analyser, optional_info.payload_type, null),
+            .optional_type => |optional_info| {
+                if (analyser.evaluate_comptime_values) {
+                    if (payload.index) |index| switch (analyser.ip.indexToKey(index)) {
+                        .optional_value => |value| return Type.fromIP(analyser, analyser.ip.typeOf(value.val), value.val),
+                        else => {},
+                    };
+                }
+                return Type.fromIP(analyser, optional_info.payload_type, null);
+            },
             .pointer_type => |pointer_info| {
                 if (pointer_info.flags.size == .c) return optional;
                 return null;
@@ -2892,6 +2900,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const lhs_node, const rhs_node = tree.nodeData(node).node_and_node;
 
             const lhs = try analyser.resolveTypeOfNodeInternal(.of(lhs_node, handle)) orelse return null;
+            if (analyser.evaluate_comptime_values) {
+                if (lhs.ipIndex()) |index| switch (analyser.ip.indexToKey(index)) {
+                    .null_value => return try analyser.resolveTypeOfNodeInternal(.of(rhs_node, handle)),
+                    .optional_value => |value| return Type.fromIP(analyser, analyser.ip.typeOf(value.val), value.val),
+                    else => {},
+                };
+            }
 
             const rhs = try analyser.resolveTypeOfNodeInternal(.of(rhs_node, handle)) orelse return try analyser.resolveOptionalUnwrap(lhs);
 
