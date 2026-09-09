@@ -4479,8 +4479,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                                     return Type.fromIP(analyser, result_type, null);
                                 if (!std.math.isFinite(candidate_value)) return Type.fromIP(analyser, result_type, null);
                                 const prefer_candidate = switch (tag) {
-                                    .min => candidate_value < selected_value,
-                                    .max => candidate_value > selected_value,
+                                    .min => candidate_value < selected_value or
+                                        (candidate_value == 0 and selected_value == 0 and
+                                            std.math.signbit(candidate_value) and !std.math.signbit(selected_value)),
+                                    .max => candidate_value > selected_value or
+                                        (candidate_value == 0 and selected_value == 0 and
+                                            !std.math.signbit(candidate_value) and std.math.signbit(selected_value)),
                                     else => unreachable,
                                 };
                                 if (prefer_candidate) {

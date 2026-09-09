@@ -234,6 +234,10 @@ const mixed_float_min_value = @min(@as(f32, 2.5), 4);
 //    ^^^^^^^^^^^^^^^^^^^^^ (f32)(2.5)
 const mixed_float_max_value = @max(4, @as(f64, 2.5));
 //    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4)
+const float_min_negative_zero = @min(@as(f32, 0.0), @as(f32, -0.0));
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-0)
+const float_max_positive_zero = @max(@as(f64, -0.0), @as(f64, 0.0));
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (f64)(0)
 const float_add_value = @as(f32, 6.0) + @as(f64, 2.0);
 //    ^^^^^^^^^^^^^^^ (f64)(8)
 const float_sub_value = @as(f32, 6.0) - @as(f64, 2.0);
