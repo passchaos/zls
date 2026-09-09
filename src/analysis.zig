@@ -1535,6 +1535,18 @@ fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) error{OutOfM
     };
 }
 
+fn tupleFieldCount(analyser: *Analyser, ty: Type) ?usize {
+    if (!ty.is_type_val) return null;
+    return switch (ty.data) {
+        .tuple => |fields| fields.len,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .tuple_type => |info| info.types.len,
+            else => null,
+        },
+        else => null,
+    };
+}
+
 fn resolveIntegerLiteral(analyser: *Analyser, comptime T: type, options: ResolveOptions) Error!?T {
     const ip_index = try analyser.resolveInternPoolValue(options) orelse return null;
     return analyser.ip.toInt(ip_index, T);
@@ -3152,7 +3164,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .has_decl => .other,
                         else => unreachable,
                     };
-                    const found = try lookupSymbolContainer(container_type, name, kind) != null;
+                    const found = if (analyser.tupleFieldCount(container_type)) |field_count| switch (tag) {
+                        .has_field => blk: {
+                            const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
+                            break :blk index < field_count;
+                        },
+                        .has_decl => false,
+                        else => unreachable,
+                    } else try lookupSymbolContainer(container_type, name, kind) != null;
                     return Type.fromIP(analyser, .bool_type, if (found) .bool_true else .bool_false);
                 },
                 .import => {

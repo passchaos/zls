@@ -685,6 +685,19 @@ test "generic function with comptime member reflection" {
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
         .{ .label = "fallback", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    return if (@hasField(T, "1") and !@hasField(T, "2"))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(struct { u8, bool }) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime local constants" {
@@ -1050,6 +1063,47 @@ test "cross-file generic function with comptime enum switch" {
         }
     }
     try std.testing.expect(found_checked);
+}
+
+test "cross-file generic function with comptime member reflection" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    _ = try ctx.addDocument(.{ .source =
+        \\pub const Feature = true;
+        \\pub fn Select(comptime T: type) type {
+        \\    return if (@hasDecl(T, "Feature"))
+        \\        struct { enabled: u8 }
+        \\    else
+        \\        struct { disabled: u8 };
+        \\}
+    });
+
+    const source =
+        \\const api = @import("Untitled-0.zig");
+        \\const selected: api.Select(api) = undefined;
+        \\const field = selected.<cursor>
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
+    defer allocator.free(text);
+    const uri = try ctx.addDocument(.{ .source = text });
+
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })).?.completion_list;
+
+    var found_enabled = false;
+    for (response.items) |item| {
+        if (std.mem.eql(u8, item.label, "disabled")) return error.MissingOrUnexpectedCompletions;
+        if (std.mem.eql(u8, item.label, "enabled")) {
+            found_enabled = true;
+            try std.testing.expectEqual(types.completion.Item.Kind.Field, item.kind.?);
+            try std.testing.expectEqualStrings("u8", item.detail.?);
+        }
+    }
+    try std.testing.expect(found_enabled);
 }
 
 test "generic function with comptime optional condition" {
