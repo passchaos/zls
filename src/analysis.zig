@@ -1789,12 +1789,12 @@ fn resolveEnumValueTag(
     if (!enum_type.isEnumType()) return null;
     const tree = &node_handle.handle.tree;
     const tag = switch (tree.nodeTag(node_handle.node)) {
-        .enum_literal => offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(node_handle.node)),
+        .enum_literal => try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null,
         .field_access => tag: {
             const lhs_node, const name_token = tree.nodeData(node_handle.node).node_and_token;
             const lhs = try analyser.resolveTypeOfNodeInternal(.of(lhs_node, node_handle.handle)) orelse return null;
             if (!lhs.eql(enum_type)) return null;
-            break :tag offsets.identifierTokenToNameSlice(tree, name_token);
+            break :tag try analyser.identifierTokenName(tree, name_token) orelse return null;
         },
         .builtin_call,
         .builtin_call_comma,
@@ -1870,7 +1870,7 @@ fn resolveEnumTagIntValue(
             next_value = if (value_index) |index| analyser.ip.toInt(index, i128) else null;
         }
 
-        const field_name = offsets.identifierTokenToNameSlice(tree, field.ast.main_token);
+        const field_name = try analyser.identifierTokenName(tree, field.ast.main_token) orelse continue;
         if (std.mem.eql(u8, field_name, tag)) {
             const value = next_value orelse return null;
             const raw = if (value >= 0 and value <= std.math.maxInt(u64))
@@ -1919,7 +1919,7 @@ fn resolveEnumTagFromIntValue(
             next_value = if (value_index) |index| analyser.ip.toInt(index, i128) else null;
         }
 
-        const tag = offsets.identifierTokenToNameSlice(tree, field.ast.main_token);
+        const tag = try analyser.identifierTokenName(tree, field.ast.main_token) orelse continue;
         if (next_value == int_value) return tag;
         if (next_value) |value| {
             next_value = std.math.add(i128, value, 1) catch null;
@@ -4964,7 +4964,7 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
 
             const lhs = (try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle))) orelse return null;
 
-            const symbol = offsets.identifierTokenToNameSlice(tree, field_name);
+            const symbol = try analyser.identifierTokenName(tree, field_name) orelse return null;
             if (analyser.evaluate_comptime_values and
                 lhs.type.is_type_val and
                 lhs.type.isEnumType())
@@ -8354,23 +8354,31 @@ fn identifierTokenMatches(
     token: Ast.TokenIndex,
     expected: []const u8,
 ) error{OutOfMemory}!bool {
+    const name = try analyser.identifierTokenName(tree, token) orelse return false;
+    return std.mem.eql(u8, name, expected);
+}
+
+fn identifierTokenName(
+    analyser: *Analyser,
+    tree: *const Ast,
+    token: Ast.TokenIndex,
+) error{OutOfMemory}!?[]const u8 {
     const raw = tree.tokenSlice(token);
-    if (!std.mem.startsWith(u8, raw, "@\"")) {
-        return std.mem.eql(u8, offsets.identifierTokenToNameSlice(tree, token), expected);
-    }
+    if (!std.mem.startsWith(u8, raw, "@\"")) return offsets.identifierTokenToNameSlice(tree, token);
 
     var discarding_writer: std.Io.Writer.Discarding = .init(&.{});
     const parsed = std.zig.string_literal.parseWrite(&discarding_writer.writer, raw[1..]) catch |err| switch (err) {
         error.WriteFailed => unreachable,
     };
-    if (parsed != .success or discarding_writer.count != expected.len) return false;
+    if (parsed != .success) return null;
 
     const decoded = try analyser.arena.alloc(u8, discarding_writer.count);
     var writer: std.Io.Writer = .fixed(decoded);
     const decoded_result = std.zig.string_literal.parseWrite(&writer, raw[1..]) catch |err| switch (err) {
         error.WriteFailed => unreachable,
     };
-    return decoded_result == .success and std.mem.eql(u8, decoded, expected);
+    if (decoded_result != .success) return null;
+    return decoded;
 }
 
 pub fn lookupSymbolContainer(

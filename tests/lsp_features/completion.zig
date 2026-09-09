@@ -1682,6 +1682,22 @@ test "generic function with comptime intFromEnum" {
 
 test "generic function with comptime enum tagName length" {
     try testCompletion(
+        \\const Mode = enum { @"safe\x20mode" };
+        \\const Fields = struct { @"safe mode": u8 };
+        \\fn Select(comptime mode: Mode) type {
+        \\    const name = @tagName(mode);
+        \\    return if (name.len == 9 and name[4] == ' ' and @hasField(Fields, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(.@"safe\x20mode") = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\const Mode = enum { fast, safety };
         \\const Fields = struct { fast: u8, safety: u8 };
         \\fn Select(comptime mode: Mode) type {
