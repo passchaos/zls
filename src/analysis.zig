@@ -1066,9 +1066,10 @@ pub fn resolveDerefType(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?
 }
 
 pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?Binding {
-    if (pointer.is_type_val) return null;
+    const runtime_pointer = pointer.runtimeType(analyser);
+    if (runtime_pointer.is_type_val) return null;
 
-    switch (pointer.data) {
+    switch (runtime_pointer.data) {
         .pointer => |info| switch (info.size) {
             .one, .c => return .{
                 .type = try info.elem_ty.instanceTypeVal(analyser) orelse return null,
@@ -1202,7 +1203,7 @@ fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index)
 }
 
 pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: BracketAccess) error{OutOfMemory}!?Binding {
-    const lhs = lhs_binding.type;
+    const lhs = lhs_binding.type.runtimeType(analyser);
     if (lhs.is_type_val) return null;
 
     const is_const = switch (lhs.data) {
@@ -1315,10 +1316,11 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
 }
 
 pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) error{OutOfMemory}!?Type {
-    if (ty.is_type_val)
+    const runtime_ty = ty.runtimeType(analyser);
+    if (runtime_ty.is_type_val)
         return null;
 
-    switch (ty.data) {
+    switch (runtime_ty.data) {
         .pointer => |info| switch (info.size) {
             .one => {
                 if (std.mem.eql(u8, "*", name)) {
@@ -1369,7 +1371,7 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
             }
             if (!allDigits(name)) return null;
             const index = std.fmt.parseInt(u16, name, 10) catch return null;
-            return try analyser.resolveBracketAccessType(ty, .{ .single = index });
+            return try analyser.resolveBracketAccessType(runtime_ty, .{ .single = index });
         },
 
         .optional => |child_ty| {
@@ -1555,6 +1557,7 @@ fn resolveComptimeValue(analyser: *Analyser, options: ResolveOptions) Error!?Typ
     return switch (value.data) {
         .ip_index => |payload| if (payload.index != null) value else null,
         .enum_value => value,
+        .string_value => value,
         else => null,
     };
 }
@@ -2205,6 +2208,17 @@ fn staticStringType(analyser: *Analyser, len: u64) error{OutOfMemory}!Type {
     return Type.fromIP(analyser, pointer_type, null);
 }
 
+fn stringValue(analyser: *Analyser, bytes: []const u8) error{OutOfMemory}!Type {
+    const string_type = try analyser.staticStringType(bytes.len);
+    return .{
+        .data = .{ .string_value = .{
+            .string_type = try analyser.allocType(try string_type.typeOf(analyser)),
+            .bytes = bytes,
+        } },
+        .is_type_val = false,
+    };
+}
+
 fn resolveBitCountValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -2320,6 +2334,14 @@ pub fn resolvePrimitive(analyser: *Analyser, identifier_name: []const u8) error{
 }
 
 fn resolveStringLiteral(analyser: *Analyser, options: ResolveOptions) Error!?[]const u8 {
+    const old_evaluate_comptime_values = analyser.evaluate_comptime_values;
+    analyser.evaluate_comptime_values = true;
+    defer analyser.evaluate_comptime_values = old_evaluate_comptime_values;
+
+    if (try analyser.resolveBindingOfNodeInternal(options)) |binding| {
+        if (binding.type.data == .string_value) return binding.type.data.string_value.bytes;
+    }
+
     var node_with_handle = options.node_handle;
     if (try analyser.resolveVarDeclAlias(.{
         .decl = .{ .ast_node = options.node_handle.node },
@@ -2331,6 +2353,11 @@ fn resolveStringLiteral(analyser: *Analyser, options: ResolveOptions) Error!?[]c
                 .node = decl_with_handle.decl.ast_node,
                 .handle = decl_with_handle.handle,
             };
+        }
+    }
+    if (!node_with_handle.eql(options.node_handle)) {
+        if (try analyser.resolveBindingOfNodeInternal(.of(node_with_handle.node, node_with_handle.handle))) |binding| {
+            if (binding.type.data == .string_value) return binding.type.data.string_value.bytes;
         }
     }
     const string_literal_node = switch (node_with_handle.handle.tree.nodeTag(node_with_handle.node)) {
@@ -2674,6 +2701,18 @@ fn resolveFunctionTypeFromCall(
                 }
             },
             else => {},
+        }
+
+        if (param.modifier == .comptime_param) {
+            if (try analyser.resolveStringLiteral(.of(arg, handle))) |bytes| {
+                try value_params.put(
+                    analyser.arena,
+                    .{ .token = param_name_token, .handle = func_info.handle },
+                    try analyser.stringValue(bytes),
+                );
+                has_callsite_bindings = true;
+                continue;
+            }
         }
 
         if (param_type.data != .anytype_parameter and
@@ -4060,6 +4099,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .failure => return null,
             }
 
+            if (analyser.evaluate_comptime_values) {
+                const decoded = try analyser.arena.alloc(u8, discarding_writer.count);
+                var writer: std.Io.Writer = .fixed(decoded);
+                const parsed = std.zig.string_literal.parseWrite(&writer, token_bytes) catch |err| switch (err) {
+                    error.WriteFailed => unreachable,
+                };
+                if (parsed != .success) return null;
+                return try analyser.stringValue(decoded);
+            }
             return try analyser.staticStringType(discarding_writer.count);
         },
         .error_value => {
@@ -4278,6 +4326,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             var r_elem_ty = try analyser.resolveTypeOfNodeInternal(.of(r_elem_idx, handle)) orelse return null;
             if (r_elem_ty.is_type_val) return null;
+
+            if (analyser.evaluate_comptime_values and
+                l_elem_ty.data == .string_value and
+                r_elem_ty.data == .string_value)
+            {
+                const bytes = try std.mem.concat(analyser.arena, u8, &.{
+                    l_elem_ty.data.string_value.bytes,
+                    r_elem_ty.data.string_value.bytes,
+                });
+                return try analyser.stringValue(bytes);
+            }
 
             blk: {
                 l_elem_ty = l_elem_ty.pointerElementType(analyser, .one) orelse break :blk;
@@ -4580,6 +4639,12 @@ pub const Type = struct {
             int_value: ?InternPool.Index,
         },
 
+        /// A comptime-known string and its pointer-to-array type.
+        string_value: struct {
+            string_type: *Type,
+            bytes: []const u8,
+        },
+
         /// Primitive type: `u8`, `bool`, `type`, etc.
         /// Primitive value: `true`, `false`, `null`, `undefined`
         ip_index: struct {
@@ -4815,6 +4880,10 @@ pub const Type = struct {
                     hasher.update(value.tag);
                     std.hash.autoHash(hasher, value.int_value);
                 },
+                .string_value => |value| {
+                    value.string_type.hashWithHasher(hasher);
+                    hasher.update(value.bytes);
+                },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
                     std.hash.autoHash(hasher, payload.index);
@@ -4909,6 +4978,11 @@ pub const Type = struct {
                     if (!std.mem.eql(u8, a_value.tag, b_value.tag)) return false;
                     if (a_value.int_value != b_value.int_value) return false;
                 },
+                .string_value => |a_value| {
+                    const b_value = b.string_value;
+                    if (!a_value.string_type.eql(b_value.string_type.*)) return false;
+                    if (!std.mem.eql(u8, a_value.bytes, b_value.bytes)) return false;
+                },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;
 
@@ -4971,6 +5045,7 @@ pub const Type = struct {
                     return false;
                 },
                 .enum_value => |value| value.enum_type.data.isGeneric(),
+                .string_value => |value| value.string_type.data.isGeneric(),
                 .compile_error,
                 .ip_index,
                 => false,
@@ -5065,6 +5140,12 @@ pub const Type = struct {
                         .enum_type = try analyser.allocType(try analyser.resolveGenericTypeInternal(value.enum_type.*, bound_params, visiting)),
                         .tag = value.tag,
                         .int_value = value.int_value,
+                    },
+                },
+                .string_value => |value| return .{
+                    .string_value = .{
+                        .string_type = try analyser.allocType(try analyser.resolveGenericTypeInternal(value.string_type.*, bound_params, visiting)),
+                        .bytes = value.bytes,
                     },
                 },
                 .container => |info| return .{
@@ -5236,7 +5317,7 @@ pub const Type = struct {
 
     fn hasKnownValue(self: Type, analyser: *Analyser) bool {
         return switch (self.data) {
-            .enum_value => true,
+            .enum_value, .string_value => true,
             .ip_index => |payload| if (payload.index) |index|
                 !analyser.ip.isUndefined(index) and !analyser.ip.isUnknown(index)
             else
@@ -5248,6 +5329,18 @@ pub const Type = struct {
     fn withoutIPIndex(self: Type, analyser: *Analyser) Type {
         return switch (self.data) {
             .ip_index => |payload| fromIP(analyser, payload.type, null),
+            else => self,
+        };
+    }
+
+    fn runtimeType(self: Type, analyser: *Analyser) Type {
+        return switch (self.data) {
+            .enum_value => |value| blk: {
+                var result = value.enum_type.*;
+                result.is_type_val = false;
+                break :blk result;
+            },
+            .string_value => |value| Type.fromIP(analyser, value.string_type.ipIndex().?, null),
             else => self,
         };
     }
@@ -5378,6 +5471,7 @@ pub const Type = struct {
             .compile_error,
             .type_parameter,
             .enum_value,
+            .string_value,
             .ip_index,
             => false,
         };
@@ -5398,6 +5492,7 @@ pub const Type = struct {
             .compile_error,
             .type_parameter,
             .enum_value,
+            .string_value,
             .ip_index,
             => unreachable,
             .either => |entries| {
@@ -5602,6 +5697,9 @@ pub const Type = struct {
 
         if (self.data == .enum_value) {
             return self.data.enum_value.enum_type.*;
+        }
+        if (self.data == .string_value) {
+            return self.data.string_value.string_type.*;
         }
 
         if (self.data == .ip_index) {
@@ -6058,6 +6156,7 @@ pub const Type = struct {
                 try writer.writeByte('.');
                 try writer.writeAll(value.tag);
             },
+            .string_value => |value| try writer.print("\"{s}\"", .{value.bytes}),
             .container => |info| {
                 const scope_handle = info.scope_handle;
                 const handle = scope_handle.handle;

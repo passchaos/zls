@@ -850,6 +850,49 @@ test "generic function with comptime member reflection" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\const S = struct { field: u8 };
+        \\fn Select(comptime T: type, comptime name: []const u8) type {
+        \\    return if (@hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S, "field") = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const S = struct { @"hello world": u8 };
+        \\fn Select(comptime T: type, comptime name: []const u8) type {
+        \\    return if (@hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const name = "hello " ++ "world";
+        \\const selected: Select(S, name) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const S = struct { @"hello world": u8 };
+        \\fn Select(comptime T: type, comptime name: []const u8) type {
+        \\    return if (@hasField(T, name))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S, "hello\x20world") = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime local constants" {
@@ -1042,6 +1085,19 @@ test "generic function with comptime condition" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "negated", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool, comptime T: type) type {
+        \\    return if (enabled == true and T != u16)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true, u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
 }
 

@@ -210,6 +210,10 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
             enum_instance.is_type_val = false;
             try typeToCompletion(builder, enum_instance);
         },
+        .string_value => |value| {
+            const string_instance = try value.string_type.instanceTypeVal(builder.analyser) orelse return;
+            try typeToCompletion(builder, string_instance);
+        },
         .function,
         .error_union,
         .union_tag,
