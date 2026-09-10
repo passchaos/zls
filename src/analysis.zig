@@ -4289,13 +4289,6 @@ fn resolveTupleTypeConstructor(
     return try Type.createTupleType(analyser, element_types);
 }
 
-fn isEmptyStructLiteral(node_handle: NodeWithHandle) bool {
-    const tree = &node_handle.handle.tree;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullStructInit(&buffer, node_handle.node) orelse return false;
-    return literal.ast.type_expr.unwrap() == null and literal.ast.fields.len == 0;
-}
-
 fn resolveFnParameterAttributes(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -4328,6 +4321,64 @@ fn resolveFnParameterAttributes(
         }
     }
     return noalias_bits;
+}
+
+fn resolveCallingConventionTag(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?std.builtin.CallingConvention.Tag {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .enum_literal) return null;
+    const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+    if (std.mem.eql(u8, name, "c")) {
+        const convention = builtin.target.cCallingConvention() orelse return null;
+        return convention;
+    }
+    if (!std.mem.eql(u8, name, "auto") and
+        !std.mem.eql(u8, name, "async") and
+        !std.mem.eql(u8, name, "naked") and
+        !std.mem.eql(u8, name, "inline")) return null;
+    return std.meta.stringToEnum(std.builtin.CallingConvention.Tag, name);
+}
+
+fn resolveFnAttributes(
+    analyser: *Analyser,
+    options: ResolveOptions,
+) Error!?InternPool.Key.Function.Flags {
+    const node_handle = options.node_handle;
+    const tree = &node_handle.handle.tree;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullStructInit(&buffer, node_handle.node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null) return null;
+
+    var flags: InternPool.Key.Function.Flags = .{};
+    var seen_callconv = false;
+    var seen_varargs = false;
+    for (literal.ast.fields) |field_node| {
+        const field_name_token = tree.firstToken(field_node) - 2;
+        if (tree.tokenTag(field_name_token) != .identifier) return null;
+        const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
+        if (std.mem.eql(u8, field_name, "callconv")) {
+            if (seen_callconv) return null;
+            seen_callconv = true;
+            flags.calling_convention = try analyser.resolveCallingConventionTag(.of(field_node, node_handle.handle)) orelse return null;
+        } else if (std.mem.eql(u8, field_name, "varargs")) {
+            if (seen_varargs) return null;
+            seen_varargs = true;
+            flags.is_var_args = try analyser.resolveBoolValue(.{
+                .node_handle = .of(field_node, node_handle.handle),
+                .container_type = options.container_type,
+            }) orelse return null;
+        } else {
+            return null;
+        }
+    }
+    if (flags.is_var_args) {
+        const convention = builtin.target.cCallingConvention() orelse return null;
+        const c_tag: std.builtin.CallingConvention.Tag = convention;
+        if (flags.calling_convention != c_tag) return null;
+    }
+    return flags;
 }
 
 fn floatReduceValue(
@@ -7772,11 +7823,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }) orelse return .unknown_type;
                     if (!return_type.is_type_val) return .unknown_type;
                     const return_type_index = return_type.ipIndex() orelse return .unknown_type;
-                    if (!isEmptyStructLiteral(.of(params[3], handle))) return .unknown_type;
+                    const flags = try analyser.resolveFnAttributes(.{
+                        .node_handle = .of(params[3], handle),
+                        .container_type = options.container_type,
+                    }) orelse return .unknown_type;
                     const function_type = try analyser.ip.get(.{ .function_type = .{
                         .args = parameter_types,
                         .args_is_noalias = noalias_bits,
                         .return_type = return_type_index,
+                        .flags = flags,
                     } });
                     return Type.fromIP(analyser, .type_type, function_type);
                 },

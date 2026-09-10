@@ -804,6 +804,8 @@ const ConcreteFn = @Fn(&.{ i32, bool }, &.{ .{}, .{} }, u8, .{});
 //    ^^^^^^^^^^ (type)(fn(i32, bool) u8)
 const NoaliasFn = @Fn(&.{*anyopaque}, &.{.{ .@"noalias" = true }}, void, .{});
 //    ^^^^^^^^^ (type)(fn(noalias *anyopaque) void)
+const VariadicFn = @Fn(&.{i32}, &.{.{}}, void, .{ .@"callconv" = .c, .varargs = true });
+//    ^^^^^^^^^^ (type)(fn(i32, ...) callconv(.c) void)
 
 const type_enum_literal: @EnumLiteral() = .foo;
 //    ^^^^^^^^^^^^^^^^^ (@EnumLiteral())()
