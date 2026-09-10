@@ -1823,6 +1823,22 @@ test "generic function with comptime value builtins" {
     });
 }
 
+test "generic function with cmpxchg result type" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const result = @cmpxchgStrong(T, undefined, undefined, undefined, .seq_cst, .seq_cst);
+        \\    return if (@TypeOf(result) == ?T)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u32) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u32" },
+    });
+}
+
 test "generic function with comptime division builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@divTrunc(7, 3)", .detail = "[2]u8" },

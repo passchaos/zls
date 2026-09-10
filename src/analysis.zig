@@ -5913,6 +5913,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
                     return try ty.instanceTypeVal(analyser);
                 },
+                .cmpxchg_strong, .cmpxchg_weak => {
+                    if (params.len != 6) return null;
+                    const child_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (!child_type.is_type_val) return null;
+                    const optional_type = try Type.createOptionalType(analyser, child_type);
+                    return try optional_type.instanceUnchecked(analyser);
+                },
                 .mul_add => {
                     if (params.len != 4) return null;
                     const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;

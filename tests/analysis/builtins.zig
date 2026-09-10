@@ -328,11 +328,11 @@ const shl_zero_runtime_flag = @shlWithOverflow(runtime_u8, @as(u3, 0))[1];
 const mul_zero_undefined_flag = @mulWithOverflow(@as(u8, undefined), @as(u8, 0))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (u1)()
 const cmpxchg_strong = @cmpxchgStrong(u32, undefined, undefined, undefined, .unordered, .unordered);
-//    ^^^^^^^^^^^^^^ (unknown)() TODO this should be `?u32`
+//    ^^^^^^^^^^^^^^ (?u32)()
 //                                                                          ^^^^^^^^^^ (AtomicOrder)()
 //                                                                                      ^^^^^^^^^^ (AtomicOrder)()
 const cmpxchg_weak = @cmpxchgWeak(u32, undefined, undefined, undefined, .unordered, .unordered);
-//    ^^^^^^^^^^^^ (unknown)() TODO this should be `?u32`
+//    ^^^^^^^^^^^^ (?u32)()
 //                                                                      ^^^^^^^^^^ (AtomicOrder)()
 //                                                                                  ^^^^^^^^^^ (AtomicOrder)()
 const call = @call(.always_inline, undefined, undefined);
