@@ -1094,6 +1094,23 @@ test "generic function with runtime self comparisons" {
     });
 }
 
+test "generic function with runtime self integer operations" {
+    try testCompletion(
+        \\var runtime: i8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if ((runtime ^ runtime) == 0 and (runtime -% runtime) == 0 and
+        \\        (runtime -| runtime) == 0)
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with partially known integer operations" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

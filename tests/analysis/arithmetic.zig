@@ -173,6 +173,14 @@ const float_self_equal = runtime_f32 == runtime_f32;
 //    ^^^^^^^^^^^^^^^^ (bool)()
 const undefined_self_equal = @as(u8, undefined) == @as(u8, undefined);
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)()
+const integer_self_xor = runtime_i8 ^ runtime_i8;
+//    ^^^^^^^^^^^^^^^^ (i8)(0)
+const integer_self_sub_wrap = runtime_i8 -% runtime_i8;
+//    ^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const integer_self_sub_sat = runtime_i8 -| runtime_i8;
+//    ^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const undefined_self_xor = @as(i8, undefined) ^ @as(i8, undefined);
+//    ^^^^^^^^^^^^^^^^^^ (i8)()
 
 const vector_add_value = (@as(@Vector(2, u8), .{ 1, 2 }) + @as(@Vector(2, u8), .{ 3, 4 }))[1];
 //    ^^^^^^^^^^^^^^^^ (u8)(6)

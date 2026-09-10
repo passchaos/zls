@@ -6802,15 +6802,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const lhs, const rhs = tree.nodeData(node).node_and_node;
             if (analyser.evaluate_comptime_values) {
                 var lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
-                const same_operand = same_operand: {
-                    if (lhs == rhs) break :same_operand true;
-                    if (tree.nodeTag(lhs) != .identifier or tree.nodeTag(rhs) != .identifier) break :same_operand false;
-                    const lhs_token = ast.identifierTokenFromIdentifierNode(tree, lhs) orelse break :same_operand false;
-                    const rhs_token = ast.identifierTokenFromIdentifierNode(tree, rhs) orelse break :same_operand false;
-                    const lhs_name = try analyser.identifierTokenName(tree, lhs_token) orelse break :same_operand false;
-                    const rhs_name = try analyser.identifierTokenName(tree, rhs_token) orelse break :same_operand false;
-                    break :same_operand std.mem.eql(u8, lhs_name, rhs_name);
-                };
+                const same_operand = try analyser.areSameIdentifierExpression(tree, lhs, rhs);
                 if (same_operand and lhs_ty.data == .ip_index) {
                     const payload = lhs_ty.data.ip_index;
                     if (payload.index) |index| {
@@ -7111,6 +7103,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
+                const tag = tree.nodeTag(node);
+                if ((tag == .bit_xor or tag == .sub_wrap or tag == .sub_sat) and
+                    try analyser.areSameIdentifierExpression(tree, lhs, rhs) and
+                    lhs_ty.data == .ip_index and
+                    analyser.fixedWidthIntegerBounds(lhs_ty.data.ip_index.type) != null)
+                {
+                    if (lhs_ty.data.ip_index.index) |index| {
+                        if (analyser.ip.isUndefined(index)) return lhs_ty.withoutIPIndex(analyser);
+                    }
+                    return try analyser.intValueWithType(lhs_ty.data.ip_index.type, 0);
+                }
                 const value = switch (tree.nodeTag(node)) {
                     .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null) orelse
                         try analyser.resolveVectorFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
@@ -10866,6 +10869,21 @@ fn identifierTokenName(
     };
     if (decoded_result != .success) return null;
     return decoded;
+}
+
+fn areSameIdentifierExpression(
+    analyser: *Analyser,
+    tree: *const Ast,
+    lhs: Ast.Node.Index,
+    rhs: Ast.Node.Index,
+) error{OutOfMemory}!bool {
+    if (lhs == rhs) return true;
+    if (tree.nodeTag(lhs) != .identifier or tree.nodeTag(rhs) != .identifier) return false;
+    const lhs_token = ast.identifierTokenFromIdentifierNode(tree, lhs) orelse return false;
+    const rhs_token = ast.identifierTokenFromIdentifierNode(tree, rhs) orelse return false;
+    const lhs_name = try analyser.identifierTokenName(tree, lhs_token) orelse return false;
+    const rhs_name = try analyser.identifierTokenName(tree, rhs_token) orelse return false;
+    return std.mem.eql(u8, lhs_name, rhs_name);
 }
 
 pub fn lookupSymbolContainer(
