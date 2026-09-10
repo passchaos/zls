@@ -2352,6 +2352,21 @@ test "generic function with comptime std meta enum tag" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u13" },
     });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const E = enum {};
+        \\    return if (std.meta.Tag(E) == u0)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u13) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u13" },
+    });
 }
 
 test "generic function switching on comptime type info" {

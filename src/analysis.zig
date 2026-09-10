@@ -3961,8 +3961,7 @@ fn astEnumTagType(analyser: *Analyser, enum_type: Type, declaration: Ast.full.Co
         const name = try analyser.identifierTokenName(&handle.tree, field.ast.main_token) orelse continue;
         if (!std.mem.eql(u8, name, "_")) field_count += 1;
     }
-    if (field_count == 0) return null;
-    const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
+    const bits: u16 = if (field_count == 0) 0 else @intCast(std.math.log2_int_ceil(u32, field_count));
     const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
     return Type.fromIP(analyser, .type_type, tag_type);
 }

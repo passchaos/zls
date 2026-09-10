@@ -29,6 +29,10 @@ const ExplicitEnum = enum(u8) {
 const TagEnum = std.meta.Tag(ExplicitEnum);
 //    ^^^^^^^ (type)(u8)
 
+const EmptyEnum = enum {};
+const TagEmptyEnum = std.meta.Tag(EmptyEnum);
+//    ^^^^^^^^^^^^ (type)(u0)
+
 const GeneratedEnum = @Enum(u13, .exhaustive, &.{"value"}, &.{1});
 const TagGeneratedEnum = std.meta.Tag(GeneratedEnum);
 //    ^^^^^^^^^^^^^^^^ (type)(u13)
