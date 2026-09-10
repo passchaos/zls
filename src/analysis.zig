@@ -201,26 +201,32 @@ fn rawStringifyParameter(
 ) error{ OutOfMemory, WriteFailed }!void {
     const referenced = options.referenced;
     const info = options.info;
+    const include_type_parameter_name =
+        !options.include_name and options.include_type and info.name != null and info.type.isMetaType();
+    const include_name = options.include_name or include_type_parameter_name;
 
     // Note that parameter doc comments are being skipped
 
     if (options.include_modifier) {
         if (info.modifier) |modifier| {
             switch (modifier) {
-                .comptime_param => try writer.writeAll("comptime "),
+                // Type parameters are implicitly comptime. Function type
+                // formatting keeps their name so dependent types remain
+                // meaningful, making the explicit modifier redundant.
+                .comptime_param => if (!include_type_parameter_name) try writer.writeAll("comptime "),
                 .noalias_param => try writer.writeAll("noalias "),
             }
         }
     }
 
-    if (options.include_name) {
+    if (include_name) {
         if (info.name) |name| {
             try writer.writeAll(name);
         }
     }
 
     if (options.include_type) {
-        const has_parameter_name = options.include_name and info.name != null;
+        const has_parameter_name = include_name and info.name != null;
         if (has_parameter_name) try writer.writeAll(": ");
 
         try info.type.rawStringify(writer, analyser, .{
