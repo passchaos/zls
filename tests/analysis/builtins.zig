@@ -325,6 +325,16 @@ const add_zero_runtime_value = add_zero_runtime[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const add_zero_runtime_flag = add_zero_runtime[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const add_complement_runtime = @addWithOverflow(runtime_u8, ~runtime_u8);
+const add_complement_runtime_value = add_complement_runtime[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const add_complement_runtime_flag = add_complement_runtime[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const add_complement_undefined = @addWithOverflow(undefined_u8, ~undefined_u8);
+const add_complement_undefined_value = add_complement_undefined[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const add_complement_undefined_flag = add_complement_undefined[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)()
 const sub_zero_runtime_flag = @subWithOverflow(runtime_u8, @as(u8, 0))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
 const sub_self_runtime = @subWithOverflow(runtime_u8, runtime_u8);

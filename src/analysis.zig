@@ -2869,7 +2869,7 @@ fn resolveComplementaryBinaryValue(
     if (analyser.fixedWidthIntegerBounds(payload.type)) |bounds| {
         const value: i256 = switch (tag) {
             .bit_and => 0,
-            .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
+            .add, .add_wrap, .add_sat, .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
             else => return null,
         };
         return analyser.intValueWithType(payload.type, value);
@@ -2888,7 +2888,7 @@ fn resolveComplementaryBinaryValue(
     else if (analyser.fixedWidthIntegerBounds(vector.child)) |bounds|
         (try analyser.intValueWithType(vector.child, switch (tag) {
             .bit_and => 0,
-            .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
+            .add, .add_wrap, .add_sat, .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
             else => return null,
         }) orelse return null).ipIndex() orelse return null
     else
@@ -3621,6 +3621,7 @@ fn resolveOverflowValue(
     lhs: Type,
     rhs: Type,
     same_operand: bool,
+    complementary_operands: bool,
 ) error{OutOfMemory}!?Type {
     const lhs_payload = switch (lhs.data) {
         .ip_index => |payload| payload,
@@ -3634,7 +3635,7 @@ fn resolveOverflowValue(
         lhs_payload.type
     else
         try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
-    _ = analyser.fixedWidthIntegerBounds(result_type) orelse return null;
+    const bounds = analyser.fixedWidthIntegerBounds(result_type) orelse return null;
     if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
     if (rhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
 
@@ -3642,10 +3643,19 @@ fn resolveOverflowValue(
     const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
     const zero = (try analyser.intValueWithType(result_type, 0) orelse return null).ipIndex().?;
     switch (tag) {
-        .add_with_overflow => if (lhs_value == 0 or rhs_value == 0) {
-            const source_value = if (lhs_value == 0) rhs_payload.index else lhs_payload.index;
-            const result_value = try analyser.coerceKnownIntegerValue(result_type, source_value);
-            return try analyser.overflowTupleValue(result_type, result_value, false);
+        .add_with_overflow => {
+            if (complementary_operands) {
+                const all_ones = (try analyser.intValueWithType(
+                    result_type,
+                    if (bounds.min < 0) -1 else bounds.max,
+                ) orelse return null).ipIndex().?;
+                return try analyser.overflowTupleValue(result_type, all_ones, false);
+            }
+            if (lhs_value == 0 or rhs_value == 0) {
+                const source_value = if (lhs_value == 0) rhs_payload.index else lhs_payload.index;
+                const result_value = try analyser.coerceKnownIntegerValue(result_type, source_value);
+                return try analyser.overflowTupleValue(result_type, result_value, false);
+            }
         },
         .sub_with_overflow => {
             if (same_operand) return try analyser.overflowTupleValue(result_type, zero, false);
@@ -6614,7 +6624,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (analyser.evaluate_comptime_values) {
                         const same_operand = tag == .sub_with_overflow and
                             try analyser.areSameIdentifierExpression(tree, params[0], params[1]);
-                        if (try analyser.resolveOverflowValue(tag, lhs, rhs, same_operand)) |value| return value;
+                        const complementary_operands = tag == .add_with_overflow and
+                            (try analyser.complementaryIdentifierOperand(tree, params[0], params[1], .bit_not)) != null;
+                        if (try analyser.resolveOverflowValue(tag, lhs, rhs, same_operand, complementary_operands)) |value| return value;
                     }
                     var element_types = [_]Type{
                         Type.fromIP(analyser, .type_type, result_type),
@@ -7429,6 +7441,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
+                if (try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not)) |operand| {
+                    const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse return null;
+                    if (try analyser.resolveComplementaryBinaryValue(.add, operand_type)) |value| return value;
+                }
                 if (try analyser.resolveIntegerBinaryValue(.add, lhs_ty, rhs_ty) orelse
                     try analyser.resolveFloatBinaryValue(.add, lhs_ty, rhs_ty) orelse
                     try analyser.resolveVectorBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;

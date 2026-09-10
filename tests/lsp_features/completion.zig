@@ -1238,8 +1238,12 @@ test "generic function with runtime complement identities" {
         \\fn Select(comptime N: u8) type {
         \\    return if ((runtime_u8 & ~runtime_u8) == 0 and
         \\        (runtime_u8 | ~runtime_u8) == 255 and
+        \\        (runtime_u8 + ~runtime_u8) == 255 and
+        \\        (runtime_u8 +% ~runtime_u8) == 255 and
+        \\        (runtime_u8 +| ~runtime_u8) == 255 and
         \\        @reduce(.And, (runtime_i8 & ~runtime_i8) == @as(@Vector(2, i8), @splat(0))) and
         \\        @reduce(.And, (runtime_i8 ^ ~runtime_i8) == @as(@Vector(2, i8), @splat(-1))) and
+        \\        @reduce(.And, (runtime_i8 + ~runtime_i8) == @as(@Vector(2, i8), @splat(-1))) and
         \\        (runtime_bool and !runtime_bool) == false and
         \\        (runtime_bool or !runtime_bool) == true and
         \\        !@reduce(.Or, runtime_bools & !runtime_bools) and
@@ -1461,13 +1465,15 @@ test "generic function with partially known overflow builtins" {
         \\var runtime_u3: u3 = undefined;
         \\fn Select(comptime N: u8) type {
         \\    const add = @addWithOverflow(runtime_u8, @as(u8, 0));
+        \\    const complement_add = @addWithOverflow(runtime_u8, ~runtime_u8);
         \\    const sub = @subWithOverflow(runtime_u8, @as(u8, 0));
         \\    const self_sub = @subWithOverflow(runtime_u8, runtime_u8);
         \\    const mul_zero = @mulWithOverflow(runtime_i8, @as(i8, 0));
         \\    const mul_one = @mulWithOverflow(runtime_i8, @as(i8, 1));
         \\    const shl = @shlWithOverflow(runtime_u8, @as(u3, 0));
         \\    const zero_shl = @shlWithOverflow(@as(u8, 0), runtime_u3);
-        \\    return if (add[1] == 0 and sub[1] == 0 and self_sub[0] == 0 and
+        \\    return if (add[1] == 0 and complement_add[0] == 255 and complement_add[1] == 0 and
+        \\        sub[1] == 0 and self_sub[0] == 0 and
         \\        self_sub[1] == 0 and mul_zero[0] == 0 and
         \\        mul_zero[1] == 0 and mul_one[1] == 0 and shl[1] == 0 and
         \\        zero_shl[0] == 0 and zero_shl[1] == 0)

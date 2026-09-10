@@ -185,6 +185,14 @@ const integer_complement_or = runtime_u8 | ~runtime_u8;
 //    ^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
 const integer_complement_xor = runtime_i8 ^ ~runtime_i8;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const integer_complement_add = runtime_u8 + ~runtime_u8;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const integer_reverse_complement_add = ~runtime_i8 + runtime_i8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const integer_complement_add_wrap = runtime_u8 +% ~runtime_u8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const integer_complement_add_sat = runtime_i8 +| ~runtime_i8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
 const integer_self_sub = runtime_i8 - runtime_i8;
 //    ^^^^^^^^^^^^^^^^ (i8)(0)
 const integer_self_sub_wrap = runtime_i8 -% runtime_i8;
@@ -198,6 +206,8 @@ const undefined_self_sub = undefined_i8 - undefined_i8;
 const undefined_bool_self_xor = undefined_bool ^ undefined_bool;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const integer_undefined_complement_and = undefined_u8 & ~undefined_u8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const integer_undefined_complement_add = undefined_u8 + ~undefined_u8;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const bool_complement_and = runtime_bool and !runtime_bool;
 //    ^^^^^^^^^^^^^^^^^^^ (bool)(false)
@@ -344,6 +354,12 @@ const vector_integer_complement_or = (runtime_i8_vector | ~runtime_i8_vector)[1]
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
 const vector_integer_complement_xor = (runtime_i8_vector ^ ~runtime_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_integer_complement_add = (runtime_i8_vector + ~runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_integer_complement_add_wrap = (runtime_i8_vector +% ~runtime_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_integer_complement_add_sat = (runtime_i8_vector +| ~runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
 const vector_integer_complement_equal = (runtime_i8_vector == ~runtime_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const vector_integer_complement_not_equal = (~runtime_i8_vector != runtime_i8_vector)[1];
@@ -366,6 +382,10 @@ const vector_partially_undefined_complement_and = (partially_undefined_i8_vector
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
 const vector_known_lane_complement_and = (partially_undefined_i8_vector & ~partially_undefined_i8_vector)[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const vector_partially_undefined_complement_add = (partially_undefined_i8_vector + ~partially_undefined_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_known_lane_complement_add = (partially_undefined_i8_vector + ~partially_undefined_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
 const vector_partially_undefined_complement_equal = (partially_undefined_i8_vector == ~partially_undefined_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const vector_known_lane_complement_equal = (partially_undefined_i8_vector == ~partially_undefined_i8_vector)[1];
