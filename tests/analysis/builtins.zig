@@ -861,6 +861,13 @@ const NoaliasFn = @Fn(&.{*anyopaque}, &.{.{ .@"noalias" = true }}, void, .{});
 //    ^^^^^^^^^ (type)(fn(noalias *anyopaque) void)
 const VariadicFn = @Fn(&.{i32}, &.{.{}}, void, .{ .@"callconv" = .c, .varargs = true });
 //    ^^^^^^^^^^ (type)(fn(i32, ...) callconv(.c) void)
+const NominalFnChild = struct { value: u8 };
+const NominalFn = @Fn(&.{NominalFnChild}, &.{.{}}, NominalFnChild, .{});
+//    ^^^^^^^^^ (type)(fn (NominalFnChild) NominalFnChild)
+const nominal_fn_param = @typeInfo(NominalFn).@"fn".params[0].type.?;
+//    ^^^^^^^^^^^^^^^^ (type)(NominalFnChild)
+const nominal_fn_return = @typeInfo(NominalFn).@"fn".return_type.?;
+//    ^^^^^^^^^^^^^^^^^ (type)(NominalFnChild)
 
 const type_enum_literal: @EnumLiteral() = .foo;
 //    ^^^^^^^^^^^^^^^^^ (@EnumLiteral())()

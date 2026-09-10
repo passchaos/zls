@@ -9756,9 +9756,22 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .node_handle = .of(params[0], handle),
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
-                    const parameter_tuple_index = parameter_tuple.ipIndex() orelse return .unknown_type;
-                    const parameter_types = switch (analyser.ip.indexToKey(parameter_tuple_index)) {
-                        .tuple_type => |tuple| tuple.types,
+                    const parameter_types: []const Type = switch (parameter_tuple.data) {
+                        .tuple => |types| types,
+                        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return .unknown_type)) {
+                            .tuple_type => |tuple| types: {
+                                const types = try analyser.arena.alloc(Type, tuple.types.len);
+                                for (types, 0..) |*parameter_type, index| {
+                                    parameter_type.* = Type.fromIP(
+                                        analyser,
+                                        .type_type,
+                                        tuple.types.at(@intCast(index), analyser.ip),
+                                    );
+                                }
+                                break :types types;
+                            },
+                            else => return .unknown_type,
+                        },
                         else => return .unknown_type,
                     };
                     const noalias_bits = try analyser.resolveFnParameterAttributes(.{
@@ -9770,18 +9783,52 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
                     if (!return_type.is_type_val) return .unknown_type;
-                    const return_type_index = return_type.ipIndex() orelse return .unknown_type;
                     const flags = try analyser.resolveFnAttributes(.{
                         .node_handle = .of(params[3], handle),
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
-                    const function_type = try analyser.ip.get(.{ .function_type = .{
-                        .args = parameter_types,
-                        .args_is_noalias = noalias_bits,
-                        .return_type = return_type_index,
-                        .flags = flags,
-                    } });
-                    return Type.fromIP(analyser, .type_type, function_type);
+
+                    const parameter_indices = try analyser.gpa.alloc(InternPool.Index, parameter_types.len);
+                    defer analyser.gpa.free(parameter_indices);
+                    const can_intern = for (parameter_types, parameter_indices) |parameter_type, *parameter_index| {
+                        parameter_index.* = parameter_type.ipIndex() orelse break false;
+                    } else true;
+                    if (can_intern) {
+                        if (return_type.ipIndex()) |return_type_index| {
+                            const function_type = try analyser.ip.get(.{ .function_type = .{
+                                .args = try analyser.ip.getIndexSlice(parameter_indices),
+                                .args_is_noalias = noalias_bits,
+                                .return_type = return_type_index,
+                                .flags = flags,
+                            } });
+                            return Type.fromIP(analyser, .type_type, function_type);
+                        }
+                    }
+
+                    const function_parameters = try analyser.arena.alloc(Type.Data.Parameter, parameter_types.len);
+                    for (function_parameters, parameter_types, 0..) |*parameter, parameter_type, index| {
+                        parameter.* = .{
+                            .doc_comments = null,
+                            .modifier = if (noalias_bits.isSet(index)) .noalias_param else null,
+                            .name = null,
+                            .name_token = null,
+                            .type = parameter_type,
+                        };
+                    }
+                    const enclosing_type = options.container_type orelse
+                        try analyser.innermostContainer(handle, tree.tokenStart(tree.nodeMainToken(node)));
+                    return .{ .data = .{ .function = .{
+                        .fn_node = node,
+                        .fn_token = tree.nodeMainToken(node),
+                        .handle = handle,
+                        .container_type = try analyser.allocType(enclosing_type),
+                        .doc_comments = null,
+                        .name = null,
+                        .parameters = function_parameters,
+                        .has_varargs = flags.is_var_args,
+                        .calling_convention = flags.calling_convention,
+                        .return_value = try analyser.allocType(try return_type.instanceUnchecked(analyser)),
+                    } }, .is_type_val = true };
                 },
                 .Struct, .Union, .Enum => |tag| {
                     if (analyser.cachedGeneratedContainerType(options)) |generated_type| return generated_type;
@@ -11287,13 +11334,17 @@ pub const Type = struct {
                     }
                 },
                 .function => |info| {
-                    std.hash.autoHash(hasher, info.fn_node);
-                    std.hash.autoHash(hasher, info.fn_token);
-                    hasher.update(info.handle.uri.raw);
-                    info.container_type.hashWithHasher(hasher);
+                    if (info.name != null) {
+                        std.hash.autoHash(hasher, info.fn_node);
+                        std.hash.autoHash(hasher, info.fn_token);
+                        hasher.update(info.handle.uri.raw);
+                        info.container_type.hashWithHasher(hasher);
+                    }
                     for (info.parameters) |param| {
+                        std.hash.autoHash(hasher, param.modifier);
                         param.type.hashWithHasher(hasher);
                     }
+                    std.hash.autoHash(hasher, info.has_varargs);
                     std.hash.autoHash(hasher, info.calling_convention);
                     info.return_value.hashWithHasher(hasher);
                 },
@@ -11392,14 +11443,19 @@ pub const Type = struct {
                 },
                 .function => |a_info| {
                     const b_info = b.function;
-                    if (a_info.fn_node != b_info.fn_node) return false;
-                    if (a_info.fn_token != b_info.fn_token) return false;
-                    if (!a_info.handle.uri.eql(b_info.handle.uri)) return false;
-                    if (!a_info.container_type.eql(b_info.container_type.*)) return false;
+                    if ((a_info.name == null) != (b_info.name == null)) return false;
+                    if (a_info.name != null) {
+                        if (a_info.fn_node != b_info.fn_node) return false;
+                        if (a_info.fn_token != b_info.fn_token) return false;
+                        if (!a_info.handle.uri.eql(b_info.handle.uri)) return false;
+                        if (!a_info.container_type.eql(b_info.container_type.*)) return false;
+                    }
                     if (a_info.parameters.len != b_info.parameters.len) return false;
                     for (a_info.parameters, b_info.parameters) |a_param, b_param| {
+                        if (a_param.modifier != b_param.modifier) return false;
                         if (!a_param.type.eql(b_param.type)) return false;
                     }
+                    if (a_info.has_varargs != b_info.has_varargs) return false;
                     if (a_info.calling_convention != b_info.calling_convention) return false;
                     if (!a_info.return_value.eql(b_info.return_value.*)) return false;
                 },

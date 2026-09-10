@@ -2888,6 +2888,25 @@ test "generic function rebuilding types from comptime type info" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    const Original = fn (S) S;
+        \\    const info = @typeInfo(Original).@"fn";
+        \\    const Rebuilt = @Fn(&.{info.params[0].type.?}, &.{.{}}, info.return_type.?, .{});
+        \\    const rebuilt_info = @typeInfo(Rebuilt).@"fn";
+        \\    return if (Rebuilt == Original and rebuilt_info.params[0].type.? == S and
+        \\        rebuilt_info.return_type.? == S)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function with AST function calling convention type info" {
