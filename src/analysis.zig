@@ -3603,12 +3603,62 @@ fn resolveIntegerDivisionValue(
     return analyser.intValueWithType(result_type, value);
 }
 
+fn resolveIntegerBoundaryComparison(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) ?bool {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (lhs_payload.type != rhs_payload.type or analyser.ip.zigTypeTag(lhs_payload.type) != .int) return null;
+    if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+    if (rhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+
+    const lhs_value = if (lhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    if ((lhs_value == null) == (rhs_value == null)) return null;
+
+    const int_info = analyser.ip.intInfo(lhs_payload.type, builtin.target);
+    if (int_info.bits == 0 or int_info.bits > 128) return null;
+    const min_value: i256 = switch (int_info.signedness) {
+        .signed => -(@as(i256, 1) << @intCast(int_info.bits - 1)),
+        .unsigned => 0,
+    };
+    const max_value: i256 = switch (int_info.signedness) {
+        .signed => (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1,
+        .unsigned => (@as(i256, 1) << @intCast(int_info.bits)) - 1,
+    };
+    return if (lhs_value) |value| switch (tag) {
+        .less_than => if (value == max_value) false else null,
+        .less_or_equal => if (value == min_value) true else null,
+        .greater_than => if (value == min_value) false else null,
+        .greater_or_equal => if (value == max_value) true else null,
+        else => null,
+    } else if (rhs_value) |value| switch (tag) {
+        .less_than => if (value == min_value) false else null,
+        .less_or_equal => if (value == max_value) true else null,
+        .greater_than => if (value == max_value) false else null,
+        .greater_or_equal => if (value == min_value) true else null,
+        else => null,
+    } else null;
+}
+
 fn resolveComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
     lhs: Type,
     rhs: Type,
 ) ?Type {
+    if (analyser.resolveIntegerBoundaryComparison(tag, lhs, rhs)) |value| {
+        return Type.fromIP(analyser, .bool_type, if (value) .bool_true else .bool_false);
+    }
     if (lhs.data == .enum_value and rhs.data == .enum_value) {
         const lhs_value = lhs.data.enum_value;
         const rhs_value = rhs.data.enum_value;

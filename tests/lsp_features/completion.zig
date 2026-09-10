@@ -1032,6 +1032,26 @@ test "generic function with partially known boolean operators" {
     });
 }
 
+test "generic function with integer comparison boundaries" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: i8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime_u8 <= @as(u8, 255) and runtime_u8 >= @as(u8, 0) and
+        \\        !(runtime_u8 > @as(u8, 255)) and !(runtime_u8 < @as(u8, 0)) and
+        \\        runtime_i8 <= @as(i8, 127) and runtime_i8 >= @as(i8, -128) and
+        \\        !(runtime_i8 > @as(i8, 127)) and !(runtime_i8 < @as(i8, -128)))
+        \\        struct { bounded: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "bounded", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector int from bool" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
