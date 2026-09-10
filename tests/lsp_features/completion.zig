@@ -2226,6 +2226,28 @@ test "generic function with partially known vector min max" {
     });
 }
 
+test "generic function with partially known scalar min max" {
+    try testCompletion(
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const signed_min = @min(runtime_i8, @as(i8, -128));
+        \\    const signed_max = @max(runtime_i8, @as(i8, 127));
+        \\    const unsigned_min = @min(runtime_u8, @as(u8, 0));
+        \\    const unsigned_max = @max(runtime_u8, @as(u8, 255));
+        \\    return if (signed_min == -128 and signed_max == 127 and
+        \\        unsigned_min == 0 and unsigned_max == 255)
+        \\        struct { bounded: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "bounded", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime local constants" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

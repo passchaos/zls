@@ -2658,6 +2658,27 @@ fn intValueWithType(
     return Type.fromIP(analyser, result_type, coerced);
 }
 
+const IntegerBounds = struct {
+    min: i256,
+    max: i256,
+};
+
+fn fixedWidthIntegerBounds(analyser: *Analyser, int_type: InternPool.Index) ?IntegerBounds {
+    if (analyser.ip.zigTypeTag(int_type) != .int) return null;
+    const info = analyser.ip.intInfo(int_type, builtin.target);
+    if (info.bits == 0 or info.bits > 128) return null;
+    return switch (info.signedness) {
+        .signed => .{
+            .min = -(@as(i256, 1) << @intCast(info.bits - 1)),
+            .max = (@as(i256, 1) << @intCast(info.bits - 1)) - 1,
+        },
+        .unsigned => .{
+            .min = 0,
+            .max = (@as(i256, 1) << @intCast(info.bits)) - 1,
+        },
+    };
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2777,19 +2798,14 @@ fn resolveVectorBinaryValue(
     const rhs_values = analyser.aggregateValues(rhs);
     if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
-    const absorbing_value: ?i256 = absorbing: {
-        if (analyser.ip.zigTypeTag(result_vector.child) != .int) break :absorbing null;
-        const int_info = analyser.ip.intInfo(result_vector.child, builtin.target);
-        if (int_info.bits == 0 or int_info.bits > 128) break :absorbing null;
-        break :absorbing switch (tag) {
+    const absorbing_value: ?i256 = if (analyser.fixedWidthIntegerBounds(result_vector.child)) |bounds|
+        switch (tag) {
             .mul, .bit_and => 0,
-            .bit_or => if (int_info.signedness == .signed)
-                -1
-            else
-                (@as(i256, 1) << @intCast(int_info.bits)) - 1,
+            .bit_or => if (bounds.min < 0) -1 else bounds.max,
             else => null,
-        };
-    };
+        }
+    else
+        null;
     const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(values);
     const unknown_lhs = try analyser.ip.getUnknown(lhs_vector.child);
@@ -3393,21 +3409,12 @@ fn resolveReduceValue(
     for (0..values.len) |i| {
         if (analyser.ip.isUndefined(values.at(@intCast(i), analyser.ip))) return null;
     }
-    const int_info = analyser.ip.intInfo(vector.child, builtin.target);
-    if (int_info.bits > 0 and int_info.bits <= 128) {
-        const min_value: i256 = switch (int_info.signedness) {
-            .signed => -(@as(i256, 1) << @intCast(int_info.bits - 1)),
-            .unsigned => 0,
-        };
-        const max_value: i256 = switch (int_info.signedness) {
-            .signed => (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1,
-            .unsigned => (@as(i256, 1) << @intCast(int_info.bits)) - 1,
-        };
+    if (analyser.fixedWidthIntegerBounds(vector.child)) |bounds| {
         const absorbing_value: ?i256 = switch (operation) {
             .Mul, .And => 0,
-            .Or => if (int_info.signedness == .signed) -1 else max_value,
-            .Min => min_value,
-            .Max => max_value,
+            .Or => if (bounds.min < 0) -1 else bounds.max,
+            .Min => bounds.min,
+            .Max => bounds.max,
             else => null,
         };
         if (absorbing_value) |absorbing| {
@@ -3625,27 +3632,18 @@ fn resolveIntegerBoundaryComparison(
     const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
     if ((lhs_value == null) == (rhs_value == null)) return null;
 
-    const int_info = analyser.ip.intInfo(lhs_payload.type, builtin.target);
-    if (int_info.bits == 0 or int_info.bits > 128) return null;
-    const min_value: i256 = switch (int_info.signedness) {
-        .signed => -(@as(i256, 1) << @intCast(int_info.bits - 1)),
-        .unsigned => 0,
-    };
-    const max_value: i256 = switch (int_info.signedness) {
-        .signed => (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1,
-        .unsigned => (@as(i256, 1) << @intCast(int_info.bits)) - 1,
-    };
+    const bounds = analyser.fixedWidthIntegerBounds(lhs_payload.type) orelse return null;
     return if (lhs_value) |value| switch (tag) {
-        .less_than => if (value == max_value) false else null,
-        .less_or_equal => if (value == min_value) true else null,
-        .greater_than => if (value == min_value) false else null,
-        .greater_or_equal => if (value == max_value) true else null,
+        .less_than => if (value == bounds.max) false else null,
+        .less_or_equal => if (value == bounds.min) true else null,
+        .greater_than => if (value == bounds.min) false else null,
+        .greater_or_equal => if (value == bounds.max) true else null,
         else => null,
     } else if (rhs_value) |value| switch (tag) {
-        .less_than => if (value == min_value) false else null,
-        .less_or_equal => if (value == max_value) true else null,
-        .greater_than => if (value == max_value) false else null,
-        .greater_or_equal => if (value == min_value) true else null,
+        .less_than => if (value == bounds.min) false else null,
+        .less_or_equal => if (value == bounds.max) true else null,
+        .greater_than => if (value == bounds.max) false else null,
+        .greater_or_equal => if (value == bounds.min) true else null,
         else => null,
     } else null;
 }
@@ -3808,22 +3806,14 @@ fn resolveVectorMinMaxValue(
     const result_values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(result_values);
     const unknown = try analyser.ip.getUnknown(result_vector.child);
-    const boundary: ?i256 = boundary: {
-        if (analyser.ip.zigTypeTag(result_vector.child) != .int) break :boundary null;
-        const int_info = analyser.ip.intInfo(result_vector.child, builtin.target);
-        if (int_info.bits == 0 or int_info.bits > 128) break :boundary null;
-        break :boundary switch (tag) {
-            .min => switch (int_info.signedness) {
-                .signed => -(@as(i256, 1) << @intCast(int_info.bits - 1)),
-                .unsigned => 0,
-            },
-            .max => switch (int_info.signedness) {
-                .signed => (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1,
-                .unsigned => (@as(i256, 1) << @intCast(int_info.bits)) - 1,
-            },
+    const boundary: ?i256 = if (analyser.fixedWidthIntegerBounds(result_vector.child)) |bounds|
+        switch (tag) {
+            .min => bounds.min,
+            .max => bounds.max,
             else => null,
-        };
-    };
+        }
+    else
+        null;
 
     for (result_values, 0..) |*result_value, i| {
         var selected: ?Type = null;
@@ -5790,6 +5780,27 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (analyser.ip.zigTypeTag(result_type) == .vector) {
                         return try analyser.resolveVectorMinMaxValue(tag, resolved, result_type) orelse
                             Type.fromIP(analyser, result_type, null);
+                    }
+                    if (analyser.fixedWidthIntegerBounds(result_type)) |bounds| {
+                        const boundary = switch (tag) {
+                            .min => bounds.min,
+                            .max => bounds.max,
+                            else => unreachable,
+                        };
+                        var has_boundary = false;
+                        var has_undefined = false;
+                        for (resolved) |value| {
+                            const index = value.ipIndex() orelse continue;
+                            if (analyser.ip.isUndefined(index)) {
+                                has_undefined = true;
+                                continue;
+                            }
+                            if (analyser.ip.toInt(index, i256) == boundary) has_boundary = true;
+                        }
+                        if (has_boundary and !has_undefined) {
+                            return try analyser.intValueWithType(result_type, boundary) orelse
+                                Type.fromIP(analyser, result_type, null);
+                        }
                     }
 
                     var selected = resolved[0];

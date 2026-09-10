@@ -469,6 +469,18 @@ const mixed_float_min_value = @min(@as(f32, 2.5), 4);
 //    ^^^^^^^^^^^^^^^^^^^^^ (f32)(2.5)
 const mixed_float_max_value = @max(4, @as(f64, 2.5));
 //    ^^^^^^^^^^^^^^^^^^^^^ (f64)(4)
+const scalar_min_runtime_boundary = @min(runtime_i8, @as(i8, -128));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-128)
+const scalar_max_runtime_boundary = @max(runtime_i8, @as(i8, 127));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(127)
+const scalar_min_unsigned_boundary = @min(runtime_u8, @as(u8, 0));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const scalar_max_unsigned_boundary = @max(runtime_u8, @as(u8, 255));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const scalar_min_runtime_middle = @min(runtime_i8, @as(i8, -10));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const scalar_min_undefined_boundary = @min(@as(i8, undefined), @as(i8, -128));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
 const float_min_negative_zero = @min(@as(f32, 0.0), @as(f32, -0.0));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-0)
 const float_max_positive_zero = @max(@as(f64, -0.0), @as(f64, 0.0));
