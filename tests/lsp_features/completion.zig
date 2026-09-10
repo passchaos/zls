@@ -1835,6 +1835,26 @@ test "generic function with comptime size builtins" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u13" },
     });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const buffer: Buffer(u24) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "bytes", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    return struct { bytes: [@sizeOf(T)]u8 };
+        \\}
+        \\const buffer: Buffer(u40) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "bytes", .kind = .Field, .detail = "[8]u8" },
+    });
 }
 
 test "generic function with comptime Int type constructor" {
@@ -2876,6 +2896,32 @@ test "generic function with comptime alignOf" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    return if (@alignOf(T) == 4)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(f32) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "f32" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    return if (@alignOf(T) == 16)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(f80) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "f80" },
     });
 }
 

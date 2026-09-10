@@ -1004,6 +1004,10 @@ const align_of_void = @alignOf(void);
 //    ^^^^^^^^^^^^^ (comptime_int)(1)
 const align_of_generated_enum = @alignOf(ConcreteEnum);
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
+const align_of_f32 = @alignOf(f32);
+//    ^^^^^^^^^^^^ (comptime_int)(4)
+const align_of_f80 = @alignOf(f80);
+//    ^^^^^^^^^^^^ (comptime_int)(16)
 const bit_size_of_ast_enum = @bitSizeOf(enum(u13) { value = 1 });
 //    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)(13)
 const byte_size_of_ast_enum = @sizeOf(enum(u13) { value = 1 });
@@ -1012,6 +1016,10 @@ const bit_size_of_generated_enum = @bitSizeOf(@Enum(u13, .exhaustive, &.{"value"
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(13)
 const byte_size_of_generated_enum = @sizeOf(@Enum(u13, .exhaustive, &.{"value"}, &.{1}));
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(2)
+const byte_size_of_u24 = @sizeOf(u24);
+//    ^^^^^^^^^^^^^^^^ (comptime_int)(4)
+const byte_size_of_u40 = @sizeOf(u40);
+//    ^^^^^^^^^^^^^^^^ (comptime_int)(8)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()

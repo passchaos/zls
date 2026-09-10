@@ -7066,7 +7066,10 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
             const type_index = payload.index orelse break :blk null;
             const type_tag = analyser.ip.zigTypeTag(type_index) orelse break :blk null;
             break :blk switch (type_tag) {
-                .int => (@as(u64, analyser.ip.intInfo(type_index, builtin.target).bits) + 7) / 8,
+                .int => std.zig.target.intByteSize(
+                    &builtin.target,
+                    analyser.ip.intInfo(type_index, builtin.target).bits,
+                ),
                 .float => switch (type_index) {
                     .f80_type => @sizeOf(f80),
                     .c_longdouble_type => builtin.target.cTypeByteSize(.longdouble),
@@ -7121,6 +7124,24 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                     analyser.ip.intInfo(type_index, builtin.target).bits,
                 ),
                 .bool, .void, .noreturn => 1,
+                .float => switch (type_index) {
+                    .f16_type => 2,
+                    .f32_type => builtin.target.cTypeAlignment(.float),
+                    .f64_type => if (builtin.target.cTypeBitSize(.double) == 64)
+                        builtin.target.cTypeAlignment(.double)
+                    else
+                        8,
+                    .f80_type => if (builtin.target.cTypeBitSize(.longdouble) == 80)
+                        builtin.target.cTypeAlignment(.longdouble)
+                    else
+                        std.zig.target.intAlignment(&builtin.target, 80),
+                    .f128_type => if (builtin.target.cTypeBitSize(.longdouble) == 128)
+                        builtin.target.cTypeAlignment(.longdouble)
+                    else
+                        16,
+                    .c_longdouble_type => builtin.target.cTypeAlignment(.longdouble),
+                    else => break :blk null,
+                },
                 .pointer => std.zig.target.intAlignment(&builtin.target, builtin.target.ptrBitWidth()),
                 .array => try analyser.resolveTypeAlignment(Type.fromIP(
                     analyser,
