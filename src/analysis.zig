@@ -1060,6 +1060,15 @@ fn findKnownReturnExpression(
             const else_expr = while_node.ast.else_expr.unwrap() orelse break :blk .continues;
             break :blk try analyser.findKnownReturnExpression(handle, else_expr);
         },
+        .@"for", .for_simple => blk: {
+            const for_node = ast.fullFor(tree, node).?;
+            for (for_node.ast.inputs) |input| {
+                if (!try analyser.isKnownEmptyForInput(input, handle, null)) continue;
+                const else_expr = for_node.ast.else_expr.unwrap() orelse break :blk .continues;
+                break :blk try analyser.findKnownReturnExpression(handle, else_expr);
+            }
+            break :blk if (findReturnStatement(tree, node) != null) .unknown else .continues;
+        },
         .@"switch", .switch_comma => blk: {
             if (try analyser.resolveKnownSwitchTarget(.of(node, handle))) |target| {
                 break :blk analyser.findKnownReturnExpression(handle, target);

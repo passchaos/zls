@@ -3352,6 +3352,36 @@ test "generic function with empty for expression" {
     });
 }
 
+test "generic function with empty for return statements" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    for (N..N) |_| {
+        \\        return struct { unreachable_body: u8 };
+        \\    }
+        \\    return struct { selected: [N]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    for ([_]u8{}) |_| {
+        \\        return struct { unreachable_body: u8 };
+        \\    } else {
+        \\        return struct { selected_else: [N]u8 };
+        \\    }
+        \\    return struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected_else", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime while return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
