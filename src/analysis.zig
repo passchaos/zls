@@ -3483,9 +3483,7 @@ fn resolveShuffleValue(
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
     const mask_values = analyser.aggregateValues(mask);
-    if (lhs_values == null or rhs_values == null or mask_values == null) {
-        return Type.fromIP(analyser, result_type, null);
-    }
+    if (mask_values == null) return Type.fromIP(analyser, result_type, null);
 
     const values = try analyser.gpa.alloc(InternPool.Index, mask_vector.len);
     defer analyser.gpa.free(values);
@@ -3496,13 +3494,13 @@ fn resolveShuffleValue(
         };
         if (mask_value >= 0) {
             const index: u64 = @intCast(mask_value);
-            value.* = if (index < lhs_vector.len)
+            value.* = if (index < lhs_vector.len and lhs_values != null)
                 lhs_values.?.at(@intCast(index), analyser.ip)
             else
                 try analyser.ip.getUnknown(element_type);
         } else {
             const index: u64 = @intCast(~mask_value);
-            value.* = if (index < rhs_vector.len)
+            value.* = if (index < rhs_vector.len and rhs_values != null)
                 rhs_values.?.at(@intCast(index), analyser.ip)
             else
                 try analyser.ip.getUnknown(element_type);

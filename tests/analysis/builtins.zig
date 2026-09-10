@@ -230,6 +230,22 @@ const unequal_shuffle_value = @shuffle(
 );
 const unequal_shuffle_value_index = unequal_shuffle_value[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(5)
+const shuffle_runtime_lhs = @shuffle(
+    u8,
+    @as(@Vector(2, u8), @splat(runtime_u8)),
+    @as(@Vector(2, u8), .{ 3, 4 }),
+    @Vector(2, i32){ -1, -2 },
+);
+const shuffle_runtime_lhs_value = shuffle_runtime_lhs[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(3)
+const shuffle_runtime_rhs = @shuffle(
+    u8,
+    @as(@Vector(2, u8), .{ 5, 6 }),
+    @as(@Vector(2, u8), @splat(runtime_u8)),
+    @Vector(2, i32){ 0, 1 },
+);
+const shuffle_runtime_rhs_value = shuffle_runtime_rhs[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(6)
 
 const invalid_builtin_00 = @sqrt(null);
 //    ^^^^^^^^^^^^^^^^^^ (unknown)()

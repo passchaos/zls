@@ -991,6 +991,35 @@ test "generic function with comptime vector shuffle" {
     });
 }
 
+test "generic function with partially known vector shuffle" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const runtime_lhs = @shuffle(
+        \\        u8,
+        \\        @as(@Vector(2, u8), @splat(runtime)),
+        \\        @as(@Vector(2, u8), .{ N, N + 1 }),
+        \\        @Vector(2, i32){ -1, -2 },
+        \\    );
+        \\    const runtime_rhs = @shuffle(
+        \\        u8,
+        \\        @as(@Vector(2, u8), .{ N + 2, N + 3 }),
+        \\        @as(@Vector(2, u8), @splat(runtime)),
+        \\        @Vector(2, i32){ 0, 1 },
+        \\    );
+        \\    return if (runtime_lhs[0] == 4 and runtime_lhs[1] == 5 and
+        \\        runtime_rhs[0] == 6 and runtime_rhs[1] == 7)
+        \\        struct { shuffled: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "shuffled", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {
