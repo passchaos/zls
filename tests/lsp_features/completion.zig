@@ -2920,6 +2920,34 @@ test "generic function with comptime switch return statements" {
     });
 }
 
+test "generic function with comptime while return statements" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    while (!enabled) {
+        \\        return struct { unreachable_branch: u8 };
+        \\    }
+        \\    return struct { selected: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    while (!enabled) {} else {
+        \\        return struct { selected_else: u8 };
+        \\    }
+        \\    return struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected_else", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
