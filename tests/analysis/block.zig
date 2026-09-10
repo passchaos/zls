@@ -75,6 +75,16 @@ const while_true_value = while (true) {
     break @as(u8, 4);
 } else @as(u16, 300);
 
+const while_false_void = while (false) {
+//    ^^^^^^^^^^^^^^^^ (void)()
+    unreachable;
+};
+
+const while_true_break_value = while (true) {
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(4)
+    break @as(u8, 4);
+};
+
 const for_else_peer = for ([_]u8{ 1, 2 }) |_| {
     if (runtime_condition) break @as(u8, 1);
     break @as(u16, 300);

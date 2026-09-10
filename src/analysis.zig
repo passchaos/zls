@@ -7292,7 +7292,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             else
                 unreachable;
 
-            const else_expr = loop.else_expr.unwrap() orelse return null;
+            const else_expr = loop.else_expr.unwrap();
             const known_condition = if (loop.condition_expr) |condition_expr|
                 try analyser.resolveIfConditionValue(.{
                     .node_handle = .of(condition_expr, handle),
@@ -7301,14 +7301,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             else
                 null;
             if (known_condition == false) {
+                const selected = else_expr orelse return Type.fromIP(analyser, .void_type, .void_value);
                 return try analyser.resolveTypeOfNodeInternal(.{
-                    .node_handle = .of(else_expr, handle),
+                    .node_handle = .of(selected, handle),
                     .container_type = options.container_type,
                 });
             }
+            if (known_condition != true and else_expr == null) return null;
+
             var results: std.ArrayList(Type.TypeWithDescriptor) = .empty;
             if (known_condition != true) {
-                if (try analyser.resolveTypeOfNodeInternal(.of(else_expr, handle))) |else_type| {
+                if (try analyser.resolveTypeOfNodeInternal(.of(else_expr.?, handle))) |else_type| {
                     try results.append(analyser.arena, .{
                         .type = if (analyser.evaluate_comptime_values) else_type else else_type.withoutIPIndex(analyser),
                         .descriptor = "else",

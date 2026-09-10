@@ -3277,6 +3277,35 @@ test "generic function with comptime while expression branches" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool, comptime N: u8) type {
+        \\    const count = while (enabled) {
+        \\        break N;
+        \\    };
+        \\    return struct { selected: [count]u8 };
+        \\}
+        \\const selected: Select(true, 4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    const value = while (enabled) {
+        \\        unreachable;
+        \\    };
+        \\    return if (@TypeOf(value) == void)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(false) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime while return statements" {
