@@ -1275,11 +1275,19 @@ pub fn resolveCatchType(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMe
 }
 
 fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
-    if (!ty.is_type_val)
-        return null;
+    if (!ty.is_type_val) return null;
 
-    if (!ty.isTaggedUnion())
-        return null;
+    if (ty.data == .ip_index) {
+        const type_index = ty.data.ip_index.index orelse return null;
+        const union_info = switch (analyser.ip.indexToKey(type_index)) {
+            .union_type => |union_index| analyser.ip.getUnion(union_index),
+            else => return null,
+        };
+        if (union_info.tag_type == .none) return null;
+        return Type.fromIP(analyser, union_info.tag_type, null);
+    }
+
+    if (!ty.isTaggedUnion()) return null;
 
     const scope_handle = switch (ty.data) {
         .container => |info| info.scope_handle,
@@ -5778,10 +5786,19 @@ fn resolveUnionTypeConstructor(
     if (params.len != 5) return null;
     const layout = try analyser.resolveContainerLayout(.of(params[0], handle)) orelse return null;
     if (layout != .auto) return null;
-    if (!try analyser.isNullComptimeValue(.{
+    const tag_type_value = try analyser.resolveComptimeValue(.{
         .node_handle = .of(params[1], handle),
         .container_type = container_type,
-    })) return null;
+    }) orelse return null;
+    const tag_type: InternPool.Index = if (tag_type_value.ipIndex()) |index|
+        if (analyser.ip.isNull(index))
+            .none
+        else if (tag_type_value.is_type_val and analyser.ip.zigTypeTag(index) == .@"enum")
+            index
+        else
+            return null
+    else
+        return null;
 
     const names = try analyser.resolveStringListLiteral(.{
         .node_handle = .of(params[2], handle),
@@ -5803,6 +5820,14 @@ fn resolveUnionTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
     defer analyser.gpa.free(field_types);
+    if (tag_type != .none) {
+        const enum_info = analyser.ip.getEnum(analyser.ip.indexToKey(tag_type).enum_type);
+        if (enum_info.fields.count() != names.len) return null;
+        for (enum_info.fields.keys(), names) |enum_name, union_name| {
+            const interned_union_name = analyser.ip.string_pool.getString(analyser.store.io, union_name) orelse return null;
+            if (enum_name != interned_union_name) return null;
+        }
+    }
 
     var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Union.Field) = .empty;
     errdefer fields.deinit(analyser.gpa);
@@ -5813,7 +5838,7 @@ fn resolveUnionTypeConstructor(
     }
 
     const union_index = try analyser.ip.createUnion(.{
-        .tag_type = .none,
+        .tag_type = tag_type,
         .fields = fields,
         .namespace = .none,
         .layout = .auto,

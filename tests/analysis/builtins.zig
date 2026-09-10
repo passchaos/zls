@@ -812,6 +812,11 @@ const ConcreteUnion = @Union(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{
 //    ^^^^^^^^^^^^^ (type)(union { foo: u8, bar: i16 })
 const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
 //    ^^^^^^^^^^^^ (type)(union { value: u8 align(4) })
+const GeneratedUnionTag = @Enum(u8, .exhaustive, &.{ "foo", "bar" }, &.{ 1, 2 });
+const TaggedUnion = @Union(.auto, GeneratedUnionTag, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^ (type)(union(enum(u8) { foo = 1, bar = 2 }) { foo: u8, bar: i16 })
+const generated_union_tag = @typeInfo(TaggedUnion).@"union".tag_type.?;
+//    ^^^^^^^^^^^^^^^^^^^ (type)(enum(u8) { foo = 1, bar = 2 })
 const GeneratedUnionFieldType = @FieldType(ConcreteUnion, "bar");
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
 const GeneratedUnionHasField = @hasField(ConcreteUnion, "foo");

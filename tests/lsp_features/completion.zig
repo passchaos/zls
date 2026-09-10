@@ -2184,6 +2184,23 @@ test "generic function with comptime Union type constructor" {
     , &.{
         .{ .label = "value", .kind = .Field, .detail = "value: align(4) u8" },
     });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "value", "enabled" }, &.{ 1, 2 });
+        \\    const U = @Union(.auto, Tag, &.{ "value", "enabled" }, &.{ T, bool }, &.{ .{}, .{} });
+        \\    const info = @typeInfo(U).@"union";
+        \\    return if (info.tag_type.? == Tag and std.meta.Tag(U) == Tag)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function with comptime generated Union values" {
