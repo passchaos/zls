@@ -487,6 +487,15 @@ const vector_max = @max(
 );
 const vector_max_value = vector_max[1];
 //    ^^^^^^^^^^^^^^^^ (i8)(7)
+var runtime_i8_vector: @Vector(2, i8) = undefined;
+const vector_min_runtime_boundary = @min(runtime_i8_vector, @as(@Vector(2, i8), @splat(-128)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-128)
+const vector_max_runtime_boundary = @max(runtime_i8_vector, @as(@Vector(2, i8), @splat(127)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(127)
+const vector_min_runtime_middle = @min(runtime_i8_vector, @as(@Vector(2, i8), @splat(-10)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_min_undefined_boundary = @min(@as(@Vector(2, i8), .{ undefined, 0 }), @as(@Vector(2, i8), @splat(-128)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
 const vector_min_zero = @min(@as(@Vector(2, f32), .{ 0.0, 2.0 }), @as(@Vector(2, f32), .{ -0.0, 3.0 }))[0];
 //    ^^^^^^^^^^^^^^^ (f32)(-0)
 const vector_max_zero = @max(@as(@Vector(2, f32), .{ -0.0, 2.0 }), @as(@Vector(2, f32), .{ 0.0, 3.0 }))[0];

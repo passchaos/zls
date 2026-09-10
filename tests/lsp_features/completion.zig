@@ -2208,6 +2208,24 @@ test "generic function with comptime vector min max" {
     });
 }
 
+test "generic function with partially known vector min max" {
+    try testCompletion(
+        \\var runtime: @Vector(2, i8) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const minimum = @min(runtime, @as(@Vector(2, i8), @splat(-128)));
+        \\    const maximum = @max(runtime, @as(@Vector(2, i8), @splat(127)));
+        \\    return if (minimum[0] == -128 and maximum[1] == 127)
+        \\        struct { bounded: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "bounded", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime local constants" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

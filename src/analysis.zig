@@ -3807,9 +3807,28 @@ fn resolveVectorMinMaxValue(
     };
     const result_values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(result_values);
+    const unknown = try analyser.ip.getUnknown(result_vector.child);
+    const boundary: ?i256 = boundary: {
+        if (analyser.ip.zigTypeTag(result_vector.child) != .int) break :boundary null;
+        const int_info = analyser.ip.intInfo(result_vector.child, builtin.target);
+        if (int_info.bits == 0 or int_info.bits > 128) break :boundary null;
+        break :boundary switch (tag) {
+            .min => switch (int_info.signedness) {
+                .signed => -(@as(i256, 1) << @intCast(int_info.bits - 1)),
+                .unsigned => 0,
+            },
+            .max => switch (int_info.signedness) {
+                .signed => (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1,
+                .unsigned => (@as(i256, 1) << @intCast(int_info.bits)) - 1,
+            },
+            else => null,
+        };
+    };
 
     for (result_values, 0..) |*result_value, i| {
         var selected: ?Type = null;
+        var has_unknown = false;
+        var has_undefined = false;
         for (operands) |operand| {
             const payload = switch (operand.data) {
                 .ip_index => |payload| payload,
@@ -3820,8 +3839,21 @@ fn resolveVectorMinMaxValue(
                 else => return null,
             };
             if (vector.len != result_vector.len) return null;
-            const values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, result_type, null);
-            const candidate = Type.fromIP(analyser, vector.child, values.at(@intCast(i), analyser.ip));
+            const values = analyser.aggregateValues(operand) orelse {
+                has_unknown = true;
+                continue;
+            };
+            if (values.len != vector.len) return null;
+            const candidate_index = values.at(@intCast(i), analyser.ip);
+            if (analyser.ip.isUndefined(candidate_index)) {
+                has_undefined = true;
+                continue;
+            }
+            if (candidate_index == .none or analyser.ip.isUnknown(candidate_index)) {
+                has_unknown = true;
+                continue;
+            }
+            const candidate = Type.fromIP(analyser, vector.child, candidate_index);
             if (selected == null) {
                 selected = candidate;
                 continue;
@@ -3844,13 +3876,25 @@ fn resolveVectorMinMaxValue(
                 }
             }
         }
-        const selected_index = selected.?.ipIndex() orelse return Type.fromIP(analyser, result_type, null);
-        result_value.* = if (analyser.ip.zigTypeTag(result_vector.child) == .float)
+        if (has_undefined or selected == null) {
+            result_value.* = unknown;
+            continue;
+        }
+        const selected_index = selected.?.ipIndex() orelse {
+            result_value.* = unknown;
+            continue;
+        };
+        const coerced = if (analyser.ip.zigTypeTag(result_vector.child) == .float)
             try analyser.coerceNumericToFloatValue(result_vector.child, selected_index) orelse
-                try analyser.ip.getUnknown(result_vector.child)
+                unknown
         else
             try analyser.coerceIP(result_vector.child, selected_index) orelse
-                try analyser.ip.getUnknown(result_vector.child);
+                unknown;
+        if (has_unknown and (boundary == null or analyser.ip.toInt(coerced, i256) != boundary.?)) {
+            result_value.* = unknown;
+        } else {
+            result_value.* = coerced;
+        }
     }
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), result_values);
 }
