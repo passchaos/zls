@@ -921,6 +921,25 @@ test "generic function with comptime vector wrapping and saturating arithmetic" 
     });
 }
 
+test "generic function with partially known vector wrapping and saturating arithmetic" {
+    try testCompletion(
+        \\var runtime: @Vector(2, u8) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const zeros: @Vector(2, u8) = @splat(0);
+        \\    const maximums: @Vector(2, u8) = @splat(255);
+        \\    return if ((runtime *% zeros)[0] == 0 and (runtime *| zeros)[1] == 0 and
+        \\        (runtime +| maximums)[0] == 255 and (zeros -| runtime)[1] == 0)
+        \\        struct { evaluated: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector shifts" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

@@ -148,6 +148,18 @@ const vector_integer_add_runtime = (runtime_u8_vector + @as(@Vector(2, u8), @spl
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const vector_integer_mul_undefined = (@as(@Vector(2, u8), .{ undefined, 1 }) * @as(@Vector(2, u8), @splat(0)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const vector_mul_wrap_zero_runtime = (runtime_u8_vector *% @as(@Vector(2, u8), @splat(0)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_mul_sat_zero_runtime = (runtime_u8_vector *| @as(@Vector(2, u8), @splat(0)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_add_sat_max_runtime = (runtime_u8_vector +| @as(@Vector(2, u8), @splat(255)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const vector_sub_sat_zero_runtime = (@as(@Vector(2, u8), @splat(0)) -| runtime_u8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_add_wrap_runtime = (runtime_u8_vector +% @as(@Vector(2, u8), @splat(0)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const vector_mul_wrap_undefined = (@as(@Vector(2, u8), .{ undefined, 1 }) *% @as(@Vector(2, u8), @splat(0)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;
