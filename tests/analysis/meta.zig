@@ -73,3 +73,14 @@ const optional_pointer_alignment = std.meta.alignment(?*align(32) MetaNominal);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(32)
 const implicit_pointer_alignment = std.meta.alignment(*u16);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(2)
+
+const FieldStruct = struct { alpha: u8, beta: u16 };
+const StructFieldEnum = std.meta.FieldEnum(FieldStruct);
+//    ^^^^^^^^^^^^^^^ (type)(enum(u1) { alpha = 0, beta = 1 })
+const FieldUnion = union { alpha: u8, beta: u16 };
+const UnionFieldEnum = std.meta.FieldEnum(FieldUnion);
+//    ^^^^^^^^^^^^^^ (type)(enum(u1) { alpha = 0, beta = 1 })
+const ConsecutiveTag = enum { alpha, beta };
+const ConsecutiveUnion = union(ConsecutiveTag) { alpha: u8, beta: u16 };
+const ReusedFieldEnum = std.meta.FieldEnum(ConsecutiveUnion);
+//    ^^^^^^^^^^^^^^^ (type)(ConsecutiveTag)

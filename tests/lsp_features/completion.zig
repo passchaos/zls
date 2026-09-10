@@ -2459,6 +2459,43 @@ test "generic function with comptime std meta type utilities" {
     });
 }
 
+test "generic function with comptime std meta FieldEnum" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T, enabled: bool };
+        \\    const Fields = std.meta.FieldEnum(S);
+        \\    return if (@typeInfo(Fields).@"enum".fields.len == 2 and
+        \\        @tagName(Fields.value)[0] == 'v' and @intFromEnum(Fields.enabled) == 1)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const Tag = enum { value, enabled };
+        \\    const U = union(Tag) { value: T, enabled: bool };
+        \\    const Untagged = union { value: T, enabled: bool };
+        \\    const Generated = std.meta.FieldEnum(Untagged);
+        \\    return if (std.meta.FieldEnum(U) == Tag and @intFromEnum(Generated.enabled) == 1)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

@@ -1371,6 +1371,142 @@ fn resolveArgsTupleType(analyser: *Analyser, function_type: Type) Error!?Type {
     return try Type.createTupleType(analyser, parameter_types);
 }
 
+fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const []const u8 {
+    if (!container_type.is_type_val) return null;
+    return switch (container_type.data) {
+        .tuple => |fields| blk: {
+            const names = try analyser.arena.alloc([]const u8, fields.len);
+            for (names, 0..) |*name, index| {
+                name.* = try std.fmt.allocPrint(analyser.arena, "{d}", .{index});
+            }
+            break :blk names;
+        },
+        .container => blk: {
+            const kind = container_type.getContainerKind() orelse return null;
+            if (kind != .keyword_struct and kind != .keyword_union and kind != .keyword_enum) return null;
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
+            const skip_discard = kind == .keyword_enum;
+            const count = if (skip_discard)
+                astEnumFieldCount(info.declaration, info.handle)
+            else
+                astContainerFieldCount(info.declaration, info.handle);
+            const names = try analyser.arena.alloc([]const u8, count);
+            var index: usize = 0;
+            for (info.declaration.ast.members) |member| {
+                const field = info.handle.tree.fullContainerField(member) orelse continue;
+                const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
+                if (skip_discard and std.mem.eql(u8, name, "_")) continue;
+                names[index] = name;
+                index += 1;
+            }
+            break :blk names;
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .struct_type => |struct_index| blk: {
+                const fields = analyser.ip.getStruct(struct_index).fields;
+                const names = try analyser.arena.alloc([]const u8, fields.count());
+                for (fields.keys(), names) |field_name, *name| {
+                    name.* = try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, field_name);
+                }
+                break :blk names;
+            },
+            .union_type => |union_index| blk: {
+                const fields = analyser.ip.getUnion(union_index).fields;
+                const names = try analyser.arena.alloc([]const u8, fields.count());
+                for (fields.keys(), names) |field_name, *name| {
+                    name.* = try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, field_name);
+                }
+                break :blk names;
+            },
+            .enum_type => |enum_index| blk: {
+                const fields = analyser.ip.getEnum(enum_index).fields;
+                const names = try analyser.arena.alloc([]const u8, fields.count());
+                for (fields.keys(), names) |field_name, *name| {
+                    name.* = try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, field_name);
+                }
+                break :blk names;
+            },
+            .error_set_type => |error_set| blk: {
+                const names = try analyser.arena.alloc([]const u8, error_set.names.len);
+                for (names, 0..) |*name, index| {
+                    name.* = try analyser.ip.string_pool.stringToSliceAlloc(
+                        analyser.store.io,
+                        analyser.arena,
+                        error_set.names.at(@intCast(index), analyser.ip),
+                    );
+                }
+                break :blk names;
+            },
+            .tuple_type => |tuple| blk: {
+                const names = try analyser.arena.alloc([]const u8, tuple.types.len);
+                for (names, 0..) |*name, index| {
+                    name.* = try std.fmt.allocPrint(analyser.arena, "{d}", .{index});
+                }
+                break :blk names;
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
+    const names = try analyser.metaFieldNames(container_type) orelse return null;
+    if (try analyser.resolveUnionTag(container_type)) |tag_value| reuse_tag: {
+        const tag_type = try tag_value.typeOf(analyser);
+        const field_count = switch (tag_type.data) {
+            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse break :reuse_tag)) {
+                .enum_type => |enum_index| analyser.ip.getEnum(enum_index).fields.count(),
+                else => break :reuse_tag,
+            },
+            .container => blk: {
+                if (tag_type.getContainerKind() != .keyword_enum) break :reuse_tag;
+                var buffer: [2]Ast.Node.Index = undefined;
+                const info = astContainerTypeInfo(tag_type, &buffer) orelse break :reuse_tag;
+                break :blk astEnumFieldCount(info.declaration, info.handle);
+            },
+            .union_tag => ast_field_count: {
+                var buffer: [2]Ast.Node.Index = undefined;
+                const info = astContainerTypeInfo(tag_type.data.union_tag.*, &buffer) orelse break :reuse_tag;
+                break :ast_field_count astContainerFieldCount(info.declaration, info.handle);
+            },
+            else => break :reuse_tag,
+        };
+        if (field_count != names.len) break :reuse_tag;
+        for (names, 0..) |name, index| {
+            const value = try analyser.resolveEnumTagIntValue(tag_type, name) orelse break :reuse_tag;
+            if (analyser.ip.toInt(value, usize) != index) break :reuse_tag;
+        }
+        return tag_type;
+    }
+
+    const bits: u16 = if (names.len == 0) 0 else @intCast(std.math.log2_int_ceil(usize, names.len));
+    const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+    var fields: std.array_hash_map.Auto(InternPool.String, void) = .empty;
+    errdefer fields.deinit(analyser.gpa);
+    var values: std.array_hash_map.Auto(InternPool.Index, void) = .empty;
+    errdefer values.deinit(analyser.gpa);
+    try fields.ensureTotalCapacity(analyser.gpa, names.len);
+    try values.ensureTotalCapacity(analyser.gpa, names.len);
+    for (names, 0..) |name, index| {
+        const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
+        const value = (try analyser.intValueWithType(tag_type, index) orelse return null).ipIndex().?;
+        fields.putAssumeCapacityNoClobber(name_index, {});
+        values.putAssumeCapacityNoClobber(value, {});
+    }
+    const enum_index = try analyser.ip.createEnum(.{
+        .tag_type = tag_type,
+        .fields = fields,
+        .values = values,
+        .namespace = .none,
+        .is_exhaustive = true,
+    });
+    fields = .empty;
+    values = .empty;
+    return Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
+}
+
 fn resolveSwitchUnionPayload(
     analyser: *Analyser,
     union_type: Type,
@@ -8944,6 +9080,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         return .unknown_type;
                     const alignment = try analyser.metaAlignment(arg_type) orelse return .unknown_type;
                     return try analyser.comptimeIntValue(alignment);
+                }
+
+                if (std.mem.eql(u8, func_name, "FieldEnum")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveFieldEnumType(arg_type) orelse .unknown_type;
                 }
             }
 
