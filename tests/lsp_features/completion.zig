@@ -2904,6 +2904,23 @@ test "generic function with comptime labeled block breaks" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    const value = blk: {
+        \\        if (enabled) break :blk;
+        \\        break :blk;
+        \\    };
+        \\    return if (@TypeOf(value) == void)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with comptime intFromEnum" {

@@ -5180,6 +5180,11 @@ fn resolveFunctionTypeFromCall(
 }
 
 const BreakIterator = struct {
+    const Value = union(enum) {
+        operand: Ast.Node.Index,
+        void,
+    };
+
     walker: ast.Walker,
     label: ?[]const u8,
     allow_unlabeled: bool,
@@ -5190,7 +5195,7 @@ const BreakIterator = struct {
         analyser: *Analyser,
         handle: *DocumentStore.Handle,
         container_type: ?Type,
-    ) Error!?Ast.Node.Index {
+    ) Error!?Value {
         const tree = &handle.tree;
         while (true) {
             const event = try it.walker.next(analyser.gpa, tree) orelse return null;
@@ -5198,20 +5203,16 @@ const BreakIterator = struct {
                 .open => |node| switch (tree.nodeTag(node)) {
                     .@"break" => {
                         const opt_label_token, const opt_operand = tree.nodeData(node).opt_token_and_opt_node;
-                        const operand = opt_operand.unwrap() orelse {
-                            // TODO this is wrong! No operand implies `{}` i.e `void`.
-                            continue;
-                        };
                         if (try it.isInKnownUnselectedIfBranch(analyser, handle, container_type)) continue;
 
                         if (it.label) |label| {
                             const label_token = opt_label_token.unwrap() orelse continue;
                             if (!std.mem.eql(u8, label, offsets.identifierTokenToNameSlice(tree, label_token))) continue;
-                            return operand;
+                            return if (opt_operand.unwrap()) |operand| .{ .operand = operand } else .void;
                         }
 
                         if (it.allow_unlabeled and it.loop_depth == 0 and opt_label_token == .none) {
-                            return operand;
+                            return if (opt_operand.unwrap()) |operand| .{ .operand = operand } else .void;
                         }
                     },
 
@@ -6566,10 +6567,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     .allow_unlabeled = false,
                 };
                 defer it.walker.deinit(analyser.gpa);
-                while (try it.next(analyser, handle, options.container_type)) |operand| {
-                    if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type| {
+                while (try it.next(analyser, handle, options.container_type)) |value| {
+                    const value_type = switch (value) {
+                        .operand => |operand| try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse continue,
+                        .void => Type.fromIP(analyser, .void_type, .void_value),
+                    };
+                    {
                         try either.append(analyser.arena, .{
-                            .type = operand_type,
+                            .type = value_type,
                             .descriptor = "break",
                         });
                     }
@@ -6632,9 +6637,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             };
             defer it.walker.deinit(analyser.gpa);
 
-            while (try it.next(analyser, handle, options.container_type)) |operand| {
-                if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
-                    return operand_type;
+            while (try it.next(analyser, handle, options.container_type)) |value| {
+                return switch (value) {
+                    .operand => |operand| try analyser.resolveTypeOfNodeInternal(.of(operand, handle)),
+                    .void => Type.fromIP(analyser, .void_type, .void_value),
+                };
             }
         },
         .block,
@@ -6666,9 +6673,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             };
             defer it.walker.deinit(analyser.gpa);
 
-            while (try it.next(analyser, handle, options.container_type)) |operand| {
-                if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
-                    return operand_type.withoutIPIndex(analyser);
+            while (try it.next(analyser, handle, options.container_type)) |value| {
+                return switch (value) {
+                    .operand => |operand| if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
+                        operand_type.withoutIPIndex(analyser)
+                    else
+                        null,
+                    .void => Type.fromIP(analyser, .void_type, .void_value),
+                };
             }
         },
 

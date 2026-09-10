@@ -19,6 +19,11 @@ const labeled_block_1 = blk: {
     if (false) break :blk @as(i32, 1);
     break :blk @as(i64, 2);
 };
+
+const labeled_block_void = blk: {
+//    ^^^^^^^^^^^^^^^^^^ (void)()
+    break :blk;
+};
 // zig fmt: on
 
 pub fn main() void {
