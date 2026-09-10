@@ -1029,6 +1029,14 @@ const tuple_type_name_len = @typeName(@Tuple(&.{ u16, bool })).len;
 //    ^^^^^^^^^^^^^^^^^^^ (usize)(20)
 const tuple_type_name_first = @typeName(@Tuple(&.{ u16, bool }))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u8)(115)
+const fn_type_name_len = @typeName(fn (u16, bool) u8).len;
+//    ^^^^^^^^^^^^^^^^ (usize)(17)
+const fn_type_name_first = @typeName(fn (u16, bool) u8)[0];
+//    ^^^^^^^^^^^^^^^^^^ (u8)(102)
+const generated_fn_type_name_len = @typeName(ConcreteFn).len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(17)
+const generated_variadic_fn_type_name_len = @typeName(VariadicFn).len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(31)
 
 const tag_name = @tagName(type_enum_literal);
 //    ^^^^^^^^ ([:0]const u8)()

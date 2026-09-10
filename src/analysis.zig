@@ -7216,17 +7216,26 @@ fn isStringSliceType(analyser: *Analyser, ty: Type) bool {
     };
 }
 
-fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
+fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
     if (!ty.is_type_val) return false;
     return switch (ty.data) {
-        .pointer => |info| analyser.canResolveTypeName(info.elem_ty.*),
+        .pointer => |info| try analyser.canResolveTypeName(info.elem_ty.*),
         .array => |info| info.elem_count != null and
             info.sentinel != .unknown_unknown and
-            analyser.canResolveTypeName(info.elem_ty.*),
+            try analyser.canResolveTypeName(info.elem_ty.*),
         .tuple => |types| for (types) |element_type| {
-            if (!analyser.canResolveTypeName(element_type)) break false;
+            if (!try analyser.canResolveTypeName(element_type)) break false;
         } else true,
-        .optional => |child_ty| analyser.canResolveTypeName(child_ty.*),
+        .function => |info| function: {
+            if (info.name != null or info.calling_convention == null) break :function false;
+            if (!try analyser.canResolveTypeName(try info.return_value.typeOf(analyser))) break :function false;
+            for (info.parameters) |parameter| {
+                if (parameter.type.data == .anytype_parameter or
+                    !try analyser.canResolveTypeName(parameter.type)) break :function false;
+            }
+            break :function true;
+        },
+        .optional => |child_ty| try analyser.canResolveTypeName(child_ty.*),
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
             .simple_type => |simple| switch (simple) {
                 .empty_struct_type,
@@ -7267,15 +7276,23 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
             },
             .int_type => true,
             .pointer_type => |info| info.sentinel != .unknown_unknown and
-                analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.elem_type)),
+                try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.elem_type)),
             .array_type => |info| info.sentinel != .unknown_unknown and
-                analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
-            .optional_type => |info| analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.payload_type)),
-            .vector_type => |info| analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
+                try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
+            .optional_type => |info| try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.payload_type)),
+            .vector_type => |info| try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
+            .function_type => |info| function: {
+                if (info.flags.is_generic or info.flags.alignment != 0) break :function false;
+                for (0..info.args.len) |index| {
+                    const argument = info.args.at(@intCast(index), analyser.ip);
+                    if (!try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, argument))) break :function false;
+                }
+                break :function try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.return_type));
+            },
             .tuple_type => |info| types: {
                 for (0..info.types.len) |index| {
                     const element_type = Type.fromIP(analyser, .type_type, info.types.at(@intCast(index), analyser.ip));
-                    if (!analyser.canResolveTypeName(element_type)) break :types false;
+                    if (!try analyser.canResolveTypeName(element_type)) break :types false;
                 }
                 break :types true;
             },
@@ -7283,6 +7300,18 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
         },
         else => false,
     };
+}
+
+fn resolveTypeNameValue(analyser: *Analyser, ty: Type) error{OutOfMemory}![]const u8 {
+    const bytes = try ty.stringifyTypeVal(analyser, .{ .truncate_container_decls = false });
+    const is_interned_function = switch (ty.data) {
+        .ip_index => |payload| analyser.ip.indexToKey(payload.index.?) == .function_type,
+        else => false,
+    };
+    if (is_interned_function and std.mem.startsWith(u8, bytes, "fn(")) {
+        return std.mem.concat(analyser.arena, u8, &.{ "fn ", bytes[2..] });
+    }
+    return bytes;
 }
 
 fn resolveBitCountValue(
@@ -9144,8 +9173,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (!analyser.evaluate_comptime_values) return fallback;
 
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return fallback;
-                    if (!analyser.canResolveTypeName(operand)) return fallback;
-                    const bytes = try operand.stringifyTypeVal(analyser, .{ .truncate_container_decls = false });
+                    if (!try analyser.canResolveTypeName(operand)) return fallback;
+                    const bytes = try analyser.resolveTypeNameValue(operand);
                     return try analyser.stringValue(bytes);
                 },
                 .min, .max => |tag| {

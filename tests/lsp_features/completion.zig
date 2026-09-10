@@ -5146,6 +5146,29 @@ test "generic function with comptime typeName" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\const Names = struct {
+        \\    @"fn (u16, bool) u8": void,
+        \\    @"fn (noalias *u8, ...) callconv(.c) void": void,
+        \\};
+        \\fn Select(comptime T: type) type {
+        \\    const Plain = @Fn(&.{ T, bool }, &.{ .{}, .{} }, u8, .{});
+        \\    const C = @Fn(&.{*u8}, &.{.{ .@"noalias" = true }}, void,
+        \\        .{ .@"callconv" = .c, .varargs = true });
+        \\    const plain_name = @typeName(Plain);
+        \\    const c_name = @typeName(C);
+        \\    return if (plain_name.len == 17 and @hasField(Names, plain_name) and
+        \\        c_name.len == 39 and @hasField(Names, c_name))
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "enum declarations are not comptime enum values" {
