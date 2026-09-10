@@ -671,6 +671,25 @@ test "generic function with partially known integer reductions" {
     });
 }
 
+test "generic function with even runtime splat xor reductions" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_bool: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const integer = @reduce(.Xor, @as(@Vector(4, u8), @splat(runtime_u8)));
+        \\    const boolean = @reduce(.Xor, @as(@Vector(4, bool), @splat(runtime_bool)));
+        \\    return if (integer == 0 and !boolean)
+        \\        struct { reduced: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with integer reduction boundaries" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

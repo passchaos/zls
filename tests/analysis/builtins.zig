@@ -101,6 +101,16 @@ const reduce_bool_or_partial = @reduce(.Or, @as(@Vector(3, bool), .{ runtime_boo
 //    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const reduce_bool_xor_partial = @reduce(.Xor, @as(@Vector(3, bool), .{ runtime_bool, false, true }));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const reduce_even_integer_runtime_splat = @reduce(.Xor, @as(@Vector(4, u8), @splat(runtime_u8)));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const reduce_odd_integer_runtime_splat = @reduce(.Xor, @as(@Vector(3, u8), @splat(runtime_u8)));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const reduce_even_bool_runtime_splat = @reduce(.Xor, @as(@Vector(4, bool), @splat(runtime_bool)));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const reduce_odd_bool_runtime_splat = @reduce(.Xor, @as(@Vector(3, bool), @splat(runtime_bool)));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const reduce_even_undefined_splat = @reduce(.Xor, @as(@Vector(4, u8), @splat(undefined_u8)));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const reduce_bool_and_undefined = @reduce(.And, @as(@Vector(2, bool), .{ false, undefined }));
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 var runtime_u8: u8 = undefined;

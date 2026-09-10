@@ -3871,6 +3871,57 @@ fn resolveReduceValue(
     return result;
 }
 
+fn resolveEvenRuntimeSplatXorReduction(
+    analyser: *Analyser,
+    tree: *const Ast,
+    handle: *DocumentStore.Handle,
+    operand_node: Ast.Node.Index,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (vector.len == 0 or vector.len % 2 != 0) return null;
+
+    var node = operand_node;
+    switch (tree.nodeTag(node)) {
+        .builtin_call,
+        .builtin_call_comma,
+        .builtin_call_two,
+        .builtin_call_two_comma,
+        => {
+            if (!std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@as")) return null;
+            var as_buffer: [2]Ast.Node.Index = undefined;
+            const as_params = tree.builtinCallParams(&as_buffer, node).?;
+            if (as_params.len != 2) return null;
+            node = as_params[1];
+        },
+        else => {},
+    }
+    switch (tree.nodeTag(node)) {
+        .builtin_call,
+        .builtin_call_comma,
+        .builtin_call_two,
+        .builtin_call_two_comma,
+        => {},
+        else => return null,
+    }
+    if (!std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@splat")) return null;
+    var splat_buffer: [2]Ast.Node.Index = undefined;
+    const splat_params = tree.builtinCallParams(&splat_buffer, node).?;
+    if (splat_params.len != 1 or
+        !try analyser.isMutableIdentifierExpression(tree, handle, splat_params[0])) return null;
+
+    if (vector.child == .bool_type) return Type.fromIP(analyser, .bool_type, .bool_false);
+    _ = analyser.fixedWidthIntegerBounds(vector.child) orelse return null;
+    return analyser.intValueWithType(vector.child, 0);
+}
+
 fn resolveSelectValue(
     analyser: *Analyser,
     element_type: InternPool.Index,
@@ -6587,6 +6638,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         const operation = try analyser.resolveReduceOperation(.of(params[0], handle));
                         if (operation) |op| {
                             if (try analyser.resolveReduceValue(op, operand)) |value| return value;
+                            if (op == .Xor) {
+                                if (try analyser.resolveEvenRuntimeSplatXorReduction(tree, handle, params[1], operand)) |value| return value;
+                            }
                         }
                     }
                     return Type.fromIP(analyser, vector.child, null);
