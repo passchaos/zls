@@ -2281,6 +2281,47 @@ test "generic function with comptime generated Enum values" {
     });
 }
 
+test "generic function with comptime std meta enum tag" {
+    const enum_types = [_][]const u8{
+        "enum(T) { value = 1 }",
+        "@Enum(T, .exhaustive, &.{\"value\"}, &.{1})",
+    };
+    for (enum_types) |enum_type| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const std = @import("std");
+            \\fn Select(comptime T: type) type {{
+            \\    const E = {s};
+            \\    return if (std.meta.Tag(E) == T)
+            \\        struct {{ matched: T }}
+            \\    else
+            \\        struct {{ fallback: u8 }};
+            \\}}
+            \\const selected: Select(u13) = undefined;
+            \\const field = selected.<cursor>
+        , .{enum_type});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "matched", .kind = .Field, .detail = "u13" },
+        });
+    }
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const U = union(enum) { value: T };
+        \\    const Tag = std.meta.Tag(U);
+        \\    return if (std.meta.Tag(Tag) == u0)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u13) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u13" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

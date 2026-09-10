@@ -1303,6 +1303,35 @@ fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
     return null;
 }
 
+fn resolveEnumTagType(analyser: *Analyser, enum_type: Type) Error!?Type {
+    if (!enum_type.isEnumType(analyser)) return null;
+
+    return switch (enum_type.data) {
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .enum_type => |enum_index| Type.fromIP(
+                analyser,
+                .type_type,
+                analyser.ip.getEnum(enum_index).tag_type,
+            ),
+            else => null,
+        },
+        .container => blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(enum_type, &buffer) orelse break :blk null;
+            if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_enum) break :blk null;
+            break :blk try analyser.astEnumTagType(enum_type, info.declaration, info.handle);
+        },
+        .union_tag => |union_type| blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(union_type.*, &buffer) orelse break :blk null;
+            if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_union or
+                info.declaration.ast.enum_token == null) break :blk null;
+            break :blk try analyser.astEnumTagType(union_type.*, info.declaration, info.handle);
+        },
+        else => null,
+    };
+}
+
 fn resolveSwitchUnionPayload(
     analyser: *Analyser,
     union_type: Type,
@@ -8632,7 +8661,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (call.ast.params.len < 1) return .unknown_type;
                     const arg = call.ast.params[0];
                     const arg_ty = try analyser.resolveTypeOfNodeInternal(.of(arg, handle)) orelse return .unknown_type;
-                    // TODO: handle enum tag, e.g. `enum(u8)`
+                    if (try analyser.resolveEnumTagType(arg_ty)) |tag_type| return tag_type;
                     const tag_type = try analyser.resolveUnionTag(arg_ty) orelse return .unknown_type;
                     return try tag_type.typeOf(analyser);
                 }

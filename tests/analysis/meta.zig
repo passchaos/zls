@@ -21,6 +21,21 @@ const TagA = std.meta.Tag(TaggedUnionA);
 const TagB = std.meta.Tag(TaggedUnionB);
 //    ^^^^ (type)(@typeInfo(TaggedUnionB).@"union".tag_type.?)
 
+const ExplicitEnum = enum(u8) {
+    foo,
+    bar,
+};
+
+const TagEnum = std.meta.Tag(ExplicitEnum);
+//    ^^^^^^^ (type)(u8)
+
+const GeneratedEnum = @Enum(u13, .exhaustive, &.{"value"}, &.{1});
+const TagGeneratedEnum = std.meta.Tag(GeneratedEnum);
+//    ^^^^^^^^^^^^^^^^ (type)(u13)
+
+const TagBBacking = std.meta.Tag(TagB);
+//    ^^^^^^^^^^^ (type)(u1)
+
 const ArgsTupleA = std.meta.ArgsTuple(fn (u8, i32) void);
 //    ^^^^^^^^^^ (type)(struct { u8, i32 })
 
