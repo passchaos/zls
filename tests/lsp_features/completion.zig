@@ -2758,6 +2758,23 @@ test "generic function with AST function calling convention type info" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Generated = @Fn(&.{T}, &.{.{}}, void, .{});
+        \\    const Ast = fn () callconv(.naked) noreturn;
+        \\    return if (@typeInfo(Generated).@"fn".calling_convention == .auto and
+        \\        @typeInfo(Ast).@"fn".calling_convention == .naked and
+        \\        @typeInfo(Generated).@"fn".calling_convention != .naked)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function with nominal function signature type info" {

@@ -3871,7 +3871,7 @@ fn resolveEnumValueTag(
     enum_type: Type,
     node_handle: NodeWithHandle,
 ) Error!?[]const u8 {
-    if (!enum_type.isEnumType(analyser)) return null;
+    if (!enum_type.isEnumType(analyser) and !enum_type.isTaggedUnion()) return null;
     const tree = &node_handle.handle.tree;
     const tag = switch (tree.nodeTag(node_handle.node)) {
         .enum_literal => try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null,
