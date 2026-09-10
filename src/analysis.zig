@@ -3513,11 +3513,13 @@ fn resolveTypeInfoDescriptorField(
                 .function => |info| blk: {
                     if (index >= info.parameters.len) return field_value_type;
                     const parameter = info.parameters[index];
-                    const parameter_type = if (parameter.type.data == .anytype_parameter)
+                    const is_generic = parameter.type.data == .anytype_parameter or
+                        (parameter.type.data.isGeneric() and !parameter.type.isMetaType());
+                    const parameter_type = if (is_generic)
                         InternPool.Index.none
                     else
                         parameter.type.ipIndex() orelse return field_value_type;
-                    break :blk .{ parameter_type, parameter.type.data == .anytype_parameter, parameter.modifier == .noalias_param };
+                    break :blk .{ parameter_type, is_generic, parameter.modifier == .noalias_param };
                 },
                 else => return field_value_type,
             };

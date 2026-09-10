@@ -2574,6 +2574,30 @@ test "generic function with comptime type info descriptors" {
     });
 }
 
+test "generic function with comptime generic parameter descriptors" {
+    try testCompletion(
+        \\fn generic(a: anytype, comptime b: anytype, comptime T: type, value: T) void {
+        \\    _ = a;
+        \\    _ = b;
+        \\    _ = value;
+        \\}
+        \\fn Select(comptime Result: type) type {
+        \\    const info = @typeInfo(@TypeOf(generic)).@"fn";
+        \\    return if (info.is_generic and info.params[0].is_generic and info.params[0].type == null and
+        \\        info.params[1].is_generic and info.params[1].type == null and
+        \\        !info.params[2].is_generic and info.params[2].type.? == type and
+        \\        info.params[3].is_generic and info.params[3].type == null)
+        \\        struct { matched: Result }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime type info field attributes" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
