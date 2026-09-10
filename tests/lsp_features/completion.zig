@@ -2724,6 +2724,36 @@ test "generic function with AST function calling convention type info" {
     });
 }
 
+test "generic function with nominal function signature type info" {
+    const cases = [_][]const u8{
+        "info.params[0].type.? == S",
+        "info.params[1].type.? == U",
+        "info.params[2].type.? == E",
+        "info.return_type.? == S",
+        "!info.is_generic",
+    };
+    for (cases) |condition| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select(comptime T: type) type {{
+            \\    const S = struct {{ value: T }};
+            \\    const U = union {{ value: T }};
+            \\    const E = enum {{ value }};
+            \\    const info = @typeInfo(fn (S, U, E) S).@"fn";
+            \\    return if ({s})
+            \\        struct {{ matched: T }}
+            \\    else
+            \\        struct {{ fallback: u8 }};
+            \\}}
+            \\const selected: Select(u16) = undefined;
+            \\const field = selected.<cursor>
+        , .{condition});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "matched", .kind = .Field, .detail = "u16" },
+        });
+    }
+}
+
 test "generic function with implicit tagged union type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

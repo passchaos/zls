@@ -948,6 +948,11 @@ const type_info_ast_enum_exhaustive = @typeInfo(AstOpenEnum).@"enum".is_exhausti
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const TypeInfoAstFnReturn = @typeInfo(fn (u16) u8).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const TypeInfoNominal = struct { value: u8 };
+const TypeInfoAstNominalReturn = @typeInfo(fn (TypeInfoNominal) TypeInfoNominal).@"fn".return_type.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominal)
+const TypeInfoAstNominalParam = @typeInfo(fn (TypeInfoNominal) TypeInfoNominal).@"fn".params[0].type.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominal)
 const type_info_struct_fields_len = @typeInfo(ConcreteStruct).@"struct".fields.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const type_info_union_fields_len = @typeInfo(ConcreteUnion).@"union".fields.len;

@@ -3331,7 +3331,7 @@ fn resolveTypeInfoFieldAccess(
                         @as(?std.builtin.CallingConvention.Tag, info.flags.calling_convention),
                         info.flags.is_generic,
                         info.flags.is_var_args,
-                        info.return_type,
+                        Type.fromIP(analyser, .type_type, info.return_type),
                         info.args.len,
                     },
                     else => return field_value_type,
@@ -3340,7 +3340,7 @@ fn resolveTypeInfoFieldAccess(
                     info.calling_convention,
                     value.reflected_type.isGenericFunc(),
                     info.has_varargs,
-                    (try info.return_value.typeOf(analyser)).ipIndex() orelse return field_value_type,
+                    try info.return_value.typeOf(analyser),
                     info.parameters.len,
                 },
                 else => return field_value_type,
@@ -3357,7 +3357,7 @@ fn resolveTypeInfoFieldAccess(
                 return Type.fromIP(analyser, .bool_type, if (is_var_args) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "return_type")) {
-                return try analyser.optionalTypeValue(field_value_type, return_type);
+                return try analyser.typeInfoOptionalTypeValue(value, field_value_type, return_type);
             }
             if (std.mem.eql(u8, field_name, "params")) {
                 return try analyser.typeInfoCollectionValue(value, field_value_type, .fn_params, param_count);
@@ -3650,7 +3650,11 @@ fn resolveTypeInfoDescriptorField(
                     .function_type => |info| blk: {
                         if (index >= info.args.len) return field_value_type;
                         const parameter_type = info.args.at(index, analyser.ip);
-                        break :blk .{ parameter_type, info.args_is_generic.isSet(index), info.args_is_noalias.isSet(index) };
+                        break :blk .{
+                            if (parameter_type == .none) null else Type.fromIP(analyser, .type_type, parameter_type),
+                            info.args_is_generic.isSet(index),
+                            info.args_is_noalias.isSet(index),
+                        };
                     },
                     else => return field_value_type,
                 },
@@ -3658,11 +3662,11 @@ fn resolveTypeInfoDescriptorField(
                     if (index >= info.parameters.len) return field_value_type;
                     const parameter = info.parameters[index];
                     const is_generic = parameter.type.data == .anytype_parameter or
-                        (parameter.type.data.isGeneric() and !parameter.type.isMetaType());
-                    const parameter_type = if (is_generic)
-                        InternPool.Index.none
+                        (parameter.type.hasUnresolvedGenericType() and !parameter.type.isMetaType());
+                    const parameter_type: ?Type = if (is_generic)
+                        null
                     else
-                        parameter.type.ipIndex() orelse return field_value_type;
+                        parameter.type;
                     break :blk .{ parameter_type, is_generic, parameter.modifier == .noalias_param };
                 },
                 else => return field_value_type,
@@ -3674,7 +3678,10 @@ fn resolveTypeInfoDescriptorField(
                 return Type.fromIP(analyser, .bool_type, if (is_noalias) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "type")) {
-                return try analyser.optionalTypeValue(field_value_type, param_type);
+                if (param_type) |payload| {
+                    return try analyser.typeInfoOptionalTypeValue(value, field_value_type, payload);
+                }
+                return try analyser.optionalTypeValue(field_value_type, .none);
             }
         },
         .error_set_errors => {
@@ -11933,6 +11940,38 @@ pub const Type = struct {
 
     pub fn isGenericType(self: Type) bool {
         return self.data.isGeneric();
+    }
+
+    fn hasUnresolvedGenericType(self: Type) bool {
+        return switch (self.data) {
+            .type_parameter, .anytype_parameter => true,
+            .pointer => |info| info.elem_ty.hasUnresolvedGenericType(),
+            .array => |info| info.elem_ty.hasUnresolvedGenericType(),
+            .tuple => |types| for (types) |ty| {
+                if (ty.hasUnresolvedGenericType()) break true;
+            } else false,
+            .optional, .union_tag => |ty| ty.hasUnresolvedGenericType(),
+            .error_union => |info| info.payload.hasUnresolvedGenericType() or
+                if (info.error_set) |error_set| error_set.hasUnresolvedGenericType() else false,
+            .container => |info| for (info.bound_params.values()) |ty| {
+                if (ty.hasUnresolvedGenericType()) break true;
+            } else false,
+            .function => |info| {
+                if (info.container_type.hasUnresolvedGenericType() or
+                    info.return_value.hasUnresolvedGenericType()) return true;
+                for (info.parameters) |parameter| {
+                    if (parameter.type.hasUnresolvedGenericType()) return true;
+                }
+                return false;
+            },
+            .either => |entries| for (entries) |entry| {
+                const ty: Type = .{ .data = entry.type_data, .is_type_val = self.is_type_val };
+                if (ty.hasUnresolvedGenericType()) break true;
+            } else false,
+            .enum_value => |value| value.enum_type.hasUnresolvedGenericType(),
+            .string_value => |value| value.string_type.hasUnresolvedGenericType(),
+            .compile_error, .type_info_value, .ip_index => false,
+        };
     }
 
     fn getContainerKind(self: Type) ?std.zig.Token.Tag {
