@@ -2434,7 +2434,25 @@ fn resolveAbsValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type 
     }
     if (scalar_tag == .int) {
         const info = analyser.ip.intInfo(operand_type, builtin.target);
-        if (info.bits > 128) return null;
+        if (info.bits > 128) {
+            if (info.signedness == .unsigned) return operand;
+            return switch (analyser.ip.indexToKey(operand_index)) {
+                .int_u64_value => |int_value| analyser.intValueWithType(result_type, int_value.int),
+                .int_i64_value => |int_value| analyser.intValueWithType(
+                    result_type,
+                    if (int_value.int >= 0) int_value.int else -@as(i128, int_value.int),
+                ),
+                .int_big_value => |int_value| Type.fromIP(
+                    analyser,
+                    result_type,
+                    try analyser.ip.getBigInt(result_type, .{
+                        .positive = true,
+                        .limbs = int_value.getConst(analyser.ip).limbs,
+                    }),
+                ),
+                else => null,
+            };
+        }
         const magnitude: i256 = switch (info.signedness) {
             .unsigned => @intCast(analyser.ip.toInt(operand_index, u128) orelse return null),
             .signed => magnitude: {
@@ -4805,6 +4823,14 @@ fn resolveNegationValue(
     }
 
     if (payload.type == .comptime_int_type) {
+        if (analyser.ip.indexToKey(index) == .int_big_value) {
+            const int_value = analyser.ip.indexToKey(index).int_big_value;
+            const result_index = try analyser.ip.getBigInt(payload.type, .{
+                .positive = !int_value.isPositive(),
+                .limbs = int_value.getConst(analyser.ip).limbs,
+            });
+            return Type.fromIP(analyser, payload.type, result_index);
+        }
         const value = analyser.ip.toInt(index, i256) orelse return null;
         const result = std.math.sub(i256, 0, value) catch return null;
         return analyser.intValueWithType(payload.type, result);

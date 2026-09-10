@@ -1747,6 +1747,7 @@ test "generic function with comptime value builtins" {
         .{ .expression = "@ctz(@as(u8, 0))", .detail = "[8]u8" },
         .{ .expression = "@abs(-4)", .detail = "[4]u8" },
         .{ .expression = "@abs(@as(i8, -4))", .detail = "[4]u8" },
+        .{ .expression = "@intCast(@abs(@as(i256, -4)))", .detail = "[4]u8" },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(allocator,
