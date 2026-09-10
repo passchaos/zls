@@ -1177,6 +1177,64 @@ fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
     return null;
 }
 
+fn resolveSwitchUnionPayload(
+    analyser: *Analyser,
+    union_type: Type,
+    switch_tree: *const Ast,
+    switch_node: Ast.full.Switch,
+    selected_case: Ast.full.SwitchCase,
+) Error!?Type {
+    const container = switch (union_type.data) {
+        .container => |container| container,
+        else => return null,
+    };
+    const union_tree = &container.scope_handle.handle.tree;
+
+    var payloads: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+    if (selected_case.ast.values.len != 0) {
+        for (selected_case.ast.values) |case_value| {
+            if (switch_tree.nodeTag(case_value) != .enum_literal) return null;
+            const name = try analyser.identifierTokenName(switch_tree, switch_tree.nodeMainToken(case_value)) orelse return null;
+            const field = try analyser.lookupSymbolContainer(union_type, name, .field) orelse return null;
+            const field_type = try field.resolveType(analyser) orelse return null;
+            try payloads.append(analyser.arena, .{ .type = field_type, .descriptor = name });
+        }
+        return Type.fromEither(analyser, payloads.items);
+    }
+
+    var container_buffer: [2]Ast.Node.Index = undefined;
+    const declaration = union_tree.fullContainerDecl(&container_buffer, container.scope_handle.toNode()) orelse return null;
+    for (declaration.ast.members) |member| {
+        var field = union_tree.fullContainerField(member) orelse continue;
+        field.convertToNonTupleLike(union_tree);
+        if (field.ast.tuple_like or union_tree.tokenTag(field.ast.main_token) != .identifier) continue;
+        const name = try analyser.identifierTokenName(union_tree, field.ast.main_token) orelse return null;
+
+        var explicitly_matched = false;
+        for (switch_node.ast.cases) |case_node| {
+            const switch_case = switch_tree.fullSwitchCase(case_node).?;
+            for (switch_case.ast.values) |case_value| {
+                if (switch_tree.nodeTag(case_value) != .enum_literal) return null;
+                const case_name = try analyser.identifierTokenName(switch_tree, switch_tree.nodeMainToken(case_value)) orelse return null;
+                if (std.mem.eql(u8, name, case_name)) {
+                    explicitly_matched = true;
+                    break;
+                }
+            }
+            if (explicitly_matched) break;
+        }
+        if (explicitly_matched) continue;
+
+        const field_type = try (DeclWithHandle{
+            .decl = .{ .ast_node = member },
+            .handle = container.scope_handle.handle,
+            .container_type = union_type,
+        }).resolveType(analyser) orelse return null;
+        try payloads.append(analyser.arena, .{ .type = field_type, .descriptor = name });
+    }
+    return Type.fromEither(analyser, payloads.items);
+}
+
 fn resolveUnionTagAccess(analyser: *Analyser, ty: Type, symbol: []const u8) Error!?Type {
     if (!ty.is_type_val)
         return null;
@@ -10894,20 +10952,8 @@ pub const DeclWithHandle = struct {
                     if (case.inline_token == null) {
                         return switch_expr_type;
                     }
-                    // TODO either type
-                    return null;
                 }
-
-                // TODO Peer type resolution, we just use the first resolvable item for now.
-                for (case.ast.values) |case_value| {
-                    if (tree.nodeTag(case_value) != .enum_literal) continue;
-                    const name_token = tree.nodeMainToken(case_value);
-                    const name = offsets.identifierTokenToNameSlice(tree, name_token);
-                    const decl = try switch_expr_type.lookupSymbol(analyser, name) orelse continue;
-                    break :blk (try decl.resolveType(analyser)) orelse continue;
-                }
-
-                return null;
+                break :blk try analyser.resolveSwitchUnionPayload(switch_expr_type, tree, tree.switchFull(payload.node), case);
             },
             .error_token => return null,
         } orelse return null;

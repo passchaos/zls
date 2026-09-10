@@ -115,7 +115,16 @@ const switch_tagged_union_inline = switch (some_tagged_union) {
     //              ^ (bool)()
     //                 ^ (Enum)()
     inline else => |a, b| .{ a, b },
-    //              ^ (unknown)() TODO this should be `either type`
+    //              ^ (either type)()
+    //                 ^ (Enum)()
+};
+
+const switch_tagged_union_inline_single = switch (some_tagged_union) {
+    inline .foo, .bar, .baz => |a, b| .{ a, b },
+    //                          ^ (either type)()
+    //                             ^ (Enum)()
+    inline else => |a, b| .{ a, b },
+    //              ^ (void)()
     //                 ^ (Enum)()
 };
 
