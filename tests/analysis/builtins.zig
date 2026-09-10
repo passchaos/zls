@@ -335,6 +335,16 @@ const mul_one_runtime_flag = @mulWithOverflow(runtime_i8, @as(i8, 1))[1];
 //    ^^^^^^^^^^^^^^^^^^^^ (u1)(0)
 const shl_zero_runtime_flag = @shlWithOverflow(runtime_u8, @as(u3, 0))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const shl_zero_lhs_runtime = @shlWithOverflow(@as(u8, 0), runtime_u3);
+const shl_zero_lhs_runtime_value = shl_zero_lhs_runtime[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const shl_zero_lhs_runtime_flag = shl_zero_lhs_runtime[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const shl_zero_lhs_undefined = @shlWithOverflow(@as(u8, 0), undefined_u3);
+const shl_zero_lhs_undefined_value = shl_zero_lhs_undefined[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const shl_zero_lhs_undefined_flag = shl_zero_lhs_undefined[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)()
 const mul_zero_undefined_flag = @mulWithOverflow(@as(u8, undefined), @as(u8, 0))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (u1)()
 const cmpxchg_strong = @cmpxchgStrong(u32, undefined, undefined, undefined, .unordered, .unordered);
@@ -653,6 +663,7 @@ const vector_div_floor_value = @divFloor(@as(@Vector(2, i8), .{ -7, 8 }), @as(@V
 const vector_div_exact_value = @divExact(@as(@Vector(2, i8), .{ 6, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(4)
 var runtime_u3: u3 = undefined;
+const undefined_u3: u3 = undefined;
 const vector_shl_exact_zero_runtime = @shlExact(@as(@Vector(2, u8), @splat(0)), @as(@Vector(2, u3), @splat(runtime_u3)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const vector_shr_exact_zero_runtime = @shrExact(@as(@Vector(2, u8), @splat(0)), @as(@Vector(2, u3), @splat(runtime_u3)))[1];

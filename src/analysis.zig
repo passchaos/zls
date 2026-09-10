@@ -3600,9 +3600,14 @@ fn resolveOverflowValue(
                 return try analyser.overflowTupleValue(result_type, result_value, false);
             }
         },
-        .shl_with_overflow => if (rhs_value == 0) {
-            const result_value = try analyser.coerceKnownIntegerValue(result_type, lhs_payload.index);
-            return try analyser.overflowTupleValue(result_type, result_value, false);
+        .shl_with_overflow => {
+            if (try analyser.resolveZeroShiftValue(lhs, rhs)) |result| {
+                return try analyser.overflowTupleValue(result_type, result.ipIndex(), false);
+            }
+            if (rhs_value == 0) {
+                const result_value = try analyser.coerceKnownIntegerValue(result_type, lhs_payload.index);
+                return try analyser.overflowTupleValue(result_type, result_value, false);
+            }
         },
         else => return null,
     }

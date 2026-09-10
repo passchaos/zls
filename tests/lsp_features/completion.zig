@@ -1352,6 +1352,7 @@ test "generic function with partially known overflow builtins" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;
         \\var runtime_i8: i8 = undefined;
+        \\var runtime_u3: u3 = undefined;
         \\fn Select(comptime N: u8) type {
         \\    const add = @addWithOverflow(runtime_u8, @as(u8, 0));
         \\    const sub = @subWithOverflow(runtime_u8, @as(u8, 0));
@@ -1359,9 +1360,11 @@ test "generic function with partially known overflow builtins" {
         \\    const mul_zero = @mulWithOverflow(runtime_i8, @as(i8, 0));
         \\    const mul_one = @mulWithOverflow(runtime_i8, @as(i8, 1));
         \\    const shl = @shlWithOverflow(runtime_u8, @as(u3, 0));
+        \\    const zero_shl = @shlWithOverflow(@as(u8, 0), runtime_u3);
         \\    return if (add[1] == 0 and sub[1] == 0 and self_sub[0] == 0 and
         \\        self_sub[1] == 0 and mul_zero[0] == 0 and
-        \\        mul_zero[1] == 0 and mul_one[1] == 0 and shl[1] == 0)
+        \\        mul_zero[1] == 0 and mul_one[1] == 0 and shl[1] == 0 and
+        \\        zero_shl[0] == 0 and zero_shl[1] == 0)
         \\        struct { checked: [N]u8 }
         \\    else
         \\        struct { fallback: u8 };
