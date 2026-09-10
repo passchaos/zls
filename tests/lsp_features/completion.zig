@@ -634,6 +634,24 @@ test "generic function with partially known boolean reductions" {
     });
 }
 
+test "generic function with partially known integer reductions" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const multiplied = @reduce(.Mul, @as(@Vector(3, u8), .{ runtime, 0, N }));
+        \\    const masked = @reduce(.And, @as(@Vector(3, u8), .{ runtime, 0, N }));
+        \\    return if (multiplied == 0 and masked == 0)
+        \\        struct { reduced: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime float reductions" {
     try testCompletion(
         \\fn Select(comptime value: f32) type {

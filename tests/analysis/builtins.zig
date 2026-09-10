@@ -101,6 +101,13 @@ const reduce_bool_or_partial = @reduce(.Or, @as(@Vector(3, bool), .{ runtime_boo
 //    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const reduce_bool_xor_partial = @reduce(.Xor, @as(@Vector(3, bool), .{ runtime_bool, false, true }));
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+var runtime_u8: u8 = undefined;
+const reduce_integer_mul_partial = @reduce(.Mul, @as(@Vector(3, u8), .{ runtime_u8, 0, 7 }));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const reduce_integer_and_partial = @reduce(.And, @as(@Vector(3, u8), .{ runtime_u8, 0, 255 }));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const reduce_integer_add_partial = @reduce(.Add, @as(@Vector(3, u8), .{ runtime_u8, 0, 7 }));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const reduce_float_add_value = @reduce(.Add, @as(@Vector(4, f32), @splat(2.5)));
 //    ^^^^^^^^^^^^^^^^^^^^^^ (f32)(10)
 const reduce_float_mul_value = @reduce(.Mul, @as(@Vector(3, f64), @splat(-2.0)));

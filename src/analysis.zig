@@ -3327,6 +3327,15 @@ fn resolveReduceValue(
     }
 
     if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
+    if (operation == .Mul or operation == .And) {
+        for (0..values.len) |i| {
+            const value = values.at(@intCast(i), analyser.ip);
+            if (analyser.ip.isUndefined(value)) return null;
+            if (analyser.ip.toInt(value, i256)) |int| {
+                if (int == 0) return analyser.intValueWithType(vector.child, 0);
+            }
+        }
+    }
     var result = Type.fromIP(analyser, vector.child, values.at(0, analyser.ip));
     for (1..values.len) |i| {
         const candidate = Type.fromIP(analyser, vector.child, values.at(@intCast(i), analyser.ip));
