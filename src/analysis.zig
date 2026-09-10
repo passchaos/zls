@@ -7339,6 +7339,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     .descriptor = "break",
                 });
             }
+            if (known_condition == true and results.items.len == 0) {
+                return Type.fromIP(analyser, .noreturn_type, null);
+            }
             return Type.fromEither(analyser, results.items);
         },
         .block,

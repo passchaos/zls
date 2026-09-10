@@ -85,6 +85,9 @@ const while_true_break_value = while (true) {
     break @as(u8, 4);
 };
 
+const while_true_noreturn = while (true) {};
+//    ^^^^^^^^^^^^^^^^^^^ (noreturn)()
+
 const for_else_peer = for ([_]u8{ 1, 2 }) |_| {
     if (runtime_condition) break @as(u8, 1);
     break @as(u16, 300);
