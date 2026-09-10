@@ -5304,8 +5304,28 @@ fn resolveBitPermutationValue(
     const index = payload.index orelse return null;
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
-    if (int_info.bits > 128) return null;
     if (tag == .byte_swap and int_info.bits % 8 != 0) return null;
+    if (int_info.bits > 128) {
+        var source = try analyser.managedIntegerValue(index) orelse return null;
+        defer source.deinit();
+        var result: std.math.big.int.Managed = try .initCapacity(
+            analyser.gpa,
+            std.math.big.int.calcTwosCompLimbCount(int_info.bits),
+        );
+        defer result.deinit();
+        var mutable = result.toMutable();
+        switch (tag) {
+            .bit_reverse => mutable.bitReverse(source.toConst(), int_info.signedness, int_info.bits),
+            .byte_swap => mutable.byteSwap(source.toConst(), int_info.signedness, int_info.bits / 8),
+            else => return null,
+        }
+        result.setMetadata(mutable.positive, mutable.len);
+        return Type.fromIP(
+            analyser,
+            payload.type,
+            try analyser.ip.getBigInt(payload.type, result.toConst()),
+        );
+    }
 
     const raw: u128 = switch (int_info.signedness) {
         .unsigned => analyser.ip.toInt(index, u128) orelse return null,

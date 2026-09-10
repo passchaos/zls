@@ -443,10 +443,16 @@ const bit_reverse_u8_value = @bitReverse(@as(u8, 0b0000_0011));
 //    ^^^^^^^^^^^^^^^^^^^^ (u8)(192)
 const bit_reverse_i8_value = @bitReverse(@as(i8, 1));
 //    ^^^^^^^^^^^^^^^^^^^^ (i8)(-128)
+const bit_reverse_u256_value = @bitReverse(@as(u256, 1));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u256)(57896044618658097711785492504343953926634992332820282019728792003956564819968)
+const bit_reverse_i256_value = @bitReverse(@as(i256, 1));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i256)(-57896044618658097711785492504343953926634992332820282019728792003956564819968)
 const byte_swap_u16_value = @byteSwap(@as(u16, 0x1234));
 //    ^^^^^^^^^^^^^^^^^^^ (u16)(13330)
 const byte_swap_u24_value = @byteSwap(@as(u24, 0x123456));
 //    ^^^^^^^^^^^^^^^^^^^ (u24)(5649426)
+const byte_swap_u256_value = @byteSwap(@as(u256, 1));
+//    ^^^^^^^^^^^^^^^^^^^^ (u256)(452312848583266388373324160190187140051835877600158453279131187530910662656)
 const byte_swap_i16_value = @byteSwap(@as(i16, 0x1234));
 //    ^^^^^^^^^^^^^^^^^^^ (i16)(13330)
 const bit_reverse_u128_value = @bitReverse(@as(u128, 1));

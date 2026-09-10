@@ -1762,6 +1762,8 @@ test "generic function with comptime value builtins" {
         .{ .expression = "@min(@as(u128, 340282366920938463463374607431768211455), 7)", .detail = "[7]u8" },
         .{ .expression = "@bitReverse(@as(u8, 0b0000_0011))", .detail = "[192]u8" },
         .{ .expression = "@byteSwap(@as(u16, 0x1234))", .detail = "[13330]u8" },
+        .{ .expression = "@ctz(@bitReverse(@as(u256, 1)))", .detail = "[255]u8" },
+        .{ .expression = "@ctz(@byteSwap(@as(u256, 1)))", .detail = "[248]u8" },
         .{ .expression = "@shlExact(@as(u8, 3), 2)", .detail = "[12]u8" },
         .{ .expression = "@shrExact(@as(u8, 12), 2)", .detail = "[3]u8" },
         .{ .expression = "@intFromBool(true)", .detail = "[1]u8" },
