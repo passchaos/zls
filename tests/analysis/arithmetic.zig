@@ -73,6 +73,18 @@ const bit_xor_u8_i16 = runtime_u8 ^ runtime_i16;
 
 const bit_not_u8 = ~runtime_u8;
 //    ^^^^^^^^^^ (u8)()
+const integer_mul_zero_runtime = runtime_u8 * @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const integer_and_zero_runtime = runtime_u8 & @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const integer_or_ones_runtime = runtime_u8 | @as(u8, 255);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const signed_or_ones_runtime = runtime_i8 | @as(i8, -1);
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const integer_add_zero_runtime = runtime_u8 + @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const integer_mul_zero_undefined = @as(u8, undefined) * @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const bool_and_runtime_false = runtime_bool and false;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const bool_or_runtime_true = runtime_bool or true;

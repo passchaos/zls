@@ -2679,6 +2679,36 @@ fn fixedWidthIntegerBounds(analyser: *Analyser, int_type: InternPool.Index) ?Int
     };
 }
 
+fn resolveIntegerAbsorbingBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (lhs_payload.type != rhs_payload.type) return null;
+    const bounds = analyser.fixedWidthIntegerBounds(lhs_payload.type) orelse return null;
+    if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+    if (rhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+
+    const absorbing: i256 = switch (tag) {
+        .mul, .bit_and => 0,
+        .bit_or => if (bounds.min < 0) -1 else bounds.max,
+        else => return null,
+    };
+    const lhs_value = if (lhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    if (lhs_value != absorbing and rhs_value != absorbing) return null;
+    return analyser.intValueWithType(lhs_payload.type, absorbing);
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2693,6 +2723,7 @@ fn resolveIntegerBinaryValue(
         .ip_index => |payload| payload,
         else => return null,
     };
+    if (try analyser.resolveIntegerAbsorbingBinaryValue(tag, lhs, rhs)) |value| return value;
     const lhs_index = lhs_payload.index orelse return null;
     const rhs_index = rhs_payload.index orelse return null;
     const lhs_value = analyser.ip.toInt(lhs_index, i256) orelse return null;
