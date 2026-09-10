@@ -760,8 +760,10 @@ const trap = @trap();
 //    ^^^^ (noreturn)()
 
 const Int = @Int(.signed, 16);
-//    ^^^ (type)()
+//    ^^^ (type)(i16)
 //               ^^^^^^^ (Signedness)()
+const UnsignedInt = @Int(.unsigned, 256);
+//    ^^^^^^^^^^^ (type)(u256)
 const Pointer = @Pointer(.one, undefined, undefined, undefined);
 //    ^^^^^^^ (type)()
 //                       ^^^^ (Size)()

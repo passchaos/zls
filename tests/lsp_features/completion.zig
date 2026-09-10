@@ -1821,6 +1821,30 @@ test "generic function with comptime size builtins" {
     });
 }
 
+test "generic function with comptime Int type constructor" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Number(comptime signedness: std.builtin.Signedness, comptime bits: u16) type {
+        \\    return struct { value: @Int(signedness, bits) };
+        \\}
+        \\const number: Number(.signed, 13) = undefined;
+        \\const field = number.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "i13" },
+    });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Number(comptime signedness: std.builtin.Signedness, comptime bits: u16) type {
+        \\    return struct { value: @Int(signedness, bits) };
+        \\}
+        \\const number: Number(.unsigned, 256) = undefined;
+        \\const field = number.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "u256" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

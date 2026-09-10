@@ -4133,6 +4133,22 @@ fn resolveReduceOperation(
     };
 }
 
+fn resolveSignedness(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?std.builtin.Signedness {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) == .enum_literal) {
+        const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+        return std.meta.stringToEnum(std.builtin.Signedness, name);
+    }
+    const value = try analyser.resolveTypeOfNodeInternal(.of(node_handle.node, node_handle.handle)) orelse return null;
+    return switch (value.data) {
+        .enum_value => |enum_value| std.meta.stringToEnum(std.builtin.Signedness, enum_value.tag),
+        else => null,
+    };
+}
+
 fn floatReduceValue(
     comptime T: type,
     analyser: *Analyser,
@@ -7501,6 +7517,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .EnumLiteral => {
                     return Type.fromIP(analyser, .type_type, .enum_literal_type);
+                },
+                .Int => {
+                    if (params.len != 2) return null;
+                    const signedness = try analyser.resolveSignedness(.of(params[0], handle)) orelse return null;
+                    const bits = try analyser.resolveIntegerLiteral(u16, .of(params[1], handle)) orelse return null;
+                    const int_type = try analyser.ip.get(.{ .int_type = .{
+                        .signedness = signedness,
+                        .bits = bits,
+                    } });
+                    return Type.fromIP(analyser, .type_type, int_type);
                 },
                 .Vector => {
                     if (params.len != 2) return null;
