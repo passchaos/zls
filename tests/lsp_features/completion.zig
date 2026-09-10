@@ -1956,6 +1956,19 @@ test "generic function with comptime Fn type constructor" {
     });
 }
 
+test "generic function with comptime Struct type constructor" {
+    try testCompletion(
+        \\fn Record(comptime T: type) type {
+        \\    return @Struct(.auto, null, &.{ "value", "enabled" }, &.{ T, bool }, &.{ .{}, .{} });
+        \\}
+        \\const record: Record(u16) = undefined;
+        \\const field = record.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "value: u16" },
+        .{ .label = "enabled", .kind = .Field, .detail = "enabled: bool" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

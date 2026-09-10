@@ -786,6 +786,8 @@ const Struct = @Struct(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //                                        ^ ([1][]const u8)()
 //                                                            ^ ([?]Attributes)()
 //                                                              ^ (Attributes)()
+const ConcreteStruct = @Struct(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^^^^ (type)(struct { foo: u8, bar: i16 })
 const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //    ^^^^^ (type)()
 //                   ^^^^^ (ContainerLayout)()

@@ -4007,10 +4007,27 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
             return array_info.child;
         },
         .struct_type => |struct_index| {
-            const optional_decl_index = ip.getStruct(struct_index).owner_decl;
-            const decl_index = optional_decl_index.unwrap() orelse return panicOrElse(?Index, "TODO", null);
-            const decl = ip.getDecl(decl_index);
-            try writer.print("{f}", .{ip.fmtId(decl.name)});
+            const struct_info = ip.getStruct(struct_index);
+            if (struct_info.owner_decl.unwrap()) |decl_index| {
+                const decl = ip.getDecl(decl_index);
+                try writer.print("{f}", .{ip.fmtId(decl.name)});
+            } else {
+                if (options.truncate_container) {
+                    try writer.writeAll("struct {...}");
+                    return null;
+                }
+                try writer.writeAll("struct { ");
+                for (struct_info.fields.keys(), struct_info.fields.values(), 0..) |name, field, i| {
+                    if (i != 0) try writer.writeAll(", ");
+                    if (field.is_comptime) try writer.writeAll("comptime ");
+                    try writer.print("{f}: {f}", .{ ip.fmtId(name), field.ty.fmtOptions(ip, options) });
+                    if (field.alignment != 0) try writer.print(" align({d})", .{field.alignment});
+                    if (field.default_value != .none) {
+                        try writer.print(" = {f}", .{field.default_value.fmtOptions(ip, options)});
+                    }
+                }
+                try writer.writeAll(" }");
+            }
         },
         .optional_type => |optional_info| {
             try writer.writeByte('?');
@@ -4667,6 +4684,7 @@ test "struct value" {
     const struct_info = ip.getStructMut(struct_index);
     try struct_info.fields.put(gpa, foo_name_index, .{ .ty = .usize_type });
     try struct_info.fields.put(gpa, bar_name_index, .{ .ty = .bool_type });
+    try expectFmt("struct { foo: usize, bar: bool }", "{f}", .{struct_type.fmt(&ip)});
 
     const aggregate_value = try ip.get(.{ .aggregate = .{
         .ty = struct_type,

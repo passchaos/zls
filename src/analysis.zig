@@ -4289,6 +4289,123 @@ fn resolveTupleTypeConstructor(
     return try Type.createTupleType(analyser, element_types);
 }
 
+fn resolveStringListLiteral(
+    analyser: *Analyser,
+    options: ResolveOptions,
+) Error!?[]const []const u8 {
+    const node_handle = options.node_handle;
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null) return null;
+
+    const strings = try analyser.arena.alloc([]const u8, literal.ast.elements.len);
+    for (literal.ast.elements, strings, 0..) |element, *string, i| {
+        string.* = try analyser.resolveStringLiteral(.{
+            .node_handle = .of(element, node_handle.handle),
+            .container_type = options.container_type,
+        }) orelse return null;
+        for (strings[0..i]) |previous| {
+            if (std.mem.eql(u8, previous, string.*)) return null;
+        }
+    }
+    return strings;
+}
+
+fn resolveContainerLayout(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?std.builtin.Type.ContainerLayout {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) == .enum_literal) {
+        const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+        return std.meta.stringToEnum(std.builtin.Type.ContainerLayout, name);
+    }
+    const value = try analyser.resolveTypeOfNodeInternal(.of(node_handle.node, node_handle.handle)) orelse return null;
+    return switch (value.data) {
+        .enum_value => |enum_value| std.meta.stringToEnum(std.builtin.Type.ContainerLayout, enum_value.tag),
+        else => null,
+    };
+}
+
+fn isNullComptimeValue(analyser: *Analyser, options: ResolveOptions) Error!bool {
+    const value = try analyser.resolveComptimeValue(options) orelse return false;
+    return if (value.ipIndex()) |index| analyser.ip.isNull(index) else false;
+}
+
+fn isEmptyStructAttributeList(
+    node_handle: NodeWithHandle,
+    expected_len: usize,
+) bool {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return false;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return false;
+    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return false;
+    for (literal.ast.elements) |element| {
+        var struct_buffer: [2]Ast.Node.Index = undefined;
+        const attributes = tree.fullStructInit(&struct_buffer, element) orelse return false;
+        if (attributes.ast.type_expr.unwrap() != null or attributes.ast.fields.len != 0) return false;
+    }
+    return true;
+}
+
+fn resolveStructTypeConstructor(
+    analyser: *Analyser,
+    params: []const Ast.Node.Index,
+    handle: *DocumentStore.Handle,
+    container_type: ?Type,
+) Error!?Type {
+    if (params.len != 5) return null;
+    const layout = try analyser.resolveContainerLayout(.of(params[0], handle)) orelse return null;
+    if (layout != .auto) return null;
+    if (!try analyser.isNullComptimeValue(.{
+        .node_handle = .of(params[1], handle),
+        .container_type = container_type,
+    })) return null;
+
+    const names = try analyser.resolveStringListLiteral(.{
+        .node_handle = .of(params[2], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    const field_tuple = try analyser.resolveTupleTypeConstructor(.{
+        .node_handle = .of(params[3], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    const field_tuple_index = field_tuple.ipIndex() orelse return null;
+    const field_type_slice = switch (analyser.ip.indexToKey(field_tuple_index)) {
+        .tuple_type => |tuple| tuple.types,
+        else => return null,
+    };
+    if (names.len != field_type_slice.len or
+        !isEmptyStructAttributeList(.of(params[4], handle), names.len)) return null;
+    const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
+    defer analyser.gpa.free(field_types);
+
+    var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Struct.Field) = .empty;
+    errdefer fields.deinit(analyser.gpa);
+    try fields.ensureTotalCapacity(analyser.gpa, names.len);
+    for (names, field_types) |name, field_type| {
+        const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
+        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type });
+    }
+
+    const struct_index = try analyser.ip.createStruct(.{
+        .fields = fields,
+        .owner_decl = .none,
+        .namespace = .none,
+        .layout = .auto,
+        .backing_int_ty = .none,
+        .status = .fully_resolved,
+    });
+    fields = .empty;
+    const struct_type = try analyser.ip.get(.{ .struct_type = struct_index });
+    return Type.fromIP(analyser, .type_type, struct_type);
+}
+
 fn resolveFnParameterAttributes(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -7835,6 +7952,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     } });
                     return Type.fromIP(analyser, .type_type, function_type);
                 },
+                .Struct => return try analyser.resolveStructTypeConstructor(
+                    params,
+                    handle,
+                    options.container_type,
+                ) orelse .unknown_type,
                 .Vector => {
                     if (params.len != 2) return null;
 
