@@ -815,6 +815,17 @@ const ConcreteEnum = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
 //    ^^^^^^^^^^^^ (type)(enum(u8) { low = 1, high = 7 })
 const NonexhaustiveEnum = @Enum(u8, .nonexhaustive, &.{"known"}, &.{1});
 //    ^^^^^^^^^^^^^^^^^ (type)(enum(u8) { known = 1, _ })
+const generated_enum_value = ConcreteEnum.high;
+//    ^^^^^^^^^^^^^^^^^^^^ (enum(u8) { low = 1, high = 7 })()
+const generated_enum_int = @intFromEnum(generated_enum_value);
+//    ^^^^^^^^^^^^^^^^^^ (u8)(7)
+const generated_enum_name = @tagName(generated_enum_value);
+//    ^^^^^^^^^^^^^^^^^^^ (*const [4:0]u8)()
+const generated_enum_name_first = generated_enum_name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(104)
+const generated_enum_from_int: ConcreteEnum = @enumFromInt(1);
+const generated_enum_roundtrip = @intFromEnum(generated_enum_from_int);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(1)
 const Fn = @Fn(&.{i32}, &.{.{}}, undefined, .{});
 //    ^^ (type)()
 //                       ^ ([?]Attributes)()

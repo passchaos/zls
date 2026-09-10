@@ -776,6 +776,13 @@ pub fn resolveFieldAccess(analyser: *Analyser, lhs: Type, field_name: []const u8
 
 pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, field_name: []const u8) Error!?Binding {
     const lhs = lhs_binding.type;
+    if (lhs.is_type_val) if (lhs.ipIndex()) |type_index| {
+        if (analyser.ip.zigTypeTag(type_index) == .@"enum" and
+            try analyser.resolveEnumTagIntValue(lhs, field_name) != null)
+        {
+            return .{ .type = try analyser.enumValue(lhs, field_name), .is_const = true };
+        }
+    };
 
     if (try analyser.resolveUnionTagAccess(lhs, field_name)) |t|
         return .{ .type = t, .is_const = true };
@@ -2791,7 +2798,7 @@ fn resolveEnumValueTag(
     enum_type: Type,
     node_handle: NodeWithHandle,
 ) Error!?[]const u8 {
-    if (!enum_type.isEnumType()) return null;
+    if (!enum_type.isEnumType(analyser)) return null;
     const tree = &node_handle.handle.tree;
     const tag = switch (tree.nodeTag(node_handle.node)) {
         .enum_literal => try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null,
@@ -2815,8 +2822,12 @@ fn resolveEnumValueTag(
         },
         else => return null,
     };
-    const decl = try enum_type.lookupSymbol(analyser, tag) orelse return null;
-    if (decl.decl != .ast_node or !decl.handle.tree.nodeTag(decl.decl.ast_node).isContainerField()) return null;
+    if (enum_type.isInternPoolEnumType(analyser)) {
+        if (try analyser.resolveEnumTagIntValue(enum_type, tag) == null) return null;
+    } else {
+        const decl = try enum_type.lookupSymbol(analyser, tag) orelse return null;
+        if (decl.decl != .ast_node or !decl.handle.tree.nodeTag(decl.decl.ast_node).isContainerField()) return null;
+    }
     return tag;
 }
 
@@ -2837,6 +2848,15 @@ fn resolveEnumTagIntValue(
     tag: []const u8,
 ) Error!?InternPool.Index {
     const container = switch (enum_type.data) {
+        .ip_index => |payload| {
+            const enum_info = switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .enum_type => |enum_index| analyser.ip.getEnum(enum_index),
+                else => return null,
+            };
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, tag) orelse return null;
+            const field_index = enum_info.fields.getIndex(name_index) orelse return null;
+            return enum_info.values.keys()[field_index];
+        },
         .container => |container| container,
         else => return null,
     };
@@ -2898,6 +2918,18 @@ fn resolveEnumTagFromIntValue(
     int_value: i256,
 ) Error!?[]const u8 {
     const container = switch (enum_type.data) {
+        .ip_index => |payload| {
+            const enum_info = switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .enum_type => |enum_index| analyser.ip.getEnum(enum_index),
+                else => return null,
+            };
+            for (enum_info.values.keys(), enum_info.fields.keys()) |value, name| {
+                if (analyser.ip.toInt(value, i256) == int_value) {
+                    return try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, name);
+                }
+            }
+            return null;
+        },
         .container => |container| container,
         else => return null,
     };
@@ -6787,11 +6819,11 @@ fn resolveFunctionTypeFromCall(
         if (param_type.data != .anytype_parameter and
             param.modifier == .comptime_param and
             param_type.is_type_val and
-            (param_type.ipIndex() != null or param_type.isEnumType()) and
+            (param_type.ipIndex() != null or param_type.isEnumType(analyser)) and
             param_type.ipIndex() != .type_type)
         {
             var bound_value: ?Type = null;
-            if (param_type.isEnumType()) {
+            if (param_type.isEnumType(analyser)) {
                 const resolved_argument = try analyser.resolveComptimeValue(.of(arg, handle));
                 const tag = if (resolved_argument != null and
                     resolved_argument.?.data == .enum_value and
@@ -7203,7 +7235,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
                 if (mut_token_tag == .keyword_const) num: {
                     const init_node = var_decl.ast.init_node.unwrap() orelse break :num;
-                    if (decl_type.isEnumType()) {
+                    if (decl_type.isEnumType(analyser)) {
                         if (try analyser.resolveEnumValueTag(decl_type, .of(init_node, handle))) |tag| {
                             return try analyser.enumValue(decl_type, tag);
                         }
@@ -7279,7 +7311,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .container_field_align,
         => {
             const container_type = options.container_type orelse try analyser.innermostContainer(handle, tree.tokenStart(tree.firstToken(node)));
-            if (container_type.isEnumType())
+            if (container_type.isEnumType(analyser))
                 return try container_type.instanceTypeVal(analyser);
 
             var field = tree.fullContainerField(node).?;
@@ -7554,7 +7586,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .as => {
                     if (params.len < 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
-                    if (analyser.evaluate_comptime_values and params.len >= 2 and ty.isEnumType()) {
+                    if (analyser.evaluate_comptime_values and params.len >= 2 and ty.isEnumType(analyser)) {
                         if (try analyser.resolveEnumValueTag(ty, .of(params[1], handle))) |tag| {
                             return try analyser.enumValue(ty, tag);
                         }
@@ -8161,7 +8193,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const lhs = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
 
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse return null;
-                    if (analyser.evaluate_comptime_values and lhs.isEnumType()) {
+                    if (analyser.evaluate_comptime_values and lhs.isEnumType(analyser)) {
                         const decl = try analyser.lookupSymbolContainer(lhs, field_name, .field);
                         if (decl != null) return try analyser.enumValue(lhs, field_name);
                     }
@@ -8655,7 +8687,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         try analyser.isMutableIdentifierExpression(tree, handle, lhs))
                     {
                         const operand_type = try lhs_ty.typeOf(analyser);
-                        const reflexive = operand_type.isEnumType() or
+                        const reflexive = operand_type.isEnumType(analyser) or
                             if (operand_type.ipIndex()) |type_index|
                                 analyser.hasReflexiveEquality(type_index)
                             else
@@ -9305,7 +9337,7 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
             const symbol = try analyser.identifierTokenName(tree, field_name) orelse return null;
             if (analyser.evaluate_comptime_values and
                 lhs.type.is_type_val and
-                lhs.type.isEnumType())
+                lhs.type.isEnumType(analyser))
             {
                 const decl = try lhs.type.lookupSymbol(analyser, symbol);
                 if (decl != null and
@@ -10639,8 +10671,25 @@ pub const Type = struct {
         return true;
     }
 
-    pub fn isEnumType(self: Type) bool {
-        return self.isContainerKind(.keyword_enum);
+    pub fn isEnumType(self: Type, analyser: *Analyser) bool {
+        return switch (self.data) {
+            .ip_index => |payload| self.is_type_val and
+                if (payload.index) |index|
+                    analyser.ip.zigTypeTag(index) == .@"enum"
+                else
+                    false,
+            else => self.isContainerKind(.keyword_enum),
+        };
+    }
+
+    fn isInternPoolEnumType(self: Type, analyser: *Analyser) bool {
+        if (!self.is_type_val) return false;
+        const payload = switch (self.data) {
+            .ip_index => |payload| payload,
+            else => return false,
+        };
+        const index = payload.index orelse return false;
+        return analyser.ip.zigTypeTag(index) == .@"enum";
     }
 
     pub fn isUnionType(self: Type) bool {
@@ -10870,7 +10919,7 @@ pub const Type = struct {
             else => {},
         }
         if (self.is_type_val) {
-            if (self.isEnumType() or self.isTaggedUnion()) {
+            if (self.isEnumType(analyser) or self.isTaggedUnion()) {
                 if (try analyser.lookupSymbolContainer(self, symbol, .field)) |decl| {
                     return decl;
                 }
@@ -10884,7 +10933,7 @@ pub const Type = struct {
                     return decl;
                 }
             }
-            if (self.isEnumType()) {
+            if (self.isEnumType(analyser)) {
                 return null;
             }
             return try analyser.lookupSymbolContainer(self, symbol, .field);
@@ -12346,7 +12395,7 @@ pub const DeclWithHandle = struct {
                     return try analyser.resolveUnionTag(switch_expr_type_type);
                 }
 
-                if (switch_expr_type.isEnumType()) break :blk switch_expr_type;
+                if (switch_expr_type.isEnumType(analyser)) break :blk switch_expr_type;
                 if (!switch_expr_type.isUnionType()) return switch_expr_type;
 
                 if (case.ast.values.len == 0) {

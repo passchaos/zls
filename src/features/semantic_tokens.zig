@@ -249,7 +249,7 @@ fn colorIdentifierBasedOnType(
             .namespace
         else if (type_node.isStructType(builder.analyser))
             .@"struct"
-        else if (type_node.isEnumType())
+        else if (type_node.isEnumType(builder.analyser))
             .@"enum"
         else if (type_node.isUnionType())
             .type // There is no token type for a union type

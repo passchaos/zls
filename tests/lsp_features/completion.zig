@@ -2095,6 +2095,28 @@ test "generic function with comptime Enum type constructor" {
     });
 }
 
+test "generic function with comptime generated Enum values" {
+    try testCompletion(
+        \\fn Select(comptime Tag: type) type {
+        \\    const Mode = @Enum(Tag, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
+        \\    const mode = Mode.high;
+        \\    const from_int: Mode = @enumFromInt(7);
+        \\    return switch (mode) {
+        \\        .high => if (@intFromEnum(mode) == 7 and @tagName(mode)[0] == 'h' and
+        \\            @intFromEnum(from_int) == 7)
+        \\            struct { matched: Tag }
+        \\        else
+        \\            struct { fallback: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

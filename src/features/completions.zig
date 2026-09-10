@@ -316,7 +316,7 @@ fn declToCompletion(builder: *Builder, decl_handle: Analyser.DeclWithHandle) Ana
                     item.documentation = documentation;
                     builder.completions.appendAssumeCapacity(item);
                     return;
-                } else if (ty.isEnumType()) {
+                } else if (ty.isEnumType(builder.analyser)) {
                     if (ty.is_type_val) {
                         kind = .Enum;
                     } else {
@@ -1886,7 +1886,7 @@ fn collectFieldAccessContainerNodes(
         const result = try analyser.getFieldAccessType(handle, loc.end, loc) orelse return;
         const container = try analyser.resolveDerefType(result) orelse result;
         if (try analyser.resolveUnwrapErrorUnionType(container, .payload)) |unwrapped| {
-            if (unwrapped.isEnumType() or unwrapped.isUnionType()) {
+            if (unwrapped.isEnumType(analyser) or unwrapped.isUnionType()) {
                 _ = try unwrapped.getAllTypesWithHandlesArraySet(analyser, types_with_handles);
                 return;
             }
