@@ -2079,21 +2079,29 @@ fn resolveArrayCat(analyser: *Analyser, l_ty: Type, r_ty: Type) Error!?Type {
     const r_info = r_ty.arrayInfo(analyser) orelse return null;
     const l_count, const l_sentinel, const l_elem_ty = l_info;
     const r_count, const r_sentinel, const r_elem_ty = r_info;
-    _ = r_elem_ty; // TODO: Do peer type resolution
+    const elem_value = try analyser.resolvePeerTypes(
+        try l_elem_ty.instanceUnchecked(analyser),
+        try r_elem_ty.instanceUnchecked(analyser),
+    ) orelse return null;
+    const elem_ty = try elem_value.typeOf(analyser);
     const elem_count = blk: {
         const l = l_count orelse break :blk null;
         const r = r_count orelse break :blk null;
         break :blk std.math.add(u64, l, r) catch null;
     };
+    const elem_type = elem_ty.ipIndex() orelse return null;
     const sentinel = blk: {
         if (l_sentinel == .unknown_unknown) break :blk .unknown_unknown;
         if (r_sentinel == .unknown_unknown) break :blk .unknown_unknown;
-        if (l_sentinel == .none) break :blk r_sentinel;
-        if (r_sentinel == .none) break :blk l_sentinel;
-        if (l_sentinel == r_sentinel) break :blk l_sentinel;
+        if (l_sentinel == .none and r_sentinel == .none) break :blk .none;
+        if (l_sentinel == .none) break :blk try analyser.coerceArrayElementValue(elem_type, r_sentinel) orelse .unknown_unknown;
+        if (r_sentinel == .none) break :blk try analyser.coerceArrayElementValue(elem_type, l_sentinel) orelse .unknown_unknown;
+        const coerced_l = try analyser.coerceArrayElementValue(elem_type, l_sentinel) orelse break :blk .unknown_unknown;
+        const coerced_r = try analyser.coerceArrayElementValue(elem_type, r_sentinel) orelse break :blk .unknown_unknown;
+        if (coerced_l == coerced_r) break :blk coerced_l;
         break :blk .none;
     };
-    const array_ty = try Type.createArrayType(analyser, elem_count, sentinel, l_elem_ty);
+    const array_ty = try Type.createArrayType(analyser, elem_count, sentinel, elem_ty);
     return try array_ty.instanceUnchecked(analyser);
 }
 
@@ -2111,6 +2119,20 @@ fn resolveArrayCatExpression(analyser: *Analyser, lhs: Type, rhs: Type) Error!?T
         return try pointer_ty.instanceUnchecked(analyser);
     }
     return try analyser.resolveArrayCat(l_elem_ty, r_elem_ty);
+}
+
+fn coerceArrayElementValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    if (analyser.ip.isUndefined(value)) return try analyser.ip.getUndefined(result_type);
+    if (analyser.ip.isUnknown(value)) return try analyser.ip.getUnknown(result_type);
+    if (analyser.ip.zigTypeTag(result_type) == .int) {
+        const int = analyser.ip.toInt(value, i256) orelse return null;
+        return (try analyser.intValueWithType(result_type, int) orelse return null).ipIndex();
+    }
+    return analyser.coerceIP(result_type, value);
 }
 
 fn resolveOptionalIPValue(
@@ -7834,12 +7856,22 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 defer analyser.gpa.free(values);
                 const unknown = try analyser.ip.getUnknown(result_array.child);
                 if (lhs_values) |source| {
-                    for (values[0..lhs_len], 0..) |*value, i| value.* = source.at(@intCast(i), analyser.ip);
+                    for (values[0..lhs_len], 0..) |*value, i| {
+                        value.* = try analyser.coerceArrayElementValue(
+                            result_array.child,
+                            source.at(@intCast(i), analyser.ip),
+                        ) orelse unknown;
+                    }
                 } else {
                     @memset(values[0..lhs_len], unknown);
                 }
                 if (rhs_values) |source| {
-                    for (values[lhs_len..], 0..) |*value, i| value.* = source.at(@intCast(i), analyser.ip);
+                    for (values[lhs_len..], 0..) |*value, i| {
+                        value.* = try analyser.coerceArrayElementValue(
+                            result_array.child,
+                            source.at(@intCast(i), analyser.ip),
+                        ) orelse unknown;
+                    }
                 } else {
                     @memset(values[lhs_len..], unknown);
                 }

@@ -599,6 +599,23 @@ test "generic function with partially known array concatenation" {
     });
 }
 
+test "generic function with peer-typed array concatenation" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const joined = [_]u8{ 1, N } ++ [_]u16{ 300, 400 };
+        \\    return if (@TypeOf(joined) == [4]u16 and joined[0] == 1 and
+        \\        joined[1] == N and joined[2] == 300)
+        \\        struct { concatenated: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "concatenated", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime splat value" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

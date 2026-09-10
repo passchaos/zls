@@ -157,6 +157,18 @@ const array_cat_4 = &[2]u8{ 0, 1 } ++ &[3]u8{ 2, 3, 4 };
 //    ^^^^^^^^^^^ (*const [5]u8)()
 const array_cat_value = ([_]u8{ 1, 2 } ++ [_]u8{ 3, 4 })[2];
 //    ^^^^^^^^^^^^^^^ (u8)(3)
+const array_cat_peer_unsigned = [_]u8{ 1, 2 } ++ [_]u16{300};
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([3]u16)()
+const array_cat_peer_unsigned_lhs = array_cat_peer_unsigned[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u16)(1)
+const array_cat_peer_unsigned_rhs = array_cat_peer_unsigned[2];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u16)(300)
+const array_cat_peer_signed = [_]u8{1} ++ [_]i16{-2};
+//    ^^^^^^^^^^^^^^^^^^^^^ ([2]i16)()
+const array_cat_peer_signed_value = array_cat_peer_signed[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i16)(-2)
+const array_cat_peer_sentinel = [_:0]u8{ 1, 2 } ++ [_]u16{300};
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([3:0]u16)()
 var runtime_array: [2]u8 = undefined;
 const array_cat_runtime_lhs = runtime_array ++ [2]u8{ 3, 4 };
 const array_cat_runtime_lhs_value = array_cat_runtime_lhs[2];
@@ -164,6 +176,10 @@ const array_cat_runtime_lhs_value = array_cat_runtime_lhs[2];
 const array_cat_runtime_rhs = [2]u8{ 5, 6 } ++ runtime_array;
 const array_cat_runtime_rhs_value = array_cat_runtime_rhs[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(6)
+const array_cat_runtime_peer = runtime_array ++ [2]u16{ 300, 400 };
+//    ^^^^^^^^^^^^^^^^^^^^^^ ([4]u16)()
+const array_cat_runtime_peer_known = array_cat_runtime_peer[2];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u16)(300)
 
 //
 // Array multiplication
