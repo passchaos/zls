@@ -2389,6 +2389,25 @@ test "generic function with comptime type info payload values" {
     });
 }
 
+test "generic function with comptime pointer type info attributes" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const P = @Pointer(.one, .{ .@"align" = 4, .@"addrspace" = .generic }, T, null);
+        \\    const explicit = @typeInfo(P).pointer;
+        \\    const implicit = @typeInfo(*T).pointer;
+        \\    return if (explicit.alignment.? == 4 and explicit.address_space == .generic and
+        \\        implicit.alignment == null and implicit.address_space == .generic)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime container type info payload values" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

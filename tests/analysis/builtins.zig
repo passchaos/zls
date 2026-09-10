@@ -872,6 +872,12 @@ const type_info_pointer_const = @typeInfo(*const u8).pointer.is_const;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoPointerChild = @typeInfo(*const u8).pointer.child;
 //    ^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const type_info_pointer_alignment_null = @typeInfo(*u8).pointer.alignment == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_pointer_alignment = @typeInfo(AttributedManyPointer).pointer.alignment.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(4)
+const type_info_pointer_address_space = @typeInfo(GenericAddressPointer).pointer.address_space == .generic;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_float_bits = @typeInfo(f32).float.bits;
 //    ^^^^^^^^^^^^^^^^^^^^ (u16)(32)
 const type_info_array_len = @typeInfo([4]u16).array.len;

@@ -3027,6 +3027,18 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "is_volatile")) {
                 return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_volatile) .bool_true else .bool_false);
             }
+            if (std.mem.eql(u8, field_name, "alignment")) {
+                const alignment = if (pointer.flags.alignment == 0)
+                    InternPool.Index.none
+                else
+                    (try analyser.intValueWithType(.usize_type, pointer.flags.alignment) orelse return field_value_type).ipIndex() orelse
+                        return field_value_type;
+                return try analyser.optionalTypeValue(field_value_type, alignment);
+            }
+            if (std.mem.eql(u8, field_name, "address_space")) {
+                const enum_type = try field_value_type.typeOf(analyser);
+                return try analyser.enumValue(enum_type, @tagName(pointer.flags.address_space));
+            }
             if (std.mem.eql(u8, field_name, "child")) {
                 return Type.fromIP(analyser, .type_type, pointer.elem_type);
             }
