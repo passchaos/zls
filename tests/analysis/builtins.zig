@@ -968,6 +968,16 @@ const type_info_fn_param_noalias = @typeInfo(NoaliasFn).@"fn".params[0].is_noali
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoFnParamType = @typeInfo(NoaliasFn).@"fn".params[0].type.?;
 //    ^^^^^^^^^^^^^^^^^^^ (type)(*anyopaque)
+const TypeInfoDecls = struct {
+    field: u8,
+    pub const Alpha = 1;
+    const hidden = 2;
+    pub fn beta() void {}
+};
+const type_info_decls_len = @typeInfo(TypeInfoDecls).@"struct".decls.len;
+//    ^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const type_info_decl_name_first = @typeInfo(TypeInfoDecls).@"struct".decls[0].name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(65)
 const align_of_u16 = @alignOf(u16);
 //    ^^^^^^^^^^^^ (comptime_int)(2)
 const align_of_generated_int = @alignOf(Int);

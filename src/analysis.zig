@@ -3150,13 +3150,13 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "payload")) return payload;
         },
         .@"struct" => {
-            const layout, const backing_integer, const is_tuple, const field_count = switch (value.reflected_type.data) {
+            const layout, const backing_integer, const is_tuple, const field_count, const declaration_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .struct_type => |struct_index| blk: {
                         const info = analyser.ip.getStruct(struct_index);
-                        break :blk .{ info.layout, info.backing_int_ty, false, info.fields.count() };
+                        break :blk .{ info.layout, info.backing_int_ty, false, info.fields.count(), 0 };
                     },
-                    .tuple_type => |tuple| .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true, tuple.types.len },
+                    .tuple_type => |tuple| .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true, tuple.types.len, 0 },
                     else => return field_value_type,
                 },
                 .container => blk: {
@@ -3171,7 +3171,13 @@ fn resolveTypeInfoFieldAccess(
                     else
                         InternPool.Index.none;
                     if (info.layout == .@"packed" and backing_integer == .none) return field_value_type;
-                    break :blk .{ info.layout, backing_integer, false, astContainerFieldCount(info.declaration, info.handle) };
+                    break :blk .{
+                        info.layout,
+                        backing_integer,
+                        false,
+                        astContainerFieldCount(info.declaration, info.handle),
+                        astContainerDeclarationCount(info.declaration, info.handle),
+                    };
                 },
                 else => return field_value_type,
             };
@@ -3188,13 +3194,16 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "fields")) {
                 return try analyser.typeInfoCollectionValue(value, field_value_type, .struct_fields, field_count);
             }
+            if (std.mem.eql(u8, field_name, "decls")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, .container_decls, declaration_count);
+            }
         },
         .@"union" => {
-            const layout, const tag_type, const field_count = switch (value.reflected_type.data) {
+            const layout, const tag_type, const field_count, const declaration_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .union_type => |union_index| blk: {
                         const info = analyser.ip.getUnion(union_index);
-                        break :blk .{ info.layout, info.tag_type, info.fields.count() };
+                        break :blk .{ info.layout, info.tag_type, info.fields.count(), 0 };
                     },
                     else => return field_value_type,
                 },
@@ -3211,7 +3220,12 @@ fn resolveTypeInfoFieldAccess(
                         }) orelse return field_value_type).ipIndex() orelse return field_value_type
                     else
                         InternPool.Index.none;
-                    break :blk .{ info.layout, tag_type, astContainerFieldCount(info.declaration, info.handle) };
+                    break :blk .{
+                        info.layout,
+                        tag_type,
+                        astContainerFieldCount(info.declaration, info.handle),
+                        astContainerDeclarationCount(info.declaration, info.handle),
+                    };
                 },
                 else => return field_value_type,
             };
@@ -3225,13 +3239,16 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "fields")) {
                 return try analyser.typeInfoCollectionValue(value, field_value_type, .union_fields, field_count);
             }
+            if (std.mem.eql(u8, field_name, "decls")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, .container_decls, declaration_count);
+            }
         },
         .@"enum" => {
-            const tag_type, const is_exhaustive, const field_count = switch (value.reflected_type.data) {
+            const tag_type, const is_exhaustive, const field_count, const declaration_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .enum_type => |enum_index| blk: {
                         const info = analyser.ip.getEnum(enum_index);
-                        break :blk .{ Type.fromIP(analyser, .type_type, info.tag_type), info.is_exhaustive, info.fields.count() };
+                        break :blk .{ Type.fromIP(analyser, .type_type, info.tag_type), info.is_exhaustive, info.fields.count(), 0 };
                     },
                     else => return field_value_type,
                 },
@@ -3252,6 +3269,7 @@ fn resolveTypeInfoFieldAccess(
                         try analyser.astEnumTagType(value.reflected_type.*, info.declaration, info.handle) orelse return field_value_type,
                         is_exhaustive,
                         astEnumFieldCount(info.declaration, info.handle),
+                        astContainerDeclarationCount(info.declaration, info.handle),
                     };
                 },
                 else => return field_value_type,
@@ -3264,6 +3282,24 @@ fn resolveTypeInfoFieldAccess(
             }
             if (std.mem.eql(u8, field_name, "fields")) {
                 return try analyser.typeInfoCollectionValue(value, field_value_type, .enum_fields, field_count);
+            }
+            if (std.mem.eql(u8, field_name, "decls")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, .container_decls, declaration_count);
+            }
+        },
+        .@"opaque" => {
+            const declaration_count = switch (value.reflected_type.data) {
+                .container => blk: {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const info = astContainerTypeInfo(value.reflected_type.*, &buffer) orelse return field_value_type;
+                    if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_opaque) return field_value_type;
+                    break :blk astContainerDeclarationCount(info.declaration, info.handle);
+                },
+                .ip_index => 0,
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "decls")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, .container_decls, declaration_count);
             }
         },
         .@"fn" => {
@@ -3614,6 +3650,13 @@ fn resolveTypeInfoDescriptorField(
                 return try analyser.stringValueWithType(name, try field_value_type.typeOf(analyser));
             }
         },
+        .container_decls => {
+            const declaration = try analyser.astContainerDeclarationAt(value.reflected_type.*, index) orelse
+                return field_value_type;
+            if (std.mem.eql(u8, field_name, "name")) {
+                return try analyser.stringValueWithType(declaration.name, try field_value_type.typeOf(analyser));
+            }
+        },
     }
     return field_value_type;
 }
@@ -3663,6 +3706,72 @@ fn astEnumFieldCount(declaration: Ast.full.ContainerDecl, handle: *DocumentStore
         if (!std.mem.eql(u8, name, "_")) count += 1;
     }
     return count;
+}
+
+fn astContainerDeclarationCount(declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle) usize {
+    var count: usize = 0;
+    for (declaration.ast.members) |member| {
+        const is_public = switch (handle.tree.nodeTag(member)) {
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            => handle.tree.fullVarDecl(member).?.visib_token != null,
+            .fn_proto,
+            .fn_proto_multi,
+            .fn_proto_one,
+            .fn_proto_simple,
+            .fn_decl,
+            => blk: {
+                var buffer: [1]Ast.Node.Index = undefined;
+                const function = handle.tree.fullFnProto(&buffer, member).?;
+                break :blk function.visib_token != null and function.name_token != null;
+            },
+            else => false,
+        };
+        count += @intFromBool(is_public);
+    }
+    return count;
+}
+
+fn astContainerDeclarationAt(
+    analyser: *Analyser,
+    container_type: Type,
+    wanted_index: u32,
+) Error!?struct { name: []const u8 } {
+    var container_buffer: [2]Ast.Node.Index = undefined;
+    const info = astContainerTypeInfo(container_type, &container_buffer) orelse return null;
+    var index: u32 = 0;
+    for (info.declaration.ast.members) |member| {
+        const name_token = switch (info.handle.tree.nodeTag(member)) {
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            => blk: {
+                const variable = info.handle.tree.fullVarDecl(member).?;
+                if (variable.visib_token == null) continue;
+                break :blk variable.ast.mut_token + 1;
+            },
+            .fn_proto,
+            .fn_proto_multi,
+            .fn_proto_one,
+            .fn_proto_simple,
+            .fn_decl,
+            => blk: {
+                var function_buffer: [1]Ast.Node.Index = undefined;
+                const function = info.handle.tree.fullFnProto(&function_buffer, member).?;
+                if (function.visib_token == null) continue;
+                break :blk function.name_token orelse continue;
+            },
+            else => continue,
+        };
+        if (index == wanted_index) {
+            return .{ .name = try analyser.identifierTokenName(&info.handle.tree, name_token) orelse return null };
+        }
+        index += 1;
+    }
+    return null;
 }
 
 fn astContainerTypeInfo(
@@ -10529,7 +10638,7 @@ pub const Type = struct {
         };
     };
 
-    const TypeInfoCollectionKind = enum { struct_fields, union_fields, enum_fields, fn_params, error_set_errors };
+    const TypeInfoCollectionKind = enum { struct_fields, union_fields, enum_fields, fn_params, error_set_errors, container_decls };
 
     pub const Data = union(enum) {
         /// - `*const T`

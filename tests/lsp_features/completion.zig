@@ -2723,6 +2723,58 @@ test "generic function with comptime error set type info" {
     });
 }
 
+test "generic function with comptime type info declarations" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct {
+        \\        field: T,
+        \\        pub const Alpha = 1;
+        \\        const hidden = 2;
+        \\        pub fn beta() void {}
+        \\        test {}
+        \\        comptime {}
+        \\    };
+        \\    const U = union { value: T, pub const Alpha = 1; const hidden = 2; };
+        \\    const E = enum { value, pub const Alpha = 1; const hidden = 2; };
+        \\    const O = opaque { pub const Alpha = 1; const hidden = 2; };
+        \\    const struct_decls = @typeInfo(S).@"struct".decls;
+        \\    const union_decls = @typeInfo(U).@"union".decls;
+        \\    const enum_decls = @typeInfo(E).@"enum".decls;
+        \\    const opaque_decls = @typeInfo(O).@"opaque".decls;
+        \\    return if (struct_decls.len == 2 and struct_decls[0].name[0] == 'A' and
+        \\        struct_decls[1].name[0] == 'b' and union_decls.len == 1 and
+        \\        union_decls[0].name[0] == 'A' and enum_decls.len == 1 and
+        \\        enum_decls[0].name[0] == 'A' and opaque_decls.len == 1 and
+        \\        opaque_decls[0].name[0] == 'A')
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{} });
+        \\    const U = @Union(.auto, null, &.{"value"}, &.{T}, &.{.{} });
+        \\    const E = @Enum(u8, .exhaustive, &.{"value"}, &.{1});
+        \\    return if (@typeInfo(S).@"struct".decls.len == 0 and
+        \\        @typeInfo(U).@"union".decls.len == 0 and
+        \\        @typeInfo(E).@"enum".decls.len == 0)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime alignOf" {
     try testCompletion(
         \\fn Select(comptime bits: u16) type {
