@@ -1507,6 +1507,29 @@ fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
     return Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
 }
 
+fn resolveMetaFieldsValue(
+    analyser: *Analyser,
+    container_type: Type,
+    value_type: Type,
+) Error!?Type {
+    const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
+    const kind: Type.TypeInfoCollectionKind = switch (tag) {
+        .@"struct" => .struct_fields,
+        .@"union" => .union_fields,
+        .@"enum" => .enum_fields,
+        .error_set => .error_set_errors,
+        else => return null,
+    };
+    const names = try analyser.metaFieldNames(container_type) orelse return null;
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(value_type),
+        .reflected_type = try analyser.allocType(container_type),
+        .tag = tag,
+        .is_payload = true,
+        .collection = .{ .kind = kind, .len = names.len, .index = null },
+    } }, .is_type_val = false };
+}
+
 fn resolveSwitchUnionPayload(
     analyser: *Analyser,
     union_type: Type,
@@ -9109,6 +9132,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         if (std.mem.eql(u8, name, field_name)) break field_index;
                     } else null;
                     return try analyser.optionalComptimeIntValue(index);
+                }
+
+                if (std.mem.eql(u8, func_name, "fields")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveMetaFieldsValue(arg_type, func_info.return_value.*) orelse .unknown_type;
                 }
             }
 

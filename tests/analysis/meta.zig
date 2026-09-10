@@ -91,3 +91,18 @@ const second_field_index = std.meta.fieldIndex(FieldUnion, "beta").?;
 //    ^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
 const missing_field_index = std.meta.fieldIndex(FieldStruct, "missing") == null;
 //    ^^^^^^^^^^^^^^^^^^^ (bool)(true)
+
+const StructFields = std.meta.fields(FieldStruct);
+const struct_fields_len = StructFields.len;
+//    ^^^^^^^^^^^^^^^^^ (usize)(2)
+const struct_field_type = StructFields[1].type;
+//    ^^^^^^^^^^^^^^^^^ (type)(u16)
+const UnionFields = std.meta.fields(FieldUnion);
+const union_field_type = UnionFields[0].type;
+//    ^^^^^^^^^^^^^^^^ (type)(u8)
+const EnumFields = std.meta.fields(ConsecutiveTag);
+const enum_field_value = EnumFields[1].value;
+//    ^^^^^^^^^^^^^^^^ (comptime_int)(1)
+const ErrorFields = std.meta.fields(error{ Alpha, Beta });
+const error_field_name_first = ErrorFields[0].name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(65)

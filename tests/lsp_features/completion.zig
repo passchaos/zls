@@ -2516,6 +2516,45 @@ test "generic function with comptime std meta field index" {
     });
 }
 
+test "generic function with comptime std meta fields" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "value", "enabled" }, &.{ T, bool }, &.{ .{}, .{} });
+        \\    const fields = std.meta.fields(S);
+        \\    return if (fields.len == 2 and fields[0].name[0] == 'v' and fields[0].type == T and
+        \\        fields[1].name[0] == 'e' and fields[1].type == bool)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const U = @Union(.auto, null, &.{ "payload", "empty" }, &.{ T, void }, &.{ .{}, .{} });
+        \\    const E = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 4, 9 });
+        \\    const union_fields = std.meta.fields(U);
+        \\    const enum_fields = std.meta.fields(E);
+        \\    const errors = std.meta.fields(error{ Oops, Failed });
+        \\    return if (union_fields.len == 2 and union_fields[0].type == T and
+        \\        enum_fields[1].value == 9 and errors.len == 2 and errors[0].name[0] == 'O')
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
