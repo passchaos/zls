@@ -1932,6 +1932,17 @@ test "generic function with comptime Fn type constructor" {
     , &.{
         .{ .label = "callback", .kind = .Field, .detail = "*const fn(u16, bool) void" },
     });
+
+    try testCompletion(
+        \\fn Holder(comptime T: type) type {
+        \\    const Callback = @Fn(&.{*T}, &.{.{ .@"noalias" = true }}, void, .{});
+        \\    return struct { callback: *const Callback };
+        \\}
+        \\const holder: Holder(u8) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "*const fn(noalias *u8) void" },
+    });
 }
 
 test "generic function with comptime value builtins" {

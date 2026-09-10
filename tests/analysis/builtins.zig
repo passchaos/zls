@@ -802,6 +802,8 @@ const Fn = @Fn(&.{i32}, &.{.{}}, undefined, .{});
 //                                          ^ (Attributes)()
 const ConcreteFn = @Fn(&.{ i32, bool }, &.{ .{}, .{} }, u8, .{});
 //    ^^^^^^^^^^ (type)(fn(i32, bool) u8)
+const NoaliasFn = @Fn(&.{*anyopaque}, &.{.{ .@"noalias" = true }}, void, .{});
+//    ^^^^^^^^^ (type)(fn(noalias *anyopaque) void)
 
 const type_enum_literal: @EnumLiteral() = .foo;
 //    ^^^^^^^^^^^^^^^^^ (@EnumLiteral())()

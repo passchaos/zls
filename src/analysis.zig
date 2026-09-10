@@ -4296,20 +4296,38 @@ fn isEmptyStructLiteral(node_handle: NodeWithHandle) bool {
     return literal.ast.type_expr.unwrap() == null and literal.ast.fields.len == 0;
 }
 
-fn isEmptyStructAttributeList(
-    node_handle: NodeWithHandle,
+fn resolveFnParameterAttributes(
+    analyser: *Analyser,
+    options: ResolveOptions,
     expected_len: usize,
-) bool {
+) Error!?std.StaticBitSet(32) {
+    if (expected_len > 32) return null;
+    const node_handle = options.node_handle;
     const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return false;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
     const literal_node = tree.nodeData(node_handle.node).node;
     var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return false;
-    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return false;
-    for (literal.ast.elements) |element| {
-        if (!isEmptyStructLiteral(.of(element, node_handle.handle))) return false;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return null;
+
+    var noalias_bits: std.StaticBitSet(32) = .empty;
+    for (literal.ast.elements, 0..) |element, i| {
+        var struct_buffer: [2]Ast.Node.Index = undefined;
+        const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
+        if (attributes.ast.type_expr.unwrap() != null) return null;
+        for (attributes.ast.fields) |field_node| {
+            const field_name_token = tree.firstToken(field_node) - 2;
+            if (tree.tokenTag(field_name_token) != .identifier) return null;
+            const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
+            if (!std.mem.eql(u8, field_name, "noalias")) return null;
+            const value = try analyser.resolveBoolValue(.{
+                .node_handle = .of(field_node, node_handle.handle),
+                .container_type = options.container_type,
+            }) orelse return null;
+            noalias_bits.setValue(i, value);
+        }
     }
-    return true;
+    return noalias_bits;
 }
 
 fn floatReduceValue(
@@ -7744,7 +7762,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .tuple_type => |tuple| tuple.types,
                         else => return .unknown_type,
                     };
-                    if (!isEmptyStructAttributeList(.of(params[1], handle), parameter_types.len)) return .unknown_type;
+                    const noalias_bits = try analyser.resolveFnParameterAttributes(.{
+                        .node_handle = .of(params[1], handle),
+                        .container_type = options.container_type,
+                    }, parameter_types.len) orelse return .unknown_type;
                     const return_type = try analyser.resolveTypeOfNodeInternal(.{
                         .node_handle = .of(params[2], handle),
                         .container_type = options.container_type,
@@ -7754,6 +7775,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (!isEmptyStructLiteral(.of(params[3], handle))) return .unknown_type;
                     const function_type = try analyser.ip.get(.{ .function_type = .{
                         .args = parameter_types,
+                        .args_is_noalias = noalias_bits,
                         .return_type = return_type_index,
                     } });
                     return Type.fromIP(analyser, .type_type, function_type);
