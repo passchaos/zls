@@ -1530,6 +1530,37 @@ fn resolveMetaFieldsValue(
     } }, .is_type_val = false };
 }
 
+fn resolveMetaDeclarationsValue(
+    analyser: *Analyser,
+    container_type: Type,
+    value_type: Type,
+) Error!?Type {
+    const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
+    const declaration_count = switch (container_type.data) {
+        .tuple => 0,
+        .container => blk: {
+            const kind = container_type.getContainerKind() orelse return null;
+            if (kind != .keyword_struct and kind != .keyword_union and
+                kind != .keyword_enum and kind != .keyword_opaque) return null;
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
+            break :blk astContainerDeclarationCount(info.declaration, info.handle);
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .struct_type, .tuple_type, .union_type, .enum_type => 0,
+            else => return null,
+        },
+        else => return null,
+    };
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(value_type),
+        .reflected_type = try analyser.allocType(container_type),
+        .tag = tag,
+        .is_payload = true,
+        .collection = .{ .kind = .container_decls, .len = declaration_count, .index = null },
+    } }, .is_type_val = false };
+}
+
 fn resolveSwitchUnionPayload(
     analyser: *Analyser,
     union_type: Type,
@@ -9139,6 +9170,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
                         return .unknown_type;
                     return try analyser.resolveMetaFieldsValue(arg_type, func_info.return_value.*) orelse .unknown_type;
+                }
+
+                if (std.mem.eql(u8, func_name, "declarations")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveMetaDeclarationsValue(arg_type, func_info.return_value.*) orelse .unknown_type;
                 }
             }
 

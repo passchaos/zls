@@ -106,3 +106,19 @@ const enum_field_value = EnumFields[1].value;
 const ErrorFields = std.meta.fields(error{ Alpha, Beta });
 const error_field_name_first = ErrorFields[0].name[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(65)
+
+const DeclStruct = struct {
+    pub const Alpha = 1;
+    const hidden = 2;
+    pub fn beta() void {}
+};
+const StructDecls = std.meta.declarations(DeclStruct);
+const struct_decls_len = StructDecls.len;
+//    ^^^^^^^^^^^^^^^^ (usize)(2)
+const struct_decl_first_name = StructDecls[0].name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(65)
+const struct_decl_second_name = StructDecls[1].name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(98)
+const GeneratedDecls = std.meta.declarations(MetaPacked);
+const generated_decls_len = GeneratedDecls.len;
+//    ^^^^^^^^^^^^^^^^^^^ (usize)(0)
