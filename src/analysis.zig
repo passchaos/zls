@@ -4252,24 +4252,7 @@ fn resolveTupleTypeConstructor(
         }
     }
 
-    var literal_options = options;
-    if (try analyser.resolveVarDeclAlias(.{
-        .decl = .{ .ast_node = options.node_handle.node },
-        .handle = options.node_handle.handle,
-        .container_type = options.container_type,
-    })) |declaration| {
-        const declaration_node = switch (declaration.decl) {
-            .ast_node => |decl_node| decl_node,
-            else => return null,
-        };
-        const declaration_tree = &declaration.handle.tree;
-        const variable = declaration_tree.fullVarDecl(declaration_node) orelse return null;
-        if (declaration_tree.tokenTag(variable.ast.mut_token) != .keyword_const) return null;
-        literal_options = .{
-            .node_handle = .of(variable.ast.init_node.unwrap() orelse return null, declaration.handle),
-            .container_type = declaration.container_type,
-        };
-    }
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
 
     const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
@@ -4289,11 +4272,31 @@ fn resolveTupleTypeConstructor(
     return try Type.createTupleType(analyser, element_types);
 }
 
+fn resolveConstInitializer(analyser: *Analyser, options: ResolveOptions) Error!?ResolveOptions {
+    const declaration = try analyser.resolveVarDeclAlias(.{
+        .decl = .{ .ast_node = options.node_handle.node },
+        .handle = options.node_handle.handle,
+        .container_type = options.container_type,
+    }) orelse return options;
+    const declaration_node = switch (declaration.decl) {
+        .ast_node => |decl_node| decl_node,
+        else => return null,
+    };
+    const tree = &declaration.handle.tree;
+    const variable = tree.fullVarDecl(declaration_node) orelse return null;
+    if (tree.tokenTag(variable.ast.mut_token) != .keyword_const) return null;
+    return .{
+        .node_handle = .of(variable.ast.init_node.unwrap() orelse return null, declaration.handle),
+        .container_type = declaration.container_type,
+    };
+}
+
 fn resolveStringListLiteral(
     analyser: *Analyser,
     options: ResolveOptions,
 ) Error!?[]const []const u8 {
-    const node_handle = options.node_handle;
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
     if (tree.nodeTag(node_handle.node) != .address_of) return null;
     const literal_node = tree.nodeData(node_handle.node).node;
@@ -4305,7 +4308,7 @@ fn resolveStringListLiteral(
     for (literal.ast.elements, strings, 0..) |element, *string, i| {
         string.* = try analyser.resolveStringLiteral(.{
             .node_handle = .of(element, node_handle.handle),
-            .container_type = options.container_type,
+            .container_type = literal_options.container_type,
         }) orelse return null;
         for (strings[0..i]) |previous| {
             if (std.mem.eql(u8, previous, string.*)) return null;
@@ -4358,7 +4361,8 @@ fn resolveStructFieldAlignments(
     options: ResolveOptions,
     expected_len: usize,
 ) Error!?[]const u16 {
-    const node_handle = options.node_handle;
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
     if (tree.nodeTag(node_handle.node) != .address_of) return null;
     const literal_node = tree.nodeData(node_handle.node).node;
@@ -4381,7 +4385,7 @@ fn resolveStructFieldAlignments(
             const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
             const field_options: ResolveOptions = .{
                 .node_handle = .of(field_node, node_handle.handle),
-                .container_type = options.container_type,
+                .container_type = literal_options.container_type,
             };
             if (std.mem.eql(u8, field_name, "comptime")) {
                 if (seen_comptime) return null;

@@ -1977,6 +1977,20 @@ test "generic function with comptime Struct type constructor" {
     , &.{
         .{ .label = "value", .kind = .Field, .detail = "value: align(4) u8" },
     });
+
+    try testCompletion(
+        \\fn Record(comptime T: type, comptime alignment: u16) type {
+        \\    const names = &.{ "value", "enabled" };
+        \\    const types = &.{ T, bool };
+        \\    const attrs = &.{ .{ .@"align" = alignment }, .{} };
+        \\    return @Struct(.auto, null, names, types, attrs);
+        \\}
+        \\const record: Record(u16, 8) = undefined;
+        \\const field = record.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "value: align(8) u16" },
+        .{ .label = "enabled", .kind = .Field, .detail = "enabled: bool" },
+    });
 }
 
 test "generic function with comptime value builtins" {
