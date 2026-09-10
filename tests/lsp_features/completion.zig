@@ -3276,6 +3276,25 @@ test "generic function with comptime enum switch" {
 
 test "generic function with comptime switch return statements" {
     try testCompletion(
+        \\fn Select(comptime signed: i256, comptime unsigned: u256) type {
+        \\    const minimum: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968;
+        \\    const high: u256 = 57896044618658097711785492504343953926634992332820282019728792003956564819968;
+        \\    return if (unsigned +% 1 == 0 and unsigned +| 1 == unsigned and
+        \\        @as(u256, 1) -% 2 == unsigned and @as(u256, 1) -| 2 == 0 and
+        \\        high *% 2 == 0 and high *| 2 == unsigned and high <<| 2 == unsigned and
+        \\        signed +% 1 == minimum and signed +| 1 == signed and
+        \\        minimum -% 1 == signed and minimum -| 1 == minimum)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(57896044618658097711785492504343953926634992332820282019728792003956564819967, 115792089237316195423570985008687907853269984665640564039457584007913129639935) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime N: u8) type {
         \\    switch (N) {
         \\        0 => return struct { zero: u8 },

@@ -3839,7 +3839,41 @@ fn resolveFixedWidthIntegerBinaryValue(
     const rhs_index = rhs_payload.index orelse return null;
     if (analyser.ip.zigTypeTag(result_type) != .int) return null;
     const int_info = analyser.ip.intInfo(result_type, builtin.target);
-    if (int_info.bits == 0 or int_info.bits > 128) return null;
+    if (int_info.bits == 0) return null;
+    if (int_info.bits > 128) {
+        var lhs_big = try analyser.managedIntegerValue(lhs_index) orelse return null;
+        defer lhs_big.deinit();
+        var rhs_big = try analyser.managedIntegerValue(rhs_index) orelse return null;
+        defer rhs_big.deinit();
+        var result: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer result.deinit();
+        switch (tag) {
+            .add_wrap => _ = try result.addWrap(&lhs_big, &rhs_big, int_info.signedness, int_info.bits),
+            .sub_wrap => _ = try result.subWrap(&lhs_big, &rhs_big, int_info.signedness, int_info.bits),
+            .mul_wrap => try result.mulWrap(&lhs_big, &rhs_big, int_info.signedness, int_info.bits),
+            .add_sat => try result.addSat(&lhs_big, &rhs_big, int_info.signedness, int_info.bits),
+            .sub_sat => try result.subSat(&lhs_big, &rhs_big, int_info.signedness, int_info.bits),
+            .mul_sat => {
+                try result.mul(&lhs_big, &rhs_big);
+                try result.saturate(&result, int_info.signedness, int_info.bits);
+            },
+            .shl_sat => {
+                const shift = analyser.ip.toInt(rhs_index, u16) orelse return null;
+                if (shift >= int_info.bits) return null;
+                try result.shiftLeftSat(&lhs_big, shift, int_info.signedness, int_info.bits);
+            },
+            else => return null,
+        }
+        if (result.toInt(i256)) |scalar| {
+            return analyser.intValueWithType(result_type, scalar);
+        } else |_| {
+            return Type.fromIP(
+                analyser,
+                result_type,
+                try analyser.ip.getBigInt(result_type, result.toConst()),
+            );
+        }
+    }
 
     const value: i256 = switch (int_info.signedness) {
         .unsigned => unsigned: {
