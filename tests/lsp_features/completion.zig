@@ -847,6 +847,24 @@ test "generic function with comptime vector comparison" {
     });
 }
 
+test "generic function with comptime vector shuffle" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const a: @Vector(2, u8) = .{ 1, N };
+        \\    const b: @Vector(2, u8) = .{ 3, 4 };
+        \\    const values = @shuffle(u8, a, b, @Vector(3, i32){ 1, -1, -2 });
+        \\    return if (values[0] == 2 and values[1] == 3 and values[2] == 4)
+        \\        struct { shuffled: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "shuffled", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime overflow builtins" {
     try testCompletion(
         \\fn Select(comptime value: u8) type {

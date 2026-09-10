@@ -1214,22 +1214,23 @@ fn resolveStringSliceValue(
 
 fn resolveArrayValue(
     analyser: *Analyser,
-    array_type: Type,
+    aggregate_type: Type,
     elements: []const Ast.Node.Index,
     handle: *DocumentStore.Handle,
 ) Error!?Type {
-    const type_index = array_type.ipIndex() orelse return null;
-    const array = switch (analyser.ip.indexToKey(type_index)) {
-        .array_type => |array| array,
+    const type_index = aggregate_type.ipIndex() orelse return null;
+    const child, const len = switch (analyser.ip.indexToKey(type_index)) {
+        .array_type => |array| .{ array.child, array.len },
+        .vector_type => |vector| .{ vector.child, vector.len },
         else => return null,
     };
-    if (array.len != elements.len) return null;
+    if (len != elements.len) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, elements.len);
     defer analyser.gpa.free(values);
     for (elements, values) |element, *value| {
-        value.* = try analyser.resolveCoercedIPValue(array.child, .of(element, handle)) orelse
-            try analyser.ip.getUnknown(array.child);
+        value.* = try analyser.resolveCoercedIPValue(child, .of(element, handle)) orelse
+            try analyser.ip.getUnknown(child);
     }
     const aggregate = try analyser.ip.get(.{ .aggregate = .{
         .ty = type_index,
@@ -3277,6 +3278,76 @@ fn resolveSelectValue(
             .bool_false => rhs_values.?.at(@intCast(i), analyser.ip),
             else => try analyser.ip.getUnknown(element_type),
         };
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
+fn resolveShuffleValue(
+    analyser: *Analyser,
+    element_type: InternPool.Index,
+    lhs: Type,
+    rhs: Type,
+    mask: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const mask_payload = switch (mask.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const mask_vector = switch (analyser.ip.indexToKey(mask_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (lhs_vector.child != element_type or
+        rhs_vector.child != element_type or
+        analyser.ip.zigTypeTag(mask_vector.child) != .int) return null;
+
+    const result_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = mask_vector.len,
+        .child = element_type,
+    } });
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    const mask_values = analyser.aggregateValues(mask);
+    if (lhs_values == null or rhs_values == null or mask_values == null) {
+        return Type.fromIP(analyser, result_type, null);
+    }
+
+    const values = try analyser.gpa.alloc(InternPool.Index, mask_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const mask_value = analyser.ip.toInt(mask_values.?.at(@intCast(i), analyser.ip), i64) orelse {
+            value.* = try analyser.ip.getUnknown(element_type);
+            continue;
+        };
+        if (mask_value >= 0) {
+            const index: u64 = @intCast(mask_value);
+            value.* = if (index < lhs_vector.len)
+                lhs_values.?.at(@intCast(index), analyser.ip)
+            else
+                try analyser.ip.getUnknown(element_type);
+        } else {
+            const index: u64 = @intCast(~mask_value);
+            value.* = if (index < rhs_vector.len)
+                rhs_values.?.at(@intCast(index), analyser.ip)
+            else
+                try analyser.ip.getUnknown(element_type);
+        }
     }
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
@@ -5603,6 +5674,24 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         if (try analyser.resolveSelectValue(element_type, predicate, lhs, rhs)) |value| return value;
                     }
                     return try analyser.resolveSelectValue(element_type, predicate.withoutIPIndex(analyser), lhs.withoutIPIndex(analyser), rhs.withoutIPIndex(analyser));
+                },
+                .shuffle => {
+                    if (params.len != 4) return null;
+                    const element = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (!element.is_type_val) return null;
+                    const element_type = element.ipIndex() orelse return null;
+                    const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
+                    const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[2], handle)) orelse return null;
+                    const mask = try analyser.resolveTypeOfNodeInternal(.of(params[3], handle)) orelse return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveShuffleValue(element_type, lhs, rhs, mask)) |value| return value;
+                    }
+                    return try analyser.resolveShuffleValue(
+                        element_type,
+                        lhs.withoutIPIndex(analyser),
+                        rhs.withoutIPIndex(analyser),
+                        mask.withoutIPIndex(analyser),
+                    );
                 },
                 .has_field, .has_decl => |tag| {
                     if (params.len != 2) return null;

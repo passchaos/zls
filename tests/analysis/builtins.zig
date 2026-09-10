@@ -149,6 +149,22 @@ const select_value = @select(
 );
 const select_value_index = select_value[1];
 //    ^^^^^^^^^^^^^^^^^^ (u8)(6)
+const shuffle_value = @shuffle(
+    u8,
+    @as(@Vector(2, u8), .{ 1, 2 }),
+    @as(@Vector(2, u8), .{ 3, 4 }),
+    @Vector(3, i32){ 1, -1, -2 },
+);
+const shuffle_value_index = shuffle_value[2];
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(4)
+const unequal_shuffle_value = @shuffle(
+    u8,
+    @as(@Vector(2, u8), .{ 1, 2 }),
+    @as(@Vector(3, u8), .{ 3, 4, 5 }),
+    @Vector(2, i32){ 1, -3 },
+);
+const unequal_shuffle_value_index = unequal_shuffle_value[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(5)
 
 const invalid_builtin_00 = @sqrt(null);
 //    ^^^^^^^^^^^^^^^^^^ (unknown)()
