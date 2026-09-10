@@ -2732,6 +2732,15 @@ fn resolveFixedWidthIntegerAbsorbingBinaryValue(
     const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
     const absorbing: ?i256 = switch (tag) {
         .mul_wrap, .mul_sat => if (lhs_value == 0 or rhs_value == 0) 0 else null,
+        .shl_sat => if (lhs_value == 0) blk: {
+            if (rhs_value) |shift| {
+                if (shift < 0 or shift >= analyser.ip.intInfo(result_type, builtin.target).bits) return null;
+            } else {
+                const shift_bounds = analyser.fixedWidthIntegerBounds(rhs_payload.type) orelse return null;
+                if (shift_bounds.min < 0 or shift_bounds.max >= analyser.ip.intInfo(result_type, builtin.target).bits) return null;
+            }
+            break :blk 0;
+        } else null,
         .add_sat => if (bounds.min == 0 and (lhs_value == bounds.max or rhs_value == bounds.max)) bounds.max else null,
         .sub_sat => if (bounds.min == 0 and (lhs_value == 0 or rhs_value == bounds.max)) 0 else null,
         else => null,
@@ -2760,6 +2769,39 @@ fn resolveIntegerRemainderByOneValue(
     return analyser.intValueWithType(lhs_payload.type, 0);
 }
 
+fn resolveZeroShiftValue(
+    analyser: *Analyser,
+    operand: Type,
+    shift_operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const shift_payload = switch (shift_operand.data) {
+        .ip_index => |shift_value| shift_value,
+        else => return null,
+    };
+    _ = analyser.fixedWidthIntegerBounds(payload.type) orelse return null;
+    const operand_index = payload.index orelse return null;
+    if (analyser.ip.isUndefined(operand_index) or analyser.ip.toInt(operand_index, i256) != 0) return null;
+
+    const operand_bits = analyser.ip.intInfo(payload.type, builtin.target).bits;
+    if (shift_payload.index) |shift_index| {
+        if (analyser.ip.isUndefined(shift_index)) return null;
+        if (analyser.ip.toInt(shift_index, u16)) |shift| {
+            if (shift >= operand_bits) return null;
+        } else if (!analyser.ip.isUnknown(shift_index)) {
+            return null;
+        }
+    }
+    if (shift_payload.index == null or analyser.ip.isUnknown(shift_payload.index.?)) {
+        const shift_bounds = analyser.fixedWidthIntegerBounds(shift_payload.type) orelse return null;
+        if (shift_bounds.min < 0 or shift_bounds.max >= operand_bits) return null;
+    }
+    return analyser.intValueWithType(payload.type, 0);
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2777,6 +2819,9 @@ fn resolveIntegerBinaryValue(
     if (try analyser.resolveIntegerAbsorbingBinaryValue(tag, lhs, rhs)) |value| return value;
     if (tag == .mod) {
         if (try analyser.resolveIntegerRemainderByOneValue(lhs, rhs)) |value| return value;
+    }
+    if (tag == .shl or tag == .shr) {
+        if (try analyser.resolveZeroShiftValue(lhs, rhs)) |value| return value;
     }
     const lhs_index = lhs_payload.index orelse return null;
     const rhs_index = rhs_payload.index orelse return null;
@@ -4519,6 +4564,7 @@ fn resolveExactShiftValue(
         .ip_index => |payload| payload,
         else => return null,
     };
+    if (try analyser.resolveZeroShiftValue(operand, shift_operand)) |value| return value;
     const index = payload.index orelse return null;
     const value = analyser.ip.toInt(index, i256) orelse return null;
     const shift_index = shift_operand.ipIndex() orelse return null;
@@ -4572,15 +4618,27 @@ fn resolveVectorShiftValue(
         else => return null,
     };
     if (vector.len != shift_vector.len) return null;
-    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
-    const shift_values = analyser.aggregateValues(shift_operand) orelse return Type.fromIP(analyser, payload.type, null);
-    if (source_values.len != vector.len or shift_values.len != vector.len) return null;
+    const source_values = analyser.aggregateValues(operand);
+    const shift_values = analyser.aggregateValues(shift_operand);
+    if ((source_values != null and source_values.?.len != vector.len) or
+        (shift_values != null and shift_values.?.len != shift_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
+    const unknown_operand = try analyser.ip.getUnknown(vector.child);
+    const unknown_shift = try analyser.ip.getUnknown(shift_vector.child);
     for (values, 0..) |*value, i| {
-        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
-        const shift_element = Type.fromIP(analyser, shift_vector.child, shift_values.at(@intCast(i), analyser.ip));
+        const index: u32 = @intCast(i);
+        const element = Type.fromIP(
+            analyser,
+            vector.child,
+            if (source_values) |slice| slice.at(index, analyser.ip) else unknown_operand,
+        );
+        const shift_element = Type.fromIP(
+            analyser,
+            shift_vector.child,
+            if (shift_values) |slice| slice.at(index, analyser.ip) else unknown_shift,
+        );
         const resolved = switch (operation) {
             .shl => try analyser.resolveIntegerBinaryValue(.shl, element, shift_element),
             .shr => try analyser.resolveIntegerBinaryValue(.shr, element, shift_element),

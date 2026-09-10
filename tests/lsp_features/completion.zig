@@ -960,6 +960,28 @@ test "generic function with comptime vector shifts" {
     });
 }
 
+test "generic function with partially known zero shifts" {
+    try testCompletion(
+        \\var shift: u3 = undefined;
+        \\var shifts: @Vector(2, u3) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const zero: @Vector(2, u8) = @splat(0);
+        \\    return if ((@as(u8, 0) << shift) == 0 and (@as(u8, 0) >> shift) == 0 and
+        \\        (@as(u8, 0) <<| shift) == 0 and @shlExact(@as(u8, 0), shift) == 0 and
+        \\        @shrExact(@as(u8, 0), shift) == 0 and @reduce(.And, (zero << shifts) == zero) and
+        \\        @reduce(.And, (zero >> shifts) == zero) and @reduce(.And, (zero <<| shifts) == zero) and
+        \\        @reduce(.And, @shlExact(zero, shifts) == zero) and @reduce(.And, @shrExact(zero, shifts) == zero))
+        \\        struct { shifted: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "shifted", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime boolean vector operators" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

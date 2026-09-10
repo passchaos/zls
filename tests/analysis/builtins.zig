@@ -627,6 +627,10 @@ const shl_exact_u8_value = @shlExact(@as(u8, 3), 2);
 //    ^^^^^^^^^^^^^^^^^^ (u8)(12)
 const shr_exact_i8_value = @shrExact(@as(i8, -12), 2);
 //    ^^^^^^^^^^^^^^^^^^ (i8)(-3)
+const shl_exact_zero_runtime = @shlExact(@as(u8, 0), runtime_u3);
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const shr_exact_zero_runtime = @shrExact(@as(u8, 0), runtime_u3);
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const shl_exact_u128_value = @shlExact(@as(u128, 1), 127);
 //    ^^^^^^^^^^^^^^^^^^^^ (u128)(170141183460469231731687303715884105728)
 const shr_exact_u128_value = @shrExact(@as(u128, 170141183460469231731687303715884105728), 127);
@@ -637,6 +641,11 @@ const vector_div_floor_value = @divFloor(@as(@Vector(2, i8), .{ -7, 8 }), @as(@V
 //    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(-3)
 const vector_div_exact_value = @divExact(@as(@Vector(2, i8), .{ 6, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(4)
+var runtime_u3: u3 = undefined;
+const vector_shl_exact_zero_runtime = @shlExact(@as(@Vector(2, u8), @splat(0)), @as(@Vector(2, u3), @splat(runtime_u3)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_shr_exact_zero_runtime = @shrExact(@as(@Vector(2, u8), @splat(0)), @as(@Vector(2, u3), @splat(runtime_u3)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const vector_mod_value = @mod(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];
 //    ^^^^^^^^^^^^^^^^ (i8)(2)
 const vector_rem_value = @rem(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];

@@ -57,6 +57,16 @@ const shl_sat_i16_u16 = runtime_i16 <<| runtime_u16;
 
 const shr_i16_u4 = runtime_i16 >> runtime_u4;
 //    ^^^^^^^^^^ (i16)()
+const zero_shl_runtime = @as(u8, 0) << runtime_u3;
+//    ^^^^^^^^^^^^^^^^ (u8)(0)
+const zero_shr_runtime = @as(u8, 0) >> runtime_u3;
+//    ^^^^^^^^^^^^^^^^ (u8)(0)
+const zero_shl_sat_runtime = @as(u8, 0) <<| runtime_u3;
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const nonzero_shl_runtime = @as(u8, 1) << runtime_u3;
+//    ^^^^^^^^^^^^^^^^^^^ (u8)()
+const undefined_shl_runtime = @as(u8, undefined) << runtime_u3;
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)()
 
 // TODO this should be `unknown`
 const shr_i16_u8 = runtime_i16 >> runtime_u8;
@@ -196,6 +206,12 @@ const vector_shl_exact_value = @shlExact(@as(@Vector(2, u8), .{ 4, 12 }), @as(@V
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(16)
 const vector_shr_exact_value = @shrExact(@as(@Vector(2, u8), .{ 4, 12 }), @as(@Vector(2, u3), @splat(2)))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(3)
+const vector_zero_shl_runtime = (@as(@Vector(2, u8), @splat(0)) << runtime_u3_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_zero_shr_runtime = (@as(@Vector(2, u8), @splat(0)) >> runtime_u3_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_zero_shl_sat_runtime = (@as(@Vector(2, u8), @splat(0)) <<| runtime_u3_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const vector_bool_not_value = (!@as(@Vector(2, bool), .{ true, false }))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_bool_and_value = (@as(@Vector(2, bool), .{ true, false }) & @as(@Vector(2, bool), .{ true, true }))[0];
@@ -256,5 +272,7 @@ var runtime_i8: i8 = -8;
 var runtime_i16: i16 = -16;
 var runtime_bool: bool = undefined;
 var runtime_bool_vector: @Vector(2, bool) = undefined;
+var runtime_u3: u3 = undefined;
+var runtime_u3_vector: @Vector(2, u3) = undefined;
 var runtime_u8_vector: @Vector(2, u8) = undefined;
 var runtime_i8_vector: @Vector(2, i8) = undefined;
