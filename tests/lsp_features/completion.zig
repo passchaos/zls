@@ -652,6 +652,27 @@ test "generic function with partially known integer reductions" {
     });
 }
 
+test "generic function with integer reduction boundaries" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: i8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const unsigned_or = @reduce(.Or, @as(@Vector(3, u8), .{ runtime_u8, 255, N }));
+        \\    const signed_or = @reduce(.Or, @as(@Vector(3, i8), .{ runtime_i8, -1, 0 }));
+        \\    const minimum = @reduce(.Min, @as(@Vector(3, i8), .{ runtime_i8, -128, 7 }));
+        \\    const maximum = @reduce(.Max, @as(@Vector(3, i8), .{ runtime_i8, 127, -7 }));
+        \\    return if (unsigned_or == 255 and signed_or == -1 and minimum == -128 and maximum == 127)
+        \\        struct { reduced: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime float reductions" {
     try testCompletion(
         \\fn Select(comptime value: f32) type {

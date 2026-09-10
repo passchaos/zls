@@ -3285,6 +3285,9 @@ fn resolveReduceValue(
 
     if (vector.child == .bool_type) {
         if (operation != .And and operation != .Or and operation != .Xor) return null;
+        for (0..values.len) |i| {
+            if (analyser.ip.isUndefined(values.at(@intCast(i), analyser.ip))) return null;
+        }
         var result = switch (operation) {
             .And => true,
             .Or, .Xor => false,
@@ -3327,12 +3330,32 @@ fn resolveReduceValue(
     }
 
     if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
-    if (operation == .Mul or operation == .And) {
-        for (0..values.len) |i| {
-            const value = values.at(@intCast(i), analyser.ip);
-            if (analyser.ip.isUndefined(value)) return null;
-            if (analyser.ip.toInt(value, i256)) |int| {
-                if (int == 0) return analyser.intValueWithType(vector.child, 0);
+    for (0..values.len) |i| {
+        if (analyser.ip.isUndefined(values.at(@intCast(i), analyser.ip))) return null;
+    }
+    const int_info = analyser.ip.intInfo(vector.child, builtin.target);
+    if (int_info.bits > 0 and int_info.bits <= 128) {
+        const min_value: i256 = switch (int_info.signedness) {
+            .signed => -(@as(i256, 1) << @intCast(int_info.bits - 1)),
+            .unsigned => 0,
+        };
+        const max_value: i256 = switch (int_info.signedness) {
+            .signed => (@as(i256, 1) << @intCast(int_info.bits - 1)) - 1,
+            .unsigned => (@as(i256, 1) << @intCast(int_info.bits)) - 1,
+        };
+        const absorbing_value: ?i256 = switch (operation) {
+            .Mul, .And => 0,
+            .Or => if (int_info.signedness == .signed) -1 else max_value,
+            .Min => min_value,
+            .Max => max_value,
+            else => null,
+        };
+        if (absorbing_value) |absorbing| {
+            for (0..values.len) |i| {
+                const value = values.at(@intCast(i), analyser.ip);
+                if (analyser.ip.toInt(value, i256)) |int| {
+                    if (int == absorbing) return analyser.intValueWithType(vector.child, absorbing);
+                }
             }
         }
     }
