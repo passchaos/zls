@@ -94,6 +94,16 @@ const for_else_peer = for ([_]u8{ 1, 2 }) |_| {
 } else @as(u8, 2);
 const for_else_peer_type = for_else_peer;
 //    ^^^^^^^^^^^^^^^^^^ (u16)()
+
+const for_empty_else_value = for ([_]u8{}) |_| {
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(4)
+    break @as(u16, 300);
+} else @as(u8, 4);
+
+const for_empty_void = for ([_]u8{}) |_| {
+//    ^^^^^^^^^^^^^^ (void)()
+    unreachable;
+};
 // zig fmt: on
 
 pub fn main() void {

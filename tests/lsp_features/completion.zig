@@ -3308,6 +3308,37 @@ test "generic function with comptime while expression branches" {
     });
 }
 
+test "generic function with empty for expression" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const count = for ([_]u8{}, 0..) |_, _| {
+        \\        break @as(u16, N + 300);
+        \\    } else N;
+        \\    return struct { selected: [count]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    const value = for ([_]u8{}) |_| {
+        \\        unreachable;
+        \\    };
+        \\    return if (@TypeOf(value) == void)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime while return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

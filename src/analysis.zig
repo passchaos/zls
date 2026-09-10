@@ -5866,6 +5866,29 @@ fn resolveEitherCallResult(
     return Type.fromEither(analyser, return_types.items);
 }
 
+fn isKnownEmptyIterable(analyser: *Analyser, iterable: Type) bool {
+    return switch (iterable.data) {
+        .array => |info| info.elem_count == 0,
+        .tuple => |fields| fields.len == 0,
+        .pointer => |info| info.size == .one and isKnownEmptyIterable(analyser, info.elem_ty.*),
+        .ip_index => |payload| isKnownEmptyIterableType(analyser, if (iterable.is_type_val)
+            payload.index orelse return false
+        else
+            payload.type),
+        else => false,
+    };
+}
+
+fn isKnownEmptyIterableType(analyser: *Analyser, type_index: InternPool.Index) bool {
+    return switch (analyser.ip.indexToKey(type_index)) {
+        .array_type => |info| info.len == 0,
+        .tuple_type => |info| info.types.len == 0,
+        .pointer_type => |info| info.flags.size == .one and
+            isKnownEmptyIterableType(analyser, info.elem_type),
+        else => false,
+    };
+}
+
 const BreakIterator = struct {
     const Value = union(enum) {
         operand: Ast.Node.Index,
@@ -7273,12 +7296,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const loop: struct {
                 label_token: ?Ast.TokenIndex,
                 condition_expr: ?Ast.Node.Index,
+                inputs: []const Ast.Node.Index,
                 then_expr: Ast.Node.Index,
                 else_expr: Ast.Node.OptionalIndex,
             } = if (ast.fullWhile(tree, node)) |while_node|
                 .{
                     .label_token = while_node.label_token,
                     .condition_expr = while_node.ast.cond_expr,
+                    .inputs = &.{},
                     .then_expr = while_node.ast.then_expr,
                     .else_expr = while_node.ast.else_expr,
                 }
@@ -7286,6 +7311,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .{
                     .label_token = for_node.label_token,
                     .condition_expr = null,
+                    .inputs = for_node.ast.inputs,
                     .then_expr = for_node.ast.then_expr,
                     .else_expr = for_node.ast.else_expr,
                 }
@@ -7300,14 +7326,18 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 })
             else
                 null;
-            if (known_condition == false) {
+            const known_empty = for (loop.inputs) |input| {
+                const iterable = try analyser.resolveTypeOfNodeInternal(.of(input, handle)) orelse continue;
+                if (isKnownEmptyIterable(analyser, iterable)) break true;
+            } else false;
+            if (known_condition == false or known_empty) {
                 const selected = else_expr orelse return Type.fromIP(analyser, .void_type, .void_value);
                 return try analyser.resolveTypeOfNodeInternal(.{
                     .node_handle = .of(selected, handle),
                     .container_type = options.container_type,
                 });
             }
-            if (known_condition != true and else_expr == null) return null;
+            if (known_condition != true and !known_empty and else_expr == null) return null;
 
             var results: std.ArrayList(Type.TypeWithDescriptor) = .empty;
             if (known_condition != true) {
