@@ -3251,6 +3251,34 @@ test "generic function with peer-typed loop expressions" {
     });
 }
 
+test "generic function with comptime while expression branches" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool, comptime N: u8) type {
+        \\    const count = while (enabled) {
+        \\        break N;
+        \\    } else @as(u16, N + 300);
+        \\    return struct { selected: [count]u8 };
+        \\}
+        \\const selected: Select(true, 4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool, comptime N: u8) type {
+        \\    const count = while (enabled) {
+        \\        break @as(u16, N + 300);
+        \\    } else N;
+        \\    return struct { selected: [count]u8 };
+        \\}
+        \\const selected: Select(false, 4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime while return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

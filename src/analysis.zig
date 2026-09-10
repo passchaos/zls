@@ -7272,17 +7272,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         => {
             const loop: struct {
                 label_token: ?Ast.TokenIndex,
+                condition_expr: ?Ast.Node.Index,
                 then_expr: Ast.Node.Index,
                 else_expr: Ast.Node.OptionalIndex,
             } = if (ast.fullWhile(tree, node)) |while_node|
                 .{
                     .label_token = while_node.label_token,
+                    .condition_expr = while_node.ast.cond_expr,
                     .then_expr = while_node.ast.then_expr,
                     .else_expr = while_node.ast.else_expr,
                 }
             else if (ast.fullFor(tree, node)) |for_node|
                 .{
                     .label_token = for_node.label_token,
+                    .condition_expr = null,
                     .then_expr = for_node.ast.then_expr,
                     .else_expr = for_node.ast.else_expr,
                 }
@@ -7290,12 +7293,27 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 unreachable;
 
             const else_expr = loop.else_expr.unwrap() orelse return null;
-            var results: std.ArrayList(Type.TypeWithDescriptor) = .empty;
-            if (try analyser.resolveTypeOfNodeInternal(.of(else_expr, handle))) |else_type| {
-                try results.append(analyser.arena, .{
-                    .type = if (analyser.evaluate_comptime_values) else_type else else_type.withoutIPIndex(analyser),
-                    .descriptor = "else",
+            const known_condition = if (loop.condition_expr) |condition_expr|
+                try analyser.resolveIfConditionValue(.{
+                    .node_handle = .of(condition_expr, handle),
+                    .container_type = options.container_type,
+                })
+            else
+                null;
+            if (known_condition == false) {
+                return try analyser.resolveTypeOfNodeInternal(.{
+                    .node_handle = .of(else_expr, handle),
+                    .container_type = options.container_type,
                 });
+            }
+            var results: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+            if (known_condition != true) {
+                if (try analyser.resolveTypeOfNodeInternal(.of(else_expr, handle))) |else_type| {
+                    try results.append(analyser.arena, .{
+                        .type = if (analyser.evaluate_comptime_values) else_type else else_type.withoutIPIndex(analyser),
+                        .descriptor = "else",
+                    });
+                }
             }
 
             var it: BreakIterator = .{
@@ -7341,7 +7359,6 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 return Type.fromIP(analyser, .void_type, .void_value);
             };
 
-            // TODO: peer type resolution based on all `break` statements
             var it: BreakIterator = .{
                 .walker = try .init(analyser.gpa, tree, node),
                 .label = offsets.identifierTokenToNameSlice(tree, label_token),
