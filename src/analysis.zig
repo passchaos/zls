@@ -2126,6 +2126,7 @@ fn coerceArrayElementValue(
     result_type: InternPool.Index,
     value: InternPool.Index,
 ) error{OutOfMemory}!?InternPool.Index {
+    if (value == .none) return try analyser.ip.getUnknown(result_type);
     if (analyser.ip.isUndefined(value)) return try analyser.ip.getUndefined(result_type);
     if (analyser.ip.isUnknown(value)) return try analyser.ip.getUnknown(result_type);
     if (analyser.ip.zigTypeTag(result_type) == .int) {
