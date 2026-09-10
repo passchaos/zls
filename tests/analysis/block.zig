@@ -14,9 +14,8 @@ const panic_block = { @panic("foo"); };
 const labeled_block_0 = blk: { break :blk @as(i32, 1); };
 //    ^^^^^^^^^^^^^^^ (i32)()
 
-// TODO this should be `i64`
 const labeled_block_1 = blk: {
-//    ^^^^^^^^^^^^^^^ (i32)()
+//    ^^^^^^^^^^^^^^^ (i64)()
     if (false) break :blk @as(i32, 1);
     break :blk @as(i64, 2);
 };

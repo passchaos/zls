@@ -5187,11 +5187,13 @@ const BreakIterator = struct {
 
     fn next(
         it: *BreakIterator,
-        allocator: std.mem.Allocator,
-        tree: *const Ast,
-    ) error{OutOfMemory}!?Ast.Node.Index {
+        analyser: *Analyser,
+        handle: *DocumentStore.Handle,
+        container_type: ?Type,
+    ) Error!?Ast.Node.Index {
+        const tree = &handle.tree;
         while (true) {
-            const event = try it.walker.next(allocator, tree) orelse return null;
+            const event = try it.walker.next(analyser.gpa, tree) orelse return null;
             switch (event) {
                 .open => |node| switch (tree.nodeTag(node)) {
                     .@"break" => {
@@ -5200,6 +5202,7 @@ const BreakIterator = struct {
                             // TODO this is wrong! No operand implies `{}` i.e `void`.
                             continue;
                         };
+                        if (try it.isInKnownUnselectedIfBranch(analyser, handle, container_type)) continue;
 
                         if (it.label) |label| {
                             const label_token = opt_label_token.unwrap() orelse continue;
@@ -5240,6 +5243,33 @@ const BreakIterator = struct {
                 },
             }
         }
+    }
+
+    fn isInKnownUnselectedIfBranch(
+        it: *const BreakIterator,
+        analyser: *Analyser,
+        handle: *DocumentStore.Handle,
+        container_type: ?Type,
+    ) Error!bool {
+        const tree = &handle.tree;
+        const stack = it.walker.stack.items;
+        if (stack.len < 2) return false;
+        for (stack[0 .. stack.len - 1], stack[1..]) |ancestor, child| {
+            switch (tree.nodeTag(ancestor.node)) {
+                .@"if", .if_simple => {
+                    const if_node = ast.fullIf(tree, ancestor.node).?;
+                    if (child.node == if_node.ast.cond_expr) continue;
+                    const condition = try analyser.resolveIfConditionValue(.{
+                        .node_handle = .of(if_node.ast.cond_expr, handle),
+                        .container_type = container_type,
+                    }) orelse continue;
+                    if ((!condition and child.node == if_node.ast.then_expr) or
+                        (condition and if_node.ast.else_expr.unwrap() == child.node)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
     }
 };
 
@@ -6536,7 +6566,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     .allow_unlabeled = false,
                 };
                 defer it.walker.deinit(analyser.gpa);
-                while (try it.next(analyser.gpa, tree)) |operand| {
+                while (try it.next(analyser, handle, options.container_type)) |operand| {
                     if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type| {
                         try either.append(analyser.arena, .{
                             .type = operand_type,
@@ -6602,7 +6632,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             };
             defer it.walker.deinit(analyser.gpa);
 
-            while (try it.next(analyser.gpa, tree)) |operand| {
+            while (try it.next(analyser, handle, options.container_type)) |operand| {
                 if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
                     return operand_type;
             }
@@ -6636,7 +6666,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             };
             defer it.walker.deinit(analyser.gpa);
 
-            while (try it.next(analyser.gpa, tree)) |operand| {
+            while (try it.next(analyser, handle, options.container_type)) |operand| {
                 if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
                     return operand_type.withoutIPIndex(analyser);
             }

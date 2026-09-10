@@ -2890,6 +2890,22 @@ test "generic function with comptime enum switch" {
     });
 }
 
+test "generic function with comptime labeled block breaks" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    const T = blk: {
+        \\        if (!enabled) break :blk struct { fallback: u8 };
+        \\        break :blk struct { selected: u8 };
+        \\    };
+        \\    return T;
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime intFromEnum" {
     try testCompletion(
         \\const Mode = enum(u128) { low = 1, high = 170141183460469231731687303715884105728 };
