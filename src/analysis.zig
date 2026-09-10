@@ -847,6 +847,31 @@ const KnownReturn = union(enum) {
     unknown,
 };
 
+fn mergeKnownReturns(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    lhs: KnownReturn,
+    rhs: KnownReturn,
+) Error!KnownReturn {
+    return switch (lhs) {
+        .expression => |lhs_expression| switch (rhs) {
+            .expression => |rhs_expression| blk: {
+                const lhs_type = try analyser.resolveTypeOfNodeInternal(.of(lhs_expression, handle)) orelse
+                    break :blk .unknown;
+                const rhs_type = try analyser.resolveTypeOfNodeInternal(.of(rhs_expression, handle)) orelse
+                    break :blk .unknown;
+                break :blk if (lhs_type.eql(rhs_type)) lhs else .unknown;
+            },
+            .continues, .unknown => .unknown,
+        },
+        .continues => switch (rhs) {
+            .continues => .continues,
+            .expression, .unknown => .unknown,
+        },
+        .unknown => .unknown,
+    };
+}
+
 fn bodyAlwaysBreaksCurrentLoop(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -964,14 +989,13 @@ fn findKnownReturnExpression(
         .@"if", .if_simple => blk: {
             const if_node = ast.fullIf(tree, node).?;
             const condition = try analyser.resolveIfConditionValue(.of(if_node.ast.cond_expr, handle)) orelse {
-                if (try analyser.findKnownReturnExpression(handle, if_node.ast.then_expr) != .continues) {
-                    break :blk .unknown;
-                }
-                const else_expr = if_node.ast.else_expr.unwrap() orelse break :blk .continues;
-                break :blk if (try analyser.findKnownReturnExpression(handle, else_expr) == .continues)
-                    .continues
-                else
-                    .unknown;
+                const then_return = try analyser.findKnownReturnExpression(handle, if_node.ast.then_expr);
+                const else_expr = if_node.ast.else_expr.unwrap() orelse break :blk switch (then_return) {
+                    .continues => .continues,
+                    .expression, .unknown => .unknown,
+                };
+                const else_return = try analyser.findKnownReturnExpression(handle, else_expr);
+                break :blk analyser.mergeKnownReturns(handle, then_return, else_return);
             };
             if (condition) {
                 break :blk try analyser.findKnownReturnExpression(handle, if_node.ast.then_expr);
@@ -1012,13 +1036,17 @@ fn findKnownReturnExpression(
                 break :blk analyser.findKnownReturnExpression(handle, target);
             }
             const switch_node = tree.switchFull(node);
+            var merged: ?KnownReturn = null;
             for (switch_node.ast.cases) |case| {
                 const switch_case = tree.fullSwitchCase(case).?;
-                if (try analyser.findKnownReturnExpression(handle, switch_case.ast.target_expr) != .continues) {
-                    break :blk .unknown;
-                }
+                const branch = try analyser.findKnownReturnExpression(handle, switch_case.ast.target_expr);
+                merged = if (merged) |current|
+                    try analyser.mergeKnownReturns(handle, current, branch)
+                else
+                    branch;
+                if (merged.? == .unknown) break :blk .unknown;
             }
-            break :blk .continues;
+            break :blk merged orelse .continues;
         },
         else => if (findReturnStatement(tree, node) != null) .unknown else .continues,
     };

@@ -3174,6 +3174,24 @@ test "generic function with runtime switch before return" {
     });
 }
 
+test "generic function with identical runtime switch return types" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const Result = struct { matched: [N]u8 };
+        \\    switch (runtime) {
+        \\        0 => return Result,
+        \\        1...3 => return Result,
+        \\        else => return Result,
+        \\    }
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with runtime while before return" {
     try testCompletion(
         \\var runtime: bool = undefined;
@@ -3248,6 +3266,20 @@ test "generic function with runtime if before return" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
+test "generic function with identical runtime if return types" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const Result = struct { matched: [N]u8 };
+        \\    if (runtime) return Result else return Result;
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
     });
 }
 
