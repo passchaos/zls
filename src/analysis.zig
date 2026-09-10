@@ -961,10 +961,19 @@ fn findKnownReturnExpression(
             const else_expr = while_node.ast.else_expr.unwrap() orelse break :blk .continues;
             break :blk try analyser.findKnownReturnExpression(handle, else_expr);
         },
-        .@"switch", .switch_comma => if (try analyser.resolveKnownSwitchTarget(.of(node, handle))) |target|
-            analyser.findKnownReturnExpression(handle, target)
-        else
-            .unknown,
+        .@"switch", .switch_comma => blk: {
+            if (try analyser.resolveKnownSwitchTarget(.of(node, handle))) |target| {
+                break :blk analyser.findKnownReturnExpression(handle, target);
+            }
+            const switch_node = tree.switchFull(node);
+            for (switch_node.ast.cases) |case| {
+                const switch_case = tree.fullSwitchCase(case).?;
+                if (try analyser.findKnownReturnExpression(handle, switch_case.ast.target_expr) != .continues) {
+                    break :blk .unknown;
+                }
+            }
+            break :blk .continues;
+        },
         else => if (findReturnStatement(tree, node) != null) .unknown else .continues,
     };
 }

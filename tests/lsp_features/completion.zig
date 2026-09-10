@@ -2920,6 +2920,24 @@ test "generic function with comptime switch return statements" {
     });
 }
 
+test "generic function with runtime switch before return" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    switch (runtime) {
+        \\        0 => _ = N,
+        \\        1...3 => _ = N + 1,
+        \\        else => _ = N + 2,
+        \\    }
+        \\    return struct { selected: [N]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime while return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
