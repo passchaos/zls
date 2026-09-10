@@ -131,6 +131,13 @@ const vector_trunc_value = @trunc(@as(@Vector(2, f64), @splat(-2.5)))[1];
 //    ^^^^^^^^^^^^^^^^^^ (f64)(-2)
 const vector_round_value = @round(@as(@Vector(2, f32), @splat(-2.5)))[0];
 //    ^^^^^^^^^^^^^^^^^^ (f32)(-3)
+const vector_int_from_bool_value = @intFromBool(@as(@Vector(3, bool), .{ true, false, true }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+var runtime_bool = true;
+const vector_int_from_bool_partial = @intFromBool(@as(@Vector(3, bool), .{ runtime_bool, false, true }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const vector_int_from_bool_runtime = @intFromBool(@as(@Vector(3, bool), @splat(runtime_bool)));
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (@Vector(3,u1))()
 const vector_clz_value = @clz(@as(@Vector(2, u8), .{ 0b00110000, 1 }))[0];
 //    ^^^^^^^^^^^^^^^^ (u4)(2)
 const vector_ctz_value = @ctz(@as(@Vector(2, u8), .{ 0b00110000, 1 }))[1];

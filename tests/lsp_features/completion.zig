@@ -848,6 +848,22 @@ test "generic function with comptime boolean vector operators" {
     });
 }
 
+test "generic function with comptime vector int from bool" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    const values = @intFromBool(@as(@Vector(3, bool), .{ enabled, false, true }));
+        \\    return if (values[0] == 1 and values[1] == 0 and values[2] == 1)
+        \\        struct { converted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "converted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

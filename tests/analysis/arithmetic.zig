@@ -128,8 +128,11 @@ const vector_bool_or_value = (@as(@Vector(2, bool), .{ true, false }) | @as(@Vec
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_bool_xor_value = (@as(@Vector(2, bool), .{ true, false }) ^ @as(@Vector(2, bool), .{ true, true }))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_bool_not_runtime = !runtime_bool_vector;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (@Vector(2,bool))()
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;
 var runtime_u16: u16 = 16;
 var runtime_i16: i16 = -16;
+var runtime_bool_vector: @Vector(2, bool) = undefined;

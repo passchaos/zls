@@ -1259,6 +1259,37 @@ fn resolveSplatValue(
     } });
 }
 
+fn resolveVectorIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (vector.child != .bool_type) return null;
+
+    const result_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = vector.len,
+        .child = .u1_type,
+    } });
+    const result = Type.fromIP(analyser, result_type, null);
+    const source_values = analyser.aggregateValues(operand) orelse return result;
+    if (source_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        value.* = switch (source_values.at(@intCast(i), analyser.ip)) {
+            .bool_true => .one_u1,
+            .bool_false => .zero_u1,
+            else => try analyser.ip.getUnknown(.u1_type),
+        };
+    }
+    return analyser.aggregateValue(result, values);
+}
+
 fn resolveVectorCastValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -5447,6 +5478,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .int_from_bool => {
                     if (params.len != 1) return null;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (try analyser.resolveVectorIntFromBoolValue(operand)) |result| {
+                        return if (analyser.evaluate_comptime_values) result else result.withoutIPIndex(analyser);
+                    }
                     if (!analyser.evaluate_comptime_values) {
                         return Type.fromIP(analyser, .u1_type, null);
                     }
@@ -6286,15 +6321,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         },
         .bool_not => {
             const operand = tree.nodeData(node).node;
+            const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse
+                return Type.fromIP(analyser, .bool_type, null);
+            if (try analyser.resolveVectorBoolNotValue(operand_type)) |value| {
+                return if (analyser.evaluate_comptime_values) value else value.withoutIPIndex(analyser);
+            }
             if (analyser.evaluate_comptime_values) {
-                const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse
-                    return Type.fromIP(analyser, .bool_type, null);
-                if (operand_type.ipIndex()) |index| {
-                    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
-                        if (try analyser.resolveVectorBoolNotValue(operand_type)) |value| return value;
-                        return operand_type.withoutIPIndex(analyser);
-                    }
-                }
                 const value = try analyser.resolveBoolValue(.of(operand, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
                 return Type.fromIP(analyser, .bool_type, if (value) .bool_false else .bool_true);
             }
