@@ -3052,6 +3052,40 @@ fn resolveZeroShiftValue(
     return analyser.intValueWithType(payload.type, 0);
 }
 
+fn resolveAllOnesRightShiftValue(
+    analyser: *Analyser,
+    operand: Type,
+    shift_operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const shift_payload = switch (shift_operand.data) {
+        .ip_index => |shift_value| shift_value,
+        else => return null,
+    };
+    const bounds = analyser.fixedWidthIntegerBounds(payload.type) orelse return null;
+    if (bounds.min >= 0) return null;
+    const operand_index = payload.index orelse return null;
+    if (analyser.ip.isUndefined(operand_index) or analyser.ip.toInt(operand_index, i256) != -1) return null;
+
+    const operand_bits = analyser.ip.intInfo(payload.type, builtin.target).bits;
+    if (shift_payload.index) |shift_index| {
+        if (analyser.ip.isUndefined(shift_index)) return null;
+        if (analyser.ip.toInt(shift_index, u16)) |shift| {
+            if (shift >= operand_bits) return null;
+        } else if (!analyser.ip.isUnknown(shift_index)) {
+            return null;
+        }
+    }
+    if (shift_payload.index == null or analyser.ip.isUnknown(shift_payload.index.?)) {
+        const shift_bounds = analyser.fixedWidthIntegerBounds(shift_payload.type) orelse return null;
+        if (shift_bounds.min < 0 or shift_bounds.max >= operand_bits) return null;
+    }
+    return analyser.intValueWithType(payload.type, -1);
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -3072,6 +3106,9 @@ fn resolveIntegerBinaryValue(
     }
     if (tag == .shl or tag == .shr) {
         if (try analyser.resolveZeroShiftValue(lhs, rhs)) |value| return value;
+        if (tag == .shr) {
+            if (try analyser.resolveAllOnesRightShiftValue(lhs, rhs)) |value| return value;
+        }
     }
     const lhs_index = lhs_payload.index orelse return null;
     const rhs_index = rhs_payload.index orelse return null;

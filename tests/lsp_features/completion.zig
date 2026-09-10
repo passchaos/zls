@@ -985,10 +985,13 @@ test "generic function with partially known zero shifts" {
         \\var shifts: @Vector(2, u3) = undefined;
         \\fn Select(comptime N: u8) type {
         \\    const zero: @Vector(2, u8) = @splat(0);
+        \\    const ones: @Vector(2, i8) = @splat(-1);
         \\    return if ((@as(u8, 0) << shift) == 0 and (@as(u8, 0) >> shift) == 0 and
+        \\        (@as(i8, -1) >> shift) == -1 and
         \\        (@as(u8, 0) <<| shift) == 0 and @shlExact(@as(u8, 0), shift) == 0 and
         \\        @shrExact(@as(u8, 0), shift) == 0 and @reduce(.And, (zero << shifts) == zero) and
-        \\        @reduce(.And, (zero >> shifts) == zero) and @reduce(.And, (zero <<| shifts) == zero) and
+        \\        @reduce(.And, (zero >> shifts) == zero) and @reduce(.And, (ones >> shifts) == ones) and
+        \\        @reduce(.And, (zero <<| shifts) == zero) and
         \\        @reduce(.And, @shlExact(zero, shifts) == zero) and @reduce(.And, @shrExact(zero, shifts) == zero))
         \\        struct { shifted: [N]u8 }
         \\    else

@@ -61,6 +61,12 @@ const zero_shl_runtime = @as(u8, 0) << runtime_u3;
 //    ^^^^^^^^^^^^^^^^ (u8)(0)
 const zero_shr_runtime = @as(u8, 0) >> runtime_u3;
 //    ^^^^^^^^^^^^^^^^ (u8)(0)
+const signed_all_ones_shr_runtime = @as(i8, -1) >> runtime_u3;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const unsigned_all_ones_shr_runtime = @as(u8, 255) >> runtime_u3;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const signed_all_ones_shr_undefined = @as(i8, -1) >> undefined_u3;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
 const zero_shl_sat_runtime = @as(u8, 0) <<| runtime_u3;
 //    ^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const nonzero_shl_runtime = @as(u8, 1) << runtime_u3;
@@ -298,6 +304,12 @@ const vector_zero_shl_runtime = (@as(@Vector(2, u8), @splat(0)) << runtime_u3_ve
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const vector_zero_shr_runtime = (@as(@Vector(2, u8), @splat(0)) >> runtime_u3_vector)[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const vector_signed_all_ones_shr_runtime = (@as(@Vector(2, i8), @splat(-1)) >> runtime_u3_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_signed_all_ones_shr_undefined = (@as(@Vector(2, i8), @splat(-1)) >> partially_undefined_u3_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_signed_all_ones_shr_known = (@as(@Vector(2, i8), @splat(-1)) >> partially_undefined_u3_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-1)
 const vector_zero_shl_sat_runtime = (@as(@Vector(2, u8), @splat(0)) <<| runtime_u3_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const vector_bool_not_value = (!@as(@Vector(2, bool), .{ true, false }))[1];
@@ -461,10 +473,12 @@ var runtime_pointer: *u8 = &pointer_storage;
 const undefined_i8: i8 = undefined;
 const undefined_u8: u8 = undefined;
 const undefined_bool: bool = undefined;
+const undefined_u3: u3 = undefined;
 const undefined_i8_vector: @Vector(2, i8) = undefined;
 const partially_undefined_i8_vector: @Vector(2, i8) = .{ undefined, 1 };
 const undefined_bool_vector: @Vector(2, bool) = undefined;
 const partially_undefined_bool_vector: @Vector(2, bool) = .{ undefined, true };
+const partially_undefined_u3_vector: @Vector(2, u3) = .{ undefined, 2 };
 const undefined_error: RuntimeError = undefined;
 const undefined_pointer: *u8 = undefined;
 const undefined_enum: RuntimeEnum = undefined;
