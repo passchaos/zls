@@ -1389,6 +1389,23 @@ test "generic function with comptime vector comparison" {
     });
 }
 
+test "generic function with comptime wide integer comparison" {
+    try testCompletion(
+        \\fn Select(comptime value: u256) type {
+        \\    return if (value == 115792089237316195423570985008687907853269984665640564039457584007913129639935 and
+        \\        value > 57896044618658097711785492504343953926634992332820282019728792003956564819968 and
+        \\        @as(i256, -1) < value)
+        \\        struct { compared: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(115792089237316195423570985008687907853269984665640564039457584007913129639935) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "compared", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with integer vector comparison boundaries" {
     try testCompletion(
         \\var runtime_u8: @Vector(2, u8) = undefined;

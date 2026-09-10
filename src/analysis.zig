@@ -4415,6 +4415,11 @@ fn resolveComparisonValue(
     if (rhs_index) |index| {
         if (analyser.ip.isUndefined(index) or analyser.ip.isUnknown(index)) return null;
     }
+    const integer_order: ?std.math.Order = if (lhs_index != null and rhs_index != null and
+        isIntegerValue(analyser, lhs_index.?) and isIntegerValue(analyser, rhs_index.?))
+        integerValueOrder(analyser, lhs_index.?, rhs_index.?)
+    else
+        null;
     const lhs_int = if (lhs_index) |index| analyser.ip.toInt(index, i256) else null;
     const rhs_int = if (rhs_index) |index| analyser.ip.toInt(index, i256) else null;
     const lhs_float = if (lhs_index) |index| analyser.floatValue(index) else null;
@@ -4423,7 +4428,9 @@ fn resolveComparisonValue(
     const rhs_numeric_float = rhs_float orelse if (rhs_index) |index| analyser.exactFloatFromInt(index) else null;
     const result = switch (tag) {
         .equal_equal, .bang_equal => blk: {
-            const equal = if (lhs_int != null and rhs_int != null)
+            const equal = if (integer_order) |order|
+                order == .eq
+            else if (lhs_int != null and rhs_int != null)
                 lhs_int.? == rhs_int.?
             else if (lhs_float != null and rhs_float != null)
                 lhs_float.? == rhs_float.?
@@ -4445,6 +4452,15 @@ fn resolveComparisonValue(
         .less_or_equal,
         .greater_or_equal,
         => blk: {
+            if (integer_order) |order| {
+                break :blk switch (tag) {
+                    .less_than => order == .lt,
+                    .greater_than => order == .gt,
+                    .less_or_equal => order != .gt,
+                    .greater_or_equal => order != .lt,
+                    else => unreachable,
+                };
+            }
             if (lhs_int != null and rhs_int != null) {
                 break :blk switch (tag) {
                     .less_than => lhs_int.? < rhs_int.?,
@@ -4479,6 +4495,35 @@ fn resolveComparisonValue(
         else => return null,
     };
     return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+}
+
+fn isIntegerValue(analyser: *Analyser, index: InternPool.Index) bool {
+    return switch (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) orelse return false) {
+        .int, .comptime_int => true,
+        else => false,
+    };
+}
+
+fn integerValueOrder(
+    analyser: *Analyser,
+    lhs: InternPool.Index,
+    rhs: InternPool.Index,
+) ?std.math.Order {
+    const lhs_key = analyser.ip.indexToKey(lhs);
+    const rhs_key = analyser.ip.indexToKey(rhs);
+    return switch (lhs_key) {
+        inline .int_u64_value, .int_i64_value => |lhs_value| switch (rhs_key) {
+            inline .int_u64_value, .int_i64_value => |rhs_value| std.math.order(@as(i128, lhs_value.int), @as(i128, rhs_value.int)),
+            .int_big_value => |rhs_value| rhs_value.getConst(analyser.ip).orderAgainstScalar(lhs_value.int).invert(),
+            else => null,
+        },
+        .int_big_value => |lhs_value| switch (rhs_key) {
+            inline .int_u64_value, .int_i64_value => |rhs_value| lhs_value.getConst(analyser.ip).orderAgainstScalar(rhs_value.int),
+            .int_big_value => |rhs_value| lhs_value.getConst(analyser.ip).order(rhs_value.getConst(analyser.ip)),
+            else => null,
+        },
+        else => null,
+    };
 }
 
 fn resolveSelfComparisonValue(
