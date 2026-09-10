@@ -1094,6 +1094,26 @@ test "generic function with runtime self comparisons" {
     });
 }
 
+test "generic function with runtime error and pointer self equality" {
+    try testCompletion(
+        \\const Failure = error{failed, stopped};
+        \\var runtime_failure: Failure = error.failed;
+        \\var storage: u8 = 0;
+        \\var runtime_pointer: *u8 = &storage;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime_failure == runtime_failure and !(runtime_failure != runtime_failure) and
+        \\        runtime_pointer == runtime_pointer and !(runtime_pointer != runtime_pointer))
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with runtime vector self comparisons" {
     try testCompletion(
         \\var runtime: @Vector(2, i8) = undefined;

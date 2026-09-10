@@ -4190,8 +4190,11 @@ fn resolveSelfComparisonValue(
         else => return null,
     };
     const type_tag = analyser.ip.zigTypeTag(payload.type);
+    const equality = tag == .equal_equal or tag == .bang_equal;
     if (type_tag == .int or
-        (type_tag == .bool and (tag == .equal_equal or tag == .bang_equal)))
+        (equality and (type_tag == .bool or
+            type_tag == .error_set or
+            (type_tag == .pointer and operand.pointerSize(analyser) != .slice))))
     {
         if (payload.index) |index| {
             if (analyser.ip.isUndefined(index)) return Type.fromIP(analyser, .bool_type, null);
