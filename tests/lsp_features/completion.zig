@@ -2016,6 +2016,24 @@ test "generic function with comptime Union type constructor" {
     });
 }
 
+test "generic function reflecting comptime container constructors" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\    const U = @Union(.auto, null, &.{"enabled"}, &.{bool}, &.{.{}});
+        \\    return if (@hasField(S, "value") and @FieldType(S, "value") == T and
+        \\        @hasField(U, "enabled") and @FieldType(U, "enabled") == bool)
+        \\        struct { reflected: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reflected", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime Enum type constructor" {
     try testCompletion(
         \\fn Mode(comptime Tag: type) type {

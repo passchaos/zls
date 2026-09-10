@@ -790,6 +790,10 @@ const ConcreteStruct = @Struct(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &
 //    ^^^^^^^^^^^^^^ (type)(struct { foo: u8, bar: i16 })
 const AlignedStruct = @Struct(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
 //    ^^^^^^^^^^^^^ (type)(struct { value: u8 align(4) })
+const GeneratedStructFieldType = @FieldType(ConcreteStruct, "foo");
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const GeneratedStructHasField = @hasField(ConcreteStruct, "bar");
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //    ^^^^^ (type)()
 //                   ^^^^^ (ContainerLayout)()
@@ -800,6 +804,10 @@ const ConcreteUnion = @Union(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{
 //    ^^^^^^^^^^^^^ (type)(union { foo: u8, bar: i16 })
 const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
 //    ^^^^^^^^^^^^ (type)(union { value: u8 align(4) })
+const GeneratedUnionFieldType = @FieldType(ConcreteUnion, "bar");
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
+const GeneratedUnionHasField = @hasField(ConcreteUnion, "foo");
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //    ^^^^ (type)()
 //                            ^^^^^^^^^^^ (Mode)()

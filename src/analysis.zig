@@ -2940,6 +2940,53 @@ fn tupleFieldCount(analyser: *Analyser, ty: Type) ?usize {
     };
 }
 
+fn internPoolHasField(analyser: *Analyser, container_type: Type, name: []const u8) ?bool {
+    if (!container_type.is_type_val) return null;
+    const type_index = container_type.ipIndex() orelse return null;
+    return switch (analyser.ip.indexToKey(type_index)) {
+        .struct_type => |struct_index| blk: {
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse break :blk false;
+            break :blk analyser.ip.getStruct(struct_index).fields.contains(name_index);
+        },
+        .union_type => |union_index| blk: {
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse break :blk false;
+            break :blk analyser.ip.getUnion(union_index).fields.contains(name_index);
+        },
+        .enum_type => |enum_index| blk: {
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse break :blk false;
+            break :blk analyser.ip.getEnum(enum_index).fields.contains(name_index);
+        },
+        .tuple_type => |tuple| blk: {
+            const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
+            break :blk index < tuple.types.len;
+        },
+        else => null,
+    };
+}
+
+fn internPoolFieldType(analyser: *Analyser, container_type: Type, name: []const u8) ?Type {
+    if (!container_type.is_type_val) return null;
+    const type_index = container_type.ipIndex() orelse return null;
+    return switch (analyser.ip.indexToKey(type_index)) {
+        .struct_type => |struct_index| blk: {
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse return null;
+            const field = analyser.ip.getStruct(struct_index).fields.get(name_index) orelse return null;
+            break :blk Type.fromIP(analyser, .type_type, field.ty);
+        },
+        .union_type => |union_index| blk: {
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse return null;
+            const field = analyser.ip.getUnion(union_index).fields.get(name_index) orelse return null;
+            break :blk Type.fromIP(analyser, .type_type, field.ty);
+        },
+        .tuple_type => |tuple| blk: {
+            const index = std.fmt.parseUnsigned(u32, name, 10) catch return null;
+            if (index >= tuple.types.len) return null;
+            break :blk Type.fromIP(analyser, .type_type, tuple.types.at(index, analyser.ip));
+        },
+        else => null,
+    };
+}
+
 fn resolveIntegerLiteral(analyser: *Analyser, comptime T: type, options: ResolveOptions) Error!?T {
     const ip_index = try analyser.resolveInternPoolValue(options) orelse return null;
     return analyser.ip.toInt(ip_index, T);
@@ -8047,7 +8094,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .has_decl => .other,
                         else => unreachable,
                     };
-                    const found = if (analyser.tupleFieldCount(container_type)) |field_count| switch (tag) {
+                    const found = if (tag == .has_field)
+                        analyser.internPoolHasField(container_type, name) orelse if (analyser.tupleFieldCount(container_type)) |field_count| switch (tag) {
+                            .has_field => blk: {
+                                const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
+                                break :blk index < field_count;
+                            },
+                            .has_decl => false,
+                            else => unreachable,
+                        } else try analyser.lookupSymbolContainer(container_type, name, kind) != null
+                    else if (analyser.tupleFieldCount(container_type)) |field_count| switch (tag) {
                         .has_field => blk: {
                             const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
                             break :blk index < field_count;
@@ -8088,9 +8144,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (params.len < 2) return null;
 
                     const container_type = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
-                    const instance = try container_type.instanceTypeVal(analyser) orelse return null;
-
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse return null;
+                    if (analyser.internPoolFieldType(container_type, field_name)) |field_type| return field_type;
+                    const instance = try container_type.instanceTypeVal(analyser) orelse return null;
 
                     const field = try instance.lookupSymbol(analyser, field_name) orelse return null;
                     const result = try field.resolveType(analyser) orelse return null;
