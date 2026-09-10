@@ -2526,6 +2526,23 @@ test "generic function with comptime type info collection lengths" {
     });
 }
 
+test "generic function with comptime alignOf" {
+    try testCompletion(
+        \\fn Select(comptime bits: u16) type {
+        \\    const T = @Int(.unsigned, bits);
+        \\    return if (@alignOf(T) == 2 and @alignOf([3]T) == 2 and
+        \\        @alignOf(bool) == 1 and @alignOf(void) == 1)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

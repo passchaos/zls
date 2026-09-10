@@ -6531,6 +6531,43 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
     };
 }
 
+fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
+    if (!ty.is_type_val) return null;
+    return switch (ty.data) {
+        .pointer => std.zig.target.intAlignment(&builtin.target, builtin.target.ptrBitWidth()),
+        .array => |info| try analyser.resolveTypeAlignment(info.elem_ty.*),
+        .container => if (ty.isEnumType(analyser)) blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
+            const tag_type = try analyser.astEnumTagType(ty, info.declaration, info.handle) orelse break :blk null;
+            break :blk try analyser.resolveTypeAlignment(tag_type);
+        } else null,
+        .ip_index => |payload| blk: {
+            const type_index = payload.index orelse break :blk null;
+            break :blk switch (analyser.ip.zigTypeTag(type_index) orelse break :blk null) {
+                .int => std.zig.target.intAlignment(
+                    &builtin.target,
+                    analyser.ip.intInfo(type_index, builtin.target).bits,
+                ),
+                .bool, .void, .noreturn => 1,
+                .pointer => std.zig.target.intAlignment(&builtin.target, builtin.target.ptrBitWidth()),
+                .array => try analyser.resolveTypeAlignment(Type.fromIP(
+                    analyser,
+                    .type_type,
+                    analyser.ip.indexToKey(type_index).array_type.child,
+                )),
+                .@"enum" => try analyser.resolveTypeAlignment(Type.fromIP(
+                    analyser,
+                    .type_type,
+                    analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type).tag_type,
+                )),
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
 fn comptimeIntValue(analyser: *Analyser, value: u64) error{OutOfMemory}!Type {
     const index = try analyser.ip.get(.{
         .int_u64_value = .{ .ty = .comptime_int_type, .int = value },
@@ -8396,6 +8433,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .size_of => analyser.resolveTypeByteSize(ty),
                         else => unreachable,
                     } orelse return Type.fromIP(analyser, .comptime_int_type, null);
+                    return try analyser.comptimeIntValue(value);
+                },
+                .align_of => {
+                    if (params.len != 1) return null;
+                    if (!analyser.evaluate_comptime_values) {
+                        return Type.fromIP(analyser, .comptime_int_type, null);
+                    }
+                    const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    const value = try analyser.resolveTypeAlignment(ty) orelse
+                        return Type.fromIP(analyser, .comptime_int_type, null);
                     return try analyser.comptimeIntValue(value);
                 },
                 .int_from_bool => {

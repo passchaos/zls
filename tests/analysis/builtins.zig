@@ -935,6 +935,18 @@ const type_info_enum_fields_len = @typeInfo(ConcreteEnum).@"enum".fields.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const type_info_fn_params_len = @typeInfo(ConcreteFn).@"fn".params.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const align_of_u16 = @alignOf(u16);
+//    ^^^^^^^^^^^^ (comptime_int)(2)
+const align_of_generated_int = @alignOf(Int);
+//    ^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(2)
+const align_of_array = @alignOf([3]u16);
+//    ^^^^^^^^^^^^^^ (comptime_int)(2)
+const align_of_bool = @alignOf(bool);
+//    ^^^^^^^^^^^^^ (comptime_int)(1)
+const align_of_void = @alignOf(void);
+//    ^^^^^^^^^^^^^ (comptime_int)(1)
+const align_of_generated_enum = @alignOf(ConcreteEnum);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()
