@@ -965,6 +965,13 @@ fn resolveKnownSwitchTarget(
         }
 
         for (switch_case.ast.values) |case_value| {
+            if (condition.data == .type_info_value) {
+                if (tree.nodeTag(case_value) != .enum_literal) return null;
+                const case_tag_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
+                const case_tag = std.meta.stringToEnum(std.builtin.TypeId, case_tag_name) orelse return null;
+                if (condition.data.type_info_value.tag == case_tag) return switch_case.ast.target_expr;
+                continue;
+            }
             if (condition.data == .enum_value) {
                 const enum_type = condition.data.enum_value.enum_type.*;
                 const case_tag = try analyser.resolveEnumValueTag(enum_type, .of(case_value, handle)) orelse return null;
@@ -2925,6 +2932,28 @@ fn resolveComptimeValue(analyser: *Analyser, options: ResolveOptions) Error!?Typ
         .ip_index => |payload| if (payload.index != null) value else null,
         .enum_value => value,
         .string_value => value,
+        .type_info_value => value,
+        else => null,
+    };
+}
+
+fn resolveTypeInfoTag(analyser: *Analyser, ty: Type) ?std.builtin.TypeId {
+    if (!ty.is_type_val) return null;
+    return switch (ty.data) {
+        .pointer => .pointer,
+        .array => .array,
+        .tuple => .@"struct",
+        .optional => .optional,
+        .error_union => .error_union,
+        .container => switch (ty.getContainerKind() orelse return null) {
+            .keyword_struct => .@"struct",
+            .keyword_enum => .@"enum",
+            .keyword_union => .@"union",
+            .keyword_opaque => .@"opaque",
+            else => null,
+        },
+        .function => .@"fn",
+        .ip_index => |payload| analyser.ip.zigTypeTag(payload.index orelse return null),
         else => null,
     };
 }
@@ -7940,6 +7969,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                     return try resolved_type.typeOf(analyser);
                 },
+                .type_info => {
+                    if (params.len != 1) return null;
+                    const result_type = try analyser.resolveLangrefType(
+                        version_data.builtins.get(call_name).?.return_type,
+                    ) orelse return null;
+                    if (!analyser.evaluate_comptime_values) return result_type;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return result_type;
+                    const tag = analyser.resolveTypeInfoTag(operand) orelse return result_type;
+                    return .{ .data = .{ .type_info_value = .{
+                        .value_type = try analyser.allocType(result_type),
+                        .tag = tag,
+                    } }, .is_type_val = false };
+                },
                 .bit_size_of, .size_of => |tag| {
                     if (params.len != 1) return null;
                     if (!analyser.evaluate_comptime_values) {
@@ -8009,6 +8051,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .tag_name => {
                     if (params.len != 1) return null;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (operand.data == .type_info_value) {
+                        const tag_name = @tagName(operand.data.type_info_value.tag);
+                        if (analyser.evaluate_comptime_values) return try analyser.stringValue(tag_name);
+                        return try analyser.staticStringType(tag_name.len);
+                    }
                     if (operand.data == .enum_value) {
                         if (analyser.evaluate_comptime_values) {
                             return try analyser.stringValue(operand.data.enum_value.tag);
@@ -9703,6 +9750,12 @@ pub const Type = struct {
             bytes: []const u8,
         },
 
+        /// A comptime-known `std.builtin.Type` value.
+        type_info_value: struct {
+            value_type: *Type,
+            tag: std.builtin.TypeId,
+        },
+
         /// Primitive type: `u8`, `bool`, `type`, etc.
         /// Primitive value: `true`, `false`, `null`, `undefined`
         ip_index: struct {
@@ -9965,6 +10018,10 @@ pub const Type = struct {
                     value.string_type.hashWithHasher(hasher);
                     hasher.update(value.bytes);
                 },
+                .type_info_value => |value| {
+                    value.value_type.hashWithHasher(hasher);
+                    std.hash.autoHash(hasher, value.tag);
+                },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
                     std.hash.autoHash(hasher, payload.index);
@@ -10064,6 +10121,11 @@ pub const Type = struct {
                     if (!a_value.string_type.eql(b_value.string_type.*)) return false;
                     if (!std.mem.eql(u8, a_value.bytes, b_value.bytes)) return false;
                 },
+                .type_info_value => |a_value| {
+                    const b_value = b.type_info_value;
+                    if (!a_value.value_type.eql(b_value.value_type.*)) return false;
+                    if (a_value.tag != b_value.tag) return false;
+                },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;
 
@@ -10127,6 +10189,7 @@ pub const Type = struct {
                 },
                 .enum_value => |value| value.enum_type.data.isGeneric(),
                 .string_value => |value| value.string_type.data.isGeneric(),
+                .type_info_value => false,
                 .compile_error,
                 .ip_index,
                 => false,
@@ -10169,6 +10232,7 @@ pub const Type = struct {
             defer std.debug.assert(visiting.removeContext(data, ctx));
             switch (data) {
                 .compile_error,
+                .type_info_value,
                 .ip_index,
                 => unreachable,
                 .type_parameter => |token_handle| {
@@ -10402,7 +10466,7 @@ pub const Type = struct {
 
     fn hasKnownValue(self: Type, analyser: *Analyser) bool {
         return switch (self.data) {
-            .enum_value, .string_value => true,
+            .enum_value, .string_value, .type_info_value => true,
             .ip_index => |payload| if (payload.index) |index|
                 !analyser.ip.isUndefined(index) and !analyser.ip.isUnknown(index)
             else
@@ -10433,6 +10497,7 @@ pub const Type = struct {
                 result.is_type_val = false;
                 break :blk result;
             },
+            .type_info_value => |value| value.value_type.*,
             else => self,
         };
     }
@@ -10564,6 +10629,7 @@ pub const Type = struct {
             .type_parameter,
             .enum_value,
             .string_value,
+            .type_info_value,
             .ip_index,
             => false,
         };
@@ -10585,6 +10651,7 @@ pub const Type = struct {
             .type_parameter,
             .enum_value,
             .string_value,
+            .type_info_value,
             .ip_index,
             => unreachable,
             .either => |entries| {
@@ -10792,6 +10859,9 @@ pub const Type = struct {
         }
         if (self.data == .string_value) {
             return self.data.string_value.string_type.*;
+        }
+        if (self.data == .type_info_value) {
+            return self.data.type_info_value.value_type.typeOf(analyser);
         }
 
         if (self.data == .ip_index) {
@@ -11266,6 +11336,7 @@ pub const Type = struct {
                 try writer.writeAll(value.tag);
             },
             .string_value => |value| try writer.print("\"{s}\"", .{value.bytes}),
+            .type_info_value => |value| try writer.print(".{s}", .{@tagName(value.tag)}),
             .container => |info| {
                 const scope_handle = info.scope_handle;
                 const handle = scope_handle.handle;

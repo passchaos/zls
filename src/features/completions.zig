@@ -214,6 +214,7 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
             const string_instance = try value.string_type.instanceTypeVal(builder.analyser) orelse return;
             try typeToCompletion(builder, string_instance);
         },
+        .type_info_value => |value| try typeToCompletion(builder, value.value_type.*),
         .function,
         .error_union,
         .union_tag,

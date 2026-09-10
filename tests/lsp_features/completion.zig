@@ -2245,6 +2245,46 @@ test "generic function with comptime generated Enum values" {
     });
 }
 
+test "generic function switching on comptime type info" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    return if (@TypeOf(@typeInfo(T)) == @TypeOf(@typeInfo(u8)))
+        \\        switch (@typeInfo(T)) {
+        \\            .int => struct { matched: T },
+        \\            else => struct { fallback: u8 },
+        \\        }
+        \\    else
+        \\        struct { wrong_type: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\    const U = @Union(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\    const E = @Enum(u8, .exhaustive, &.{"value"}, &.{1});
+        \\    return switch (@typeInfo(S)) {
+        \\        .@"struct" => switch (@typeInfo(U)) {
+        \\            .@"union" => switch (@typeInfo(E)) {
+        \\                .@"enum" => struct { matched: T },
+        \\                else => struct { fallback: u8 },
+        \\            },
+        \\            else => struct { fallback: u8 },
+        \\        },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

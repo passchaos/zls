@@ -862,6 +862,10 @@ const type_enum_literal: @EnumLiteral() = .foo;
 
 const type_info = @typeInfo(u8);
 //    ^^^^^^^^^ (Type)()
+const type_info_tag_name = @tagName(type_info);
+//    ^^^^^^^^^^^^^^^^^^ (*const [3:0]u8)()
+const type_info_tag_name_first = type_info_tag_name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(105)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()
