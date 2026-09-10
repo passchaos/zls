@@ -3247,12 +3247,19 @@ fn resolveTypeInfoFieldAccess(
             }
         },
         .@"fn" => {
-            const is_generic, const is_var_args, const return_type, const param_count = switch (value.reflected_type.data) {
+            const calling_convention, const is_generic, const is_var_args, const return_type, const param_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
-                    .function_type => |info| .{ info.flags.is_generic, info.flags.is_var_args, info.return_type, info.args.len },
+                    .function_type => |info| .{
+                        @as(?std.builtin.CallingConvention.Tag, info.flags.calling_convention),
+                        info.flags.is_generic,
+                        info.flags.is_var_args,
+                        info.return_type,
+                        info.args.len,
+                    },
                     else => return field_value_type,
                 },
                 .function => |info| .{
+                    null,
                     value.reflected_type.isGenericFunc(),
                     info.has_varargs,
                     (try info.return_value.typeOf(analyser)).ipIndex() orelse return field_value_type,
@@ -3260,6 +3267,11 @@ fn resolveTypeInfoFieldAccess(
                 },
                 else => return field_value_type,
             };
+            if (std.mem.eql(u8, field_name, "calling_convention")) {
+                const convention = calling_convention orelse return field_value_type;
+                const convention_type = try field_value_type.typeOf(analyser);
+                return try analyser.enumValue(convention_type, @tagName(convention));
+            }
             if (std.mem.eql(u8, field_name, "is_generic")) {
                 return Type.fromIP(analyser, .bool_type, if (is_generic) .bool_true else .bool_false);
             }
@@ -5604,17 +5616,25 @@ fn resolveCallingConventionTag(
     node_handle: NodeWithHandle,
 ) Error!?std.builtin.CallingConvention.Tag {
     const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .enum_literal) return null;
-    const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+    const name = if (tree.nodeTag(node_handle.node) == .enum_literal)
+        try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null
+    else blk: {
+        const value = try analyser.resolveTypeOfNodeInternal(.of(node_handle.node, node_handle.handle)) orelse return null;
+        break :blk switch (value.data) {
+            .enum_value => |enum_value| enum_value.tag,
+            else => return null,
+        };
+    };
     if (std.mem.eql(u8, name, "c")) {
         const convention = builtin.target.cCallingConvention() orelse return null;
         return convention;
     }
-    if (!std.mem.eql(u8, name, "auto") and
-        !std.mem.eql(u8, name, "async") and
-        !std.mem.eql(u8, name, "naked") and
-        !std.mem.eql(u8, name, "inline")) return null;
-    return std.meta.stringToEnum(std.builtin.CallingConvention.Tag, name);
+    const convention = std.meta.stringToEnum(std.builtin.CallingConvention.Tag, name) orelse return null;
+    if (convention == .auto or convention == .async or convention == .naked or convention == .@"inline") {
+        return convention;
+    }
+    const c_convention: std.builtin.CallingConvention.Tag = builtin.target.cCallingConvention() orelse return null;
+    return if (convention == c_convention) convention else null;
 }
 
 fn resolveFnAttributes(

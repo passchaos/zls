@@ -912,6 +912,8 @@ const type_info_enum_exhaustive = @typeInfo(ConcreteEnum).@"enum".is_exhaustive;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_fn_varargs = @typeInfo(VariadicFn).@"fn".is_var_args;
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_fn_callconv = @tagName(@typeInfo(ConcreteFn).@"fn".calling_convention)[0] == 'a';
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoFnReturn = @typeInfo(ConcreteFn).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^ (type)(u8)
 const AstPacked = packed struct(u16) { value: u8 };

@@ -2639,6 +2639,71 @@ test "generic function with comptime type info field attributes" {
     });
 }
 
+test "generic function rebuilding types from comptime type info" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const int_info = @typeInfo(T).int;
+        \\    const Int = @Int(int_info.signedness, int_info.bits);
+        \\    const optional_info = @typeInfo(?T).optional;
+        \\    const Optional = ?optional_info.child;
+        \\    const array_info = @typeInfo([4]T).array;
+        \\    const Array = [array_info.len]array_info.child;
+        \\    const vector_info = @typeInfo(@Vector(8, T)).vector;
+        \\    const Vector = @Vector(vector_info.len, vector_info.child);
+        \\    return if (Int == T and Optional == ?T and Array == [4]T and Vector == @Vector(8, T))
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(i16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "i16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{} });
+        \\    const P = *align(4) const S;
+        \\    const info = @typeInfo(P).pointer;
+        \\    const Rebuilt = @Pointer(info.size, .{
+        \\        .@"const" = info.is_const,
+        \\        .@"volatile" = info.is_volatile,
+        \\        .@"allowzero" = info.is_allowzero,
+        \\        .@"addrspace" = info.address_space,
+        \\        .@"align" = info.alignment,
+        \\    }, info.child, null);
+        \\    return if (Rebuilt == P and @typeInfo(Rebuilt).pointer.child == S)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const F = @Fn(&.{T}, &.{.{}}, u8, .{ .@"callconv" = .c, .varargs = true });
+        \\    const info = @typeInfo(F).@"fn";
+        \\    const Rebuilt = @Fn(&.{T}, &.{.{}}, info.return_type.?, .{
+        \\        .@"callconv" = info.calling_convention,
+        \\        .varargs = info.is_var_args,
+        \\    });
+        \\    return if (Rebuilt == F)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime alignOf" {
     try testCompletion(
         \\fn Select(comptime bits: u16) type {
