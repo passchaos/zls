@@ -84,3 +84,10 @@ const ConsecutiveTag = enum { alpha, beta };
 const ConsecutiveUnion = union(ConsecutiveTag) { alpha: u8, beta: u16 };
 const ReusedFieldEnum = std.meta.FieldEnum(ConsecutiveUnion);
 //    ^^^^^^^^^^^^^^^ (type)(ConsecutiveTag)
+
+const first_field_index = std.meta.fieldIndex(FieldStruct, "alpha").?;
+//    ^^^^^^^^^^^^^^^^^ (comptime_int)(0)
+const second_field_index = std.meta.fieldIndex(FieldUnion, "beta").?;
+//    ^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
+const missing_field_index = std.meta.fieldIndex(FieldStruct, "missing") == null;
+//    ^^^^^^^^^^^^^^^^^^^ (bool)(true)

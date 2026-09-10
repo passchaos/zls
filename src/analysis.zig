@@ -3657,6 +3657,15 @@ fn optionalIntegerValue(
     return analyser.optionalTypeValue(optional_instance, integer.ipIndex().?);
 }
 
+fn optionalComptimeIntValue(analyser: *Analyser, value: ?usize) error{OutOfMemory}!Type {
+    const optional_type = try analyser.ip.get(.{ .optional_type = .{ .payload_type = .comptime_int_type } });
+    const optional_value = if (value) |integer| blk: {
+        const payload = try analyser.internComptimeInt(integer);
+        break :blk try analyser.ip.get(.{ .optional_value = .{ .ty = optional_type, .val = payload } });
+    } else try analyser.ip.getNull(optional_type);
+    return Type.fromIP(analyser, optional_type, optional_value);
+}
+
 fn typeInfoCollectionValue(
     analyser: *Analyser,
     parent: Type.TypeInfoValue,
@@ -9087,6 +9096,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
                         return .unknown_type;
                     return try analyser.resolveFieldEnumType(arg_type) orelse .unknown_type;
+                }
+
+                if (std.mem.eql(u8, func_name, "fieldIndex")) {
+                    if (call.ast.params.len < 2) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    const field_name = try analyser.resolveStringLiteral(.of(call.ast.params[1], handle)) orelse
+                        return .unknown_type;
+                    const field_names = try analyser.metaFieldNames(arg_type) orelse return .unknown_type;
+                    const index = for (field_names, 0..) |name, field_index| {
+                        if (std.mem.eql(u8, name, field_name)) break field_index;
+                    } else null;
+                    return try analyser.optionalComptimeIntValue(index);
                 }
             }
 

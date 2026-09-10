@@ -2496,6 +2496,26 @@ test "generic function with comptime std meta FieldEnum" {
     });
 }
 
+test "generic function with comptime std meta field index" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "value", "enabled" }, &.{ T, bool }, &.{ .{}, .{} });
+        \\    const U = @Union(.auto, null, &.{ "payload", "empty" }, &.{ T, void }, &.{ .{}, .{} });
+        \\    return if (std.meta.fieldIndex(S, "value").? == 0 and
+        \\        std.meta.fieldIndex(U, "empty").? == 1 and
+        \\        std.meta.fieldIndex(S, "missing") == null)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
