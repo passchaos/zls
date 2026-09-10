@@ -4058,7 +4058,25 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
             }
             try writer.writeByte('}');
         },
-        .enum_type => return panicOrElse(?Index, "TODO", null),
+        .enum_type => |enum_index| {
+            const enum_info = ip.getEnum(enum_index);
+            try writer.print("enum({f})", .{enum_info.tag_type.fmtOptions(ip, options)});
+            if (options.truncate_container) {
+                try writer.writeAll(" {...}");
+                return null;
+            }
+            try writer.writeAll(" { ");
+            for (enum_info.fields.keys(), enum_info.values.keys(), 0..) |name, value, i| {
+                if (i != 0) try writer.writeAll(", ");
+                try writer.print("{f} = {f}", .{ ip.fmtId(name), value.fmtOptions(ip, options) });
+            }
+            if (!enum_info.tag_type_inferred) {
+                try writer.writeAll(" }");
+            } else {
+                if (enum_info.fields.count() != 0) try writer.writeAll(", ");
+                try writer.writeAll("_ }");
+            }
+        },
         .function_type => |function_info| {
             try writer.writeAll("fn(");
 
@@ -4714,6 +4732,35 @@ test "struct value" {
     } });
 
     try expectFmt(".{.foo = 1, .bar = true}", "{f}", .{aggregate_value.fmt(&ip)});
+}
+
+test "enum type" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ip: InternPool = try .init(io, gpa);
+    defer ip.deinit(gpa);
+
+    const low_name = try ip.string_pool.getOrPutString(io, gpa, "low");
+    const high_name = try ip.string_pool.getOrPutString(io, gpa, "high");
+    const high_value = try ip.get(.{ .int_u64_value = .{ .ty = .u8_type, .int = 7 } });
+    var fields: std.array_hash_map.Auto(String, void) = .empty;
+    try fields.put(gpa, low_name, {});
+    try fields.put(gpa, high_name, {});
+    var values: std.array_hash_map.Auto(Index, void) = .empty;
+    try values.put(gpa, .one_u8, {});
+    try values.put(gpa, high_value, {});
+
+    const enum_index = try ip.createEnum(.{
+        .tag_type = .u8_type,
+        .fields = fields,
+        .values = values,
+        .namespace = .none,
+        .tag_type_inferred = false,
+    });
+    const enum_type = try ip.get(.{ .enum_type = enum_index });
+
+    try expectFmt("enum(u8) { low = 1, high = 7 }", "{f}", .{enum_type.fmt(&ip)});
 }
 
 test "function type" {

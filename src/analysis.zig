@@ -4333,6 +4333,22 @@ fn resolveContainerLayout(
     };
 }
 
+fn resolveEnumMode(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?std.builtin.Type.Enum.Mode {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) == .enum_literal) {
+        const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+        return std.meta.stringToEnum(std.builtin.Type.Enum.Mode, name);
+    }
+    const value = try analyser.resolveTypeOfNodeInternal(.of(node_handle.node, node_handle.handle)) orelse return null;
+    return switch (value.data) {
+        .enum_value => |enum_value| std.meta.stringToEnum(std.builtin.Type.Enum.Mode, enum_value.tag),
+        else => null,
+    };
+}
+
 fn isNullComptimeValue(analyser: *Analyser, options: ResolveOptions) Error!bool {
     const value = try analyser.resolveComptimeValue(options) orelse return false;
     return if (value.ipIndex()) |index| analyser.ip.isNull(index) else false;
@@ -4557,6 +4573,82 @@ fn resolveUnionTypeConstructor(
     fields = .empty;
     const union_type = try analyser.ip.get(.{ .union_type = union_index });
     return Type.fromIP(analyser, .type_type, union_type);
+}
+
+fn resolveIntegerValueList(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    options: ResolveOptions,
+) Error!?[]const InternPool.Index {
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null) return null;
+
+    const values = try analyser.arena.alloc(InternPool.Index, literal.ast.elements.len);
+    for (literal.ast.elements, values) |element, *value| {
+        value.* = try analyser.resolveCoercedIPValue(result_type, .{
+            .node_handle = .of(element, node_handle.handle),
+            .container_type = literal_options.container_type,
+        }) orelse return null;
+    }
+    return values;
+}
+
+fn resolveEnumTypeConstructor(
+    analyser: *Analyser,
+    params: []const Ast.Node.Index,
+    handle: *DocumentStore.Handle,
+    container_type: ?Type,
+) Error!?Type {
+    if (params.len != 4) return null;
+    const tag_type = try analyser.resolveTypeOfNodeInternal(.{
+        .node_handle = .of(params[0], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    if (!tag_type.is_type_val) return null;
+    const tag_type_index = tag_type.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(tag_type_index) != .int) return null;
+    if (try analyser.resolveEnumMode(.of(params[1], handle)) != .exhaustive) return null;
+
+    const names = try analyser.resolveStringListLiteral(.{
+        .node_handle = .of(params[2], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    const raw_values = try analyser.resolveIntegerValueList(tag_type_index, .{
+        .node_handle = .of(params[3], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    if (names.len != raw_values.len) return null;
+
+    var fields: std.array_hash_map.Auto(InternPool.String, void) = .empty;
+    errdefer fields.deinit(analyser.gpa);
+    var values: std.array_hash_map.Auto(InternPool.Index, void) = .empty;
+    errdefer values.deinit(analyser.gpa);
+    try fields.ensureTotalCapacity(analyser.gpa, names.len);
+    try values.ensureTotalCapacity(analyser.gpa, names.len);
+    for (names, raw_values) |name, value| {
+        if (values.contains(value)) return null;
+        const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
+        fields.putAssumeCapacityNoClobber(name_index, {});
+        values.putAssumeCapacityNoClobber(value, {});
+    }
+
+    const enum_index = try analyser.ip.createEnum(.{
+        .tag_type = tag_type_index,
+        .fields = fields,
+        .values = values,
+        .namespace = .none,
+        .tag_type_inferred = false,
+    });
+    fields = .empty;
+    values = .empty;
+    const enum_type = try analyser.ip.get(.{ .enum_type = enum_index });
+    return Type.fromIP(analyser, .type_type, enum_type);
 }
 
 fn resolveFnParameterAttributes(
@@ -8111,6 +8203,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     options.container_type,
                 ) orelse .unknown_type,
                 .Union => return try analyser.resolveUnionTypeConstructor(
+                    params,
+                    handle,
+                    options.container_type,
+                ) orelse .unknown_type,
+                .Enum => return try analyser.resolveEnumTypeConstructor(
                     params,
                     handle,
                     options.container_type,

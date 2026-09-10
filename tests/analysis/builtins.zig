@@ -803,6 +803,8 @@ const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 
 const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //    ^^^^ (type)()
 //                            ^^^^^^^^^^^ (Mode)()
+const ConcreteEnum = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
+//    ^^^^^^^^^^^^ (type)(enum(u8) { low = 1, high = 7 })
 const Fn = @Fn(&.{i32}, &.{.{}}, undefined, .{});
 //    ^^ (type)()
 //                       ^ ([?]Attributes)()

@@ -2016,6 +2016,19 @@ test "generic function with comptime Union type constructor" {
     });
 }
 
+test "generic function with comptime Enum type constructor" {
+    try testCompletion(
+        \\fn Mode(comptime Tag: type) type {
+        \\    return @Enum(Tag, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
+        \\}
+        \\const value: Mode(u8) = undefined;
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "low", .kind = .Field, .detail = "1" },
+        .{ .label = "high", .kind = .Field, .detail = "7" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },
