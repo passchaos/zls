@@ -2018,6 +2018,39 @@ test "generic function with comptime Struct type constructor" {
     });
 }
 
+test "generic function with comptime generated Struct values" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "count", "payload" }, &.{ u8, T }, &.{ .{}, .{} });
+        \\    const value = S{ .payload = 42, .count = 7 };
+        \\    return if (value.count == 7 and value.payload == 42)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "count", "payload" }, &.{ u8, T }, &.{ .{}, .{} });
+        \\    const value: S = .{ .count = undefined, .payload = 42 };
+        \\    return if (value.count == 7)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime Union type constructor" {
     try testCompletion(
         \\fn Value(comptime T: type) type {

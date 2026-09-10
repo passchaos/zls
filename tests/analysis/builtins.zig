@@ -794,6 +794,14 @@ const GeneratedStructFieldType = @FieldType(ConcreteStruct, "foo");
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
 const GeneratedStructHasField = @hasField(ConcreteStruct, "bar");
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const generated_struct_value = ConcreteStruct{ .bar = 9, .foo = 7 };
+const generated_struct_foo = generated_struct_value.foo;
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(7)
+const generated_struct_bar = @field(generated_struct_value, "bar");
+//    ^^^^^^^^^^^^^^^^^^^^ (i16)(9)
+const generated_struct_unknown = ConcreteStruct{ .foo = 1, .bar = undefined };
+const generated_struct_unknown_bar = generated_struct_unknown.bar;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i16)()
 const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //    ^^^^^ (type)()
 //                   ^^^^^ (ContainerLayout)()

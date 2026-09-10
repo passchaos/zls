@@ -1630,6 +1630,59 @@ fn resolveAggregateLiteralValue(
 ) Error!?InternPool.Index {
     const tree = &options.node_handle.handle.tree;
     switch (tree.nodeTag(options.node_handle.node)) {
+        .struct_init_one,
+        .struct_init_one_comma,
+        .struct_init_dot_two,
+        .struct_init_dot_two_comma,
+        .struct_init_dot,
+        .struct_init_dot_comma,
+        .struct_init,
+        .struct_init_comma,
+        => {
+            const struct_index = switch (analyser.ip.indexToKey(aggregate_type)) {
+                .struct_type => |struct_index| struct_index,
+                else => return null,
+            };
+            const struct_info = analyser.ip.getStruct(struct_index);
+            var buffer: [2]Ast.Node.Index = undefined;
+            const struct_init = tree.fullStructInit(&buffer, options.node_handle.node).?;
+
+            const values = try analyser.gpa.alloc(InternPool.Index, struct_info.fields.count());
+            defer analyser.gpa.free(values);
+            var initialized = try std.DynamicBitSetUnmanaged.initEmpty(analyser.gpa, values.len);
+            defer initialized.deinit(analyser.gpa);
+            for (struct_info.fields.values(), values) |field, *value| {
+                if (field.default_value != .none) {
+                    value.* = field.default_value;
+                } else {
+                    value.* = try analyser.ip.getUnknown(field.ty);
+                }
+            }
+            for (struct_init.ast.fields) |field_node| {
+                const field_name_token = tree.firstToken(field_node) - 2;
+                if (tree.tokenTag(field_name_token) != .identifier) return null;
+                const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
+                const name_index = analyser.ip.string_pool.getString(analyser.store.io, field_name) orelse return null;
+                const field_index = struct_info.fields.getIndex(name_index) orelse return null;
+                if (initialized.isSet(field_index)) return null;
+                initialized.set(field_index);
+                const field_type = struct_info.fields.values()[field_index].ty;
+                values[field_index] = try analyser.resolveCoercedIPValue(field_type, .{
+                    .node_handle = .of(field_node, options.node_handle.handle),
+                    .container_type = options.container_type,
+                }) orelse try analyser.ip.getUnknown(field_type);
+            }
+            if (initialized.count() != values.len) {
+                for (struct_info.fields.values(), 0..) |field, field_index| {
+                    if (!initialized.isSet(field_index) and field.default_value == .none) return null;
+                }
+            }
+
+            return try analyser.ip.get(.{ .aggregate = .{
+                .ty = aggregate_type,
+                .values = try analyser.ip.getIndexSlice(values),
+            } });
+        },
         .array_init_one,
         .array_init_one_comma,
         .array_init_dot_two,
@@ -2067,6 +2120,24 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
                 if (!allDigits(name)) return null;
                 const index = std.fmt.parseInt(u16, name, 10) catch return null;
                 return try analyser.resolveBracketAccessType(ty, .{ .single = index });
+            },
+
+            .struct_type => |struct_index| {
+                const struct_info = analyser.ip.getStruct(struct_index);
+                const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse return null;
+                const field_index = struct_info.fields.getIndex(name_index) orelse return null;
+                const field_type = struct_info.fields.values()[field_index].ty;
+                const value_index = payload.index orelse return Type.fromIP(analyser, field_type, null);
+                const aggregate = switch (analyser.ip.indexToKey(value_index)) {
+                    .aggregate => |aggregate| aggregate,
+                    else => return Type.fromIP(analyser, field_type, null),
+                };
+                if (aggregate.ty != payload.type or field_index >= aggregate.values.len)
+                    return Type.fromIP(analyser, field_type, null);
+                const value = aggregate.values.at(@intCast(field_index), analyser.ip);
+                if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value))
+                    return Type.fromIP(analyser, field_type, null);
+                return Type.fromIP(analyser, field_type, value);
             },
 
             .optional_type => |optional_info| {
@@ -7349,6 +7420,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 var ty = lhs;
                 ty.data.array.elem_count = struct_init.ast.fields.len;
                 return try ty.instanceTypeVal(analyser);
+            }
+            if (analyser.evaluate_comptime_values) {
+                if (lhs.ipIndex()) |type_index| {
+                    if (try analyser.resolveCoercedIPValue(type_index, options)) |value| {
+                        return Type.fromIP(analyser, type_index, value);
+                    }
+                }
             }
             return try lhs.instanceTypeVal(analyser);
         },
