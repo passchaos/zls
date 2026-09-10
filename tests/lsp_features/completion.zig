@@ -2468,6 +2468,27 @@ test "generic function with comptime pointer type info attributes" {
     });
 }
 
+test "generic function with nominal tuple type info" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    const Tuple = @Tuple(&.{ S, u8 });
+        \\    const info = @typeInfo(Tuple).@"struct";
+        \\    const field = info.fields[0];
+        \\    return if (info.is_tuple and info.fields.len == 2 and info.decls.len == 0 and
+        \\        field.name[0] == '0' and field.type == S and !field.is_comptime and
+        \\        field.default_value_ptr == null and field.alignment == null)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const result = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime type info sentinel presence" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

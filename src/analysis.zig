@@ -3159,6 +3159,7 @@ fn resolveTypeInfoFieldAccess(
         },
         .@"struct" => {
             const layout, const backing_integer, const is_tuple, const field_count, const declaration_count = switch (value.reflected_type.data) {
+                .tuple => |tuple| .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true, tuple.len, 0 },
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .struct_type => |struct_index| blk: {
                         const info = analyser.ip.getStruct(struct_index);
@@ -3496,6 +3497,16 @@ fn resolveTypeInfoDescriptorField(
     switch (kind) {
         .struct_fields => {
             const name, const field_type, const is_comptime, const alignment, const has_default = switch (value.reflected_type.data) {
+                .tuple => |tuple| blk: {
+                    if (index >= tuple.len) return field_value_type;
+                    break :blk .{
+                        try std.fmt.allocPrint(analyser.arena, "{d}", .{index}),
+                        tuple[index],
+                        false,
+                        0,
+                        false,
+                    };
+                },
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .struct_type => |struct_index| blk: {
                         const info = analyser.ip.getStruct(struct_index);

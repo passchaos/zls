@@ -923,6 +923,11 @@ const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backin
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_tuple_is_tuple = @typeInfo(Tuple).@"struct".is_tuple;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const NominalTuple = @Tuple(&.{ TypeInfoNominalChild, u8 });
+const type_info_nominal_tuple_len = @typeInfo(NominalTuple).@"struct".fields.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const TypeInfoNominalTupleField = @typeInfo(NominalTuple).@"struct".fields[0].type;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
 const type_info_union_tag_null = @typeInfo(ConcreteUnion).@"union".tag_type == null;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const ImplicitTaggedUnion = union(enum) { alpha: u8, beta: u16 };
