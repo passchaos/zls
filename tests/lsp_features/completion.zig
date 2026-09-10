@@ -2946,6 +2946,19 @@ test "generic function with comptime while return statements" {
     , &.{
         .{ .label = "selected_else", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    while (enabled) {
+        \\        return struct { selected_body: u8 };
+        \\    }
+        \\    return struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected_body", .kind = .Field, .detail = "u8" },
+    });
 }
 
 test "generic function with wrapped comptime return statements" {

@@ -942,7 +942,13 @@ fn findKnownReturnExpression(
             const while_node = ast.fullWhile(tree, node) orelse break :blk .unknown;
             const condition = try analyser.resolveIfConditionValue(.of(while_node.ast.cond_expr, handle)) orelse
                 break :blk .unknown;
-            if (condition) break :blk .unknown;
+            if (condition) {
+                if (while_node.payload_token != null) break :blk .unknown;
+                break :blk switch (try analyser.findKnownReturnExpression(handle, while_node.ast.then_expr)) {
+                    .expression => |expression| .{ .expression = expression },
+                    .continues, .unknown => .unknown,
+                };
+            }
             const else_expr = while_node.ast.else_expr.unwrap() orelse break :blk .continues;
             break :blk try analyser.findKnownReturnExpression(handle, else_expr);
         },
