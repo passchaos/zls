@@ -1111,6 +1111,25 @@ test "generic function with runtime self integer operations" {
     });
 }
 
+test "generic function with runtime vector self integer operations" {
+    try testCompletion(
+        \\var runtime: @Vector(2, i8) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const zero: @Vector(2, i8) = @splat(0);
+        \\    return if (@reduce(.And, (runtime ^ runtime) == zero) and
+        \\        @reduce(.And, (runtime -% runtime) == zero) and
+        \\        @reduce(.And, (runtime -| runtime) == zero))
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with partially known integer operations" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

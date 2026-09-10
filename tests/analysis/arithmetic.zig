@@ -262,6 +262,14 @@ const vector_integer_add_runtime = (runtime_u8_vector + @as(@Vector(2, u8), @spl
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const vector_integer_mul_undefined = (@as(@Vector(2, u8), .{ undefined, 1 }) * @as(@Vector(2, u8), @splat(0)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const vector_integer_self_xor = (runtime_i8_vector ^ runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const vector_integer_self_sub_wrap = (runtime_i8_vector -% runtime_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const vector_integer_self_sub_sat = (runtime_i8_vector -| runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const vector_undefined_self_xor = (undefined_i8_vector ^ undefined_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
 const vector_unsigned_lte_max = (runtime_u8_vector <= @as(@Vector(2, u8), @splat(255)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_unsigned_lt_min = (runtime_u8_vector < @as(@Vector(2, u8), @splat(0)))[1];
@@ -299,3 +307,4 @@ var runtime_u3: u3 = undefined;
 var runtime_u3_vector: @Vector(2, u3) = undefined;
 var runtime_u8_vector: @Vector(2, u8) = undefined;
 var runtime_i8_vector: @Vector(2, i8) = undefined;
+const undefined_i8_vector: @Vector(2, i8) = undefined;

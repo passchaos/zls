@@ -2799,6 +2799,40 @@ fn intValueWithType(
     return Type.fromIP(analyser, result_type, coerced);
 }
 
+fn resolveIntegerSelfBinaryValue(
+    analyser: *Analyser,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (payload.index) |index| {
+        if (analyser.ip.isUndefined(index)) return operand.withoutIPIndex(analyser);
+    }
+    if (analyser.fixedWidthIntegerBounds(payload.type) != null) {
+        return analyser.intValueWithType(payload.type, 0);
+    }
+
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    _ = analyser.fixedWidthIntegerBounds(vector.child) orelse return null;
+    if (analyser.aggregateValues(operand)) |source_values| {
+        if (source_values.len != vector.len) return null;
+        for (0..vector.len) |i| {
+            if (analyser.ip.isUndefined(source_values.at(@intCast(i), analyser.ip))) return null;
+        }
+    }
+
+    const zero = (try analyser.intValueWithType(vector.child, 0) orelse return null).ipIndex() orelse return null;
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    @memset(values, zero);
+    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+}
+
 const IntegerBounds = struct {
     min: i256,
     max: i256,
@@ -7105,14 +7139,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 const tag = tree.nodeTag(node);
                 if ((tag == .bit_xor or tag == .sub_wrap or tag == .sub_sat) and
-                    try analyser.areSameIdentifierExpression(tree, lhs, rhs) and
-                    lhs_ty.data == .ip_index and
-                    analyser.fixedWidthIntegerBounds(lhs_ty.data.ip_index.type) != null)
+                    try analyser.areSameIdentifierExpression(tree, lhs, rhs))
                 {
-                    if (lhs_ty.data.ip_index.index) |index| {
-                        if (analyser.ip.isUndefined(index)) return lhs_ty.withoutIPIndex(analyser);
-                    }
-                    return try analyser.intValueWithType(lhs_ty.data.ip_index.type, 0);
+                    if (try analyser.resolveIntegerSelfBinaryValue(lhs_ty)) |value| return value;
                 }
                 const value = switch (tree.nodeTag(node)) {
                     .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null) orelse
