@@ -6985,6 +6985,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 const same_operand = try analyser.areSameIdentifierExpression(tree, lhs, rhs);
                 if (same_operand) {
                     if (try analyser.resolveSelfComparisonValue(tree.nodeTag(node), lhs_ty)) |value| return value;
+                    const tag = tree.nodeTag(node);
+                    if ((tag == .equal_equal or tag == .bang_equal) and
+                        (try lhs_ty.typeOf(analyser)).isEnumType() and
+                        try analyser.isMutableIdentifierExpression(tree, handle, lhs))
+                    {
+                        return Type.fromIP(
+                            analyser,
+                            .bool_type,
+                            if (tag == .equal_equal) .bool_true else .bool_false,
+                        );
+                    }
                 }
                 var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (try analyser.resolveVectorComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| {
@@ -11061,6 +11072,23 @@ fn areSameIdentifierExpression(
     const lhs_name = try analyser.identifierTokenName(tree, lhs_token) orelse return false;
     const rhs_name = try analyser.identifierTokenName(tree, rhs_token) orelse return false;
     return std.mem.eql(u8, lhs_name, rhs_name);
+}
+
+fn isMutableIdentifierExpression(
+    analyser: *Analyser,
+    tree: *const Ast,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) error{OutOfMemory}!bool {
+    if (tree.nodeTag(node) != .identifier) return false;
+    const token = ast.identifierTokenFromIdentifierNode(tree, node) orelse return false;
+    const name = try analyser.identifierTokenName(tree, token) orelse return false;
+    const declaration = try analyser.lookupSymbolGlobal(
+        handle,
+        name,
+        tree.tokenStart(token),
+    ) orelse return false;
+    return !declaration.isConst();
 }
 
 fn complementaryIdentifierOperand(

@@ -209,6 +209,10 @@ const bool_complement_xor = runtime_bool ^ !runtime_bool;
 //    ^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const bool_undefined_complement_and = undefined_bool and !undefined_bool;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const enum_self_equal = runtime_enum == runtime_enum;
+//    ^^^^^^^^^^^^^^^ (bool)(true)
+const enum_self_not_equal = runtime_enum != runtime_enum;
+//    ^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const error_self_equal = runtime_error == runtime_error;
 //    ^^^^^^^^^^^^^^^^ (bool)(true)
 const error_self_not_equal = runtime_error != runtime_error;
@@ -221,6 +225,8 @@ const undefined_error_self_equal = undefined_error == undefined_error;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const undefined_pointer_self_equal = undefined_pointer == undefined_pointer;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const undefined_enum_self_equal = undefined_enum == undefined_enum;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 
 const vector_add_value = (@as(@Vector(2, u8), .{ 1, 2 }) + @as(@Vector(2, u8), .{ 3, 4 }))[1];
 //    ^^^^^^^^^^^^^^^^ (u8)(6)
@@ -404,7 +410,9 @@ var runtime_u3: u3 = undefined;
 var runtime_u3_vector: @Vector(2, u3) = undefined;
 var runtime_u8_vector: @Vector(2, u8) = undefined;
 var runtime_i8_vector: @Vector(2, i8) = undefined;
+const RuntimeEnum = enum { first, second };
 const RuntimeError = error{ first, second };
+var runtime_enum: RuntimeEnum = .first;
 var runtime_error: RuntimeError = error.first;
 var pointer_storage: u8 = 0;
 var runtime_pointer: *u8 = &pointer_storage;
@@ -417,3 +425,4 @@ const undefined_bool_vector: @Vector(2, bool) = undefined;
 const partially_undefined_bool_vector: @Vector(2, bool) = .{ undefined, true };
 const undefined_error: RuntimeError = undefined;
 const undefined_pointer: *u8 = undefined;
+const undefined_enum: RuntimeEnum = undefined;

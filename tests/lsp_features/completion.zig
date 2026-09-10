@@ -1114,6 +1114,23 @@ test "generic function with runtime error and pointer self equality" {
     });
 }
 
+test "generic function with runtime enum self equality" {
+    try testCompletion(
+        \\const Choice = enum { first, second };
+        \\var runtime_choice: Choice = .first;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime_choice == runtime_choice and !(runtime_choice != runtime_choice))
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with runtime vector self comparisons" {
     try testCompletion(
         \\var runtime: @Vector(2, i8) = undefined;
