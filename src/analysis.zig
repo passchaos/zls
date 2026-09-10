@@ -5415,7 +5415,6 @@ fn resolveExactShiftValue(
     };
     if (try analyser.resolveZeroShiftValue(operand, shift_operand)) |value| return value;
     const index = payload.index orelse return null;
-    const value = analyser.ip.toInt(index, i256) orelse return null;
     const shift_index = shift_operand.ipIndex() orelse return null;
     const shift = analyser.ip.toInt(shift_index, u16) orelse return null;
 
@@ -5423,8 +5422,31 @@ fn resolveExactShiftValue(
     if (type_tag != .int and type_tag != .comptime_int) return null;
     if (type_tag == .int) {
         const info = analyser.ip.intInfo(payload.type, builtin.target);
-        if (info.bits == 0 or info.bits > 128 or shift >= info.bits) return null;
+        if (info.bits == 0 or shift >= info.bits) return null;
+        if (info.bits > 128) {
+            var source = try analyser.managedIntegerValue(index) orelse return null;
+            defer source.deinit();
+            var result: std.math.big.int.Managed = try .init(analyser.gpa);
+            defer result.deinit();
+            switch (tag) {
+                .shl_exact => {
+                    try result.shiftLeft(&source, shift);
+                    if (!result.fitsInTwosComp(info.signedness, info.bits)) return null;
+                },
+                .shr_exact => {
+                    if (source.toConst().ctz(info.bits) < shift) return null;
+                    try result.shiftRight(&source, shift);
+                },
+                else => return null,
+            }
+            return Type.fromIP(
+                analyser,
+                payload.type,
+                try analyser.ip.getBigInt(payload.type, result.toConst()),
+            );
+        }
     }
+    const value = analyser.ip.toInt(index, i256) orelse return null;
     if (shift >= @bitSizeOf(i256)) return null;
 
     const result: i256 = switch (tag) {

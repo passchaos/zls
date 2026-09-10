@@ -1766,6 +1766,8 @@ test "generic function with comptime value builtins" {
         .{ .expression = "@ctz(@byteSwap(@as(u256, 1)))", .detail = "[248]u8" },
         .{ .expression = "@shlExact(@as(u8, 3), 2)", .detail = "[12]u8" },
         .{ .expression = "@shrExact(@as(u8, 12), 2)", .detail = "[3]u8" },
+        .{ .expression = "@ctz(@shlExact(@as(u256, 1), 200))", .detail = "[200]u8" },
+        .{ .expression = "@shrExact(@as(u256, 1606938044258990275541962092341162602522202993782792835301376), 200)", .detail = "[1]u8" },
         .{ .expression = "@intFromBool(true)", .detail = "[1]u8" },
         .{ .expression = "@intFromBool(false)", .detail = "[0]u8" },
         .{ .expression = "@min(4, 7)", .detail = "[4]u8" },
