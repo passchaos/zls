@@ -1070,6 +1070,23 @@ test "generic function with partially known integer operations" {
     });
 }
 
+test "generic function with partially known wrapping and saturating integer operations" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime *% @as(u8, 0) == 0 and runtime *| @as(u8, 0) == 0 and
+        \\        runtime +| @as(u8, 255) == 255 and @as(u8, 0) -| runtime == 0)
+        \\        struct { evaluated: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector int from bool" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

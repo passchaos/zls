@@ -85,6 +85,18 @@ const integer_add_zero_runtime = runtime_u8 + @as(u8, 0);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const integer_mul_zero_undefined = @as(u8, undefined) * @as(u8, 0);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const mul_wrap_zero_runtime = runtime_u8 *% @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const mul_sat_zero_runtime = runtime_u8 *| @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const add_sat_max_runtime = runtime_u8 +| @as(u8, 255);
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(255)
+const sub_sat_zero_runtime = @as(u8, 0) -| runtime_u8;
+//    ^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const add_wrap_zero_runtime = runtime_u8 +% @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const mul_wrap_zero_undefined = @as(u8, undefined) *% @as(u8, 0);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const bool_and_runtime_false = runtime_bool and false;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const bool_or_runtime_true = runtime_bool or true;

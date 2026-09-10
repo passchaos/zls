@@ -2709,6 +2709,36 @@ fn resolveIntegerAbsorbingBinaryValue(
     return analyser.intValueWithType(lhs_payload.type, absorbing);
 }
 
+fn resolveFixedWidthIntegerAbsorbingBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+    result_type: InternPool.Index,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const bounds = analyser.fixedWidthIntegerBounds(result_type) orelse return null;
+    if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+    if (rhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+
+    const lhs_value = if (lhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    const absorbing: ?i256 = switch (tag) {
+        .mul_wrap, .mul_sat => if (lhs_value == 0 or rhs_value == 0) 0 else null,
+        .add_sat => if (bounds.min == 0 and (lhs_value == bounds.max or rhs_value == bounds.max)) bounds.max else null,
+        .sub_sat => if (bounds.min == 0 and (lhs_value == 0 or rhs_value == bounds.max)) 0 else null,
+        else => null,
+    };
+    return analyser.intValueWithType(result_type, absorbing orelse return null);
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2988,11 +3018,6 @@ fn resolveVectorFixedWidthIntegerBinaryValue(
     const rhs_values = analyser.aggregateValues(rhs);
     if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
-    const int_info = analyser.ip.intInfo(result_vector.child, builtin.target);
-    const max_value: ?i256 = if (int_info.signedness == .unsigned and int_info.bits > 0 and int_info.bits <= 128)
-        (@as(i256, 1) << @intCast(int_info.bits)) - 1
-    else
-        null;
     const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(values);
     const unknown_lhs = try analyser.ip.getUnknown(lhs_vector.child);
@@ -3001,23 +3026,6 @@ fn resolveVectorFixedWidthIntegerBinaryValue(
         const index: u32 = @intCast(i);
         const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs;
         const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs;
-        if (!analyser.ip.isUndefined(lhs_value) and !analyser.ip.isUndefined(rhs_value)) {
-            const lhs_int = analyser.ip.toInt(lhs_value, i256);
-            const rhs_int = analyser.ip.toInt(rhs_value, i256);
-            const absorbing: ?i256 = switch (tag) {
-                .mul_wrap, .mul_sat => if (lhs_int == 0 or rhs_int == 0) 0 else null,
-                .add_sat => if (max_value) |max|
-                    if (lhs_int == max or rhs_int == max) max else null
-                else
-                    null,
-                .sub_sat => if (max_value != null and (lhs_int == 0 or rhs_int == max_value.?)) 0 else null,
-                else => null,
-            };
-            if (absorbing) |resolved| {
-                value.* = (try analyser.intValueWithType(result_vector.child, resolved) orelse return null).ipIndex().?;
-                continue;
-            }
-        }
         const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_value);
         const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_value);
         const result = try analyser.resolveFixedWidthIntegerBinaryValue(
@@ -3176,10 +3184,11 @@ fn resolveFixedWidthIntegerBinaryValue(
         .ip_index => |payload| payload,
         else => return null,
     };
-    const lhs_index = lhs_payload.index orelse return null;
-    const rhs_index = rhs_payload.index orelse return null;
     const result_type = result_type_override orelse
         try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    if (try analyser.resolveFixedWidthIntegerAbsorbingBinaryValue(tag, lhs, rhs, result_type)) |value| return value;
+    const lhs_index = lhs_payload.index orelse return null;
+    const rhs_index = rhs_payload.index orelse return null;
     if (analyser.ip.zigTypeTag(result_type) != .int) return null;
     const int_info = analyser.ip.intInfo(result_type, builtin.target);
     if (int_info.bits == 0 or int_info.bits > 128) return null;
