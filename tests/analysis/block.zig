@@ -48,6 +48,15 @@ const labeled_block_different_value = blk: {
     if (runtime_condition) break :blk @as(u8, 4);
     break :blk @as(u8, 5);
 };
+
+const labeled_block_switch = blk: {
+//    ^^^^^^^^^^^^^^^^^^^^ (i64)()
+    switch (@as(u8, 2)) {
+        0 => break :blk @as(i32, 1),
+        1...3 => break :blk @as(i64, 2),
+        else => break :blk @as(u16, 3),
+    }
+};
 // zig fmt: on
 
 pub fn main() void {

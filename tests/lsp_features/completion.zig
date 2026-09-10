@@ -2999,6 +2999,22 @@ test "generic function with comptime labeled block breaks" {
     });
 
     try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    return blk: {
+        \\        switch (N) {
+        \\            0 => break :blk struct { zero: u8 },
+        \\            1...3 => break :blk struct { range: u8 },
+        \\            else => break :blk struct { fallback: u8 },
+        \\        }
+        \\    };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "range", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\var runtime: bool = undefined;
         \\fn Select(comptime N: u8) type {
         \\    const count = blk: {

@@ -5273,7 +5273,7 @@ const BreakIterator = struct {
                 .open => |node| switch (tree.nodeTag(node)) {
                     .@"break" => {
                         const opt_label_token, const opt_operand = tree.nodeData(node).opt_token_and_opt_node;
-                        if (try it.isInKnownUnselectedIfBranch(analyser, handle, container_type)) continue;
+                        if (try it.isInKnownUnselectedBranch(analyser, handle, container_type)) continue;
 
                         if (it.label) |label| {
                             const label_token = opt_label_token.unwrap() orelse continue;
@@ -5316,7 +5316,7 @@ const BreakIterator = struct {
         }
     }
 
-    fn isInKnownUnselectedIfBranch(
+    fn isInKnownUnselectedBranch(
         it: *const BreakIterator,
         analyser: *Analyser,
         handle: *DocumentStore.Handle,
@@ -5336,6 +5336,16 @@ const BreakIterator = struct {
                     }) orelse continue;
                     if ((!condition and child.node == if_node.ast.then_expr) or
                         (condition and if_node.ast.else_expr.unwrap() == child.node)) return true;
+                },
+                .@"switch", .switch_comma => {
+                    const switch_node = tree.switchFull(ancestor.node);
+                    if (child.node == switch_node.ast.condition) continue;
+                    const selected_target = try analyser.resolveKnownSwitchTarget(.{
+                        .node_handle = .of(ancestor.node, handle),
+                        .container_type = container_type,
+                    }) orelse continue;
+                    const switch_case = tree.fullSwitchCase(child.node) orelse continue;
+                    if (switch_case.ast.target_expr != selected_target) return true;
                 },
                 else => {},
             }
