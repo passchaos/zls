@@ -5075,25 +5075,49 @@ fn resolveBitCountValue(
     const index = payload.index orelse return null;
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
-    if (int_info.bits == 0 or int_info.bits > 128) return null;
+    if (int_info.bits == 0) return null;
 
-    const raw: u128 = switch (int_info.signedness) {
-        .unsigned => analyser.ip.toInt(index, u128) orelse return null,
-        .signed => signed: {
-            const signed_value = analyser.ip.toInt(index, i128) orelse return null;
-            const bits: u128 = @bitCast(signed_value);
-            const mask = if (int_info.bits == 128)
-                std.math.maxInt(u128)
-            else
-                (@as(u128, 1) << @intCast(int_info.bits)) - 1;
-            break :signed bits & mask;
-        },
-    };
-    const value: u64 = switch (tag) {
-        .clz => if (raw == 0) int_info.bits else @clz(raw) - (128 - int_info.bits),
-        .ctz => if (raw == 0) int_info.bits else @ctz(raw),
-        .pop_count => @popCount(raw),
-        else => return null,
+    const value: u64 = if (int_info.bits > 128) value: {
+        const bit_count: std.math.big.Limb = int_info.bits;
+        break :value switch (analyser.ip.indexToKey(index)) {
+            inline .int_u64_value, .int_i64_value => |int_value| scalar: {
+                var buffer: [std.math.big.int.calcTwosCompLimbCount(64)]std.math.big.Limb = undefined;
+                var big_int: std.math.big.int.Mutable = .init(&buffer, int_value.int);
+                const int = big_int.toConst();
+                break :scalar @intCast(switch (tag) {
+                    .clz => int.clz(bit_count),
+                    .ctz => int.ctz(bit_count),
+                    .pop_count => int.popCount(bit_count),
+                    else => return null,
+                });
+            },
+            .int_big_value => |int_value| @intCast(switch (tag) {
+                .clz => int_value.getConst(analyser.ip).clz(bit_count),
+                .ctz => int_value.getConst(analyser.ip).ctz(bit_count),
+                .pop_count => int_value.getConst(analyser.ip).popCount(bit_count),
+                else => return null,
+            }),
+            else => return null,
+        };
+    } else value: {
+        const raw: u128 = switch (int_info.signedness) {
+            .unsigned => analyser.ip.toInt(index, u128) orelse return null,
+            .signed => signed: {
+                const signed_value = analyser.ip.toInt(index, i128) orelse return null;
+                const bits: u128 = @bitCast(signed_value);
+                const mask = if (int_info.bits == 128)
+                    std.math.maxInt(u128)
+                else
+                    (@as(u128, 1) << @intCast(int_info.bits)) - 1;
+                break :signed bits & mask;
+            },
+        };
+        break :value switch (tag) {
+            .clz => if (raw == 0) int_info.bits else @clz(raw) - (128 - int_info.bits),
+            .ctz => if (raw == 0) int_info.bits else @ctz(raw),
+            .pop_count => @popCount(raw),
+            else => return null,
+        };
     };
 
     const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, int_info.bits) + 1));
