@@ -896,8 +896,17 @@ const type_info_vector_len = @typeInfo(@Vector(8, i16)).vector.len;
 //    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)(8)
 const TypeInfoOptionalChild = @typeInfo(?u32).optional.child;
 //    ^^^^^^^^^^^^^^^^^^^^^ (type)(u32)
+const TypeInfoNominalChild = struct { value: u8 };
+const TypeInfoPointerNominalChild = @typeInfo(*const TypeInfoNominalChild).pointer.child;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
+const TypeInfoArrayNominalChild = @typeInfo([4]TypeInfoNominalChild).array.child;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
+const TypeInfoOptionalNominalChild = @typeInfo(?TypeInfoNominalChild).optional.child;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
 const TypeInfoErrorPayload = @typeInfo(error{Oops}!u64).error_union.payload;
 //    ^^^^^^^^^^^^^^^^^^^^ (type)(u64)
+const TypeInfoErrorNominalPayload = @typeInfo(error{Oops}!TypeInfoNominalChild).error_union.payload;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
 const type_info_error_set_len = @typeInfo(error{ Oops, Failed }).error_set.?.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const type_info_empty_error_set_len = @typeInfo(error{}).error_set.?.len;

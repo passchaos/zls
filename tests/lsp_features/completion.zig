@@ -2423,6 +2423,30 @@ test "generic function with comptime type info payload values" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "i16" },
     });
+
+    const cases = [_][]const u8{
+        "@typeInfo(*const S).pointer.child == S",
+        "@typeInfo([4]S).array.child == S",
+        "@typeInfo(?S).optional.child == S",
+        "@typeInfo(error{Oops}!S).error_union.payload == S",
+    };
+    for (cases) |condition| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select(comptime T: type) type {{
+            \\    const S = struct {{ value: T }};
+            \\    return if ({s})
+            \\        struct {{ matched: T }}
+            \\    else
+            \\        struct {{ fallback: u8 }};
+            \\}}
+            \\const selected: Select(u16) = undefined;
+            \\const field = selected.<cursor>
+        , .{condition});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "matched", .kind = .Field, .detail = "u16" },
+        });
+    }
 }
 
 test "generic function with comptime pointer type info attributes" {

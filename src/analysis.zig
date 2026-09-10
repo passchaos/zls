@@ -3068,57 +3068,63 @@ fn resolveTypeInfoFieldAccess(
             }
         },
         .pointer => {
-            const pointer = switch (value.reflected_type.data) {
+            const pointer, const child = switch (value.reflected_type.data) {
+                .pointer => |pointer| .{ @as(?InternPool.Key.Pointer, null), pointer.elem_ty.* },
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
-                    .pointer_type => |pointer| pointer,
+                    .pointer_type => |pointer| .{ pointer, Type.fromIP(analyser, .type_type, pointer.elem_type) },
                     else => return field_value_type,
                 },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "size")) {
                 const enum_type = try field_value_type.typeOf(analyser);
-                return try analyser.enumValue(enum_type, @tagName(pointer.flags.size));
+                const size = if (pointer) |info| info.flags.size else value.reflected_type.data.pointer.size;
+                return try analyser.enumValue(enum_type, @tagName(size));
             }
             if (std.mem.eql(u8, field_name, "is_const")) {
-                return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_const) .bool_true else .bool_false);
+                const is_const = if (pointer) |info| info.flags.is_const else value.reflected_type.data.pointer.is_const;
+                return Type.fromIP(analyser, .bool_type, if (is_const) .bool_true else .bool_false);
             }
+            if (std.mem.eql(u8, field_name, "child")) return child;
+            if (std.mem.eql(u8, field_name, "sentinel_ptr")) {
+                const sentinel = if (pointer) |info| info.sentinel else value.reflected_type.data.pointer.sentinel;
+                return try analyser.optionalPresenceValue(field_value_type, sentinel != .none);
+            }
+            const info = pointer orelse return field_value_type;
             if (std.mem.eql(u8, field_name, "is_volatile")) {
-                return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_volatile) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (info.flags.is_volatile) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "alignment")) {
-                const alignment = if (pointer.flags.alignment == 0)
+                const alignment = if (info.flags.alignment == 0)
                     InternPool.Index.none
                 else
-                    (try analyser.intValueWithType(.usize_type, pointer.flags.alignment) orelse return field_value_type).ipIndex() orelse
+                    (try analyser.intValueWithType(.usize_type, info.flags.alignment) orelse return field_value_type).ipIndex() orelse
                         return field_value_type;
                 return try analyser.optionalTypeValue(field_value_type, alignment);
             }
             if (std.mem.eql(u8, field_name, "address_space")) {
                 const enum_type = try field_value_type.typeOf(analyser);
-                return try analyser.enumValue(enum_type, @tagName(pointer.flags.address_space));
-            }
-            if (std.mem.eql(u8, field_name, "child")) {
-                return Type.fromIP(analyser, .type_type, pointer.elem_type);
+                return try analyser.enumValue(enum_type, @tagName(info.flags.address_space));
             }
             if (std.mem.eql(u8, field_name, "is_allowzero")) {
-                return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_allowzero) .bool_true else .bool_false);
-            }
-            if (std.mem.eql(u8, field_name, "sentinel_ptr")) {
-                return try analyser.optionalPresenceValue(field_value_type, pointer.sentinel != .none);
+                return Type.fromIP(analyser, .bool_type, if (info.flags.is_allowzero) .bool_true else .bool_false);
             }
         },
         .array, .vector => {
-            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
-            const len, const child, const sentinel = switch (analyser.ip.indexToKey(type_index)) {
-                .array_type => |array| .{ array.len, array.child, array.sentinel },
-                .vector_type => |vector| .{ @as(u64, vector.len), vector.child, InternPool.Index.none },
+            const len, const child, const sentinel = switch (value.reflected_type.data) {
+                .array => |array| .{ array.elem_count orelse return field_value_type, array.elem_ty.*, array.sentinel },
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .array_type => |array| .{ array.len, Type.fromIP(analyser, .type_type, array.child), array.sentinel },
+                    .vector_type => |vector| .{ @as(u64, vector.len), Type.fromIP(analyser, .type_type, vector.child), InternPool.Index.none },
+                    else => return field_value_type,
+                },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "len")) {
                 return try analyser.comptimeIntValue(len);
             }
             if (std.mem.eql(u8, field_name, "child")) {
-                return Type.fromIP(analyser, .type_type, child);
+                return child;
             }
             if (value.tag == .array and std.mem.eql(u8, field_name, "sentinel_ptr")) {
                 return try analyser.optionalPresenceValue(field_value_type, sentinel != .none);
