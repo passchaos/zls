@@ -7274,10 +7274,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 unreachable;
 
             const else_expr = loop.else_expr.unwrap() orelse return null;
-
-            // TODO: peer type resolution based on `else` and all `break` statements
-            if (try analyser.resolveTypeOfNodeInternal(.of(else_expr, handle))) |else_type|
-                return else_type.withoutIPIndex(analyser);
+            var results: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+            if (try analyser.resolveTypeOfNodeInternal(.of(else_expr, handle))) |else_type| {
+                try results.append(analyser.arena, .{
+                    .type = if (analyser.evaluate_comptime_values) else_type else else_type.withoutIPIndex(analyser),
+                    .descriptor = "else",
+                });
+            }
 
             var it: BreakIterator = .{
                 .walker = try .init(analyser.gpa, tree, loop.then_expr),
@@ -7287,11 +7290,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             defer it.walker.deinit(analyser.gpa);
 
             while (try it.next(analyser, handle, options.container_type)) |value| {
-                return switch (value) {
-                    .operand => |operand| try analyser.resolveTypeOfNodeInternal(.of(operand, handle)),
+                const value_type = switch (value) {
+                    .operand => |operand| if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
+                        if (analyser.evaluate_comptime_values) operand_type else operand_type.withoutIPIndex(analyser)
+                    else
+                        continue,
                     .void => Type.fromIP(analyser, .void_type, .void_value),
                 };
+                try results.append(analyser.arena, .{
+                    .type = value_type,
+                    .descriptor = "break",
+                });
             }
+            return Type.fromEither(analyser, results.items);
         },
         .block,
         .block_semicolon,

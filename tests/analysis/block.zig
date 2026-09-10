@@ -57,6 +57,20 @@ const labeled_block_switch = blk: {
         else => break :blk @as(u16, 3),
     }
 };
+
+const while_else_peer = while (runtime_condition) {
+    if (runtime_condition) break @as(u8, 1);
+    break @as(u16, 300);
+} else @as(u8, 2);
+const while_else_peer_type = while_else_peer;
+//    ^^^^^^^^^^^^^^^^^^^^ (u16)()
+
+const for_else_peer = for ([_]u8{ 1, 2 }) |_| {
+    if (runtime_condition) break @as(u8, 1);
+    break @as(u16, 300);
+} else @as(u8, 2);
+const for_else_peer_type = for_else_peer;
+//    ^^^^^^^^^^^^^^^^^^ (u16)()
 // zig fmt: on
 
 pub fn main() void {

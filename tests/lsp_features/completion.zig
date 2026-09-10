@@ -3227,6 +3227,30 @@ test "generic function with runtime while before return" {
     });
 }
 
+test "generic function with peer-typed loop expressions" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const while_value = while (runtime) {
+        \\        if (runtime) break @as(u8, N);
+        \\        break @as(u16, N + 300);
+        \\    } else @as(u8, N + 2);
+        \\    const for_value = for ([_]u8{ 1, 2 }) |_| {
+        \\        if (runtime) break @as(u8, N + 3);
+        \\        break @as(u16, N + 300);
+        \\    } else @as(u8, N + 5);
+        \\    return if (@TypeOf(while_value) == u16 and @TypeOf(for_value) == u16)
+        \\        struct { merged: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "merged", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime while return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
