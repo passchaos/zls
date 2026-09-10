@@ -900,6 +900,19 @@ const type_info_fn_varargs = @typeInfo(VariadicFn).@"fn".is_var_args;
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoFnReturn = @typeInfo(ConcreteFn).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^ (type)(u8)
+const AstPacked = packed struct(u16) { value: u8 };
+const AstExtern = extern union { value: u8 };
+const AstOpenEnum = enum(u8) { value = 1, _ };
+const type_info_ast_struct_layout = @typeInfo(AstPacked).@"struct".layout == .@"packed";
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const TypeInfoAstStructBacking = @typeInfo(AstPacked).@"struct".backing_integer.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u16)
+const type_info_ast_union_layout = @typeInfo(AstExtern).@"union".layout == .@"extern";
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_ast_enum_exhaustive = @typeInfo(AstOpenEnum).@"enum".is_exhaustive;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const TypeInfoAstFnReturn = @typeInfo(fn (u16) u8).@"fn".return_type.?;
+//    ^^^^^^^^^^^^^^^^^^^ (type)(u8)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()

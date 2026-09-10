@@ -3076,13 +3076,29 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "payload")) return payload;
         },
         .@"struct" => {
-            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
-            const layout, const backing_integer, const is_tuple = switch (analyser.ip.indexToKey(type_index)) {
-                .struct_type => |struct_index| blk: {
-                    const info = analyser.ip.getStruct(struct_index);
-                    break :blk .{ info.layout, info.backing_int_ty, false };
+            const layout, const backing_integer, const is_tuple = switch (value.reflected_type.data) {
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .struct_type => |struct_index| blk: {
+                        const info = analyser.ip.getStruct(struct_index);
+                        break :blk .{ info.layout, info.backing_int_ty, false };
+                    },
+                    .tuple_type => .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true },
+                    else => return field_value_type,
                 },
-                .tuple_type => .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true },
+                .container => blk: {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const info = astContainerTypeInfo(value.reflected_type.*, &buffer) orelse return field_value_type;
+                    if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_struct) return field_value_type;
+                    const backing_integer = if (info.declaration.ast.arg.unwrap()) |arg|
+                        (try analyser.resolveTypeOfNodeInternal(.{
+                            .node_handle = .of(arg, info.handle),
+                            .container_type = value.reflected_type.*,
+                        }) orelse return field_value_type).ipIndex() orelse return field_value_type
+                    else
+                        InternPool.Index.none;
+                    if (info.layout == .@"packed" and backing_integer == .none) return field_value_type;
+                    break :blk .{ info.layout, backing_integer, false };
+                },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "layout")) {
@@ -3097,46 +3113,96 @@ fn resolveTypeInfoFieldAccess(
             }
         },
         .@"union" => {
-            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
-            const info = switch (analyser.ip.indexToKey(type_index)) {
-                .union_type => |union_index| analyser.ip.getUnion(union_index),
+            const layout, const tag_type = switch (value.reflected_type.data) {
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .union_type => |union_index| blk: {
+                        const info = analyser.ip.getUnion(union_index);
+                        break :blk .{ info.layout, info.tag_type };
+                    },
+                    else => return field_value_type,
+                },
+                .container => blk: {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const info = astContainerTypeInfo(value.reflected_type.*, &buffer) orelse return field_value_type;
+                    if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_union) return field_value_type;
+                    if (info.declaration.ast.enum_token != null and info.declaration.ast.arg.unwrap() == null)
+                        return field_value_type;
+                    const tag_type = if (info.declaration.ast.arg.unwrap()) |arg|
+                        (try analyser.resolveTypeOfNodeInternal(.{
+                            .node_handle = .of(arg, info.handle),
+                            .container_type = value.reflected_type.*,
+                        }) orelse return field_value_type).ipIndex() orelse return field_value_type
+                    else
+                        InternPool.Index.none;
+                    break :blk .{ info.layout, tag_type };
+                },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "layout")) {
                 const enum_type = try field_value_type.typeOf(analyser);
-                return try analyser.enumValue(enum_type, @tagName(info.layout));
+                return try analyser.enumValue(enum_type, @tagName(layout));
             }
             if (std.mem.eql(u8, field_name, "tag_type")) {
-                return try analyser.optionalTypeValue(field_value_type, info.tag_type);
+                return try analyser.optionalTypeValue(field_value_type, tag_type);
             }
         },
         .@"enum" => {
-            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
-            const info = switch (analyser.ip.indexToKey(type_index)) {
-                .enum_type => |enum_index| analyser.ip.getEnum(enum_index),
+            const tag_type, const is_exhaustive = switch (value.reflected_type.data) {
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .enum_type => |enum_index| blk: {
+                        const info = analyser.ip.getEnum(enum_index);
+                        break :blk .{ Type.fromIP(analyser, .type_type, info.tag_type), info.is_exhaustive };
+                    },
+                    else => return field_value_type,
+                },
+                .container => blk: {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const info = astContainerTypeInfo(value.reflected_type.*, &buffer) orelse return field_value_type;
+                    if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_enum) return field_value_type;
+                    var is_exhaustive = true;
+                    for (info.declaration.ast.members) |member| {
+                        const enum_field = info.handle.tree.fullContainerField(member) orelse continue;
+                        const name = try analyser.identifierTokenName(&info.handle.tree, enum_field.ast.main_token) orelse continue;
+                        if (std.mem.eql(u8, name, "_")) {
+                            is_exhaustive = false;
+                            break;
+                        }
+                    }
+                    break :blk .{
+                        try analyser.astEnumTagType(value.reflected_type.*, info.declaration, info.handle) orelse return field_value_type,
+                        is_exhaustive,
+                    };
+                },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "tag_type")) {
-                return Type.fromIP(analyser, .type_type, info.tag_type);
+                return tag_type;
             }
             if (std.mem.eql(u8, field_name, "is_exhaustive")) {
-                return Type.fromIP(analyser, .bool_type, if (info.is_exhaustive) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (is_exhaustive) .bool_true else .bool_false);
             }
         },
         .@"fn" => {
-            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
-            const info = switch (analyser.ip.indexToKey(type_index)) {
-                .function_type => |info| info,
+            const is_generic, const is_var_args, const return_type = switch (value.reflected_type.data) {
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .function_type => |info| .{ info.flags.is_generic, info.flags.is_var_args, info.return_type },
+                    else => return field_value_type,
+                },
+                .function => |info| .{
+                    value.reflected_type.isGenericFunc(),
+                    info.has_varargs,
+                    (try info.return_value.typeOf(analyser)).ipIndex() orelse return field_value_type,
+                },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "is_generic")) {
-                return Type.fromIP(analyser, .bool_type, if (info.flags.is_generic) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (is_generic) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "is_var_args")) {
-                return Type.fromIP(analyser, .bool_type, if (info.flags.is_var_args) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (is_var_args) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "return_type")) {
-                return try analyser.optionalTypeValue(field_value_type, info.return_type);
+                return try analyser.optionalTypeValue(field_value_type, return_type);
             }
         },
         else => {},
@@ -3155,6 +3221,48 @@ fn optionalTypeValue(
     else
         try analyser.ip.get(.{ .optional_value = .{ .ty = optional_type, .val = value } });
     return Type.fromIP(analyser, optional_type, optional_value);
+}
+
+fn astContainerTypeInfo(
+    container_type: Type,
+    buffer: *[2]Ast.Node.Index,
+) ?struct {
+    declaration: Ast.full.ContainerDecl,
+    handle: *DocumentStore.Handle,
+    layout: std.builtin.Type.ContainerLayout,
+} {
+    const container = switch (container_type.data) {
+        .container => |container| container,
+        else => return null,
+    };
+    const handle = container.scope_handle.handle;
+    const tree = &handle.tree;
+    const declaration = tree.fullContainerDecl(buffer, container.scope_handle.toNode()) orelse return null;
+    const layout: std.builtin.Type.ContainerLayout = if (declaration.layout_token) |token| switch (tree.tokenTag(token)) {
+        .keyword_extern => .@"extern",
+        .keyword_packed => .@"packed",
+        else => return null,
+    } else .auto;
+    return .{ .declaration = declaration, .handle = handle, .layout = layout };
+}
+
+fn astEnumTagType(analyser: *Analyser, enum_type: Type, declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle) Error!?Type {
+    if (declaration.ast.arg.unwrap()) |arg| {
+        return analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(arg, handle),
+            .container_type = enum_type,
+        });
+    }
+    var field_count: u32 = 0;
+    for (declaration.ast.members) |member| {
+        const field = handle.tree.fullContainerField(member) orelse continue;
+        const name = try analyser.identifierTokenName(&handle.tree, field.ast.main_token) orelse continue;
+        if (!std.mem.eql(u8, name, "_")) field_count += 1;
+    }
+    if (field_count == 0) return null;
+    const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
+    const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+    return Type.fromIP(analyser, .type_type, tag_type);
 }
 
 fn resolveEnumValueTag(
