@@ -1915,6 +1915,20 @@ test "generic function with comptime value builtins" {
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
     try testCompletion(
+        \\fn Select(comptime value: u256) type {
+        \\    const signed: i256 = @bitCast(value);
+        \\    const unsigned: u256 = @bitCast(signed);
+        \\    return if (signed == -1 and unsigned == value)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(115792089237316195423570985008687907853269984665640564039457584007913129639935) = undefined;
+        \\const fields = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
         \\fn Direct(comptime value: i8) type {
         \\    return if (value == -1) struct { direct: u8 } else struct { fallback: u8 };
         \\}

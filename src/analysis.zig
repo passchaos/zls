@@ -2633,7 +2633,15 @@ fn bitCastIntValue(
     if (analyser.ip.zigTypeTag(source_ty) != .int) return null;
     const dest_info = analyser.ip.intInfo(dest_ty, builtin.target);
     const source_info = analyser.ip.intInfo(source_ty, builtin.target);
-    if (dest_info.bits != source_info.bits or dest_info.bits > 128) return null;
+    if (dest_info.bits != source_info.bits) return null;
+    if (dest_info.bits > 128) {
+        var source = try analyser.managedIntegerValue(value) orelse return null;
+        defer source.deinit();
+        var result: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer result.deinit();
+        try result.truncate(&source, dest_info.signedness, dest_info.bits);
+        return try analyser.ip.getBigInt(dest_ty, result.toConst());
+    }
 
     const raw: u128 = switch (source_info.signedness) {
         .unsigned => analyser.ip.toInt(value, u128) orelse return null,
