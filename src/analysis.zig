@@ -6722,17 +6722,35 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 const lhs_values = analyser.aggregateValues(l_elem_ty);
                 const rhs_values = analyser.aggregateValues(r_elem_ty);
-                if (lhs_values != null and rhs_values != null) {
-                    const left = try lhs_values.?.dupe(analyser.gpa, analyser.ip);
-                    defer analyser.gpa.free(left);
-                    const right = try rhs_values.?.dupe(analyser.gpa, analyser.ip);
-                    defer analyser.gpa.free(right);
-                    const values = try analyser.gpa.alloc(InternPool.Index, left.len + right.len);
-                    defer analyser.gpa.free(values);
-                    @memcpy(values[0..left.len], left);
-                    @memcpy(values[left.len..], right);
-                    return try analyser.aggregateValue(result, values) orelse result;
+                const result_payload = switch (result.data) {
+                    .ip_index => |payload| payload,
+                    else => return result,
+                };
+                const result_array = switch (analyser.ip.indexToKey(result_payload.type)) {
+                    .array_type => |array| array,
+                    else => return result,
+                };
+                const lhs_len = std.math.cast(usize, (l_elem_ty.arrayInfo(analyser) orelse return result)[0] orelse return result) orelse return result;
+                const rhs_len = std.math.cast(usize, (r_elem_ty.arrayInfo(analyser) orelse return result)[0] orelse return result) orelse return result;
+                const value_len = std.math.add(usize, lhs_len, rhs_len) catch return result;
+                if (value_len != result_array.len or
+                    (lhs_values != null and lhs_values.?.len != lhs_len) or
+                    (rhs_values != null and rhs_values.?.len != rhs_len)) return result;
+
+                const values = try analyser.gpa.alloc(InternPool.Index, result_array.len);
+                defer analyser.gpa.free(values);
+                const unknown = try analyser.ip.getUnknown(result_array.child);
+                if (lhs_values) |source| {
+                    for (values[0..lhs_len], 0..) |*value, i| value.* = source.at(@intCast(i), analyser.ip);
+                } else {
+                    @memset(values[0..lhs_len], unknown);
                 }
+                if (rhs_values) |source| {
+                    for (values[lhs_len..], 0..) |*value, i| value.* = source.at(@intCast(i), analyser.ip);
+                } else {
+                    @memset(values[lhs_len..], unknown);
+                }
+                return try analyser.aggregateValue(result, values) orelse result;
             }
             return result;
         },

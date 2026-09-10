@@ -580,6 +580,25 @@ test "generic function with comptime array values" {
     });
 }
 
+test "generic function with partially known array concatenation" {
+    try testCompletion(
+        \\var runtime: [2]u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const runtime_lhs = runtime ++ [2]u8{ N, N + 1 };
+        \\    const runtime_rhs = [2]u8{ N + 2, N + 3 } ++ runtime;
+        \\    return if (runtime_lhs[2] == 4 and runtime_lhs[3] == 5 and
+        \\        runtime_rhs[0] == 6 and runtime_rhs[1] == 7)
+        \\        struct { concatenated: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "concatenated", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime splat value" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

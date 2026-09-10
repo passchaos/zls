@@ -157,6 +157,13 @@ const array_cat_4 = &[2]u8{ 0, 1 } ++ &[3]u8{ 2, 3, 4 };
 //    ^^^^^^^^^^^ (*const [5]u8)()
 const array_cat_value = ([_]u8{ 1, 2 } ++ [_]u8{ 3, 4 })[2];
 //    ^^^^^^^^^^^^^^^ (u8)(3)
+var runtime_array: [2]u8 = undefined;
+const array_cat_runtime_lhs = runtime_array ++ [2]u8{ 3, 4 };
+const array_cat_runtime_lhs_value = array_cat_runtime_lhs[2];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(3)
+const array_cat_runtime_rhs = [2]u8{ 5, 6 } ++ runtime_array;
+const array_cat_runtime_rhs_value = array_cat_runtime_rhs[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(6)
 
 //
 // Array multiplication
