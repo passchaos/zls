@@ -4465,6 +4465,45 @@ fn resolveStructTypeConstructor(
     return Type.fromIP(analyser, .type_type, struct_type);
 }
 
+fn resolveUnionFieldAlignments(
+    analyser: *Analyser,
+    options: ResolveOptions,
+    expected_len: usize,
+) Error!?[]const u16 {
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return null;
+
+    const alignments = try analyser.arena.alloc(u16, expected_len);
+    @memset(alignments, 0);
+    for (literal.ast.elements, alignments) |element, *alignment| {
+        var struct_buffer: [2]Ast.Node.Index = undefined;
+        const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
+        if (attributes.ast.type_expr.unwrap() != null) return null;
+        var seen_align = false;
+        for (attributes.ast.fields) |field_node| {
+            const field_name_token = tree.firstToken(field_node) - 2;
+            if (tree.tokenTag(field_name_token) != .identifier) return null;
+            const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
+            if (!std.mem.eql(u8, field_name, "align") or seen_align) return null;
+            seen_align = true;
+            const field_options: ResolveOptions = .{
+                .node_handle = .of(field_node, node_handle.handle),
+                .container_type = literal_options.container_type,
+            };
+            if (try analyser.isNullComptimeValue(field_options)) continue;
+            alignment.* = try analyser.resolveIntegerLiteral(u16, field_options) orelse return null;
+            if (!std.math.isPowerOfTwo(alignment.*)) return null;
+        }
+    }
+    return alignments;
+}
+
 fn resolveUnionTypeConstructor(
     analyser: *Analyser,
     params: []const Ast.Node.Index,
@@ -4492,17 +4531,20 @@ fn resolveUnionTypeConstructor(
         .tuple_type => |tuple| tuple.types,
         else => return null,
     };
-    if (names.len != field_type_slice.len or
-        !isEmptyStructAttributeList(.of(params[4], handle), names.len)) return null;
+    if (names.len != field_type_slice.len) return null;
+    const alignments = try analyser.resolveUnionFieldAlignments(.{
+        .node_handle = .of(params[4], handle),
+        .container_type = container_type,
+    }, names.len) orelse return null;
     const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
     defer analyser.gpa.free(field_types);
 
     var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Union.Field) = .empty;
     errdefer fields.deinit(analyser.gpa);
     try fields.ensureTotalCapacity(analyser.gpa, names.len);
-    for (names, field_types) |name, field_type| {
+    for (names, field_types, alignments) |name, field_type, alignment| {
         const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
-        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type, .alignment = 0 });
+        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type, .alignment = alignment });
     }
 
     const union_index = try analyser.ip.createUnion(.{

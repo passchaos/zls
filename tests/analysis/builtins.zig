@@ -798,6 +798,8 @@ const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //                                                            ^ (Attributes)()
 const ConcreteUnion = @Union(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^^^ (type)(union { foo: u8, bar: i16 })
+const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
+//    ^^^^^^^^^^^^ (type)(union { value: u8 align(4) })
 const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //    ^^^^ (type)()
 //                            ^^^^^^^^^^^ (Mode)()

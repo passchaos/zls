@@ -2004,6 +2004,16 @@ test "generic function with comptime Union type constructor" {
         .{ .label = "value", .kind = .Field, .detail = "value: u16" },
         .{ .label = "enabled", .kind = .Field, .detail = "enabled: bool" },
     });
+
+    try testCompletion(
+        \\fn Value(comptime T: type, comptime alignment: u16) type {
+        \\    return @Union(.auto, null, &.{"value"}, &.{T}, &.{.{ .@"align" = alignment }});
+        \\}
+        \\const value: Value(u8, 4) = undefined;
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "value: align(4) u8" },
+    });
 }
 
 test "generic function with comptime value builtins" {
