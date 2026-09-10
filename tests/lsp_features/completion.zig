@@ -2641,6 +2641,29 @@ test "generic function with comptime pointer type info attributes" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Vector(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    return @Vector(4, *S);
+        \\}
+        \\const vector: Vector(u16) = undefined;
+        \\const pointer = vector[0];
+        \\const field = pointer.*.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Vector(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    return @Vector(4, *S);
+        \\}
+        \\const vector: Vector(u16) = undefined;
+        \\const length = vector.<cursor>
+    , &.{
+        .{ .label = "len", .kind = .Field, .detail = "usize = 4" },
+    });
 }
 
 test "generic function with nominal tuple type info" {

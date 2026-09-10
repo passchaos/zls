@@ -2111,6 +2111,13 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                 break :elem info.elem_ty;
             },
         },
+        .vector => |info| switch (rhs) {
+            .single => {
+                const instance = try info.elem_ty.instanceUnchecked(analyser);
+                return .{ .type = instance, .is_const = is_const };
+            },
+            .open, .range => return null,
+        },
         .pointer => |info| switch (info.size) {
             .one => switch (info.elem_ty.data) {
                 .tuple, .array => continue :elem info.elem_ty.data,
@@ -2231,6 +2238,15 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
                     return Type.fromIP(analyser, .usize_type, index);
                 }
                 return Type.fromIP(analyser, .usize_type, null);
+            }
+        },
+
+        .vector => |info| {
+            if (std.mem.eql(u8, "len", name)) {
+                const index = try analyser.ip.get(
+                    .{ .int_u64_value = .{ .ty = .usize_type, .int = info.len } },
+                );
+                return Type.fromIP(analyser, .usize_type, index);
             }
         },
 
@@ -14317,6 +14333,7 @@ pub const DeclWithHandle = struct {
                 if (node.is_type_val) return null;
                 break :blk switch (node.data) {
                     .array => |array_info| try array_info.elem_ty.instanceTypeVal(analyser),
+                    .vector => |vector_info| try vector_info.elem_ty.instanceTypeVal(analyser),
                     .tuple => try analyser.resolveBracketAccessType(node, .{ .single = pay.index }),
                     .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
                         .vector_type => |vector_info| Type.fromIP(analyser, vector_info.child, null),
