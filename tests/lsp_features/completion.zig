@@ -2182,6 +2182,8 @@ test "generic function with comptime division builtins" {
         .{ .expression = "@divExact(8, 2)", .detail = "[4]u8" },
         .{ .expression = "@mod(7, 3)", .detail = "[1]u8" },
         .{ .expression = "@rem(7, 3)", .detail = "[1]u8" },
+        .{ .expression = "@mod(@as(i256, -28948022309329048855892746252171976963317496166410141009864396001978282409989), 7)", .detail = "[5]u8" },
+        .{ .expression = "@rem(@as(i256, 28948022309329048855892746252171976963317496166410141009864396001978282409989), 7)", .detail = "[2]u8" },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(allocator,
@@ -2196,6 +2198,21 @@ test "generic function with comptime division builtins" {
             .{ .label = "items", .kind = .Field, .detail = case.detail },
         });
     }
+
+    try testCompletion(
+        \\fn Select(comptime value: u256) type {
+        \\    return if (@divExact(value, 8) == 7237005577332262213973186563042994240829374041602535252466099000494570602496 and
+        \\        @divTrunc(@as(i256, -28948022309329048855892746252171976963317496166410141009864396001978282409989), 7) == -4135431758475578407984678036024568137616785166630020144266342285996897487141 and
+        \\        @divFloor(@as(i256, -28948022309329048855892746252171976963317496166410141009864396001978282409989), 7) == -4135431758475578407984678036024568137616785166630020144266342285996897487142)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(57896044618658097711785492504343953926634992332820282019728792003956564819968) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
 
     try testCompletion(
         \\fn Select(comptime lhs: f32, comptime rhs: f64) type {

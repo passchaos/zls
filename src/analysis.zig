@@ -4380,23 +4380,65 @@ fn resolveIntegerDivisionValue(
     if (tag == .mod or tag == .rem) {
         if (try analyser.resolveIntegerRemainderByOneValue(lhs, rhs)) |value| return value;
     }
-    const lhs_value = analyser.ip.toInt(lhs_payload.index orelse return null, i256) orelse return null;
-    const rhs_value = analyser.ip.toInt(rhs_payload.index orelse return null, i256) orelse return null;
-    if (rhs_value == 0 or (lhs_value == std.math.minInt(i256) and rhs_value == -1)) return null;
+    const lhs_index = lhs_payload.index orelse return null;
+    const rhs_index = rhs_payload.index orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const lhs_value = analyser.ip.toInt(lhs_index, i256);
+    const rhs_value = analyser.ip.toInt(rhs_index, i256);
+    const wide_result = analyser.ip.zigTypeTag(result_type) == .int and
+        analyser.ip.intInfo(result_type, builtin.target).bits > 128;
+    if (wide_result or lhs_value == null or rhs_value == null) {
+        var lhs_big = try analyser.managedIntegerValue(lhs_index) orelse return null;
+        defer lhs_big.deinit();
+        var rhs_big = try analyser.managedIntegerValue(rhs_index) orelse return null;
+        defer rhs_big.deinit();
+        if (rhs_big.toConst().eqlZero()) return null;
+
+        var quotient: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer quotient.deinit();
+        var remainder: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer remainder.deinit();
+        const use_floor = tag == .div_floor or tag == .mod;
+        if (use_floor) {
+            try quotient.divFloor(&remainder, &lhs_big, &rhs_big);
+        } else {
+            try quotient.divTrunc(&remainder, &lhs_big, &rhs_big);
+        }
+        if (tag == .div_exact and !remainder.toConst().eqlZero()) return null;
+        const result = switch (tag) {
+            .mod, .rem => &remainder,
+            .div_trunc, .div_floor, .div_exact => &quotient,
+            else => return null,
+        };
+        if (result_type != .comptime_int_type) {
+            const info = analyser.ip.intInfo(result_type, builtin.target);
+            if (!result.fitsInTwosComp(info.signedness, info.bits)) return null;
+        }
+        if (result.toInt(i256)) |scalar| {
+            return analyser.intValueWithType(result_type, scalar);
+        } else |_| {
+            return Type.fromIP(
+                analyser,
+                result_type,
+                try analyser.ip.getBigInt(result_type, result.toConst()),
+            );
+        }
+    }
+    if (lhs_value == null or rhs_value == null) return null;
+    if (rhs_value.? == 0 or (lhs_value.? == std.math.minInt(i256) and rhs_value.? == -1)) return null;
 
     const value: i256 = switch (tag) {
-        .div_trunc => @divTrunc(lhs_value, rhs_value),
-        .div_floor => @divFloor(lhs_value, rhs_value),
+        .div_trunc => @divTrunc(lhs_value.?, rhs_value.?),
+        .div_floor => @divFloor(lhs_value.?, rhs_value.?),
         .div_exact => blk: {
-            if (@rem(lhs_value, rhs_value) != 0) return null;
-            break :blk @divTrunc(lhs_value, rhs_value);
+            if (@rem(lhs_value.?, rhs_value.?) != 0) return null;
+            break :blk @divTrunc(lhs_value.?, rhs_value.?);
         },
-        .mod => @mod(lhs_value, rhs_value),
-        .rem => @rem(lhs_value, rhs_value),
+        .mod => @mod(lhs_value.?, rhs_value.?),
+        .rem => @rem(lhs_value.?, rhs_value.?),
         else => return null,
     };
 
-    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     return analyser.intValueWithType(result_type, value);
 }
 
