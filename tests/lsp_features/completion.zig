@@ -978,6 +978,25 @@ test "generic function with partially known boolean vector operators" {
     });
 }
 
+test "generic function with partially known integer vector operations" {
+    try testCompletion(
+        \\var runtime: @Vector(2, u8) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const zeros: @Vector(2, u8) = @splat(0);
+        \\    const ones: @Vector(2, u8) = @splat(255);
+        \\    return if ((runtime * zeros)[0] == 0 and (runtime & zeros)[1] == 0 and
+        \\        (runtime | ones)[0] == 255)
+        \\        struct { evaluated: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector int from bool" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

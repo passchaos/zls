@@ -2768,20 +2768,46 @@ fn resolveVectorBinaryValue(
         else => return null,
     };
     if (lhs_vector.len != rhs_vector.len) return null;
-    const lhs_values = analyser.aggregateValues(lhs) orelse return null;
-    const rhs_values = analyser.aggregateValues(rhs) orelse return null;
-    if (lhs_values.len != lhs_vector.len or rhs_values.len != rhs_vector.len) return null;
-
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     const result_vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+        (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
+    const absorbing_value: ?i256 = absorbing: {
+        if (analyser.ip.zigTypeTag(result_vector.child) != .int) break :absorbing null;
+        const int_info = analyser.ip.intInfo(result_vector.child, builtin.target);
+        if (int_info.bits == 0 or int_info.bits > 128) break :absorbing null;
+        break :absorbing switch (tag) {
+            .mul, .bit_and => 0,
+            .bit_or => if (int_info.signedness == .signed)
+                -1
+            else
+                (@as(i256, 1) << @intCast(int_info.bits)) - 1,
+            else => null,
+        };
+    };
     const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(values);
+    const unknown_lhs = try analyser.ip.getUnknown(lhs_vector.child);
+    const unknown_rhs = try analyser.ip.getUnknown(rhs_vector.child);
     for (values, 0..) |*value, i| {
-        const lhs_value = lhs_values.at(@intCast(i), analyser.ip);
-        const rhs_value = rhs_values.at(@intCast(i), analyser.ip);
+        const index: u32 = @intCast(i);
+        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs;
+        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs;
+        if (!analyser.ip.isUndefined(lhs_value) and !analyser.ip.isUndefined(rhs_value)) {
+            if (absorbing_value) |absorbing| {
+                const lhs_int = analyser.ip.toInt(lhs_value, i256);
+                const rhs_int = analyser.ip.toInt(rhs_value, i256);
+                if (lhs_int == absorbing or rhs_int == absorbing) {
+                    value.* = (try analyser.intValueWithType(result_vector.child, absorbing) orelse return null).ipIndex().?;
+                    continue;
+                }
+            }
+        }
         const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_value);
         const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_value);
         const result = try analyser.resolveIntegerBinaryValue(tag, lhs_element, rhs_element) orelse
