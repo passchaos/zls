@@ -6984,6 +6984,13 @@ fn resolveNegationValue(
 fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
+        .container => if (ty.isEnumType(analyser)) blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
+            const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
+                break :blk null;
+            break :blk analyser.resolveTypeBitSize(tag_type);
+        } else null,
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth(),
@@ -7024,6 +7031,10 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                     const elem_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.child)) orelse break :vector null;
                     break :vector std.math.mul(u64, info.len, elem_bits) catch null;
                 },
+                .@"enum" => {
+                    const info = analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type);
+                    break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.tag_type));
+                },
                 else => null,
             };
         },
@@ -7034,6 +7045,13 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
 fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
+        .container => if (ty.isEnumType(analyser)) blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
+            const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
+                break :blk null;
+            break :blk analyser.resolveTypeByteSize(tag_type);
+        } else null,
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth() / 8,
@@ -7072,6 +7090,10 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                     const total_bits = std.math.mul(u64, info.len, elem_bits) catch break :vector null;
                     const byte_count = std.math.divCeil(u64, total_bits, 8) catch break :vector null;
                     break :vector if (byte_count == 0) 0 else std.math.ceilPowerOfTwo(u64, byte_count) catch null;
+                },
+                .@"enum" => {
+                    const info = analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type);
+                    break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.tag_type));
                 },
                 else => null,
             };

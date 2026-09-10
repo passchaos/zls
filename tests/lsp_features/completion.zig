@@ -1819,6 +1819,22 @@ test "generic function with comptime size builtins" {
         .{ .label = "bits", .kind = .Field, .detail = slice_bits },
         .{ .label = "bytes", .kind = .Field, .detail = slice_bytes },
     });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    const AstEnum = enum(T) { value = 1 };
+        \\    const GeneratedEnum = @Enum(T, .exhaustive, &.{"value"}, &.{1});
+        \\    return if (@bitSizeOf(AstEnum) == 13 and @sizeOf(AstEnum) == 2 and
+        \\        @bitSizeOf(GeneratedEnum) == 13 and @sizeOf(GeneratedEnum) == 2)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Buffer(u13) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u13" },
+    });
 }
 
 test "generic function with comptime Int type constructor" {
