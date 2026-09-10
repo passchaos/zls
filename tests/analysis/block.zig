@@ -104,6 +104,16 @@ const for_empty_void = for ([_]u8{}) |_| {
 //    ^^^^^^^^^^^^^^ (void)()
     unreachable;
 };
+
+const for_empty_range_else_value = for (4..4) |_| {
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(4)
+    break @as(u16, 300);
+} else @as(u8, 4);
+
+const for_empty_range_void = for (4..4) |_| {
+//    ^^^^^^^^^^^^^^^^^^^^ (void)()
+    unreachable;
+};
 // zig fmt: on
 
 pub fn main() void {

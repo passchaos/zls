@@ -5879,6 +5879,34 @@ fn isKnownEmptyIterable(analyser: *Analyser, iterable: Type) bool {
     };
 }
 
+fn isKnownEmptyForInput(
+    analyser: *Analyser,
+    input: Ast.Node.Index,
+    handle: *DocumentStore.Handle,
+    container_type: ?Type,
+) Error!bool {
+    const tree = &handle.tree;
+    if (tree.nodeTag(input) == .for_range) {
+        const start, const end_optional = tree.nodeData(input).node_and_opt_node;
+        const end = end_optional.unwrap() orelse return false;
+        const start_value = try analyser.resolveComptimeValue(.{
+            .node_handle = .of(start, handle),
+            .container_type = container_type,
+        }) orelse return false;
+        const end_value = try analyser.resolveComptimeValue(.{
+            .node_handle = .of(end, handle),
+            .container_type = container_type,
+        }) orelse return false;
+        return analyser.resolveComparisonBool(.equal_equal, start_value, end_value) orelse false;
+    }
+
+    const iterable = try analyser.resolveTypeOfNodeInternal(.{
+        .node_handle = .of(input, handle),
+        .container_type = container_type,
+    }) orelse return false;
+    return isKnownEmptyIterable(analyser, iterable);
+}
+
 fn isKnownEmptyIterableType(analyser: *Analyser, type_index: InternPool.Index) bool {
     return switch (analyser.ip.indexToKey(type_index)) {
         .array_type => |info| info.len == 0,
@@ -7327,8 +7355,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             else
                 null;
             const known_empty = for (loop.inputs) |input| {
-                const iterable = try analyser.resolveTypeOfNodeInternal(.of(input, handle)) orelse continue;
-                if (isKnownEmptyIterable(analyser, iterable)) break true;
+                if (try analyser.isKnownEmptyForInput(input, handle, options.container_type)) break true;
             } else false;
             if (known_condition == false or known_empty) {
                 const selected = else_expr orelse return Type.fromIP(analyser, .void_type, .void_value);

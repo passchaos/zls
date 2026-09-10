@@ -3337,6 +3337,19 @@ test "generic function with empty for expression" {
     , &.{
         .{ .label = "selected", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    const count = for (N..N) |_| {
+        \\        break @as(u16, N + 300);
+        \\    } else N;
+        \\    return struct { selected: [count]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
 }
 
 test "generic function with comptime while return statements" {
