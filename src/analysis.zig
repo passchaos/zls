@@ -2680,12 +2680,19 @@ fn truncateIntValue(
 ) error{OutOfMemory}!?InternPool.Index {
     if (analyser.ip.zigTypeTag(dest_ty) != .int) return null;
     const info = analyser.ip.intInfo(dest_ty, builtin.target);
-    if (info.bits > 128) return null;
     const source_ty = analyser.ip.typeOf(value);
     if (analyser.ip.zigTypeTag(source_ty) == .int and
         analyser.ip.intInfo(source_ty, builtin.target).signedness != info.signedness)
     {
         return null;
+    }
+    if (info.bits > 128) {
+        var source = try analyser.managedIntegerValue(value) orelse return null;
+        defer source.deinit();
+        var result: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer result.deinit();
+        try result.truncate(&source, info.signedness, info.bits);
+        return try analyser.ip.getBigInt(dest_ty, result.toConst());
     }
 
     const raw: u256 = if (analyser.ip.toInt(value, u256)) |unsigned|

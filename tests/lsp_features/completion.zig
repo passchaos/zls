@@ -1887,6 +1887,20 @@ test "generic function with comptime value builtins" {
     });
 
     try testCompletion(
+        \\fn Select(comptime value: u512) type {
+        \\    const truncated: u256 = @truncate(value);
+        \\    return if (truncated == 5)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2037035976334486086268445688409378161051468393665936250636140449354381299763336706183397381) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Buffers(comptime cast_value: u8, comptime truncate_value: u8) type {
         \\    return struct {
         \\        casted: [cast_value]u8,
