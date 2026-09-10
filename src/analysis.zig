@@ -6406,19 +6406,39 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .bool_and, .bool_or => |tag| {
             if (analyser.evaluate_comptime_values) {
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
-                const lhs_value = try analyser.resolveBoolValue(.of(lhs, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
-                switch (tag) {
-                    .bool_and => if (!lhs_value) return Type.fromIP(analyser, .bool_type, .bool_false),
-                    .bool_or => if (lhs_value) return Type.fromIP(analyser, .bool_type, .bool_true),
-                    else => unreachable,
+                const lhs_type = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse
+                    return Type.fromIP(analyser, .bool_type, null);
+                const lhs_index = lhs_type.ipIndex();
+                if (lhs_index) |index| {
+                    if (analyser.ip.isUndefined(index)) return Type.fromIP(analyser, .bool_type, null);
+                    switch (tag) {
+                        .bool_and => if (index == .bool_false) return Type.fromIP(analyser, .bool_type, .bool_false),
+                        .bool_or => if (index == .bool_true) return Type.fromIP(analyser, .bool_type, .bool_true),
+                        else => unreachable,
+                    }
                 }
-                const rhs_value = try analyser.resolveBoolValue(.of(rhs, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
-                const value = switch (tag) {
-                    .bool_and => lhs_value and rhs_value,
-                    .bool_or => lhs_value or rhs_value,
+
+                const rhs_type = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse
+                    return Type.fromIP(analyser, .bool_type, null);
+                const rhs_index = rhs_type.ipIndex() orelse return Type.fromIP(analyser, .bool_type, null);
+                if (analyser.ip.isUndefined(rhs_index)) return Type.fromIP(analyser, .bool_type, null);
+                if (lhs_index == .bool_true or lhs_index == .bool_false) {
+                    return switch (rhs_index) {
+                        .bool_true, .bool_false => Type.fromIP(analyser, .bool_type, rhs_index),
+                        else => Type.fromIP(analyser, .bool_type, null),
+                    };
+                }
+                return switch (tag) {
+                    .bool_and => if (rhs_index == .bool_false)
+                        Type.fromIP(analyser, .bool_type, .bool_false)
+                    else
+                        Type.fromIP(analyser, .bool_type, null),
+                    .bool_or => if (rhs_index == .bool_true)
+                        Type.fromIP(analyser, .bool_type, .bool_true)
+                    else
+                        Type.fromIP(analyser, .bool_type, null),
                     else => unreachable,
                 };
-                return Type.fromIP(analyser, .bool_type, if (value) .bool_true else .bool_false);
             }
             return Type.fromIP(analyser, .bool_type, null);
         },
