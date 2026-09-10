@@ -2219,6 +2219,21 @@ test "generic function with comptime Union type constructor" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const U = @Union(.@"extern", null, &.{ "value", "enabled" }, &.{ T, bool }, &.{ .{}, .{} });
+        \\    const info = @typeInfo(U).@"union";
+        \\    return if (info.layout == .@"extern" and info.tag_type == null)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function with comptime generated Union values" {

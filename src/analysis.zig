@@ -5810,7 +5810,6 @@ fn resolveUnionTypeConstructor(
 ) Error!?Type {
     if (params.len != 5) return null;
     const layout = try analyser.resolveContainerLayout(.of(params[0], handle)) orelse return null;
-    if (layout != .auto) return null;
     const tag_type_value = try analyser.resolveComptimeValue(.{
         .node_handle = .of(params[1], handle),
         .container_type = container_type,
@@ -5824,6 +5823,7 @@ fn resolveUnionTypeConstructor(
             return null
     else
         return null;
+    if (layout != .auto and tag_type != .none) return null;
 
     const names = try analyser.resolveStringListLiteral(.{
         .node_handle = .of(params[2], handle),
@@ -5866,7 +5866,7 @@ fn resolveUnionTypeConstructor(
         .tag_type = tag_type,
         .fields = fields,
         .namespace = .none,
-        .layout = .auto,
+        .layout = layout,
         .status = .fully_resolved,
     });
     fields = .empty;

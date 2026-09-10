@@ -818,6 +818,8 @@ const ConcreteUnion = @Union(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{
 //    ^^^^^^^^^^^^^ (type)(union { foo: u8, bar: i16 })
 const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
 //    ^^^^^^^^^^^^ (type)(union { value: u8 align(4) })
+const ExternUnion = @Union(.@"extern", null, &.{ "small", "large" }, &.{ u8, u32 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^ (type)(extern union { small: u8, large: u32 })
 const GeneratedUnionTag = @Enum(u8, .exhaustive, &.{ "foo", "bar" }, &.{ 1, 2 });
 const TaggedUnion = @Union(.auto, GeneratedUnionTag, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^ (type)(union(enum(u8) { foo = 1, bar = 2 }) { foo: u8, bar: i16 })
@@ -961,6 +963,8 @@ const TypeInfoNominalTupleField = @typeInfo(NominalTuple).@"struct".fields[0].ty
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
 const type_info_union_tag_null = @typeInfo(ConcreteUnion).@"union".tag_type == null;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_extern_union_layout = @typeInfo(ExternUnion).@"union".layout == .@"extern";
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const ImplicitTaggedUnion = union(enum) { alpha: u8, beta: u16 };
 const TypeInfoImplicitUnionTag = @typeInfo(ImplicitTaggedUnion).@"union".tag_type.?;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(@typeInfo(ImplicitTaggedUnion).@"union".tag_type.?)
