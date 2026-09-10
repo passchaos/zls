@@ -159,6 +159,20 @@ const unsigned_lt_middle = runtime_u8 < @as(u8, 100);
 //    ^^^^^^^^^^^^^^^^^^ (bool)()
 const undefined_lte_max = @as(u8, undefined) <= @as(u8, 255);
 //    ^^^^^^^^^^^^^^^^^ (bool)()
+const integer_self_equal = runtime_u8 == runtime_u8;
+//    ^^^^^^^^^^^^^^^^^^ (bool)(true)
+const integer_self_not_equal = runtime_i8 != runtime_i8;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const integer_self_lte = runtime_u8 <= runtime_u8;
+//    ^^^^^^^^^^^^^^^^ (bool)(true)
+const integer_self_gt = runtime_i8 > runtime_i8;
+//    ^^^^^^^^^^^^^^^ (bool)(false)
+const bool_self_equal = runtime_bool == runtime_bool;
+//    ^^^^^^^^^^^^^^^ (bool)(true)
+const float_self_equal = runtime_f32 == runtime_f32;
+//    ^^^^^^^^^^^^^^^^ (bool)()
+const undefined_self_equal = @as(u8, undefined) == @as(u8, undefined);
+//    ^^^^^^^^^^^^^^^^^^^^ (bool)()
 
 const vector_add_value = (@as(@Vector(2, u8), .{ 1, 2 }) + @as(@Vector(2, u8), .{ 3, 4 }))[1];
 //    ^^^^^^^^^^^^^^^^ (u8)(6)
@@ -271,6 +285,7 @@ var runtime_u16: u16 = 16;
 var runtime_i8: i8 = -8;
 var runtime_i16: i16 = -16;
 var runtime_bool: bool = undefined;
+var runtime_f32: f32 = undefined;
 var runtime_bool_vector: @Vector(2, bool) = undefined;
 var runtime_u3: u3 = undefined;
 var runtime_u3_vector: @Vector(2, u3) = undefined;

@@ -1074,6 +1074,26 @@ test "generic function with integer comparison boundaries" {
     });
 }
 
+test "generic function with runtime self comparisons" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_bool: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime_u8 == runtime_u8 and !(runtime_i8 != runtime_i8) and
+        \\        runtime_u8 <= runtime_u8 and !(runtime_i8 > runtime_i8) and
+        \\        runtime_bool == runtime_bool)
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with partially known integer operations" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

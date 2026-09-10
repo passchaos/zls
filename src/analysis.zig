@@ -6802,6 +6802,30 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const lhs, const rhs = tree.nodeData(node).node_and_node;
             if (analyser.evaluate_comptime_values) {
                 var lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
+                const same_operand = same_operand: {
+                    if (lhs == rhs) break :same_operand true;
+                    if (tree.nodeTag(lhs) != .identifier or tree.nodeTag(rhs) != .identifier) break :same_operand false;
+                    const lhs_token = ast.identifierTokenFromIdentifierNode(tree, lhs) orelse break :same_operand false;
+                    const rhs_token = ast.identifierTokenFromIdentifierNode(tree, rhs) orelse break :same_operand false;
+                    const lhs_name = try analyser.identifierTokenName(tree, lhs_token) orelse break :same_operand false;
+                    const rhs_name = try analyser.identifierTokenName(tree, rhs_token) orelse break :same_operand false;
+                    break :same_operand std.mem.eql(u8, lhs_name, rhs_name);
+                };
+                if (same_operand and lhs_ty.data == .ip_index) {
+                    const payload = lhs_ty.data.ip_index;
+                    if (payload.index) |index| {
+                        if (analyser.ip.isUndefined(index)) return Type.fromIP(analyser, .bool_type, null);
+                    }
+                    const type_tag = analyser.ip.zigTypeTag(payload.type);
+                    if (type_tag == .int or type_tag == .bool) {
+                        const result = switch (tree.nodeTag(node)) {
+                            .equal_equal, .less_or_equal, .greater_or_equal => true,
+                            .bang_equal, .less_than, .greater_than => false,
+                            else => unreachable,
+                        };
+                        return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+                    }
+                }
                 var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (try analyser.resolveVectorComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| {
                     return value;
