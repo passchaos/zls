@@ -2844,6 +2844,70 @@ fn resolveSelfBinaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
+fn resolveComplementaryBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (payload.index) |index| {
+        if (analyser.ip.isUndefined(index)) return operand.withoutIPIndex(analyser);
+    }
+
+    const scalar_tag = analyser.ip.zigTypeTag(payload.type);
+    if (scalar_tag == .bool) {
+        const value: InternPool.Index = switch (tag) {
+            .bool_and, .bit_and => .bool_false,
+            .bool_or, .bit_or, .bit_xor => .bool_true,
+            else => return null,
+        };
+        return Type.fromIP(analyser, .bool_type, value);
+    }
+    if (analyser.fixedWidthIntegerBounds(payload.type)) |bounds| {
+        const value: i256 = switch (tag) {
+            .bit_and => 0,
+            .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
+            else => return null,
+        };
+        return analyser.intValueWithType(payload.type, value);
+    }
+
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const known: InternPool.Index = if (analyser.ip.zigTypeTag(vector.child) == .bool)
+        switch (tag) {
+            .bit_and => .bool_false,
+            .bit_or, .bit_xor => .bool_true,
+            else => return null,
+        }
+    else if (analyser.fixedWidthIntegerBounds(vector.child)) |bounds|
+        (try analyser.intValueWithType(vector.child, switch (tag) {
+            .bit_and => 0,
+            .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
+            else => return null,
+        }) orelse return null).ipIndex() orelse return null
+    else
+        return null;
+
+    const source_values = analyser.aggregateValues(operand);
+    if (source_values) |values| if (values.len != vector.len) return null;
+    const unknown = try analyser.ip.getUnknown(vector.child);
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        value.* = if (source_values) |source|
+            if (analyser.ip.isUndefined(source.at(@intCast(i), analyser.ip))) unknown else known
+        else
+            known;
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+}
+
 const IntegerBounds = struct {
     min: i256,
     max: i256,
@@ -6962,6 +7026,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .bool_and, .bool_or => |tag| {
             if (analyser.evaluate_comptime_values) {
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
+                if (try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bool_not)) |operand| {
+                    const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse
+                        return Type.fromIP(analyser, .bool_type, null);
+                    if (try analyser.resolveComplementaryBinaryValue(tag, operand_type)) |value| return value;
+                }
                 const lhs_type = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse
                     return Type.fromIP(analyser, .bool_type, null);
                 const lhs_index = lhs_type.ipIndex();
@@ -7205,6 +7274,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
                 const tag = tree.nodeTag(node);
+                const complementary_operand = try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not) orelse
+                    try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bool_not);
+                if (complementary_operand) |operand| {
+                    const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse return null;
+                    if (try analyser.resolveComplementaryBinaryValue(tag, operand_type)) |value| return value;
+                }
                 if ((tag == .bit_xor or tag == .sub_wrap or tag == .sub_sat) and
                     try analyser.areSameIdentifierExpression(tree, lhs, rhs))
                 {
@@ -10983,6 +11058,24 @@ fn areSameIdentifierExpression(
     const lhs_name = try analyser.identifierTokenName(tree, lhs_token) orelse return false;
     const rhs_name = try analyser.identifierTokenName(tree, rhs_token) orelse return false;
     return std.mem.eql(u8, lhs_name, rhs_name);
+}
+
+fn complementaryIdentifierOperand(
+    analyser: *Analyser,
+    tree: *const Ast,
+    lhs: Ast.Node.Index,
+    rhs: Ast.Node.Index,
+    unary_tag: Ast.Node.Tag,
+) error{OutOfMemory}!?Ast.Node.Index {
+    if (tree.nodeTag(lhs) == unary_tag) {
+        const operand = tree.nodeData(lhs).node;
+        if (try analyser.areSameIdentifierExpression(tree, operand, rhs)) return operand;
+    }
+    if (tree.nodeTag(rhs) == unary_tag) {
+        const operand = tree.nodeData(rhs).node;
+        if (try analyser.areSameIdentifierExpression(tree, lhs, operand)) return operand;
+    }
+    return null;
 }
 
 pub fn lookupSymbolContainer(

@@ -1173,6 +1173,32 @@ test "generic function with runtime boolean self xor" {
     });
 }
 
+test "generic function with runtime complement identities" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: @Vector(2, i8) = undefined;
+        \\var runtime_bool: bool = undefined;
+        \\var runtime_bools: @Vector(2, bool) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if ((runtime_u8 & ~runtime_u8) == 0 and
+        \\        (runtime_u8 | ~runtime_u8) == 255 and
+        \\        @reduce(.And, (runtime_i8 & ~runtime_i8) == @as(@Vector(2, i8), @splat(0))) and
+        \\        @reduce(.And, (runtime_i8 ^ ~runtime_i8) == @as(@Vector(2, i8), @splat(-1))) and
+        \\        (runtime_bool and !runtime_bool) == false and
+        \\        (runtime_bool or !runtime_bool) == true and
+        \\        !@reduce(.Or, runtime_bools & !runtime_bools) and
+        \\        @reduce(.And, runtime_bools | !runtime_bools))
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with partially known integer operations" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;
