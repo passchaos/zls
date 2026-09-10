@@ -3312,6 +3312,16 @@ fn optionalPresenceValue(
     return Type.fromIP(analyser, optional_type, optional_value);
 }
 
+fn optionalIntegerValue(
+    analyser: *Analyser,
+    optional_instance: Type,
+    value: u16,
+) error{OutOfMemory}!Type {
+    if (value == 0) return analyser.optionalTypeValue(optional_instance, .none);
+    const integer = try analyser.intValueWithType(.usize_type, value) orelse return optional_instance;
+    return analyser.optionalTypeValue(optional_instance, integer.ipIndex().?);
+}
+
 fn typeInfoCollectionValue(
     analyser: *Analyser,
     parent: Type.TypeInfoValue,
@@ -3340,7 +3350,7 @@ fn resolveTypeInfoDescriptorField(
 
     switch (kind) {
         .struct_fields => {
-            const name, const field_type, const is_comptime = switch (value.reflected_type.data) {
+            const name, const field_type, const is_comptime, const alignment, const has_default = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .struct_type => |struct_index| blk: {
                         const info = analyser.ip.getStruct(struct_index);
@@ -3351,13 +3361,21 @@ fn resolveTypeInfoDescriptorField(
                             info.fields.keys()[index],
                         );
                         const field_info = info.fields.values()[index];
-                        break :blk .{ name, Type.fromIP(analyser, .type_type, field_info.ty), field_info.is_comptime };
+                        break :blk .{
+                            name,
+                            Type.fromIP(analyser, .type_type, field_info.ty),
+                            field_info.is_comptime,
+                            field_info.alignment,
+                            field_info.default_value != .none,
+                        };
                     },
                     .tuple_type => |tuple| blk: {
                         if (index >= tuple.types.len) return field_value_type;
                         break :blk .{
                             try std.fmt.allocPrint(analyser.arena, "{d}", .{index}),
                             Type.fromIP(analyser, .type_type, tuple.types.at(index, analyser.ip)),
+                            false,
+                            0,
                             false,
                         };
                     },
@@ -3371,7 +3389,21 @@ fn resolveTypeInfoDescriptorField(
                         .handle = ast_field.handle,
                         .container_type = value.reflected_type.*,
                     }).resolveType(analyser) orelse return field_value_type;
-                    break :blk .{ ast_field.name, try field_type.typeOf(analyser), ast_field.is_comptime };
+                    const full_field = ast_field.handle.tree.fullContainerField(ast_field.node).?;
+                    const alignment = if (full_field.ast.align_expr.unwrap()) |align_expr|
+                        try analyser.resolveIntegerLiteral(u16, .{
+                            .node_handle = .of(align_expr, ast_field.handle),
+                            .container_type = value.reflected_type.*,
+                        }) orelse return field_value_type
+                    else
+                        0;
+                    break :blk .{
+                        ast_field.name,
+                        try field_type.typeOf(analyser),
+                        ast_field.is_comptime,
+                        alignment,
+                        full_field.ast.value_expr != .none,
+                    };
                 },
                 else => return field_value_type,
             };
@@ -3382,9 +3414,15 @@ fn resolveTypeInfoDescriptorField(
             if (std.mem.eql(u8, field_name, "is_comptime")) {
                 return Type.fromIP(analyser, .bool_type, if (is_comptime) .bool_true else .bool_false);
             }
+            if (std.mem.eql(u8, field_name, "alignment")) {
+                return try analyser.optionalIntegerValue(field_value_type, alignment);
+            }
+            if (std.mem.eql(u8, field_name, "default_value_ptr")) {
+                return try analyser.optionalPresenceValue(field_value_type, has_default);
+            }
         },
         .union_fields => {
-            const name, const field_type = switch (value.reflected_type.data) {
+            const name, const field_type, const alignment = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .union_type => |union_index| blk: {
                         const info = analyser.ip.getUnion(union_index);
@@ -3394,7 +3432,8 @@ fn resolveTypeInfoDescriptorField(
                             analyser.arena,
                             info.fields.keys()[index],
                         );
-                        break :blk .{ name, Type.fromIP(analyser, .type_type, info.fields.values()[index].ty) };
+                        const field_info = info.fields.values()[index];
+                        break :blk .{ name, Type.fromIP(analyser, .type_type, field_info.ty), field_info.alignment };
                     },
                     else => return field_value_type,
                 },
@@ -3406,7 +3445,15 @@ fn resolveTypeInfoDescriptorField(
                         .handle = ast_field.handle,
                         .container_type = value.reflected_type.*,
                     }).resolveType(analyser) orelse return field_value_type;
-                    break :blk .{ ast_field.name, try field_type.typeOf(analyser) };
+                    const full_field = ast_field.handle.tree.fullContainerField(ast_field.node).?;
+                    const alignment = if (full_field.ast.align_expr.unwrap()) |align_expr|
+                        try analyser.resolveIntegerLiteral(u16, .{
+                            .node_handle = .of(align_expr, ast_field.handle),
+                            .container_type = value.reflected_type.*,
+                        }) orelse return field_value_type
+                    else
+                        0;
+                    break :blk .{ ast_field.name, try field_type.typeOf(analyser), alignment };
                 },
                 else => return field_value_type,
             };
@@ -3414,6 +3461,9 @@ fn resolveTypeInfoDescriptorField(
                 return try analyser.stringValueWithType(name, try field_value_type.typeOf(analyser));
             }
             if (std.mem.eql(u8, field_name, "type")) return field_type;
+            if (std.mem.eql(u8, field_name, "alignment")) {
+                return try analyser.optionalIntegerValue(field_value_type, alignment);
+            }
         },
         .enum_fields => {
             const name, const int_value = switch (value.reflected_type.data) {

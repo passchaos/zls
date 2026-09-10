@@ -941,6 +941,17 @@ const TypeInfoStructFieldType = @typeInfo(ConcreteStruct).@"struct".fields[1].ty
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
 const type_info_enum_field_value = @typeInfo(ConcreteEnum).@"enum".fields[1].value;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(7)
+const type_info_struct_field_alignment = @typeInfo(AlignedStruct).@"struct".fields[0].alignment.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(4)
+const type_info_struct_field_default_null = @typeInfo(ConcreteStruct).@"struct".fields[0].default_value_ptr == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const AstComptimeStruct = struct { comptime fixed: u8 = 3 };
+const type_info_ast_field_comptime = @typeInfo(AstComptimeStruct).@"struct".fields[0].is_comptime;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_ast_field_default = @typeInfo(AstComptimeStruct).@"struct".fields[0].default_value_ptr != null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_union_field_alignment = @typeInfo(AlignedUnion).@"union".fields[0].alignment.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(4)
 const type_info_fn_param_noalias = @typeInfo(NoaliasFn).@"fn".params[0].is_noalias;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoFnParamType = @typeInfo(NoaliasFn).@"fn".params[0].type.?;

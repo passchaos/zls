@@ -2574,6 +2574,47 @@ test "generic function with comptime type info descriptors" {
     });
 }
 
+test "generic function with comptime type info field attributes" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "a", "b" }, &.{ u8, T },
+        \\        &.{ .{}, .{ .@"align" = 4 } });
+        \\    const U = @Union(.auto, null, &.{"value"}, &.{T}, &.{.{ .@"align" = 8 }});
+        \\    const sf = @typeInfo(S).@"struct".fields[1];
+        \\    const uf = @typeInfo(U).@"union".fields[0];
+        \\    return if (!sf.is_comptime and sf.default_value_ptr == null and sf.alignment.? == 4 and
+        \\        uf.alignment.? == 8)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct {
+        \\        comptime fixed: u8 = 3,
+        \\        value: T align(4),
+        \\    };
+        \\    const fixed = @typeInfo(S).@"struct".fields[0];
+        \\    const value = @typeInfo(S).@"struct".fields[1];
+        \\    return if (fixed.is_comptime and fixed.default_value_ptr != null and fixed.alignment == null and
+        \\        !value.is_comptime and value.default_value_ptr == null and value.alignment.? == 4)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime alignOf" {
     try testCompletion(
         \\fn Select(comptime bits: u16) type {
