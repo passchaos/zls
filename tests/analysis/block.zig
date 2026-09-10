@@ -31,6 +31,23 @@ const labeled_block_peer = blk: {
     if (runtime_condition) break :blk @as(i32, 1);
     break :blk @as(i64, 2);
 };
+
+const labeled_block_value = blk: {
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(4)
+    break :blk @as(u8, 4);
+};
+
+const labeled_block_same_value = blk: {
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(4)
+    if (runtime_condition) break :blk @as(u8, 4);
+    break :blk @as(u8, 4);
+};
+
+const labeled_block_different_value = blk: {
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+    if (runtime_condition) break :blk @as(u8, 4);
+    break :blk @as(u8, 5);
+};
 // zig fmt: on
 
 pub fn main() void {

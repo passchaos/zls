@@ -6689,7 +6689,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             while (try it.next(analyser, handle, options.container_type)) |value| {
                 const value_type = switch (value) {
                     .operand => |operand| if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
-                        operand_type.withoutIPIndex(analyser)
+                        if (analyser.evaluate_comptime_values) operand_type else operand_type.withoutIPIndex(analyser)
                     else
                         continue,
                     .void => Type.fromIP(analyser, .void_type, .void_value),
