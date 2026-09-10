@@ -3285,24 +3285,29 @@ fn resolveReduceValue(
 
     if (vector.child == .bool_type) {
         if (operation != .And and operation != .Or and operation != .Xor) return null;
-        var result = switch (values.at(0, analyser.ip)) {
-            .bool_true => true,
-            .bool_false => false,
-            else => return null,
+        var result = switch (operation) {
+            .And => true,
+            .Or, .Xor => false,
+            else => unreachable,
         };
-        for (1..values.len) |i| {
+        var has_unknown = false;
+        for (0..values.len) |i| {
             const value = switch (values.at(@intCast(i), analyser.ip)) {
                 .bool_true => true,
                 .bool_false => false,
-                else => return null,
+                else => {
+                    has_unknown = true;
+                    continue;
+                },
             };
             result = switch (operation) {
-                .And => result and value,
-                .Or => result or value,
+                .And => if (!value) return Type.fromIP(analyser, .bool_type, .bool_false) else result,
+                .Or => if (value) return Type.fromIP(analyser, .bool_type, .bool_true) else result,
                 .Xor => result != value,
                 else => unreachable,
             };
         }
+        if (has_unknown) return null;
         return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
     }
     if (analyser.ip.zigTypeTag(vector.child) == .float) {

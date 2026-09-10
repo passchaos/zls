@@ -617,6 +617,23 @@ test "generic function with comptime integer and boolean reductions" {
     });
 }
 
+test "generic function with partially known boolean reductions" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const values: @Vector(3, bool) = .{ runtime, false, true };
+        \\    return if (!@reduce(.And, values) and @reduce(.Or, values))
+        \\        struct { reduced: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime float reductions" {
     try testCompletion(
         \\fn Select(comptime value: f32) type {

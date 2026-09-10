@@ -95,6 +95,12 @@ const reduce_bool_or_value = @reduce(.Or, @as(@Vector(3, bool), @splat(false)));
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const reduce_bool_xor_value = @reduce(.Xor, @as(@Vector(3, bool), @splat(true)));
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const reduce_bool_and_partial = @reduce(.And, @as(@Vector(3, bool), .{ runtime_bool, false, true }));
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const reduce_bool_or_partial = @reduce(.Or, @as(@Vector(3, bool), .{ runtime_bool, false, true }));
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const reduce_bool_xor_partial = @reduce(.Xor, @as(@Vector(3, bool), .{ runtime_bool, false, true }));
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const reduce_float_add_value = @reduce(.Add, @as(@Vector(4, f32), @splat(2.5)));
 //    ^^^^^^^^^^^^^^^^^^^^^^ (f32)(10)
 const reduce_float_mul_value = @reduce(.Mul, @as(@Vector(3, f64), @splat(-2.0)));
