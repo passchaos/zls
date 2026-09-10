@@ -1332,6 +1332,37 @@ fn resolveEnumTagType(analyser: *Analyser, enum_type: Type) Error!?Type {
     };
 }
 
+fn resolveArgsTupleType(analyser: *Analyser, function_type: Type) Error!?Type {
+    if (!function_type.is_type_val) return null;
+
+    const parameter_types = switch (function_type.data) {
+        .function => |info| blk: {
+            if (info.has_varargs) return null;
+            const types = try analyser.arena.alloc(Type, info.parameters.len);
+            for (info.parameters, types) |parameter, *parameter_type| {
+                if (parameter.type.data == .anytype_parameter) return null;
+                parameter_type.* = parameter.type;
+            }
+            break :blk types;
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .function_type => |info| blk: {
+                if (info.flags.is_var_args) return null;
+                const types = try analyser.arena.alloc(Type, info.args.len);
+                for (types, 0..) |*parameter_type, index| {
+                    const parameter = info.args.at(@intCast(index), analyser.ip);
+                    if (parameter == .none or info.args_is_generic.isSet(index)) return null;
+                    parameter_type.* = Type.fromIP(analyser, .type_type, parameter);
+                }
+                break :blk types;
+            },
+            else => return null,
+        },
+        else => return null,
+    };
+    return try Type.createTupleType(analyser, parameter_types);
+}
+
 fn resolveSwitchUnionPayload(
     analyser: *Analyser,
     union_type: Type,
@@ -8645,16 +8676,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (call.ast.params.len < 1) return .unknown_type;
                     const arg = call.ast.params[0];
                     const arg_ty = try analyser.resolveTypeOfNodeInternal(.of(arg, handle)) orelse return .unknown_type;
-                    if (!arg_ty.is_type_val or arg_ty.data != .function) return .unknown_type;
-                    const arg_func_info = arg_ty.data.function;
-                    if (arg_func_info.has_varargs) return .unknown_type;
-                    const arg_func_params = arg_func_info.parameters;
-                    const elem_ty_slice = try analyser.arena.alloc(Type, arg_func_params.len);
-                    for (arg_func_params, elem_ty_slice) |param, *elem_ty| {
-                        if (param.type.data == .anytype_parameter) return .unknown_type;
-                        elem_ty.* = param.type;
-                    }
-                    return try Type.createTupleType(analyser, elem_ty_slice);
+                    return try analyser.resolveArgsTupleType(arg_ty) orelse .unknown_type;
                 }
 
                 if (std.mem.eql(u8, func_name, "Tag")) {

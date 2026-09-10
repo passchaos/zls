@@ -43,3 +43,7 @@ fn function(_: u16, _: i64) void {}
 
 const ArgsTupleB = std.meta.ArgsTuple(@TypeOf(function));
 //    ^^^^^^^^^^ (type)(struct { u16, i64 })
+
+const GeneratedFunction = @Fn(&.{ u8, i32 }, &.{ .{}, .{} }, void, .{});
+const ArgsTupleGenerated = std.meta.ArgsTuple(GeneratedFunction);
+//    ^^^^^^^^^^^^^^^^^^ (type)(struct { u8, i32 })

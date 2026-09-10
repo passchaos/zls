@@ -2017,6 +2017,21 @@ test "generic function with comptime Fn type constructor" {
     });
 }
 
+test "generic function with comptime std meta ArgsTuple generated function" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Holder(comptime T: type) type {
+        \\    const F = @Fn(&.{ T, u8 }, &.{ .{}, .{} }, void, .{});
+        \\    return struct { args: std.meta.ArgsTuple(F) };
+        \\}
+        \\const holder: Holder(u16) = undefined;
+        \\const fields = holder.args.<cursor>
+    , &.{
+        .{ .label = "@\"0\"", .kind = .Field, .detail = "u16" },
+        .{ .label = "@\"1\"", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime Struct type constructor" {
     try testCompletion(
         \\fn Record(comptime T: type) type {
