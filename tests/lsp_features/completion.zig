@@ -2464,6 +2464,48 @@ test "generic function with comptime AST container type info payload values" {
     });
 }
 
+test "generic function with comptime type info collection lengths" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "a", "b" }, &.{ T, u8 }, &.{ .{}, .{} });
+        \\    const U = @Union(.auto, null, &.{ "a", "b" }, &.{ T, u8 }, &.{ .{}, .{} });
+        \\    const E = @Enum(u8, .exhaustive, &.{ "a", "b" }, &.{ 1, 2 });
+        \\    const F = @Fn(&.{ T, u8 }, &.{ .{}, .{} }, void, .{});
+        \\    return if (@typeInfo(S).@"struct".fields.len == 2 and
+        \\        @typeInfo(U).@"union".fields.len == 2 and
+        \\        @typeInfo(E).@"enum".fields.len == 2 and
+        \\        @typeInfo(F).@"fn".params.len == 2)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { a: T, b: u8 };
+        \\    const U = union { a: T, b: u8 };
+        \\    const E = enum { a, b };
+        \\    const F = fn (T, u8) void;
+        \\    return if (@typeInfo(S).@"struct".fields.len == 2 and
+        \\        @typeInfo(U).@"union".fields.len == 2 and
+        \\        @typeInfo(E).@"enum".fields.len == 2 and
+        \\        @typeInfo(F).@"fn".params.len == 2)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

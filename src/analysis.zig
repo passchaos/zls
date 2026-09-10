@@ -2968,6 +2968,12 @@ fn resolveTypeInfoFieldAccess(
     value: Type.TypeInfoValue,
     field_name: []const u8,
 ) Error!?Type {
+    if (value.collection_len) |len| {
+        if (std.mem.eql(u8, field_name, "len")) {
+            const index = try analyser.ip.get(.{ .int_u64_value = .{ .ty = .usize_type, .int = len } });
+            return Type.fromIP(analyser, .usize_type, index);
+        }
+    }
     const field = try value.value_type.lookupSymbol(analyser, field_name) orelse return null;
     const field_value_type = try field.resolveType(analyser) orelse return null;
 
@@ -2978,6 +2984,7 @@ fn resolveTypeInfoFieldAccess(
             .reflected_type = value.reflected_type,
             .tag = value.tag,
             .is_payload = true,
+            .collection_len = null,
         } }, .is_type_val = false };
     }
 
@@ -3088,13 +3095,13 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "payload")) return payload;
         },
         .@"struct" => {
-            const layout, const backing_integer, const is_tuple = switch (value.reflected_type.data) {
+            const layout, const backing_integer, const is_tuple, const field_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .struct_type => |struct_index| blk: {
                         const info = analyser.ip.getStruct(struct_index);
-                        break :blk .{ info.layout, info.backing_int_ty, false };
+                        break :blk .{ info.layout, info.backing_int_ty, false, info.fields.count() };
                     },
-                    .tuple_type => .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true },
+                    .tuple_type => |tuple| .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true, tuple.types.len },
                     else => return field_value_type,
                 },
                 .container => blk: {
@@ -3109,7 +3116,7 @@ fn resolveTypeInfoFieldAccess(
                     else
                         InternPool.Index.none;
                     if (info.layout == .@"packed" and backing_integer == .none) return field_value_type;
-                    break :blk .{ info.layout, backing_integer, false };
+                    break :blk .{ info.layout, backing_integer, false, astContainerFieldCount(info.declaration, info.handle) };
                 },
                 else => return field_value_type,
             };
@@ -3123,13 +3130,16 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "is_tuple")) {
                 return Type.fromIP(analyser, .bool_type, if (is_tuple) .bool_true else .bool_false);
             }
+            if (std.mem.eql(u8, field_name, "fields")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, field_count);
+            }
         },
         .@"union" => {
-            const layout, const tag_type = switch (value.reflected_type.data) {
+            const layout, const tag_type, const field_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .union_type => |union_index| blk: {
                         const info = analyser.ip.getUnion(union_index);
-                        break :blk .{ info.layout, info.tag_type };
+                        break :blk .{ info.layout, info.tag_type, info.fields.count() };
                     },
                     else => return field_value_type,
                 },
@@ -3146,7 +3156,7 @@ fn resolveTypeInfoFieldAccess(
                         }) orelse return field_value_type).ipIndex() orelse return field_value_type
                     else
                         InternPool.Index.none;
-                    break :blk .{ info.layout, tag_type };
+                    break :blk .{ info.layout, tag_type, astContainerFieldCount(info.declaration, info.handle) };
                 },
                 else => return field_value_type,
             };
@@ -3157,13 +3167,16 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "tag_type")) {
                 return try analyser.optionalTypeValue(field_value_type, tag_type);
             }
+            if (std.mem.eql(u8, field_name, "fields")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, field_count);
+            }
         },
         .@"enum" => {
-            const tag_type, const is_exhaustive = switch (value.reflected_type.data) {
+            const tag_type, const is_exhaustive, const field_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .enum_type => |enum_index| blk: {
                         const info = analyser.ip.getEnum(enum_index);
-                        break :blk .{ Type.fromIP(analyser, .type_type, info.tag_type), info.is_exhaustive };
+                        break :blk .{ Type.fromIP(analyser, .type_type, info.tag_type), info.is_exhaustive, info.fields.count() };
                     },
                     else => return field_value_type,
                 },
@@ -3183,6 +3196,7 @@ fn resolveTypeInfoFieldAccess(
                     break :blk .{
                         try analyser.astEnumTagType(value.reflected_type.*, info.declaration, info.handle) orelse return field_value_type,
                         is_exhaustive,
+                        astEnumFieldCount(info.declaration, info.handle),
                     };
                 },
                 else => return field_value_type,
@@ -3193,17 +3207,21 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "is_exhaustive")) {
                 return Type.fromIP(analyser, .bool_type, if (is_exhaustive) .bool_true else .bool_false);
             }
+            if (std.mem.eql(u8, field_name, "fields")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, field_count);
+            }
         },
         .@"fn" => {
-            const is_generic, const is_var_args, const return_type = switch (value.reflected_type.data) {
+            const is_generic, const is_var_args, const return_type, const param_count = switch (value.reflected_type.data) {
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
-                    .function_type => |info| .{ info.flags.is_generic, info.flags.is_var_args, info.return_type },
+                    .function_type => |info| .{ info.flags.is_generic, info.flags.is_var_args, info.return_type, info.args.len },
                     else => return field_value_type,
                 },
                 .function => |info| .{
                     value.reflected_type.isGenericFunc(),
                     info.has_varargs,
                     (try info.return_value.typeOf(analyser)).ipIndex() orelse return field_value_type,
+                    info.parameters.len,
                 },
                 else => return field_value_type,
             };
@@ -3215,6 +3233,9 @@ fn resolveTypeInfoFieldAccess(
             }
             if (std.mem.eql(u8, field_name, "return_type")) {
                 return try analyser.optionalTypeValue(field_value_type, return_type);
+            }
+            if (std.mem.eql(u8, field_name, "params")) {
+                return try analyser.typeInfoCollectionValue(value, field_value_type, param_count);
             }
         },
         else => {},
@@ -3233,6 +3254,39 @@ fn optionalTypeValue(
     else
         try analyser.ip.get(.{ .optional_value = .{ .ty = optional_type, .val = value } });
     return Type.fromIP(analyser, optional_type, optional_value);
+}
+
+fn typeInfoCollectionValue(
+    analyser: *Analyser,
+    parent: Type.TypeInfoValue,
+    collection_type: Type,
+    len: u64,
+) error{OutOfMemory}!Type {
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(collection_type),
+        .reflected_type = parent.reflected_type,
+        .tag = parent.tag,
+        .is_payload = true,
+        .collection_len = len,
+    } }, .is_type_val = false };
+}
+
+fn astContainerFieldCount(declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle) usize {
+    var count: usize = 0;
+    for (declaration.ast.members) |member| {
+        if (handle.tree.fullContainerField(member) != null) count += 1;
+    }
+    return count;
+}
+
+fn astEnumFieldCount(declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle) usize {
+    var count: usize = 0;
+    for (declaration.ast.members) |member| {
+        const field = handle.tree.fullContainerField(member) orelse continue;
+        const name = offsets.tokenToSlice(&handle.tree, field.ast.main_token);
+        if (!std.mem.eql(u8, name, "_")) count += 1;
+    }
+    return count;
 }
 
 fn astContainerTypeInfo(
@@ -8301,6 +8355,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .reflected_type = try analyser.allocType(operand),
                         .tag = tag,
                         .is_payload = false,
+                        .collection_len = null,
                     } }, .is_type_val = false };
                 },
                 .bit_size_of, .size_of => |tag| {
@@ -10001,6 +10056,7 @@ pub const Type = struct {
         reflected_type: *Type,
         tag: std.builtin.TypeId,
         is_payload: bool,
+        collection_len: ?u64,
     };
 
     pub const Data = union(enum) {
@@ -10348,6 +10404,7 @@ pub const Type = struct {
                     value.reflected_type.hashWithHasher(hasher);
                     std.hash.autoHash(hasher, value.tag);
                     std.hash.autoHash(hasher, value.is_payload);
+                    std.hash.autoHash(hasher, value.collection_len);
                 },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
@@ -10454,6 +10511,7 @@ pub const Type = struct {
                     if (!a_value.reflected_type.eql(b_value.reflected_type.*)) return false;
                     if (a_value.tag != b_value.tag) return false;
                     if (a_value.is_payload != b_value.is_payload) return false;
+                    if (a_value.collection_len != b_value.collection_len) return false;
                 },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;
