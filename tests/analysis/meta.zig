@@ -67,3 +67,9 @@ const layout_extern_name = @tagName(std.meta.containerLayout(MetaExtern))[0];
 const MetaUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{}});
 const layout_union_name = @tagName(std.meta.containerLayout(MetaUnion))[0];
 //    ^^^^^^^^^^^^^^^^^ (u8)(97)
+const explicit_pointer_alignment = std.meta.alignment(*align(32) MetaNominal);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(32)
+const optional_pointer_alignment = std.meta.alignment(?*align(32) MetaNominal);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(32)
+const implicit_pointer_alignment = std.meta.alignment(*u16);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(2)

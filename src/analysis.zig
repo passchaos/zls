@@ -5645,6 +5645,36 @@ fn resolveContainerLayout(
     };
 }
 
+fn metaAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
+    if (!ty.is_type_val) return null;
+    return switch (ty.data) {
+        .pointer => |info| if (info.alignment != 0)
+            info.alignment
+        else
+            try analyser.resolveTypeAlignment(info.elem_ty.*),
+        .optional => |child| switch (child.data) {
+            .pointer, .function => try analyser.metaAlignment(child.*),
+            .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return null) orelse return null) {
+                .pointer, .@"fn" => try analyser.metaAlignment(child.*),
+                else => try analyser.resolveTypeAlignment(ty),
+            },
+            else => try analyser.resolveTypeAlignment(ty),
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .pointer_type => |pointer| if (pointer.flags.alignment != 0)
+                pointer.flags.alignment
+            else
+                try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, pointer.elem_type)),
+            .optional_type => |optional| switch (analyser.ip.zigTypeTag(optional.payload_type) orelse return null) {
+                .pointer, .@"fn" => try analyser.metaAlignment(Type.fromIP(analyser, .type_type, optional.payload_type)),
+                else => try analyser.resolveTypeAlignment(ty),
+            },
+            else => try analyser.resolveTypeAlignment(ty),
+        },
+        else => try analyser.resolveTypeAlignment(ty),
+    };
+}
+
 fn containerTypeLayout(analyser: *Analyser, container_type: Type) ?std.builtin.Type.ContainerLayout {
     if (!container_type.is_type_val) return null;
     return switch (container_type.data) {
@@ -8906,6 +8936,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const layout = analyser.containerTypeLayout(arg_type) orelse return .unknown_type;
                     const return_type = try func_info.return_value.typeOf(analyser);
                     return try analyser.enumValue(return_type, @tagName(layout));
+                }
+
+                if (std.mem.eql(u8, func_name, "alignment")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    const alignment = try analyser.metaAlignment(arg_type) orelse return .unknown_type;
+                    return try analyser.comptimeIntValue(alignment);
                 }
             }
 

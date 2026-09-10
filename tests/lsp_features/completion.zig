@@ -2441,6 +2441,22 @@ test "generic function with comptime std meta type utilities" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    return if (std.meta.alignment(*align(32) S) == 32 and
+        \\        std.meta.alignment(?*align(32) S) == 32 and std.meta.alignment(*u16) == 2)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function switching on comptime type info" {
