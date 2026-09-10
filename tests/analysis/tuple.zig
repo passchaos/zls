@@ -26,7 +26,8 @@ const some_tuple_field_access_2 = some_tuple.@"2";
 const some_tuple_len = some_tuple.len;
 //    ^^^^^^^^^^^^^^ (usize)(2)
 
-const either_tuple = if (true) .{undefined} else .{ undefined, undefined };
+const unknown_condition: bool = undefined;
+const either_tuple = if (unknown_condition) .{undefined} else .{ undefined, undefined };
 //    ^^^^^^^^^^^^ (either type)()
 
 comptime {

@@ -1054,13 +1054,14 @@ test "either type instances" {
 
 test "either type instances - big" {
     try testHoverWithOptions(
-        \\const foo = if (true) 1 else true;
-        \\const bar<cursor> = if (true)
+        \\var runtime: bool = undefined;
+        \\const foo = if (runtime) 1 else true;
+        \\const bar<cursor> = if (runtime)
         \\    .{ foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo }
         \\else
         \\    .{ foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo };
     ,
-        \\const bar = if (true)
+        \\const bar = if (runtime)
         \\    .{ foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo }
         \\else
         \\    .{ foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo, foo }
@@ -1068,16 +1069,17 @@ test "either type instances - big" {
         \\(struct { bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool })
     , .{ .markup_kind = .plaintext });
     try testHoverWithOptions(
-        \\const a = if (true) 1 else true;
-        \\const b = if (true) false else 0;
-        \\const c = if (true) .{ a, b } else .{ b, a };
-        \\const d = if (true) .{ a, c } else .{ b, c };
-        \\const e = if (true) .{ c, d } else .{ d, c };
-        \\const f = if (true) .{ d, e } else .{ e, d };
-        \\const g = if (true) .{ e, f } else .{ f, e };
-        \\const h<cursor> = if (true) .{ f, g } else .{ g, f };
+        \\var runtime: bool = undefined;
+        \\const a = if (runtime) 1 else true;
+        \\const b = if (runtime) false else 0;
+        \\const c = if (runtime) .{ a, b } else .{ b, a };
+        \\const d = if (runtime) .{ a, c } else .{ b, c };
+        \\const e = if (runtime) .{ c, d } else .{ d, c };
+        \\const f = if (runtime) .{ d, e } else .{ e, d };
+        \\const g = if (runtime) .{ e, f } else .{ f, e };
+        \\const h<cursor> = if (runtime) .{ f, g } else .{ g, f };
     ,
-        \\const h = if (true) .{ f, g } else .{ g, f }
+        \\const h = if (runtime) .{ f, g } else .{ g, f }
         \\(struct { struct { struct { comptime_int, struct { comptime_int, bool } }, struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } } }, struct { struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } }, struct { struct { comptime_int, struct { comptime_int, bool } }, struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } } } } })
         \\(struct { struct { struct { bool, struct { comptime_int, bool } }, struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } } }, struct { struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } }, struct { struct { comptime_int, struct { comptime_int, bool } }, struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } } } } })
         \\(struct { struct { struct { comptime_int, struct { bool, bool } }, struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } } }, struct { struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } }, struct { struct { comptime_int, struct { comptime_int, bool } }, struct { struct { comptime_int, bool }, struct { comptime_int, struct { comptime_int, bool } } } } } })

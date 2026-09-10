@@ -300,9 +300,18 @@ const fixed_array: FixedArray(4, u8) = undefined;
 
 const selected_length = if (true) 4 else 2;
 const selected_length_copy = selected_length + 0;
-//    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)((unknown value))
+//    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)(4)
 const selected_array: FixedArray(selected_length, u8) = undefined;
 //    ^^^^^^^^^^^^^^ ([5]u8)()
+
+const selected_switch_length = switch (@as(u8, 1)) {
+    1 => 4,
+    else => 2,
+};
+const selected_switch_length_copy = selected_switch_length + 0;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(4)
+const selected_switch_array: FixedArray(selected_switch_length, u8) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^ ([5]u8)()
 
 fn ZeroParameterArray() type {
     return [@intFromBool(@inComptime())]u8;

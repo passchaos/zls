@@ -176,13 +176,13 @@ pub fn main() !void {
     _ = &runtime_bool;
 }
 
-const comptime_bool: bool = true;
+const unknown_bool: bool = undefined;
 
-const comptime_int_and_void = if (comptime_bool) 0 else {};
+const comptime_int_and_void = if (unknown_bool) 0 else {};
 //    ^^^^^^^^^^^^^^^^^^^^^ (either type)()
 
-const compile_error_0 = if (comptime_bool) s else @compileError("Foo");
+const compile_error_0 = if (unknown_bool) s else @compileError("Foo");
 //    ^^^^^^^^^^^^^^^ (S)()
 
-const compile_error_1 = if (comptime_bool) @compileError("Foo") else s;
+const compile_error_1 = if (unknown_bool) @compileError("Foo") else s;
 //    ^^^^^^^^^^^^^^^ (S)()

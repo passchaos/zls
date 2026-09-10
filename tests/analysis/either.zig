@@ -1,16 +1,17 @@
 const UnknownType: type = undefined;
 const unknown_value: UnknownType = undefined;
+const unknown_condition: bool = undefined;
 
-const non_type_and_type: if (true) undefined else i32 = unknown_value;
+const non_type_and_type: if (unknown_condition) undefined else i32 = unknown_value;
 //    ^^^^^^^^^^^^^^^^^ (unknown)()
 
-const type_and_non_type: if (true) i32 else undefined = unknown_value;
+const type_and_non_type: if (unknown_condition) i32 else undefined = unknown_value;
 //    ^^^^^^^^^^^^^^^^^ (unknown)()
 
-const compile_error_and_type: if (true) @compileError("Foo") else i32 = 1;
+const compile_error_and_type: if (unknown_condition) @compileError("Foo") else i32 = 1;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (either type)()
 
-const type_and_compile_error: if (true) i32 else @compileError("Foo") = 1;
+const type_and_compile_error: if (unknown_condition) i32 else @compileError("Foo") = 1;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (either type)()
 
 fn runtimeInComptime() bool {
@@ -37,10 +38,10 @@ fn GenericStruct(T: type) type {
     return struct { field: T };
 }
 
-const EitherType = if (true) StructU32 else StructF64;
+const EitherType = if (unknown_condition) StructU32 else StructF64;
 //    ^^^^^^^^^^ (type)()
 
-const EitherError = if (true) error{Foo} else error{Bar};
+const EitherError = if (unknown_condition) error{Foo} else error{Bar};
 //    ^^^^^^^^^^^ (type)()
 
 const either: EitherType = .{};

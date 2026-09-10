@@ -7238,7 +7238,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         },
         .@"if", .if_simple => {
             const if_node = ast.fullIf(tree, node).?;
-            if (analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) {
+            if (analyser.evaluate_comptime_values or
+                analyser.evaluate_comptime_control_flow or
+                analyser.generic_bindings != null)
+            {
                 if (try analyser.resolveIfConditionValue(.{
                     .node_handle = .of(if_node.ast.cond_expr, handle),
                     .container_type = options.container_type,
@@ -7272,7 +7275,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         => {
             const switch_node = tree.switchFull(node);
 
-            if ((analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) and
+            if ((analyser.evaluate_comptime_values or
+                analyser.evaluate_comptime_control_flow or
+                analyser.generic_bindings != null) and
                 switch_node.label_token == null)
             {
                 if (try analyser.resolveKnownSwitchTarget(options)) |target| {
