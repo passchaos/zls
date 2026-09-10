@@ -847,6 +847,64 @@ const KnownReturn = union(enum) {
     unknown,
 };
 
+fn resolveKnownSwitchTarget(
+    analyser: *Analyser,
+    options: ResolveOptions,
+) Error!?Ast.Node.Index {
+    const handle = options.node_handle.handle;
+    const tree = &handle.tree;
+    const switch_node = tree.switchFull(options.node_handle.node);
+    if (switch_node.label_token != null) return null;
+
+    const condition = try analyser.resolveComptimeValue(.{
+        .node_handle = .of(switch_node.ast.condition, handle),
+        .container_type = options.container_type,
+    }) orelse return null;
+
+    var else_target: ?Ast.Node.Index = null;
+    for (switch_node.ast.cases) |case| {
+        const switch_case = tree.fullSwitchCase(case).?;
+        if (switch_case.ast.values.len == 0) {
+            else_target = switch_case.ast.target_expr;
+            continue;
+        }
+
+        for (switch_case.ast.values) |case_value| {
+            if (condition.data == .enum_value) {
+                const enum_type = condition.data.enum_value.enum_type.*;
+                const case_tag = try analyser.resolveEnumValueTag(enum_type, .of(case_value, handle)) orelse return null;
+                if (std.mem.eql(u8, condition.data.enum_value.tag, case_tag)) return switch_case.ast.target_expr;
+                continue;
+            }
+            const matches = if (tree.nodeTag(case_value) == .switch_range) range: {
+                const first, const last = tree.nodeData(case_value).node_and_node;
+                const first_index = try analyser.resolveInternPoolValue(.{
+                    .node_handle = .of(first, handle),
+                    .container_type = options.container_type,
+                }) orelse return null;
+                const last_index = try analyser.resolveInternPoolValue(.{
+                    .node_handle = .of(last, handle),
+                    .container_type = options.container_type,
+                }) orelse return null;
+                const first_value = Type.fromIP(analyser, analyser.ip.typeOf(first_index), first_index);
+                const last_value = Type.fromIP(analyser, analyser.ip.typeOf(last_index), last_index);
+                const at_least_first = analyser.resolveComparisonBool(.greater_or_equal, condition, first_value) orelse return null;
+                const at_most_last = analyser.resolveComparisonBool(.less_or_equal, condition, last_value) orelse return null;
+                break :range at_least_first and at_most_last;
+            } else equal: {
+                const value_index = try analyser.resolveInternPoolValue(.{
+                    .node_handle = .of(case_value, handle),
+                    .container_type = options.container_type,
+                }) orelse return null;
+                const value = Type.fromIP(analyser, analyser.ip.typeOf(value_index), value_index);
+                break :equal analyser.resolveComparisonBool(.equal_equal, condition, value) orelse return null;
+            };
+            if (matches) return switch_case.ast.target_expr;
+        }
+    }
+    return else_target;
+}
+
 fn findKnownReturnExpression(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -879,6 +937,10 @@ fn findKnownReturnExpression(
             const else_expr = if_node.ast.else_expr.unwrap() orelse break :blk .continues;
             break :blk try analyser.findKnownReturnExpression(handle, else_expr);
         },
+        .@"switch", .switch_comma => if (try analyser.resolveKnownSwitchTarget(.of(node, handle))) |target|
+            analyser.findKnownReturnExpression(handle, target)
+        else
+            .unknown,
         else => if (findReturnStatement(tree, node) != null) .unknown else .continues,
     };
 }
@@ -6491,66 +6553,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             if ((analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) and
                 switch_node.label_token == null)
-            select: {
-                const condition = try analyser.resolveComptimeValue(.{
-                    .node_handle = .of(switch_node.ast.condition, handle),
-                    .container_type = options.container_type,
-                }) orelse break :select;
-
-                var else_target: ?Ast.Node.Index = null;
-                for (switch_node.ast.cases) |case| {
-                    const switch_case = tree.fullSwitchCase(case).?;
-                    if (switch_case.ast.values.len == 0) {
-                        else_target = switch_case.ast.target_expr;
-                        continue;
-                    }
-
-                    for (switch_case.ast.values) |case_value| {
-                        if (condition.data == .enum_value) {
-                            const enum_type = condition.data.enum_value.enum_type.*;
-                            const case_tag = try analyser.resolveEnumValueTag(enum_type, .of(case_value, handle)) orelse break :select;
-                            if (std.mem.eql(u8, condition.data.enum_value.tag, case_tag)) {
-                                return try analyser.resolveTypeOfNodeInternal(.{
-                                    .node_handle = .of(switch_case.ast.target_expr, handle),
-                                    .container_type = options.container_type,
-                                });
-                            }
-                            continue;
-                        }
-                        const matches = if (tree.nodeTag(case_value) == .switch_range) range: {
-                            const first, const last = tree.nodeData(case_value).node_and_node;
-                            const first_index = try analyser.resolveInternPoolValue(.{
-                                .node_handle = .of(first, handle),
-                                .container_type = options.container_type,
-                            }) orelse break :select;
-                            const last_index = try analyser.resolveInternPoolValue(.{
-                                .node_handle = .of(last, handle),
-                                .container_type = options.container_type,
-                            }) orelse break :select;
-                            const first_value = Type.fromIP(analyser, analyser.ip.typeOf(first_index), first_index);
-                            const last_value = Type.fromIP(analyser, analyser.ip.typeOf(last_index), last_index);
-                            const at_least_first = analyser.resolveComparisonBool(.greater_or_equal, condition, first_value) orelse break :select;
-                            const at_most_last = analyser.resolveComparisonBool(.less_or_equal, condition, last_value) orelse break :select;
-                            break :range at_least_first and at_most_last;
-                        } else equal: {
-                            const value_index = try analyser.resolveInternPoolValue(.{
-                                .node_handle = .of(case_value, handle),
-                                .container_type = options.container_type,
-                            }) orelse break :select;
-                            const value = Type.fromIP(analyser, analyser.ip.typeOf(value_index), value_index);
-                            break :equal analyser.resolveComparisonBool(.equal_equal, condition, value) orelse break :select;
-                        };
-
-                        if (matches) {
-                            return try analyser.resolveTypeOfNodeInternal(.{
-                                .node_handle = .of(switch_case.ast.target_expr, handle),
-                                .container_type = options.container_type,
-                            });
-                        }
-                    }
-                }
-
-                if (else_target) |target| {
+            {
+                if (try analyser.resolveKnownSwitchTarget(options)) |target| {
                     return try analyser.resolveTypeOfNodeInternal(.{
                         .node_handle = .of(target, handle),
                         .container_type = options.container_type,

@@ -2890,6 +2890,36 @@ test "generic function with comptime enum switch" {
     });
 }
 
+test "generic function with comptime switch return statements" {
+    try testCompletion(
+        \\fn Select(comptime N: u8) type {
+        \\    switch (N) {
+        \\        0 => return struct { zero: u8 },
+        \\        1...3 => return struct { range: u8 },
+        \\        else => return struct { fallback: u8 },
+        \\    }
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "range", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Select(comptime mode: Mode) type {
+        \\    switch (mode) {
+        \\        .fast => return struct { optimized: u8 },
+        \\        .safe => return struct { checked: u8 },
+        \\    }
+        \\}
+        \\const selected: Select(.safe) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "checked", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
