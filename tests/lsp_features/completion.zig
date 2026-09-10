@@ -2704,6 +2704,26 @@ test "generic function rebuilding types from comptime type info" {
     });
 }
 
+test "generic function with AST function calling convention type info" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Auto = fn (T) u8;
+        \\    const Naked = fn () callconv(.naked) noreturn;
+        \\    const auto_name = @tagName(@typeInfo(Auto).@"fn".calling_convention);
+        \\    const naked_name = @tagName(@typeInfo(Naked).@"fn".calling_convention);
+        \\    return if (auto_name.len == 4 and auto_name[1] == 'u' and
+        \\        naked_name.len == 5 and naked_name[0] == 'n')
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime error set type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

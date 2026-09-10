@@ -924,6 +924,8 @@ const type_info_fn_varargs = @typeInfo(VariadicFn).@"fn".is_var_args;
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_fn_callconv = @tagName(@typeInfo(ConcreteFn).@"fn".calling_convention)[0] == 'a';
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_ast_fn_callconv = @tagName(@typeInfo(fn () callconv(.naked) noreturn).@"fn".calling_convention)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(110)
 const TypeInfoFnReturn = @typeInfo(ConcreteFn).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^ (type)(u8)
 const AstPacked = packed struct(u16) { value: u8 };

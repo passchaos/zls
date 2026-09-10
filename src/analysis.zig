@@ -3315,7 +3315,7 @@ fn resolveTypeInfoFieldAccess(
                     else => return field_value_type,
                 },
                 .function => |info| .{
-                    null,
+                    info.calling_convention,
                     value.reflected_type.isGenericFunc(),
                     info.has_varargs,
                     (try info.return_value.typeOf(analyser)).ipIndex() orelse return field_value_type,
@@ -9619,6 +9619,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             const return_value = try analyser.resolveReturnValueOfFuncNode(handle, node) orelse
                 Type.fromIP(analyser, .unknown_type, null);
+            const calling_convention = if (fn_proto.ast.callconv_expr.unwrap()) |callconv_expr|
+                try analyser.resolveCallingConventionTag(.of(callconv_expr, handle))
+            else if (fn_proto.extern_export_inline_token) |token| switch (tree.tokenTag(token)) {
+                .keyword_extern, .keyword_export => target: {
+                    const convention = builtin.target.cCallingConvention() orelse break :target null;
+                    break :target @as(std.builtin.CallingConvention.Tag, convention);
+                },
+                .keyword_inline => .@"inline",
+                else => .auto,
+            } else .auto;
 
             const info: Type.Data.Function = .{
                 .fn_node = node,
@@ -9629,6 +9639,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .name = name,
                 .parameters = parameters.items,
                 .has_varargs = has_varargs,
+                .calling_convention = calling_convention,
                 .return_value = try analyser.allocType(return_value),
             };
 
@@ -10747,6 +10758,7 @@ pub const Type = struct {
             name: ?[]const u8,
             parameters: []Parameter,
             has_varargs: bool,
+            calling_convention: ?std.builtin.CallingConvention.Tag,
             return_value: *Type,
         };
 
@@ -10952,6 +10964,7 @@ pub const Type = struct {
                     for (info.parameters) |param| {
                         param.type.hashWithHasher(hasher);
                     }
+                    std.hash.autoHash(hasher, info.calling_convention);
                     info.return_value.hashWithHasher(hasher);
                 },
                 .compile_error => |node_handle| {
@@ -11050,6 +11063,7 @@ pub const Type = struct {
                     for (a_info.parameters, b_info.parameters) |a_param, b_param| {
                         if (!a_param.type.eql(b_param.type)) return false;
                     }
+                    if (a_info.calling_convention != b_info.calling_convention) return false;
                     if (!a_info.return_value.eql(b_info.return_value.*)) return false;
                 },
                 .compile_error => |a_node_handle| return a_node_handle.eql(b.compile_error),
@@ -11302,6 +11316,7 @@ pub const Type = struct {
                             break :blk parameters;
                         },
                         .has_varargs = info.has_varargs,
+                        .calling_convention = info.calling_convention,
                         .return_value = try analyser.allocType(try analyser.resolveGenericTypeInternal(info.return_value.*, bound_params, visiting)),
                     },
                 },
