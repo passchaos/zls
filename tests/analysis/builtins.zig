@@ -617,6 +617,12 @@ const wide_mod_value = @mod(@as(u128, 170141183460469231731687303715884105728), 
 //    ^^^^^^^^^^^^^^ (u128)(2)
 const wide_rem_value = @rem(@as(u128, 170141183460469231731687303715884105728), 7);
 //    ^^^^^^^^^^^^^^ (u128)(2)
+const mod_one_runtime = @mod(runtime_i8, @as(i8, 1));
+//    ^^^^^^^^^^^^^^^ (i8)(0)
+const rem_one_runtime = @rem(runtime_i8, @as(i8, 1));
+//    ^^^^^^^^^^^^^^^ (i8)(0)
+const mod_one_undefined = @mod(@as(i8, undefined), @as(i8, 1));
+//    ^^^^^^^^^^^^^^^^^ (i8)()
 const shl_exact_u8_value = @shlExact(@as(u8, 3), 2);
 //    ^^^^^^^^^^^^^^^^^^ (u8)(12)
 const shr_exact_i8_value = @shrExact(@as(i8, -12), 2);
@@ -635,6 +641,10 @@ const vector_mod_value = @mod(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8
 //    ^^^^^^^^^^^^^^^^ (i8)(2)
 const vector_rem_value = @rem(@as(@Vector(2, i8), .{ -7, 8 }), @as(@Vector(2, i8), .{ 3, 2 }))[0];
 //    ^^^^^^^^^^^^^^^^ (i8)(-1)
+const vector_mod_one_runtime = @mod(runtime_i8_vector, @as(@Vector(2, i8), @splat(1)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const vector_rem_one_runtime = @rem(runtime_i8_vector, @as(@Vector(2, i8), @splat(1)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const vector_float_div_floor_value = @divFloor(@as(@Vector(2, f32), .{ -7.5, 8.0 }), @as(@Vector(2, f32), .{ 2.0, 2.0 }))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (f32)(-4)
 

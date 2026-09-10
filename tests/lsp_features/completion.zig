@@ -1859,6 +1859,26 @@ test "generic function with comptime division builtins" {
     });
 
     try testCompletion(
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_vector: @Vector(2, i8) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (@mod(runtime_i8, @as(i8, 1)) == 0 and
+        \\        @rem(runtime_i8, @as(i8, 1)) == 0 and
+        \\        @reduce(.And, @mod(runtime_vector, @as(@Vector(2, i8), @splat(1))) ==
+        \\            @as(@Vector(2, i8), @splat(0))) and
+        \\        @reduce(.And, @rem(runtime_vector, @as(@Vector(2, i8), @splat(1))) ==
+        \\            @as(@Vector(2, i8), @splat(0))))
+        \\        struct { reduced: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reduced", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime value: f32) type {
         \\    return if (@min(value, 4) == 2.5 and @max(4, value) == 4 and
         \\        @divTrunc(-value * 3, 2) == -3 and @divFloor(-value * 3, 2) == -4 and

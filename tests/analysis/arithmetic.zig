@@ -85,6 +85,12 @@ const integer_add_zero_runtime = runtime_u8 + @as(u8, 0);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const integer_mul_zero_undefined = @as(u8, undefined) * @as(u8, 0);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const integer_mod_one_runtime = runtime_u8 % @as(u8, 1);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const integer_mod_two_runtime = runtime_u8 % @as(u8, 2);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const integer_mod_one_undefined = @as(u8, undefined) % @as(u8, 1);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const mul_wrap_zero_runtime = runtime_u8 *% @as(u8, 0);
 //    ^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
 const mul_sat_zero_runtime = runtime_u8 *| @as(u8, 0);

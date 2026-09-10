@@ -2739,6 +2739,27 @@ fn resolveFixedWidthIntegerAbsorbingBinaryValue(
     return analyser.intValueWithType(result_type, absorbing orelse return null);
 }
 
+fn resolveIntegerRemainderByOneValue(
+    analyser: *Analyser,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (lhs_payload.type != rhs_payload.type) return null;
+    _ = analyser.fixedWidthIntegerBounds(lhs_payload.type) orelse return null;
+    if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+    const rhs_index = rhs_payload.index orelse return null;
+    if (analyser.ip.isUndefined(rhs_index) or analyser.ip.toInt(rhs_index, i256) != 1) return null;
+    return analyser.intValueWithType(lhs_payload.type, 0);
+}
+
 fn resolveIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -2754,6 +2775,9 @@ fn resolveIntegerBinaryValue(
         else => return null,
     };
     if (try analyser.resolveIntegerAbsorbingBinaryValue(tag, lhs, rhs)) |value| return value;
+    if (tag == .mod) {
+        if (try analyser.resolveIntegerRemainderByOneValue(lhs, rhs)) |value| return value;
+    }
     const lhs_index = lhs_payload.index orelse return null;
     const rhs_index = rhs_payload.index orelse return null;
     const lhs_value = analyser.ip.toInt(lhs_index, i256) orelse return null;
@@ -3147,20 +3171,31 @@ fn resolveVectorDivisionValue(
         else => return null,
     };
     if (lhs_vector.len != rhs_vector.len) return null;
-    const lhs_values = analyser.aggregateValues(lhs) orelse return null;
-    const rhs_values = analyser.aggregateValues(rhs) orelse return null;
-    if (lhs_values.len != lhs_vector.len or rhs_values.len != rhs_vector.len) return null;
-
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     const result_vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+        (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
     const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(values);
+    const unknown_lhs = try analyser.ip.getUnknown(lhs_vector.child);
+    const unknown_rhs = try analyser.ip.getUnknown(rhs_vector.child);
     for (values, 0..) |*value, i| {
-        const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_values.at(@intCast(i), analyser.ip));
-        const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_values.at(@intCast(i), analyser.ip));
+        const index: u32 = @intCast(i);
+        const lhs_element = Type.fromIP(
+            analyser,
+            lhs_vector.child,
+            if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs,
+        );
+        const rhs_element = Type.fromIP(
+            analyser,
+            rhs_vector.child,
+            if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs,
+        );
         const result = try analyser.resolveIntegerDivisionValue(tag, lhs_element, rhs_element) orelse
             try analyser.resolveFloatDivisionValue(tag, lhs_element, rhs_element) orelse
             try analyser.resolveFloatRemainderValue(tag, lhs_element, rhs_element);
@@ -3680,6 +3715,9 @@ fn resolveIntegerDivisionValue(
         .ip_index => |payload| payload,
         else => return null,
     };
+    if (tag == .mod or tag == .rem) {
+        if (try analyser.resolveIntegerRemainderByOneValue(lhs, rhs)) |value| return value;
+    }
     const lhs_value = analyser.ip.toInt(lhs_payload.index orelse return null, i256) orelse return null;
     const rhs_value = analyser.ip.toInt(rhs_payload.index orelse return null, i256) orelse return null;
     if (rhs_value == 0 or (lhs_value == std.math.minInt(i256) and rhs_value == -1)) return null;
