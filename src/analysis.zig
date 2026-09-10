@@ -847,6 +847,38 @@ const KnownReturn = union(enum) {
     unknown,
 };
 
+fn bodyAlwaysBreaksCurrentLoop(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) Error!bool {
+    const tree = &handle.tree;
+    return switch (tree.nodeTag(node)) {
+        .@"break" => tree.nodeData(node).opt_token_and_opt_node[0] == .none,
+        .@"comptime", .@"nosuspend" => analyser.bodyAlwaysBreaksCurrentLoop(handle, tree.nodeData(node).node),
+        .block, .block_semicolon, .block_two, .block_two_semicolon => blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const statements = tree.blockStatements(&buffer, node) orelse break :blk false;
+            for (statements) |statement| {
+                if (try analyser.bodyAlwaysBreaksCurrentLoop(handle, statement)) break :blk true;
+                if (try analyser.findKnownReturnExpression(handle, statement) != .continues) break :blk false;
+            }
+            break :blk false;
+        },
+        .@"if", .if_simple => blk: {
+            const if_node = ast.fullIf(tree, node).?;
+            const condition = try analyser.resolveIfConditionValue(.of(if_node.ast.cond_expr, handle)) orelse
+                break :blk false;
+            const selected = if (condition)
+                if_node.ast.then_expr
+            else
+                if_node.ast.else_expr.unwrap() orelse break :blk false;
+            break :blk analyser.bodyAlwaysBreaksCurrentLoop(handle, selected);
+        },
+        else => false,
+    };
+}
+
 fn resolveKnownSwitchTarget(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -949,13 +981,27 @@ fn findKnownReturnExpression(
         },
         .@"while", .while_simple, .while_cont => blk: {
             const while_node = ast.fullWhile(tree, node) orelse break :blk .unknown;
-            const condition = try analyser.resolveIfConditionValue(.of(while_node.ast.cond_expr, handle)) orelse
-                break :blk .unknown;
+            const condition = try analyser.resolveIfConditionValue(.of(while_node.ast.cond_expr, handle)) orelse {
+                if (while_node.payload_token != null or
+                    !try analyser.bodyAlwaysBreaksCurrentLoop(handle, while_node.ast.then_expr))
+                {
+                    break :blk .unknown;
+                }
+                const else_expr = while_node.ast.else_expr.unwrap() orelse break :blk .continues;
+                break :blk if (try analyser.findKnownReturnExpression(handle, else_expr) == .continues)
+                    .continues
+                else
+                    .unknown;
+            };
             if (condition) {
                 if (while_node.payload_token != null) break :blk .unknown;
                 break :blk switch (try analyser.findKnownReturnExpression(handle, while_node.ast.then_expr)) {
                     .expression => |expression| .{ .expression = expression },
-                    .continues, .unknown => .unknown,
+                    .continues => if (try analyser.bodyAlwaysBreaksCurrentLoop(handle, while_node.ast.then_expr))
+                        .continues
+                    else
+                        .unknown,
+                    .unknown => .unknown,
                 };
             }
             const else_expr = while_node.ast.else_expr.unwrap() orelse break :blk .continues;

@@ -2938,6 +2938,24 @@ test "generic function with runtime switch before return" {
     });
 }
 
+test "generic function with runtime while before return" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    while (runtime) {
+        \\        break;
+        \\    } else {
+        \\        _ = N;
+        \\    }
+        \\    return struct { selected: [N]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime while return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
