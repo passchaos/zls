@@ -2421,6 +2421,28 @@ test "generic function with comptime std meta enum tag" {
     });
 }
 
+test "generic function with comptime std meta type utilities" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    const Child = std.meta.Child(@Vector(4, *S));
+        \\    const Elem = std.meta.Elem(*@Vector(4, *S));
+        \\    const P = @Struct(.@"packed", null, &.{"value"}, &.{u8}, &.{.{} });
+        \\    const U = @Union(.@"extern", null, &.{"value"}, &.{T}, &.{.{} });
+        \\    return if (Child == *S and Elem == *S and std.meta.containerLayout(P) == .@"packed" and
+        \\        std.meta.containerLayout(U) == .@"extern")
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

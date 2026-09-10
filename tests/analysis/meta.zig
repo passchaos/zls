@@ -51,3 +51,19 @@ const ArgsTupleB = std.meta.ArgsTuple(@TypeOf(function));
 const GeneratedFunction = @Fn(&.{ u8, i32 }, &.{ .{}, .{} }, void, .{});
 const ArgsTupleGenerated = std.meta.ArgsTuple(GeneratedFunction);
 //    ^^^^^^^^^^^^^^^^^^ (type)(struct { u8, i32 })
+
+const MetaNominal = struct { value: u8 };
+const ChildNominalVector = std.meta.Child(@Vector(4, *MetaNominal));
+//    ^^^^^^^^^^^^^^^^^^ (type)(*MetaNominal)
+const ElemNominalVector = std.meta.Elem(*@Vector(4, *MetaNominal));
+//    ^^^^^^^^^^^^^^^^^ (type)(*MetaNominal)
+const MetaPacked = @Struct(.@"packed", null, &.{"value"}, &.{u8}, &.{.{}});
+const LayoutPacked = std.meta.containerLayout(MetaPacked);
+const layout_packed_name = @tagName(LayoutPacked)[0];
+//    ^^^^^^^^^^^^^^^^^^ (u8)(112)
+const MetaExtern = extern struct { value: u8 };
+const layout_extern_name = @tagName(std.meta.containerLayout(MetaExtern))[0];
+//    ^^^^^^^^^^^^^^^^^^ (u8)(101)
+const MetaUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{}});
+const layout_union_name = @tagName(std.meta.containerLayout(MetaUnion))[0];
+//    ^^^^^^^^^^^^^^^^^ (u8)(97)

@@ -5645,6 +5645,24 @@ fn resolveContainerLayout(
     };
 }
 
+fn containerTypeLayout(analyser: *Analyser, container_type: Type) ?std.builtin.Type.ContainerLayout {
+    if (!container_type.is_type_val) return null;
+    return switch (container_type.data) {
+        .tuple => .auto,
+        .container => blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            break :blk (astContainerTypeInfo(container_type, &buffer) orelse return null).layout;
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .struct_type => |struct_index| analyser.ip.getStruct(struct_index).layout,
+            .tuple_type => .auto,
+            .union_type => |union_index| analyser.ip.getUnion(union_index).layout,
+            else => null,
+        },
+        else => null,
+    };
+}
+
 fn resolveEnumMode(
     analyser: *Analyser,
     node_handle: NodeWithHandle,
@@ -8879,6 +8897,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (try analyser.resolveEnumTagType(arg_ty)) |tag_type| return tag_type;
                     const tag_type = try analyser.resolveUnionTag(arg_ty) orelse return .unknown_type;
                     return try tag_type.typeOf(analyser);
+                }
+
+                if (std.mem.eql(u8, func_name, "containerLayout")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    const layout = analyser.containerTypeLayout(arg_type) orelse return .unknown_type;
+                    const return_type = try func_info.return_value.typeOf(analyser);
+                    return try analyser.enumValue(return_type, @tagName(layout));
                 }
             }
 
