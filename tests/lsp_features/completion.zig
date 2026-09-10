@@ -1156,6 +1156,23 @@ test "generic function with runtime vector self integer operations" {
     });
 }
 
+test "generic function with runtime boolean self xor" {
+    try testCompletion(
+        \\var scalar: bool = undefined;
+        \\var vector: @Vector(2, bool) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (!(scalar ^ scalar) and !@reduce(.Or, vector ^ vector))
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with partially known integer operations" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

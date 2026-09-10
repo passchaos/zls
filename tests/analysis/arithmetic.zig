@@ -169,6 +169,8 @@ const integer_self_gt = runtime_i8 > runtime_i8;
 //    ^^^^^^^^^^^^^^^ (bool)(false)
 const bool_self_equal = runtime_bool == runtime_bool;
 //    ^^^^^^^^^^^^^^^ (bool)(true)
+const bool_self_xor = runtime_bool ^ runtime_bool;
+//    ^^^^^^^^^^^^^ (bool)(false)
 const float_self_equal = runtime_f32 == runtime_f32;
 //    ^^^^^^^^^^^^^^^^ (bool)()
 const undefined_self_equal = @as(u8, undefined) == @as(u8, undefined);
@@ -185,6 +187,8 @@ const undefined_self_xor = @as(i8, undefined) ^ @as(i8, undefined);
 //    ^^^^^^^^^^^^^^^^^^ (i8)()
 const undefined_self_sub = undefined_i8 - undefined_i8;
 //    ^^^^^^^^^^^^^^^^^^ (i8)()
+const undefined_bool_self_xor = undefined_bool ^ undefined_bool;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 
 const vector_add_value = (@as(@Vector(2, u8), .{ 1, 2 }) + @as(@Vector(2, u8), .{ 3, 4 }))[1];
 //    ^^^^^^^^^^^^^^^^ (u8)(6)
@@ -254,6 +258,14 @@ const vector_bool_or_runtime = (runtime_bool_vector | @as(@Vector(2, bool), @spl
 //    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_bool_xor_runtime = (runtime_bool_vector ^ @as(@Vector(2, bool), @splat(true)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_bool_self_xor = (runtime_bool_vector ^ runtime_bool_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_undefined_bool_self_xor = (undefined_bool_vector ^ undefined_bool_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_partially_undefined_bool_self_xor = (partially_undefined_bool_vector ^ partially_undefined_bool_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_known_bool_lane_self_xor = (partially_undefined_bool_vector ^ partially_undefined_bool_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
 const vector_bool_and_undefined = (@as(@Vector(2, bool), .{ undefined, true }) & @as(@Vector(2, bool), @splat(false)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const vector_integer_mul_zero_runtime = (runtime_u8_vector * @as(@Vector(2, u8), @splat(0)))[0];
@@ -345,5 +357,8 @@ var runtime_u3_vector: @Vector(2, u3) = undefined;
 var runtime_u8_vector: @Vector(2, u8) = undefined;
 var runtime_i8_vector: @Vector(2, i8) = undefined;
 const undefined_i8: i8 = undefined;
+const undefined_bool: bool = undefined;
 const undefined_i8_vector: @Vector(2, i8) = undefined;
 const partially_undefined_i8_vector: @Vector(2, i8) = .{ undefined, 1 };
+const undefined_bool_vector: @Vector(2, bool) = undefined;
+const partially_undefined_bool_vector: @Vector(2, bool) = .{ undefined, true };

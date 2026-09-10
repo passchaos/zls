@@ -2799,8 +2799,9 @@ fn intValueWithType(
     return Type.fromIP(analyser, result_type, coerced);
 }
 
-fn resolveIntegerSelfBinaryValue(
+fn resolveSelfBinaryValue(
     analyser: *Analyser,
+    tag: Ast.Node.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
     const payload = switch (operand.data) {
@@ -2810,6 +2811,10 @@ fn resolveIntegerSelfBinaryValue(
     if (payload.index) |index| {
         if (analyser.ip.isUndefined(index)) return operand.withoutIPIndex(analyser);
     }
+    const scalar_tag = analyser.ip.zigTypeTag(payload.type);
+    if (scalar_tag == .bool and tag == .bit_xor) {
+        return Type.fromIP(analyser, .bool_type, .bool_false);
+    }
     if (analyser.fixedWidthIntegerBounds(payload.type) != null) {
         return analyser.intValueWithType(payload.type, 0);
     }
@@ -2818,7 +2823,10 @@ fn resolveIntegerSelfBinaryValue(
         .vector_type => |vector| vector,
         else => return null,
     };
-    _ = analyser.fixedWidthIntegerBounds(vector.child) orelse return null;
+    const child_tag = analyser.ip.zigTypeTag(vector.child);
+    if (child_tag != .bool or tag != .bit_xor) {
+        _ = analyser.fixedWidthIntegerBounds(vector.child) orelse return null;
+    }
     if (analyser.aggregateValues(operand)) |source_values| {
         if (source_values.len != vector.len) return null;
         for (0..vector.len) |i| {
@@ -2826,7 +2834,10 @@ fn resolveIntegerSelfBinaryValue(
         }
     }
 
-    const zero = (try analyser.intValueWithType(vector.child, 0) orelse return null).ipIndex() orelse return null;
+    const zero: InternPool.Index = if (child_tag == .bool)
+        .bool_false
+    else
+        (try analyser.intValueWithType(vector.child, 0) orelse return null).ipIndex() orelse return null;
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     @memset(values, zero);
@@ -7186,7 +7197,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 if ((tag == .bit_xor or tag == .sub_wrap or tag == .sub_sat) and
                     try analyser.areSameIdentifierExpression(tree, lhs, rhs))
                 {
-                    if (try analyser.resolveIntegerSelfBinaryValue(lhs_ty)) |value| return value;
+                    if (try analyser.resolveSelfBinaryValue(tag, lhs_ty)) |value| return value;
                 }
                 const value = switch (tree.nodeTag(node)) {
                     .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null) orelse
@@ -7233,7 +7244,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
                 if (try analyser.areSameIdentifierExpression(tree, lhs, rhs)) {
-                    if (try analyser.resolveIntegerSelfBinaryValue(lhs_ty)) |value| return value;
+                    if (try analyser.resolveSelfBinaryValue(.sub, lhs_ty)) |value| return value;
                 }
                 if (try analyser.resolveIntegerBinaryValue(.sub, lhs_ty, rhs_ty) orelse
                     try analyser.resolveFloatBinaryValue(.sub, lhs_ty, rhs_ty) orelse
