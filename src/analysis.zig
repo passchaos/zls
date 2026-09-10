@@ -3776,14 +3776,17 @@ fn resolveVectorComparisonValue(
     } });
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
-    if (lhs_values == null or rhs_values == null) return Type.fromIP(analyser, result_type, null);
-    if (lhs_values.?.len != lhs_vector.len or rhs_values.?.len != rhs_vector.len) return null;
+    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+        (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
     defer analyser.gpa.free(values);
+    const unknown_lhs = try analyser.ip.getUnknown(lhs_vector.child);
+    const unknown_rhs = try analyser.ip.getUnknown(rhs_vector.child);
     for (values, 0..) |*value, i| {
-        const lhs_value = lhs_values.?.at(@intCast(i), analyser.ip);
-        const rhs_value = rhs_values.?.at(@intCast(i), analyser.ip);
+        const index: u32 = @intCast(i);
+        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs;
+        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs;
         const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_value);
         const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_value);
         const comparison = analyser.resolveComparisonValue(tag, lhs_element, rhs_element);

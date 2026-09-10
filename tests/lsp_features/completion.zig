@@ -1085,6 +1085,30 @@ test "generic function with comptime vector comparison" {
     });
 }
 
+test "generic function with integer vector comparison boundaries" {
+    try testCompletion(
+        \\var runtime_u8: @Vector(2, u8) = undefined;
+        \\var runtime_i8: @Vector(2, i8) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const unsigned_max: @Vector(2, u8) = @splat(255);
+        \\    const unsigned_min: @Vector(2, u8) = @splat(0);
+        \\    const signed_max: @Vector(2, i8) = @splat(127);
+        \\    const signed_min: @Vector(2, i8) = @splat(-128);
+        \\    return if (@reduce(.And, runtime_u8 <= unsigned_max) and
+        \\        !@reduce(.Or, runtime_u8 < unsigned_min) and
+        \\        @reduce(.And, runtime_i8 >= signed_min) and
+        \\        !@reduce(.Or, runtime_i8 > signed_max))
+        \\        struct { bounded: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "bounded", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector shuffle" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {
