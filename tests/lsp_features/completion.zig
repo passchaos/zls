@@ -1856,6 +1856,18 @@ test "generic function with comptime Tuple type constructor" {
         .{ .label = "@\"0\"", .kind = .Field, .detail = "u8" },
         .{ .label = "@\"1\"", .kind = .Field, .detail = "i16" },
     });
+
+    try testCompletion(
+        \\fn Pair(comptime T: type, comptime U: type) type {
+        \\    const fields = &.{ T, U };
+        \\    return @Tuple(fields);
+        \\}
+        \\const pair: Pair(u16, bool) = undefined;
+        \\const field = pair.<cursor>
+    , &.{
+        .{ .label = "@\"0\"", .kind = .Field, .detail = "u16" },
+        .{ .label = "@\"1\"", .kind = .Field, .detail = "bool" },
+    });
 }
 
 test "generic function with comptime value builtins" {

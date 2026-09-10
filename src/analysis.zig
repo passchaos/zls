@@ -4151,18 +4151,63 @@ fn resolveSignedness(
 
 fn resolveTupleTypeConstructor(
     analyser: *Analyser,
-    node_handle: NodeWithHandle,
+    options: ResolveOptions,
 ) Error!?Type {
+    if (try analyser.resolveTypeOfNodeInternal(options)) |fields| {
+        if (fields.data == .ip_index) {
+            const pointer = switch (analyser.ip.indexToKey(fields.data.ip_index.type)) {
+                .pointer_type => |pointer| pointer,
+                else => null,
+            };
+            if (pointer) |info| if (info.flags.size == .one) {
+                const field_values = switch (analyser.ip.indexToKey(info.elem_type)) {
+                    .tuple_type => |tuple| tuple.values,
+                    else => null,
+                };
+                if (field_values) |values| {
+                    const element_types = try analyser.arena.alloc(Type, values.len);
+                    for (element_types, 0..) |*element_type, i| {
+                        const value = values.at(@intCast(i), analyser.ip);
+                        if (value == .none or analyser.ip.typeOf(value) != .type_type) break;
+                        element_type.* = Type.fromIP(analyser, .type_type, value);
+                    } else return try Type.createTupleType(analyser, element_types);
+                }
+            };
+        }
+    }
+
+    var literal_options = options;
+    if (try analyser.resolveVarDeclAlias(.{
+        .decl = .{ .ast_node = options.node_handle.node },
+        .handle = options.node_handle.handle,
+        .container_type = options.container_type,
+    })) |declaration| {
+        const declaration_node = switch (declaration.decl) {
+            .ast_node => |decl_node| decl_node,
+            else => return null,
+        };
+        const declaration_tree = &declaration.handle.tree;
+        const variable = declaration_tree.fullVarDecl(declaration_node) orelse return null;
+        if (declaration_tree.tokenTag(variable.ast.mut_token) != .keyword_const) return null;
+        literal_options = .{
+            .node_handle = .of(variable.ast.init_node.unwrap() orelse return null, declaration.handle),
+            .container_type = declaration.container_type,
+        };
+    }
+
+    const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
     if (tree.nodeTag(node_handle.node) != .address_of) return null;
     const literal_node = tree.nodeData(node_handle.node).node;
     var buffer: [2]Ast.Node.Index = undefined;
     const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
     if (literal.ast.type_expr.unwrap() != null) return null;
-
     const element_types = try analyser.arena.alloc(Type, literal.ast.elements.len);
     for (literal.ast.elements, element_types) |element_node, *element_type| {
-        element_type.* = try analyser.resolveTypeOfNodeInternal(.of(element_node, node_handle.handle)) orelse return null;
+        element_type.* = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(element_node, node_handle.handle),
+            .container_type = literal_options.container_type,
+        }) orelse return null;
         if (!element_type.is_type_val) return null;
     }
     return try Type.createTupleType(analyser, element_types);
@@ -7549,7 +7594,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .Tuple => {
                     if (params.len != 1) return null;
-                    return try analyser.resolveTupleTypeConstructor(.of(params[0], handle));
+                    return try analyser.resolveTupleTypeConstructor(.{
+                        .node_handle = .of(params[0], handle),
+                        .container_type = options.container_type,
+                    });
                 },
                 .Vector => {
                     if (params.len != 2) return null;

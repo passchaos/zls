@@ -766,6 +766,9 @@ const UnsignedInt = @Int(.unsigned, 256);
 //    ^^^^^^^^^^^ (type)(u256)
 const Tuple = @Tuple(&.{ u8, i16 });
 //    ^^^^^ (type)(struct { u8, i16 })
+const TupleFields = &.{ i32, bool };
+const AliasedTuple = @Tuple(TupleFields);
+//    ^^^^^^^^^^^^ (type)(struct { i32, bool })
 const Pointer = @Pointer(.one, undefined, undefined, undefined);
 //    ^^^^^^^ (type)()
 //                       ^^^^ (Size)()
