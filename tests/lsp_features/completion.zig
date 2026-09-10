@@ -2408,6 +2408,26 @@ test "generic function with comptime pointer type info attributes" {
     });
 }
 
+test "generic function with comptime type info sentinel presence" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const plain_pointer = @typeInfo([*]T).pointer;
+        \\    const sentinel_pointer = @typeInfo([*:0]T).pointer;
+        \\    const plain_array = @typeInfo([4]T).array;
+        \\    const sentinel_array = @typeInfo([4:0]T).array;
+        \\    return if (plain_pointer.sentinel_ptr == null and sentinel_pointer.sentinel_ptr != null and
+        \\        plain_array.sentinel_ptr == null and sentinel_array.sentinel_ptr != null)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime container type info payload values" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

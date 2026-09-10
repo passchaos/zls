@@ -878,12 +878,20 @@ const type_info_pointer_alignment = @typeInfo(AttributedManyPointer).pointer.ali
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(4)
 const type_info_pointer_address_space = @typeInfo(GenericAddressPointer).pointer.address_space == .generic;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_pointer_sentinel_null = @typeInfo([*]u8).pointer.sentinel_ptr == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_pointer_sentinel_present = @typeInfo([*:0]u8).pointer.sentinel_ptr != null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_float_bits = @typeInfo(f32).float.bits;
 //    ^^^^^^^^^^^^^^^^^^^^ (u16)(32)
 const type_info_array_len = @typeInfo([4]u16).array.len;
 //    ^^^^^^^^^^^^^^^^^^^ (comptime_int)(4)
 const TypeInfoArrayChild = @typeInfo([4]u16).array.child;
 //    ^^^^^^^^^^^^^^^^^^ (type)(u16)
+const type_info_array_sentinel_null = @typeInfo([4]u8).array.sentinel_ptr == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_array_sentinel_present = @typeInfo([4:0]u8).array.sentinel_ptr != null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_vector_len = @typeInfo(@Vector(8, i16)).vector.len;
 //    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)(8)
 const TypeInfoOptionalChild = @typeInfo(?u32).optional.child;

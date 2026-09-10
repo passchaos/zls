@@ -3052,12 +3052,15 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "is_allowzero")) {
                 return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_allowzero) .bool_true else .bool_false);
             }
+            if (std.mem.eql(u8, field_name, "sentinel_ptr")) {
+                return try analyser.optionalPresenceValue(field_value_type, pointer.sentinel != .none);
+            }
         },
         .array, .vector => {
             const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
-            const len, const child = switch (analyser.ip.indexToKey(type_index)) {
-                .array_type => |array| .{ array.len, array.child },
-                .vector_type => |vector| .{ @as(u64, vector.len), vector.child },
+            const len, const child, const sentinel = switch (analyser.ip.indexToKey(type_index)) {
+                .array_type => |array| .{ array.len, array.child, array.sentinel },
+                .vector_type => |vector| .{ @as(u64, vector.len), vector.child, InternPool.Index.none },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "len")) {
@@ -3065,6 +3068,9 @@ fn resolveTypeInfoFieldAccess(
             }
             if (std.mem.eql(u8, field_name, "child")) {
                 return Type.fromIP(analyser, .type_type, child);
+            }
+            if (value.tag == .array and std.mem.eql(u8, field_name, "sentinel_ptr")) {
+                return try analyser.optionalPresenceValue(field_value_type, sentinel != .none);
             }
         },
         .optional => {
@@ -3253,6 +3259,27 @@ fn optionalTypeValue(
         try analyser.ip.getNull(optional_type)
     else
         try analyser.ip.get(.{ .optional_value = .{ .ty = optional_type, .val = value } });
+    return Type.fromIP(analyser, optional_type, optional_value);
+}
+
+fn optionalPresenceValue(
+    analyser: *Analyser,
+    optional_instance: Type,
+    is_present: bool,
+) error{OutOfMemory}!Type {
+    const optional_type = (try optional_instance.typeOf(analyser)).ipIndex() orelse return optional_instance;
+    if (!is_present) {
+        return Type.fromIP(analyser, optional_type, try analyser.ip.getNull(optional_type));
+    }
+    const child_type = switch (analyser.ip.indexToKey(optional_type)) {
+        .optional_type => |info| info.payload_type,
+        else => return optional_instance,
+    };
+    const child_value = try analyser.ip.getUnknown(child_type);
+    const optional_value = try analyser.ip.get(.{ .optional_value = .{
+        .ty = optional_type,
+        .val = child_value,
+    } });
     return Type.fromIP(analyser, optional_type, optional_value);
 }
 
