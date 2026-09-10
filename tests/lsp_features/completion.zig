@@ -1845,6 +1845,19 @@ test "generic function with comptime Int type constructor" {
     });
 }
 
+test "generic function with comptime Tuple type constructor" {
+    try testCompletion(
+        \\fn Pair(comptime T: type, comptime U: type) type {
+        \\    return @Tuple(&.{ T, U });
+        \\}
+        \\const pair: Pair(u8, i16) = undefined;
+        \\const field = pair.<cursor>
+    , &.{
+        .{ .label = "@\"0\"", .kind = .Field, .detail = "u8" },
+        .{ .label = "@\"1\"", .kind = .Field, .detail = "i16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

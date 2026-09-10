@@ -764,6 +764,8 @@ const Int = @Int(.signed, 16);
 //               ^^^^^^^ (Signedness)()
 const UnsignedInt = @Int(.unsigned, 256);
 //    ^^^^^^^^^^^ (type)(u256)
+const Tuple = @Tuple(&.{ u8, i16 });
+//    ^^^^^ (type)(struct { u8, i16 })
 const Pointer = @Pointer(.one, undefined, undefined, undefined);
 //    ^^^^^^^ (type)()
 //                       ^^^^ (Size)()

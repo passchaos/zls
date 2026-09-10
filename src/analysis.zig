@@ -4149,6 +4149,25 @@ fn resolveSignedness(
     };
 }
 
+fn resolveTupleTypeConstructor(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?Type {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null) return null;
+
+    const element_types = try analyser.arena.alloc(Type, literal.ast.elements.len);
+    for (literal.ast.elements, element_types) |element_node, *element_type| {
+        element_type.* = try analyser.resolveTypeOfNodeInternal(.of(element_node, node_handle.handle)) orelse return null;
+        if (!element_type.is_type_val) return null;
+    }
+    return try Type.createTupleType(analyser, element_types);
+}
+
 fn floatReduceValue(
     comptime T: type,
     analyser: *Analyser,
@@ -7527,6 +7546,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .bits = bits,
                     } });
                     return Type.fromIP(analyser, .type_type, int_type);
+                },
+                .Tuple => {
+                    if (params.len != 1) return null;
+                    return try analyser.resolveTupleTypeConstructor(.of(params[0], handle));
                 },
                 .Vector => {
                     if (params.len != 2) return null;
