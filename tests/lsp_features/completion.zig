@@ -7110,6 +7110,36 @@ test "either instance field preserves all candidate types" {
     });
 }
 
+test "either callable preserves all return types" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\const Alpha = struct { alpha: u8 };
+        \\const Beta = struct { beta: u16 };
+        \\fn alpha() Alpha { return undefined; }
+        \\fn beta() Beta { return undefined; }
+        \\const function = if (runtime) alpha else beta;
+        \\const value = function();
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "alpha", .kind = .Field, .detail = "u8" },
+        .{ .label = "beta", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\const Alpha = struct { alpha: u8 };
+        \\const Beta = struct { beta: u16 };
+        \\fn alpha(_: u8) Alpha { return undefined; }
+        \\fn beta(_: u8) Beta { return undefined; }
+        \\const function = if (runtime) alpha else beta;
+        \\const value = function(4);
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "alpha", .kind = .Field, .detail = "u8" },
+        .{ .label = "beta", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "container type inside switch case value" {
     try testCompletion(
         \\test {

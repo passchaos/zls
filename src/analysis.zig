@@ -5809,6 +5809,34 @@ fn resolveFunctionTypeFromCall(
     return resolved;
 }
 
+fn resolveEitherCallResult(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    call: Ast.full.Call,
+    callable: Type,
+) Error!?Type {
+    const entries = switch (callable.data) {
+        .either => |entries| entries,
+        else => return null,
+    };
+
+    var return_types: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+    for (entries) |entry| {
+        const candidate: Type = .{
+            .data = entry.type_data,
+            .is_type_val = callable.is_type_val,
+        };
+        var func_ty = try analyser.resolveFuncProtoOfCallable(candidate) orelse return null;
+        if (func_ty.is_type_val) return null;
+        func_ty = try analyser.resolveFunctionTypeFromCall(handle, call, func_ty);
+        try return_types.append(analyser.arena, .{
+            .type = func_ty.data.function.return_value.*,
+            .descriptor = entry.descriptor,
+        });
+    }
+    return Type.fromEither(analyser, return_types.items);
+}
+
 const BreakIterator = struct {
     const Value = union(enum) {
         operand: Ast.Node.Index,
@@ -6061,6 +6089,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const call = tree.fullCall(&buffer, node).?;
 
             const ty = try analyser.resolveTypeOfNodeInternal(.of(call.ast.fn_expr, handle)) orelse return null;
+            if (ty.data == .either) {
+                return try analyser.resolveEitherCallResult(handle, call, ty);
+            }
             var func_ty = try analyser.resolveFuncProtoOfCallable(ty) orelse return null;
             if (func_ty.is_type_val) return null;
 
