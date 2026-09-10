@@ -1122,7 +1122,8 @@ test "generic function with runtime self integer operations" {
     try testCompletion(
         \\var runtime: i8 = undefined;
         \\fn Select(comptime N: u8) type {
-        \\    return if ((runtime ^ runtime) == 0 and (runtime -% runtime) == 0 and
+        \\    return if ((runtime ^ runtime) == 0 and (runtime - runtime) == 0 and
+        \\        (runtime -% runtime) == 0 and
         \\        (runtime -| runtime) == 0)
         \\        struct { matched: [N]u8 }
         \\    else
@@ -1141,6 +1142,7 @@ test "generic function with runtime vector self integer operations" {
         \\fn Select(comptime N: u8) type {
         \\    const zero: @Vector(2, i8) = @splat(0);
         \\    return if (@reduce(.And, (runtime ^ runtime) == zero) and
+        \\        @reduce(.And, (runtime - runtime) == zero) and
         \\        @reduce(.And, (runtime -% runtime) == zero) and
         \\        @reduce(.And, (runtime -| runtime) == zero))
         \\        struct { matched: [N]u8 }

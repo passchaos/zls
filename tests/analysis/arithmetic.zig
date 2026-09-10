@@ -175,11 +175,15 @@ const undefined_self_equal = @as(u8, undefined) == @as(u8, undefined);
 //    ^^^^^^^^^^^^^^^^^^^^ (bool)()
 const integer_self_xor = runtime_i8 ^ runtime_i8;
 //    ^^^^^^^^^^^^^^^^ (i8)(0)
+const integer_self_sub = runtime_i8 - runtime_i8;
+//    ^^^^^^^^^^^^^^^^ (i8)(0)
 const integer_self_sub_wrap = runtime_i8 -% runtime_i8;
 //    ^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const integer_self_sub_sat = runtime_i8 -| runtime_i8;
 //    ^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const undefined_self_xor = @as(i8, undefined) ^ @as(i8, undefined);
+//    ^^^^^^^^^^^^^^^^^^ (i8)()
+const undefined_self_sub = undefined_i8 - undefined_i8;
 //    ^^^^^^^^^^^^^^^^^^ (i8)()
 
 const vector_add_value = (@as(@Vector(2, u8), .{ 1, 2 }) + @as(@Vector(2, u8), .{ 3, 4 }))[1];
@@ -264,12 +268,20 @@ const vector_integer_mul_undefined = (@as(@Vector(2, u8), .{ undefined, 1 }) * @
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const vector_integer_self_xor = (runtime_i8_vector ^ runtime_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const vector_integer_self_sub = (runtime_i8_vector - runtime_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const vector_integer_self_sub_wrap = (runtime_i8_vector -% runtime_i8_vector)[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const vector_integer_self_sub_sat = (runtime_i8_vector -| runtime_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const vector_undefined_self_xor = (undefined_i8_vector ^ undefined_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_undefined_self_sub = (undefined_i8_vector - undefined_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_partially_undefined_self_sub = (partially_undefined_i8_vector - partially_undefined_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_known_lane_self_sub = (partially_undefined_i8_vector - partially_undefined_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const vector_integer_self_equal = (runtime_i8_vector == runtime_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_integer_self_not_equal = (runtime_i8_vector != runtime_i8_vector)[1];
@@ -332,5 +344,6 @@ var runtime_u3: u3 = undefined;
 var runtime_u3_vector: @Vector(2, u3) = undefined;
 var runtime_u8_vector: @Vector(2, u8) = undefined;
 var runtime_i8_vector: @Vector(2, i8) = undefined;
+const undefined_i8: i8 = undefined;
 const undefined_i8_vector: @Vector(2, i8) = undefined;
 const partially_undefined_i8_vector: @Vector(2, i8) = .{ undefined, 1 };

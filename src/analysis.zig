@@ -7232,6 +7232,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
+                if (try analyser.areSameIdentifierExpression(tree, lhs, rhs)) {
+                    if (try analyser.resolveIntegerSelfBinaryValue(lhs_ty)) |value| return value;
+                }
                 if (try analyser.resolveIntegerBinaryValue(.sub, lhs_ty, rhs_ty) orelse
                     try analyser.resolveFloatBinaryValue(.sub, lhs_ty, rhs_ty) orelse
                     try analyser.resolveVectorBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
