@@ -3256,14 +3256,14 @@ fn resolveTypeInfoFieldAccess(
                     var buffer: [2]Ast.Node.Index = undefined;
                     const info = astContainerTypeInfo(value.reflected_type.*, &buffer) orelse return field_value_type;
                     if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_struct) return field_value_type;
-                    const backing_integer = if (info.declaration.ast.arg.unwrap()) |arg|
-                        (try analyser.resolveTypeOfNodeInternal(.{
-                            .node_handle = .of(arg, info.handle),
-                            .container_type = value.reflected_type.*,
-                        }) orelse return field_value_type).ipIndex() orelse return field_value_type
+                    const backing_integer = if (info.layout == .@"packed")
+                        (try analyser.astPackedStructBackingType(
+                            value.reflected_type.*,
+                            info.declaration,
+                            info.handle,
+                        ) orelse return field_value_type).ipIndex() orelse return field_value_type
                     else
                         InternPool.Index.none;
-                    if (info.layout == .@"packed" and backing_integer == .none) return field_value_type;
                     break :blk .{
                         info.layout,
                         backing_integer,
@@ -3946,6 +3946,40 @@ fn astContainerTypeInfo(
         else => return null,
     } else .auto;
     return .{ .declaration = declaration, .handle = handle, .layout = layout };
+}
+
+fn astPackedStructBackingType(
+    analyser: *Analyser,
+    struct_type: Type,
+    declaration: Ast.full.ContainerDecl,
+    handle: *DocumentStore.Handle,
+) Error!?Type {
+    std.debug.assert(struct_type.isStructType(analyser));
+    if (declaration.ast.arg.unwrap()) |arg| {
+        const backing_type = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(arg, handle),
+            .container_type = struct_type,
+        }) orelse return null;
+        if (!backing_type.is_type_val) return null;
+        const backing_type_index = backing_type.ipIndex() orelse return null;
+        if (analyser.ip.zigTypeTag(backing_type_index) != .int) return null;
+        return backing_type;
+    }
+
+    var total_bits: u64 = 0;
+    for (declaration.ast.members) |member| {
+        const field = handle.tree.fullContainerField(member) orelse continue;
+        const field_type_node = field.ast.type_expr.unwrap() orelse return null;
+        const field_type = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(field_type_node, handle),
+            .container_type = struct_type,
+        }) orelse return null;
+        const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
+        total_bits = std.math.add(u64, total_bits, field_bits) catch return null;
+    }
+    const bits = std.math.cast(u16, total_bits) orelse return null;
+    const backing_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+    return Type.fromIP(analyser, .type_type, backing_type);
 }
 
 fn astEnumTagType(analyser: *Analyser, enum_type: Type, declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle) Error!?Type {
@@ -7151,13 +7185,19 @@ fn resolveNegationValue(
 fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
-        .container => if (ty.isEnumType(analyser)) blk: {
+        .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
-            const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
+            if (ty.isEnumType(analyser)) {
+                const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
+                    break :blk null;
+                break :blk analyser.resolveTypeBitSize(tag_type);
+            }
+            if (ty.getContainerKind() != .keyword_struct or info.layout != .@"packed") break :blk null;
+            const backing_type = (analyser.astPackedStructBackingType(ty, info.declaration, info.handle) catch break :blk null) orelse
                 break :blk null;
-            break :blk analyser.resolveTypeBitSize(tag_type);
-        } else null,
+            break :blk analyser.resolveTypeBitSize(backing_type);
+        },
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth(),
@@ -7222,13 +7262,19 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
 fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
-        .container => if (ty.isEnumType(analyser)) blk: {
+        .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
-            const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
+            if (ty.isEnumType(analyser)) {
+                const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
+                    break :blk null;
+                break :blk analyser.resolveTypeByteSize(tag_type);
+            }
+            if (ty.getContainerKind() != .keyword_struct or info.layout != .@"packed") break :blk null;
+            const backing_type = (analyser.astPackedStructBackingType(ty, info.declaration, info.handle) catch break :blk null) orelse
                 break :blk null;
-            break :blk analyser.resolveTypeByteSize(tag_type);
-        } else null,
+            break :blk analyser.resolveTypeByteSize(backing_type);
+        },
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth() / 8,
@@ -7297,12 +7343,17 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
     return switch (ty.data) {
         .pointer => std.zig.target.intAlignment(&builtin.target, builtin.target.ptrBitWidth()),
         .array => |info| try analyser.resolveTypeAlignment(info.elem_ty.*),
-        .container => if (ty.isEnumType(analyser)) blk: {
+        .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
-            const tag_type = try analyser.astEnumTagType(ty, info.declaration, info.handle) orelse break :blk null;
-            break :blk try analyser.resolveTypeAlignment(tag_type);
-        } else null,
+            if (ty.isEnumType(analyser)) {
+                const tag_type = try analyser.astEnumTagType(ty, info.declaration, info.handle) orelse break :blk null;
+                break :blk try analyser.resolveTypeAlignment(tag_type);
+            }
+            if (ty.getContainerKind() != .keyword_struct or info.layout != .@"packed") break :blk null;
+            const backing_type = try analyser.astPackedStructBackingType(ty, info.declaration, info.handle) orelse break :blk null;
+            break :blk try analyser.resolveTypeAlignment(backing_type);
+        },
         .ip_index => |payload| blk: {
             const type_index = payload.index orelse break :blk null;
             break :blk switch (analyser.ip.zigTypeTag(type_index) orelse break :blk null) {

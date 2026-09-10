@@ -2877,6 +2877,24 @@ test "generic function with comptime type info field attributes" {
     });
 }
 
+test "generic function with inferred AST packed struct backing type" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = packed struct { low: u3, high: T };
+        \\    const info = @typeInfo(S).@"struct";
+        \\    return if (info.layout == .@"packed" and info.backing_integer.? == u8 and
+        \\        @bitSizeOf(S) == 8 and @sizeOf(S) == 1 and @alignOf(S) == 1)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u5" },
+    });
+}
+
 test "generic function rebuilding types from comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

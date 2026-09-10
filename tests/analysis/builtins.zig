@@ -1003,12 +1003,19 @@ const type_info_ast_fn_callconv_compare = @typeInfo(fn () callconv(.naked) noret
 const TypeInfoFnReturn = @typeInfo(ConcreteFn).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^ (type)(u8)
 const AstPacked = packed struct(u16) { value: u8 };
+const AstPackedInferred = packed struct { low: u3, high: u5 };
 const AstExtern = extern union { value: u8 };
 const AstOpenEnum = enum(u8) { value = 1, _ };
 const type_info_ast_struct_layout = @typeInfo(AstPacked).@"struct".layout == .@"packed";
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoAstStructBacking = @typeInfo(AstPacked).@"struct".backing_integer.?;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u16)
+const TypeInfoAstStructInferredBacking = @typeInfo(AstPackedInferred).@"struct".backing_integer.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const bit_size_of_ast_packed_struct = @bitSizeOf(AstPackedInferred);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(8)
+const byte_size_of_ast_packed_struct = @sizeOf(AstPackedInferred);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
 const type_info_ast_union_layout = @typeInfo(AstExtern).@"union".layout == .@"extern";
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_ast_enum_exhaustive = @typeInfo(AstOpenEnum).@"enum".is_exhaustive;
