@@ -2285,6 +2285,57 @@ test "generic function switching on comptime type info" {
     });
 }
 
+test "generic function capturing comptime type info payload" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    return switch (@typeInfo(T)) {
+        \\        .int => |info| if (info.signedness == .signed and info.bits == 16)
+        \\            struct { matched: T }
+        \\        else
+        \\            struct { fallback: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(i16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "i16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    return switch (@typeInfo(*const T)) {
+        \\        .pointer => |info| if (info.size == .one and info.is_const and info.child == T)
+        \\            struct { matched: T }
+        \\        else
+        \\            struct { fallback: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\    return switch (@typeInfo(S)) {
+        \\        .@"struct" => |info| if (info.layout == .auto and !info.is_tuple)
+        \\            struct { matched: T }
+        \\        else
+        \\            struct { fallback: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime type info payload values" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

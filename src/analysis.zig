@@ -13033,6 +13033,19 @@ pub const DeclWithHandle = struct {
                     return try analyser.resolveUnionTag(switch_expr_type_type);
                 }
 
+                if (switch_expr_type.data == .type_info_value and case.ast.values.len == 1) {
+                    const case_value = case.ast.values[0];
+                    if (tree.nodeTag(case_value) == .enum_literal) {
+                        const case_tag_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
+                        if (std.mem.eql(u8, case_tag_name, @tagName(switch_expr_type.data.type_info_value.tag))) {
+                            break :blk try analyser.resolveTypeInfoFieldAccess(
+                                switch_expr_type.data.type_info_value,
+                                case_tag_name,
+                            );
+                        }
+                    }
+                }
+
                 if (switch_expr_type.isEnumType(analyser)) break :blk switch_expr_type;
                 if (!switch_expr_type.isUnionType()) return switch_expr_type;
 
