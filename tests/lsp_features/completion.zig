@@ -2315,6 +2315,27 @@ test "generic function with comptime type info payload values" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const array = @typeInfo([4]T).array;
+        \\    const vector = @typeInfo(@Vector(8, T)).vector;
+        \\    const optional = @typeInfo(?T).optional;
+        \\    const error_union = @typeInfo(error{Oops}!T).error_union;
+        \\    const float = @typeInfo(f32).float;
+        \\    return if (array.len == 4 and array.child == T and
+        \\        vector.len == 8 and vector.child == T and
+        \\        optional.child == T and error_union.error_set == error{Oops} and
+        \\        error_union.payload == T and float.bits == 32)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(i16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "i16" },
+    });
 }
 
 test "generic function with comptime value builtins" {

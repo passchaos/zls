@@ -872,6 +872,18 @@ const type_info_pointer_const = @typeInfo(*const u8).pointer.is_const;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoPointerChild = @typeInfo(*const u8).pointer.child;
 //    ^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const type_info_float_bits = @typeInfo(f32).float.bits;
+//    ^^^^^^^^^^^^^^^^^^^^ (u16)(32)
+const type_info_array_len = @typeInfo([4]u16).array.len;
+//    ^^^^^^^^^^^^^^^^^^^ (comptime_int)(4)
+const TypeInfoArrayChild = @typeInfo([4]u16).array.child;
+//    ^^^^^^^^^^^^^^^^^^ (type)(u16)
+const type_info_vector_len = @typeInfo(@Vector(8, i16)).vector.len;
+//    ^^^^^^^^^^^^^^^^^^^^ (comptime_int)(8)
+const TypeInfoOptionalChild = @typeInfo(?u32).optional.child;
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)(u32)
+const TypeInfoErrorPayload = @typeInfo(error{Oops}!u64).error_union.payload;
+//    ^^^^^^^^^^^^^^^^^^^^ (type)(u64)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()

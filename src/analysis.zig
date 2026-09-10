@@ -2982,6 +2982,21 @@ fn resolveTypeInfoFieldAccess(
     }
 
     switch (value.tag) {
+        .float => {
+            if (std.mem.eql(u8, field_name, "bits")) {
+                const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+                const bits: u16 = switch (type_index) {
+                    .f16_type => 16,
+                    .f32_type => 32,
+                    .f64_type => 64,
+                    .f80_type => 80,
+                    .f128_type => 128,
+                    else => return field_value_type,
+                };
+                const field_type = (try field_value_type.typeOf(analyser)).ipIndex() orelse return field_value_type;
+                return try analyser.intValueWithType(field_type, bits);
+            }
+        },
         .int => {
             const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
             const info = analyser.ip.intInfo(type_index, builtin.target);
@@ -3018,6 +3033,47 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "is_allowzero")) {
                 return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_allowzero) .bool_true else .bool_false);
             }
+        },
+        .array, .vector => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const len, const child = switch (analyser.ip.indexToKey(type_index)) {
+                .array_type => |array| .{ array.len, array.child },
+                .vector_type => |vector| .{ @as(u64, vector.len), vector.child },
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "len")) {
+                return try analyser.comptimeIntValue(len);
+            }
+            if (std.mem.eql(u8, field_name, "child")) {
+                return Type.fromIP(analyser, .type_type, child);
+            }
+        },
+        .optional => {
+            if (!std.mem.eql(u8, field_name, "child")) return field_value_type;
+            const child = switch (value.reflected_type.data) {
+                .optional => |child| child.*,
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .optional_type => |optional| Type.fromIP(analyser, .type_type, optional.payload_type),
+                    else => return field_value_type,
+                },
+                else => return field_value_type,
+            };
+            return child;
+        },
+        .error_union => {
+            const error_set, const payload = switch (value.reflected_type.data) {
+                .error_union => |info| .{ (info.error_set orelse return field_value_type).*, info.payload.* },
+                .ip_index => |type_payload| switch (analyser.ip.indexToKey(type_payload.index orelse return field_value_type)) {
+                    .error_union_type => |info| .{
+                        Type.fromIP(analyser, .type_type, info.error_set_type),
+                        Type.fromIP(analyser, .type_type, info.payload_type),
+                    },
+                    else => return field_value_type,
+                },
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "error_set")) return error_set;
+            if (std.mem.eql(u8, field_name, "payload")) return payload;
         },
         else => {},
     }
