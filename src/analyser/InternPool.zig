@@ -4105,7 +4105,29 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
 
             return function_info.return_type;
         },
-        .union_type => return panicOrElse(?Index, "TODO", null),
+        .union_type => |union_index| {
+            const union_info = ip.getUnion(union_index);
+            switch (union_info.layout) {
+                .auto => {},
+                .@"extern" => try writer.writeAll("extern "),
+                .@"packed" => try writer.writeAll("packed "),
+            }
+            try writer.writeAll("union");
+            if (union_info.tag_type != .none) {
+                try writer.print("({f})", .{union_info.tag_type.fmtOptions(ip, options)});
+            }
+            if (options.truncate_container) {
+                try writer.writeAll(" {...}");
+                return null;
+            }
+            try writer.writeAll(" { ");
+            for (union_info.fields.keys(), union_info.fields.values(), 0..) |name, field, i| {
+                if (i != 0) try writer.writeAll(", ");
+                try writer.print("{f}: {f}", .{ ip.fmtId(name), field.ty.fmtOptions(ip, options) });
+                if (field.alignment != 0) try writer.print(" align({d})", .{field.alignment});
+            }
+            try writer.writeAll(" }");
+        },
         .tuple_type => |tuple_info| {
             assert(tuple_info.types.len == tuple_info.values.len);
             try writer.writeAll("struct { ");
@@ -4764,6 +4786,7 @@ test "union value" {
     const union_info = ip.getUnionMut(union_index);
     try union_info.fields.put(gpa, int_name_index, .{ .ty = .usize_type, .alignment = 0 });
     try union_info.fields.put(gpa, float_name_index, .{ .ty = .f16_type, .alignment = 0 });
+    try expectFmt("union { int: usize, float: f16 }", "{f}", .{union_type.fmt(&ip)});
 
     const union_value1 = try ip.get(.{ .union_value = .{
         .ty = union_type,

@@ -4465,6 +4465,58 @@ fn resolveStructTypeConstructor(
     return Type.fromIP(analyser, .type_type, struct_type);
 }
 
+fn resolveUnionTypeConstructor(
+    analyser: *Analyser,
+    params: []const Ast.Node.Index,
+    handle: *DocumentStore.Handle,
+    container_type: ?Type,
+) Error!?Type {
+    if (params.len != 5) return null;
+    const layout = try analyser.resolveContainerLayout(.of(params[0], handle)) orelse return null;
+    if (layout != .auto) return null;
+    if (!try analyser.isNullComptimeValue(.{
+        .node_handle = .of(params[1], handle),
+        .container_type = container_type,
+    })) return null;
+
+    const names = try analyser.resolveStringListLiteral(.{
+        .node_handle = .of(params[2], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    const field_tuple = try analyser.resolveTupleTypeConstructor(.{
+        .node_handle = .of(params[3], handle),
+        .container_type = container_type,
+    }) orelse return null;
+    const field_tuple_index = field_tuple.ipIndex() orelse return null;
+    const field_type_slice = switch (analyser.ip.indexToKey(field_tuple_index)) {
+        .tuple_type => |tuple| tuple.types,
+        else => return null,
+    };
+    if (names.len != field_type_slice.len or
+        !isEmptyStructAttributeList(.of(params[4], handle), names.len)) return null;
+    const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
+    defer analyser.gpa.free(field_types);
+
+    var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Union.Field) = .empty;
+    errdefer fields.deinit(analyser.gpa);
+    try fields.ensureTotalCapacity(analyser.gpa, names.len);
+    for (names, field_types) |name, field_type| {
+        const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
+        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type, .alignment = 0 });
+    }
+
+    const union_index = try analyser.ip.createUnion(.{
+        .tag_type = .none,
+        .fields = fields,
+        .namespace = .none,
+        .layout = .auto,
+        .status = .fully_resolved,
+    });
+    fields = .empty;
+    const union_type = try analyser.ip.get(.{ .union_type = union_index });
+    return Type.fromIP(analyser, .type_type, union_type);
+}
+
 fn resolveFnParameterAttributes(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -8012,6 +8064,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return Type.fromIP(analyser, .type_type, function_type);
                 },
                 .Struct => return try analyser.resolveStructTypeConstructor(
+                    params,
+                    handle,
+                    options.container_type,
+                ) orelse .unknown_type,
+                .Union => return try analyser.resolveUnionTypeConstructor(
                     params,
                     handle,
                     options.container_type,

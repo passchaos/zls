@@ -796,6 +796,8 @@ const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //                                      ^ ([1][]const u8)()
 //                                                          ^ ([?]Attributes)()
 //                                                            ^ (Attributes)()
+const ConcreteUnion = @Union(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^^^ (type)(union { foo: u8, bar: i16 })
 const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //    ^^^^ (type)()
 //                            ^^^^^^^^^^^ (Mode)()
