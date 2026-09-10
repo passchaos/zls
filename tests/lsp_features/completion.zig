@@ -830,6 +830,24 @@ test "generic function with comptime vector shifts" {
     });
 }
 
+test "generic function with comptime boolean vector operators" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    const a: @Vector(2, bool) = .{ enabled, false };
+        \\    const b: @Vector(2, bool) = .{ true, true };
+        \\    return if ((a & b)[0] and (a | b)[1] and !(a ^ b)[0] and (!a)[1] and
+        \\        @reduce(.And, a == @as(@Vector(2, bool), .{ true, false })))
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

@@ -120,6 +120,14 @@ const vector_shl_exact_value = @shlExact(@as(@Vector(2, u8), .{ 4, 12 }), @as(@V
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(16)
 const vector_shr_exact_value = @shrExact(@as(@Vector(2, u8), .{ 4, 12 }), @as(@Vector(2, u3), @splat(2)))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(3)
+const vector_bool_not_value = (!@as(@Vector(2, bool), .{ true, false }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_bool_and_value = (@as(@Vector(2, bool), .{ true, false }) & @as(@Vector(2, bool), .{ true, true }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_bool_or_value = (@as(@Vector(2, bool), .{ true, false }) | @as(@Vector(2, bool), .{ false, true }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_bool_xor_value = (@as(@Vector(2, bool), .{ true, false }) ^ @as(@Vector(2, bool), .{ true, true }))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;

@@ -2760,6 +2760,89 @@ fn resolveVectorBinaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn resolveVectorBoolBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (lhs_vector.len != rhs_vector.len or lhs_vector.child != .bool_type or rhs_vector.child != .bool_type) {
+        return null;
+    }
+    const lhs_values = analyser.aggregateValues(lhs) orelse return Type.fromIP(analyser, lhs_payload.type, null);
+    const rhs_values = analyser.aggregateValues(rhs) orelse return Type.fromIP(analyser, lhs_payload.type, null);
+    if (lhs_values.len != lhs_vector.len or rhs_values.len != rhs_vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        const lhs_value = lhs_values.at(@intCast(i), analyser.ip);
+        const rhs_value = rhs_values.at(@intCast(i), analyser.ip);
+        value.* = switch (tag) {
+            .bit_and => if (lhs_value == .bool_false or rhs_value == .bool_false)
+                .bool_false
+            else if (lhs_value == .bool_true and rhs_value == .bool_true)
+                .bool_true
+            else
+                try analyser.ip.getUnknown(.bool_type),
+            .bit_or => if (lhs_value == .bool_true or rhs_value == .bool_true)
+                .bool_true
+            else if (lhs_value == .bool_false and rhs_value == .bool_false)
+                .bool_false
+            else
+                try analyser.ip.getUnknown(.bool_type),
+            .bit_xor => if ((lhs_value == .bool_true or lhs_value == .bool_false) and
+                (rhs_value == .bool_true or rhs_value == .bool_false))
+                if ((lhs_value == .bool_true) != (rhs_value == .bool_true)) .bool_true else .bool_false
+            else
+                try analyser.ip.getUnknown(.bool_type),
+            else => return null,
+        };
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, lhs_payload.type, null), values);
+}
+
+fn resolveVectorBoolNotValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (vector.child != .bool_type) return null;
+    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
+    if (source_values.len != vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        value.* = switch (source_values.at(@intCast(i), analyser.ip)) {
+            .bool_true => .bool_false,
+            .bool_false => .bool_true,
+            else => try analyser.ip.getUnknown(.bool_type),
+        };
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+}
+
 fn resolveVectorFixedWidthIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -6202,8 +6285,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             return Type.fromIP(analyser, .bool_type, null);
         },
         .bool_not => {
+            const operand = tree.nodeData(node).node;
             if (analyser.evaluate_comptime_values) {
-                const operand = tree.nodeData(node).node;
+                const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse
+                    return Type.fromIP(analyser, .bool_type, null);
+                if (operand_type.ipIndex()) |index| {
+                    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+                        if (try analyser.resolveVectorBoolNotValue(operand_type)) |value| return value;
+                        return operand_type.withoutIPIndex(analyser);
+                    }
+                }
                 const value = try analyser.resolveBoolValue(.of(operand, handle)) orelse return Type.fromIP(analyser, .bool_type, null);
                 return Type.fromIP(analyser, .bool_type, if (value) .bool_false else .bool_true);
             }
@@ -6407,6 +6498,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         try analyser.resolveVectorFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
                     else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveFloatBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
+                        try analyser.resolveVectorBoolBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveVectorBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
                 };
                 if (value) |resolved| return resolved;
