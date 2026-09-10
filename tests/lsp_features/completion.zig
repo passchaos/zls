@@ -2027,6 +2027,19 @@ test "generic function with comptime Enum type constructor" {
         .{ .label = "low", .kind = .Field, .detail = "1" },
         .{ .label = "high", .kind = .Field, .detail = "7" },
     });
+
+    try testCompletion(
+        \\fn Mode(comptime Tag: type, comptime high: Tag) type {
+        \\    const names = &.{ "low", "high" };
+        \\    const values = &.{ 1, high };
+        \\    return @Enum(Tag, .exhaustive, names, values);
+        \\}
+        \\const value: Mode(u16, 9) = undefined;
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "low", .kind = .Field, .detail = "1" },
+        .{ .label = "high", .kind = .Field, .detail = "9" },
+    });
 }
 
 test "generic function with comptime value builtins" {
