@@ -29,9 +29,8 @@ const baz_fn = Foo(i32).baz;
 const baz_call = Foo(i32).baz(u8, -42, 42);
 //    ^^^^^^^^ (i32)()
 
-// TODO this should be `fn (U: type, u8, U) anytype`
 const qux_fn = Foo(u8).qux;
-//    ^^^^^^ (fn (U: type, u8, U) (unknown type))()
+//    ^^^^^^ (fn (U: type, u8, U) anytype)()
 
 const qux_call = Foo(u8).qux(i32, 42, -42);
 //    ^^^^^^^^ (i32)()

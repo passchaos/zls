@@ -6573,7 +6573,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     var resolved_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     for (params[1..]) |param| {
                         const candidate = try analyser.resolveTypeOfNodeInternal(.of(param, handle)) orelse return .unknown_type;
-                        resolved_type = try analyser.resolvePeerTypes(resolved_type, candidate) orelse return .unknown_type;
+                        resolved_type = try analyser.resolvePeerTypes(resolved_type, candidate) orelse {
+                            if (!resolved_type.isGenericType() and !candidate.isGenericType()) return .unknown_type;
+                            return .{
+                                .data = .{ .anytype_parameter = .{
+                                    .token_handle = .{ .token = tree.nodeMainToken(node), .handle = handle },
+                                    .type_from_callsite_references = null,
+                                } },
+                                .is_type_val = true,
+                            };
+                        };
                     }
                     return try resolved_type.typeOf(analyser);
                 },
@@ -8169,7 +8178,8 @@ pub const Type = struct {
         /// `T` in `fn Foo(comptime T: type) type`
         type_parameter: TokenWithHandle,
 
-        /// `anytype` in `fn foo(bar: anytype) @TypeOf(bar)`
+        /// A caller-dependent type, such as `anytype` in
+        /// `fn foo(bar: anytype) @TypeOf(bar)`.
         anytype_parameter: struct {
             token_handle: TokenWithHandle,
             type_from_callsite_references: ?*Type,
@@ -9881,11 +9891,7 @@ pub const Type = struct {
                 try writer.writeAll(str);
                 if (referenced) |r| try r.put(analyser.arena, .of(str, handle, token), {});
             },
-            .anytype_parameter => |info| {
-                const token = info.token_handle.token;
-                const handle = info.token_handle.handle;
-                const str = handle.tree.tokenSlice(token);
-                std.debug.assert(std.mem.eql(u8, str, "anytype"));
+            .anytype_parameter => {
                 try writer.writeAll("anytype");
             },
         }
