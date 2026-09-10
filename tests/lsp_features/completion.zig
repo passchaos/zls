@@ -2135,6 +2135,40 @@ test "generic function with comptime Union type constructor" {
     });
 }
 
+test "generic function with comptime generated Union values" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const U = @Union(.auto, null, &.{ "count", "payload" }, &.{ u8, T }, &.{ .{}, .{} });
+        \\    const direct = U{ .payload = 42 };
+        \\    const initialized = @unionInit(U, "count", 7);
+        \\    return if (direct.payload == 42 and @field(initialized, "count") == 7)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const U = @Union(.auto, null, &.{ "count", "payload" }, &.{ u8, T }, &.{ .{}, .{} });
+        \\    const value: U = .{ .count = undefined };
+        \\    return if (value.count == 7)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function reflecting comptime container constructors" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

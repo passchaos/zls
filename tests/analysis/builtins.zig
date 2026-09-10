@@ -816,6 +816,17 @@ const GeneratedUnionFieldType = @FieldType(ConcreteUnion, "bar");
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
 const GeneratedUnionHasField = @hasField(ConcreteUnion, "foo");
 //    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const generated_union_value = ConcreteUnion{ .bar = 9 };
+const generated_union_bar = generated_union_value.bar;
+//    ^^^^^^^^^^^^^^^^^^^ (i16)(9)
+const generated_union_inactive_foo = generated_union_value.foo;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const generated_union_init = @unionInit(ConcreteUnion, "foo", 7);
+const generated_union_foo = @field(generated_union_init, "foo");
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(7)
+const generated_union_unknown = ConcreteUnion{ .foo = undefined };
+const generated_union_unknown_foo = generated_union_unknown.foo;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //    ^^^^ (type)()
 //                            ^^^^^^^^^^^ (Mode)()
