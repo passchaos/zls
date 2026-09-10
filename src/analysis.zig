@@ -4515,24 +4515,56 @@ fn resolveIntegerBoundaryComparison(
     if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
     if (rhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
 
-    const lhs_value = if (lhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
-    const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
-    if ((lhs_value == null) == (rhs_value == null)) return null;
+    const lhs_known = if (lhs_payload.index) |index| !analyser.ip.isUnknown(index) else false;
+    const rhs_known = if (rhs_payload.index) |index| !analyser.ip.isUnknown(index) else false;
+    if (lhs_known == rhs_known) return null;
 
-    const bounds = analyser.fixedWidthIntegerBounds(lhs_payload.type) orelse return null;
-    return if (lhs_value) |value| switch (tag) {
-        .less_than => if (value == bounds.max) false else null,
-        .less_or_equal => if (value == bounds.min) true else null,
-        .greater_than => if (value == bounds.min) false else null,
-        .greater_or_equal => if (value == bounds.max) true else null,
+    const known_index = if (lhs_known) lhs_payload.index.? else rhs_payload.index.?;
+    const boundary = integerBoundary(analyser, lhs_payload.type, known_index) orelse return null;
+    return if (lhs_known) switch (tag) {
+        .less_than => if (boundary == .max) false else null,
+        .less_or_equal => if (boundary == .min) true else null,
+        .greater_than => if (boundary == .min) false else null,
+        .greater_or_equal => if (boundary == .max) true else null,
         else => null,
-    } else if (rhs_value) |value| switch (tag) {
-        .less_than => if (value == bounds.min) false else null,
-        .less_or_equal => if (value == bounds.max) true else null,
-        .greater_than => if (value == bounds.max) false else null,
-        .greater_or_equal => if (value == bounds.min) true else null,
+    } else switch (tag) {
+        .less_than => if (boundary == .min) false else null,
+        .less_or_equal => if (boundary == .max) true else null,
+        .greater_than => if (boundary == .max) false else null,
+        .greater_or_equal => if (boundary == .min) true else null,
         else => null,
-    } else null;
+    };
+}
+
+fn integerBoundary(
+    analyser: *Analyser,
+    int_type: InternPool.Index,
+    value: InternPool.Index,
+) ?enum { min, max } {
+    const info = analyser.ip.intInfo(int_type, builtin.target);
+    if (info.bits == 0) return null;
+    if (info.bits <= 128) {
+        const scalar = analyser.ip.toInt(value, i256) orelse return null;
+        const bounds = analyser.fixedWidthIntegerBounds(int_type).?;
+        if (scalar == bounds.min) return .min;
+        if (scalar == bounds.max) return .max;
+        return null;
+    }
+
+    if (info.signedness == .unsigned and analyser.ip.isZero(value)) return .min;
+    const big = switch (analyser.ip.indexToKey(value)) {
+        .int_big_value => |int_value| int_value.getConst(analyser.ip),
+        else => return null,
+    };
+    return switch (info.signedness) {
+        .unsigned => if (big.positive and big.bitCountAbs() == info.bits and big.popCount(info.bits) == info.bits) .max else null,
+        .signed => if (big.positive)
+            if (big.bitCountAbs() == info.bits - 1 and big.popCount(info.bits) == info.bits - 1) .max else null
+        else if (big.bitCountAbs() == info.bits and big.abs().popCount(info.bits) == 1)
+            .min
+        else
+            null,
+    };
 }
 
 fn resolveComparisonValue(

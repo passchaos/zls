@@ -1146,6 +1146,25 @@ test "generic function with integer comparison boundaries" {
     , &.{
         .{ .label = "bounded", .kind = .Field, .detail = "[4]u8" },
     });
+
+    try testCompletion(
+        \\var runtime_u256: u256 = undefined;
+        \\var runtime_i256: i256 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime_u256 <= @as(u256, 115792089237316195423570985008687907853269984665640564039457584007913129639935) and
+        \\        !(runtime_u256 > @as(u256, 115792089237316195423570985008687907853269984665640564039457584007913129639935)) and runtime_u256 >= @as(u256, 0) and
+        \\        runtime_i256 >= @as(i256, -57896044618658097711785492504343953926634992332820282019728792003956564819968) and
+        \\        !(runtime_i256 < @as(i256, -57896044618658097711785492504343953926634992332820282019728792003956564819968)) and
+        \\        runtime_i256 <= @as(i256, 57896044618658097711785492504343953926634992332820282019728792003956564819967))
+        \\        struct { bounded: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "bounded", .kind = .Field, .detail = "[4]u8" },
+    });
 }
 
 test "generic function with runtime self comparisons" {
