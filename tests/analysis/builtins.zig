@@ -935,6 +935,16 @@ const type_info_enum_fields_len = @typeInfo(ConcreteEnum).@"enum".fields.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const type_info_fn_params_len = @typeInfo(ConcreteFn).@"fn".params.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const type_info_struct_field_name_first = @typeInfo(ConcreteStruct).@"struct".fields[1].name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(98)
+const TypeInfoStructFieldType = @typeInfo(ConcreteStruct).@"struct".fields[1].type;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
+const type_info_enum_field_value = @typeInfo(ConcreteEnum).@"enum".fields[1].value;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(7)
+const type_info_fn_param_noalias = @typeInfo(NoaliasFn).@"fn".params[0].is_noalias;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const TypeInfoFnParamType = @typeInfo(NoaliasFn).@"fn".params[0].type.?;
+//    ^^^^^^^^^^^^^^^^^^^ (type)(*anyopaque)
 const align_of_u16 = @alignOf(u16);
 //    ^^^^^^^^^^^^ (comptime_int)(2)
 const align_of_generated_int = @alignOf(Int);

@@ -2526,6 +2526,54 @@ test "generic function with comptime type info collection lengths" {
     });
 }
 
+test "generic function with comptime type info descriptors" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "a", "b" }, &.{ u8, T }, &.{ .{}, .{} });
+        \\    const U = @Union(.auto, null, &.{ "a", "b" }, &.{ T, u8 }, &.{ .{}, .{} });
+        \\    const E = @Enum(u8, .exhaustive, &.{ "a", "b" }, &.{ 4, 9 });
+        \\    const F = @Fn(&.{ *T, u16 }, &.{ .{ .@"noalias" = true }, .{} }, void, .{});
+        \\    const sf = @typeInfo(S).@"struct".fields[1];
+        \\    const uf = @typeInfo(U).@"union".fields[0];
+        \\    const ef = @typeInfo(E).@"enum".fields[1];
+        \\    const fp = @typeInfo(F).@"fn".params[0];
+        \\    return if (sf.name.len == 1 and sf.name[0] == 'b' and sf.type == T and
+        \\        uf.name[0] == 'a' and uf.type == T and ef.name[0] == 'b' and ef.value == 9 and
+        \\        !fp.is_generic and fp.is_noalias and fp.type.? == *T)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { a: u8, b: T };
+        \\    const U = union { a: T, b: u8 };
+        \\    const E = enum(u8) { a = 4, b = 9 };
+        \\    const F = fn (noalias *T, u16) void;
+        \\    const sf = @typeInfo(S).@"struct".fields[1];
+        \\    const uf = @typeInfo(U).@"union".fields[0];
+        \\    const ef = @typeInfo(E).@"enum".fields[1];
+        \\    const fp = @typeInfo(F).@"fn".params[0];
+        \\    return if (sf.name[0] == 'b' and sf.type == T and uf.name[0] == 'a' and uf.type == T and
+        \\        ef.name[0] == 'b' and ef.value == 9 and !fp.is_generic and fp.is_noalias and
+        \\        fp.type.? == *T)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime alignOf" {
     try testCompletion(
         \\fn Select(comptime bits: u16) type {
