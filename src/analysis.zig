@@ -1903,6 +1903,11 @@ fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index)
                     .size = info.flags.size,
                     .sentinel = info.sentinel,
                     .is_const = info.flags.is_const,
+                    .is_volatile = info.flags.is_volatile,
+                    .is_allowzero = info.flags.is_allowzero,
+                    .address_space = info.flags.address_space,
+                    .alignment = info.flags.alignment,
+                    .packed_offset = info.packed_offset,
                     .elem_ty = try analyser.allocType(try analyser.bracketAccessTypeFromIPIndex(info.elem_type)),
                 },
             },
@@ -2134,6 +2139,11 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
                                 .size = .many,
                                 .sentinel = info.sentinel,
                                 .is_const = info.is_const,
+                                .is_volatile = info.is_volatile,
+                                .is_allowzero = info.is_allowzero,
+                                .address_space = info.address_space,
+                                .alignment = info.alignment,
+                                .packed_offset = info.packed_offset,
                                 .elem_ty = info.elem_ty,
                             },
                         },
@@ -3068,46 +3078,52 @@ fn resolveTypeInfoFieldAccess(
             }
         },
         .pointer => {
-            const pointer, const child = switch (value.reflected_type.data) {
-                .pointer => |pointer| .{ @as(?InternPool.Key.Pointer, null), pointer.elem_ty.* },
+            const pointer = switch (value.reflected_type.data) {
+                .pointer => |pointer| pointer,
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
-                    .pointer_type => |pointer| .{ pointer, Type.fromIP(analyser, .type_type, pointer.elem_type) },
+                    .pointer_type => |pointer| Type.Pointer{
+                        .size = pointer.flags.size,
+                        .sentinel = pointer.sentinel,
+                        .is_const = pointer.flags.is_const,
+                        .is_volatile = pointer.flags.is_volatile,
+                        .is_allowzero = pointer.flags.is_allowzero,
+                        .address_space = pointer.flags.address_space,
+                        .alignment = pointer.flags.alignment,
+                        .packed_offset = pointer.packed_offset,
+                        .elem_ty = try analyser.allocType(Type.fromIP(analyser, .type_type, pointer.elem_type)),
+                    },
                     else => return field_value_type,
                 },
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "size")) {
                 const enum_type = try field_value_type.typeOf(analyser);
-                const size = if (pointer) |info| info.flags.size else value.reflected_type.data.pointer.size;
-                return try analyser.enumValue(enum_type, @tagName(size));
+                return try analyser.enumValue(enum_type, @tagName(pointer.size));
             }
             if (std.mem.eql(u8, field_name, "is_const")) {
-                const is_const = if (pointer) |info| info.flags.is_const else value.reflected_type.data.pointer.is_const;
-                return Type.fromIP(analyser, .bool_type, if (is_const) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (pointer.is_const) .bool_true else .bool_false);
             }
-            if (std.mem.eql(u8, field_name, "child")) return child;
+            if (std.mem.eql(u8, field_name, "child")) return pointer.elem_ty.*;
             if (std.mem.eql(u8, field_name, "sentinel_ptr")) {
-                const sentinel = if (pointer) |info| info.sentinel else value.reflected_type.data.pointer.sentinel;
-                return try analyser.optionalPresenceValue(field_value_type, sentinel != .none);
+                return try analyser.optionalPresenceValue(field_value_type, pointer.sentinel != .none);
             }
-            const info = pointer orelse return field_value_type;
             if (std.mem.eql(u8, field_name, "is_volatile")) {
-                return Type.fromIP(analyser, .bool_type, if (info.flags.is_volatile) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (pointer.is_volatile) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "alignment")) {
-                const alignment = if (info.flags.alignment == 0)
+                const alignment = if (pointer.alignment == 0)
                     InternPool.Index.none
                 else
-                    (try analyser.intValueWithType(.usize_type, info.flags.alignment) orelse return field_value_type).ipIndex() orelse
+                    (try analyser.intValueWithType(.usize_type, pointer.alignment) orelse return field_value_type).ipIndex() orelse
                         return field_value_type;
                 return try analyser.optionalTypeValue(field_value_type, alignment);
             }
             if (std.mem.eql(u8, field_name, "address_space")) {
                 const enum_type = try field_value_type.typeOf(analyser);
-                return try analyser.enumValue(enum_type, @tagName(info.flags.address_space));
+                return try analyser.enumValue(enum_type, @tagName(pointer.address_space));
             }
             if (std.mem.eql(u8, field_name, "is_allowzero")) {
-                return Type.fromIP(analyser, .bool_type, if (info.flags.is_allowzero) .bool_true else .bool_false);
+                return Type.fromIP(analyser, .bool_type, if (pointer.is_allowzero) .bool_true else .bool_false);
             }
         },
         .array, .vector => {
@@ -5380,10 +5396,13 @@ fn resolvePointerAttributes(
             flags.is_allowzero = try analyser.resolveBoolValue(field_options) orelse return null;
         } else if (std.mem.eql(u8, field_name, "align")) {
             const alignment_value = try analyser.resolveComptimeValue(field_options) orelse return null;
-            if (alignment_value.ipIndex()) |index| {
-                if (analyser.ip.isNull(index)) continue;
-            }
-            const alignment = try analyser.resolveIntegerLiteral(u16, field_options) orelse return null;
+            const alignment_index = alignment_value.ipIndex() orelse return null;
+            if (analyser.ip.isNull(alignment_index)) continue;
+            const alignment_payload = switch (analyser.ip.indexToKey(alignment_index)) {
+                .optional_value => |optional| optional.val,
+                else => alignment_index,
+            };
+            const alignment = analyser.ip.toInt(alignment_payload, u16) orelse return null;
             if (!std.math.isPowerOfTwo(alignment)) return null;
             flags.alignment = alignment;
         } else if (std.mem.eql(u8, field_name, "addrspace")) {
@@ -8734,14 +8753,32 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         => {
             const ptr_info = ast.fullPtrType(tree, node).?;
             const size = ptr_info.size;
-            const is_const = ptr_info.const_token != null;
 
             const sentinel = try analyser.resolveOptionalIPValue(ptr_info.ast.sentinel, handle);
+            const alignment = if (ptr_info.ast.align_node.unwrap()) |align_node|
+                try analyser.resolveIntegerLiteral(u16, .of(align_node, handle)) orelse return null
+            else
+                0;
+            const address_space = if (ptr_info.ast.addrspace_node.unwrap()) |addrspace_node|
+                try analyser.resolveAddressSpace(.of(addrspace_node, handle)) orelse return null
+            else
+                .generic;
+            const packed_offset: InternPool.Key.Pointer.PackedOffset = if (ptr_info.ast.bit_range_start.unwrap()) |bit_offset_node| .{
+                .bit_offset = try analyser.resolveIntegerLiteral(u16, .of(bit_offset_node, handle)) orelse return null,
+                .host_size = try analyser.resolveIntegerLiteral(u16, .of(ptr_info.ast.bit_range_end.unwrap().?, handle)) orelse return null,
+            } else .{ .bit_offset = 0, .host_size = 0 };
 
             const elem_ty = try analyser.resolveTypeOfNodeInternal(.of(ptr_info.ast.child_type, handle)) orelse return null;
             if (!elem_ty.is_type_val) return null;
 
-            return try Type.createPointerType(analyser, size, sentinel, is_const, elem_ty);
+            return try Type.createPointerTypeWithFlags(analyser, .{
+                .size = size,
+                .is_const = ptr_info.const_token != null,
+                .is_volatile = ptr_info.volatile_token != null,
+                .is_allowzero = ptr_info.allowzero_token != null,
+                .address_space = address_space,
+                .alignment = alignment,
+            }, packed_offset, sentinel, elem_ty);
         },
         .array_type,
         .array_type_sentinel,
@@ -9616,7 +9653,6 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
                     if (!child.is_type_val) return .unknown_type;
-                    const child_type = child.ipIndex() orelse return .unknown_type;
                     const sentinel_value = try analyser.resolveComptimeValue(.{
                         .node_handle = .of(params[3], handle),
                         .container_type = options.container_type,
@@ -9624,17 +9660,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const sentinel = if (sentinel_value.ipIndex()) |index|
                         if (analyser.ip.isNull(index))
                             InternPool.Index.none
-                        else
-                            try analyser.coerceIP(child_type, index) orelse return .unknown_type
+                        else sentinel: {
+                            const child_type = child.ipIndex() orelse return .unknown_type;
+                            break :sentinel try analyser.coerceIP(child_type, index) orelse return .unknown_type;
+                        }
                     else
                         return .unknown_type;
                     if (sentinel != .none and (size == .one or size == .c)) return .unknown_type;
-                    const pointer_type = try analyser.ip.get(.{ .pointer_type = .{
-                        .elem_type = child_type,
-                        .sentinel = sentinel,
-                        .flags = flags,
-                    } });
-                    return Type.fromIP(analyser, .type_type, pointer_type);
+                    return try Type.createPointerTypeWithFlags(
+                        analyser,
+                        flags,
+                        .{ .bit_offset = 0, .host_size = 0 },
+                        sentinel,
+                        child,
+                    );
                 },
                 .Fn => {
                     if (params.len != 4) return .unknown_type;
@@ -10839,18 +10878,25 @@ pub const Type = struct {
 
     const TypeInfoCollectionKind = enum { struct_fields, union_fields, enum_fields, fn_params, error_set_errors, container_decls };
 
+    const Pointer = struct {
+        size: std.builtin.Type.Pointer.Size,
+        /// `.none` means no sentinel, `.unknown_unknown` means unknown sentinel
+        sentinel: InternPool.Index,
+        is_const: bool,
+        is_volatile: bool = false,
+        is_allowzero: bool = false,
+        address_space: std.builtin.AddressSpace = .generic,
+        alignment: u16 = 0,
+        packed_offset: InternPool.Key.Pointer.PackedOffset = .{ .bit_offset = 0, .host_size = 0 },
+        elem_ty: *Type,
+    };
+
     pub const Data = union(enum) {
         /// - `*const T`
         /// - `[*]T`
         /// - `[]const T`
         /// - `[*c]T`
-        pointer: struct {
-            size: std.builtin.Type.Pointer.Size,
-            /// `.none` means no sentinel, `.unknown_unknown` means unknown sentinel
-            sentinel: InternPool.Index,
-            is_const: bool,
-            elem_ty: *Type,
-        },
+        pointer: Pointer,
 
         /// `[elem_count :sentinel]elem_ty`
         array: struct {
@@ -10976,6 +11022,19 @@ pub const Type = struct {
             is_const: bool,
             elem_ty: Type,
         ) !Data {
+            return createPointerWithFlags(analyser, .{
+                .size = size,
+                .is_const = is_const,
+            }, .{ .bit_offset = 0, .host_size = 0 }, sentinel, elem_ty);
+        }
+
+        fn createPointerWithFlags(
+            analyser: *Analyser,
+            flags: InternPool.Key.Pointer.Flags,
+            packed_offset: InternPool.Key.Pointer.PackedOffset,
+            sentinel: InternPool.Index,
+            elem_ty: Type,
+        ) !Data {
             std.debug.assert(elem_ty.is_type_val);
             blk: {
                 const elem_type = elem_ty.ipIndex() orelse break :blk;
@@ -10983,19 +11042,22 @@ pub const Type = struct {
                     .pointer_type = .{
                         .elem_type = elem_type,
                         .sentinel = try analyser.coerceIP(elem_type, sentinel) orelse break :blk,
-                        .flags = .{
-                            .size = size,
-                            .is_const = is_const,
-                        },
+                        .flags = flags,
+                        .packed_offset = packed_offset,
                     },
                 });
                 return .{ .ip_index = .{ .type = .type_type, .index = index } };
             }
             return .{
                 .pointer = .{
-                    .size = size,
+                    .size = flags.size,
                     .sentinel = sentinel,
-                    .is_const = is_const,
+                    .is_const = flags.is_const,
+                    .is_volatile = flags.is_volatile,
+                    .is_allowzero = flags.is_allowzero,
+                    .address_space = flags.address_space,
+                    .alignment = flags.alignment,
+                    .packed_offset = packed_offset,
                     .elem_ty = try analyser.allocType(elem_ty),
                 },
             };
@@ -11118,6 +11180,11 @@ pub const Type = struct {
                     std.hash.autoHash(hasher, info.size);
                     std.hash.autoHash(hasher, info.sentinel);
                     std.hash.autoHash(hasher, info.is_const);
+                    std.hash.autoHash(hasher, info.is_volatile);
+                    std.hash.autoHash(hasher, info.is_allowzero);
+                    std.hash.autoHash(hasher, info.address_space);
+                    std.hash.autoHash(hasher, info.alignment);
+                    std.hash.autoHash(hasher, info.packed_offset);
                     info.elem_ty.hashWithHasher(hasher);
                 },
                 .array => |info| {
@@ -11204,6 +11271,12 @@ pub const Type = struct {
                     const b_type = b.pointer;
                     if (a_type.size != b_type.size) return false;
                     if (a_type.sentinel != b_type.sentinel) return false;
+                    if (a_type.is_const != b_type.is_const) return false;
+                    if (a_type.is_volatile != b_type.is_volatile) return false;
+                    if (a_type.is_allowzero != b_type.is_allowzero) return false;
+                    if (a_type.address_space != b_type.address_space) return false;
+                    if (a_type.alignment != b_type.alignment) return false;
+                    if (!std.meta.eql(a_type.packed_offset, b_type.packed_offset)) return false;
                     if (!a_type.elem_ty.eql(b_type.elem_ty.*)) return false;
                 },
                 .array => |a_type| {
@@ -11421,11 +11494,15 @@ pub const Type = struct {
                     return t.data.resolveGeneric(analyser, bound_params, visiting);
                 },
                 .pointer => |info| {
-                    const size = info.size;
-                    const sentinel = info.sentinel;
-                    const is_const = info.is_const;
                     const elem_ty = try analyser.resolveGenericTypeInternal(info.elem_ty.*, bound_params, visiting);
-                    return try createPointer(analyser, size, sentinel, is_const, elem_ty);
+                    return try createPointerWithFlags(analyser, .{
+                        .size = info.size,
+                        .is_const = info.is_const,
+                        .is_volatile = info.is_volatile,
+                        .is_allowzero = info.is_allowzero,
+                        .address_space = info.address_space,
+                        .alignment = info.alignment,
+                    }, info.packed_offset, info.sentinel, elem_ty);
                 },
                 .array => |info| {
                     const elem_count = info.elem_count;
@@ -11548,6 +11625,19 @@ pub const Type = struct {
     ) !Type {
         return .{
             .data = try Data.createPointer(analyser, size, sentinel, is_const, elem_ty),
+            .is_type_val = true,
+        };
+    }
+
+    fn createPointerTypeWithFlags(
+        analyser: *Analyser,
+        flags: InternPool.Key.Pointer.Flags,
+        packed_offset: InternPool.Key.Pointer.PackedOffset,
+        sentinel: InternPool.Index,
+        elem_ty: Type,
+    ) !Type {
+        return .{
+            .data = try Data.createPointerWithFlags(analyser, flags, packed_offset, sentinel, elem_ty),
             .is_type_val = true,
         };
     }
@@ -12493,7 +12583,19 @@ pub const Type = struct {
                     },
                     .c => try writer.writeAll("[*c]"),
                 }
+                if (info.is_allowzero and info.size != .c) try writer.writeAll("allowzero ");
+                if (info.alignment != 0) {
+                    try writer.print("align({d}", .{info.alignment});
+                    if (info.packed_offset.bit_offset != 0 or info.packed_offset.host_size != 0) {
+                        try writer.print(":{d}:{d}", .{ info.packed_offset.bit_offset, info.packed_offset.host_size });
+                    }
+                    try writer.writeAll(") ");
+                }
+                if (info.address_space != .generic) {
+                    try writer.print("addrspace(.{t}) ", .{info.address_space});
+                }
                 if (info.is_const) try writer.writeAll("const ");
+                if (info.is_volatile) try writer.writeAll("volatile ");
                 try info.elem_ty.rawStringify(writer, analyser, options);
             },
             .array => |info| {

@@ -2466,6 +2466,23 @@ test "generic function with comptime pointer type info attributes" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    const info = @typeInfo(*align(4) addrspace(.generic) allowzero const volatile S).pointer;
+        \\    return if (info.size == .one and info.is_const and info.is_volatile and
+        \\        info.is_allowzero and info.alignment.? == 4 and
+        \\        info.address_space == .generic and info.child == S)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function with nominal tuple type info" {

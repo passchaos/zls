@@ -899,6 +899,13 @@ const TypeInfoOptionalChild = @typeInfo(?u32).optional.child;
 const TypeInfoNominalChild = struct { value: u8 };
 const TypeInfoPointerNominalChild = @typeInfo(*const TypeInfoNominalChild).pointer.child;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
+const AttributedNominalPointer = *allowzero align(4) addrspace(.generic) const volatile TypeInfoNominalChild;
+const type_info_nominal_pointer_volatile = @typeInfo(AttributedNominalPointer).pointer.is_volatile;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_nominal_pointer_allowzero = @typeInfo(AttributedNominalPointer).pointer.is_allowzero;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_nominal_pointer_alignment = @typeInfo(AttributedNominalPointer).pointer.alignment.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(4)
 const TypeInfoArrayNominalChild = @typeInfo([4]TypeInfoNominalChild).array.child;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(TypeInfoNominalChild)
 const TypeInfoOptionalNominalChild = @typeInfo(?TypeInfoNominalChild).optional.child;
