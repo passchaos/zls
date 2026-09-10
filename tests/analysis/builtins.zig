@@ -317,6 +317,16 @@ const add_zero_runtime_flag = add_zero_runtime[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
 const sub_zero_runtime_flag = @subWithOverflow(runtime_u8, @as(u8, 0))[1];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const sub_self_runtime = @subWithOverflow(runtime_u8, runtime_u8);
+const sub_self_runtime_value = sub_self_runtime[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(0)
+const sub_self_runtime_flag = sub_self_runtime[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const sub_self_undefined = @subWithOverflow(undefined_u8, undefined_u8);
+const sub_self_undefined_value = sub_self_undefined[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const sub_self_undefined_flag = sub_self_undefined[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u1)()
 const mul_zero_runtime_value = @mulWithOverflow(runtime_i8, @as(i8, 0))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const mul_zero_runtime_flag = @mulWithOverflow(runtime_i8, @as(i8, 0))[1];
@@ -517,6 +527,7 @@ const vector_max = @max(
 const vector_max_value = vector_max[1];
 //    ^^^^^^^^^^^^^^^^ (i8)(7)
 var runtime_i8_vector: @Vector(2, i8) = undefined;
+const undefined_u8: u8 = undefined;
 const vector_min_runtime_boundary = @min(runtime_i8_vector, @as(@Vector(2, i8), @splat(-128)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(-128)
 const vector_max_runtime_boundary = @max(runtime_i8_vector, @as(@Vector(2, i8), @splat(127)))[1];

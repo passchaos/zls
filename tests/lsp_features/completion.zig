@@ -1355,10 +1355,12 @@ test "generic function with partially known overflow builtins" {
         \\fn Select(comptime N: u8) type {
         \\    const add = @addWithOverflow(runtime_u8, @as(u8, 0));
         \\    const sub = @subWithOverflow(runtime_u8, @as(u8, 0));
+        \\    const self_sub = @subWithOverflow(runtime_u8, runtime_u8);
         \\    const mul_zero = @mulWithOverflow(runtime_i8, @as(i8, 0));
         \\    const mul_one = @mulWithOverflow(runtime_i8, @as(i8, 1));
         \\    const shl = @shlWithOverflow(runtime_u8, @as(u3, 0));
-        \\    return if (add[1] == 0 and sub[1] == 0 and mul_zero[0] == 0 and
+        \\    return if (add[1] == 0 and sub[1] == 0 and self_sub[0] == 0 and
+        \\        self_sub[1] == 0 and mul_zero[0] == 0 and
         \\        mul_zero[1] == 0 and mul_one[1] == 0 and shl[1] == 0)
         \\        struct { checked: [N]u8 }
         \\    else

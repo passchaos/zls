@@ -3556,6 +3556,7 @@ fn resolveOverflowValue(
     tag: std.zig.BuiltinFn.Tag,
     lhs: Type,
     rhs: Type,
+    same_operand: bool,
 ) error{OutOfMemory}!?Type {
     const lhs_payload = switch (lhs.data) {
         .ip_index => |payload| payload,
@@ -3582,9 +3583,12 @@ fn resolveOverflowValue(
             const result_value = try analyser.coerceKnownIntegerValue(result_type, source_value);
             return try analyser.overflowTupleValue(result_type, result_value, false);
         },
-        .sub_with_overflow => if (rhs_value == 0) {
-            const result_value = try analyser.coerceKnownIntegerValue(result_type, lhs_payload.index);
-            return try analyser.overflowTupleValue(result_type, result_value, false);
+        .sub_with_overflow => {
+            if (same_operand) return try analyser.overflowTupleValue(result_type, zero, false);
+            if (rhs_value == 0) {
+                const result_value = try analyser.coerceKnownIntegerValue(result_type, lhs_payload.index);
+                return try analyser.overflowTupleValue(result_type, result_value, false);
+            }
         },
         .mul_with_overflow => {
             if (lhs_value == 0 or rhs_value == 0) {
@@ -6437,7 +6441,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
                     if (analyser.ip.zigTypeTag(result_type) != .int) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveOverflowValue(tag, lhs, rhs)) |value| return value;
+                        const same_operand = tag == .sub_with_overflow and
+                            try analyser.areSameIdentifierExpression(tree, params[0], params[1]);
+                        if (try analyser.resolveOverflowValue(tag, lhs, rhs, same_operand)) |value| return value;
                     }
                     var element_types = [_]Type{
                         Type.fromIP(analyser, .type_type, result_type),
