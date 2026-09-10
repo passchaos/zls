@@ -4289,6 +4289,29 @@ fn resolveTupleTypeConstructor(
     return try Type.createTupleType(analyser, element_types);
 }
 
+fn isEmptyStructLiteral(node_handle: NodeWithHandle) bool {
+    const tree = &node_handle.handle.tree;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullStructInit(&buffer, node_handle.node) orelse return false;
+    return literal.ast.type_expr.unwrap() == null and literal.ast.fields.len == 0;
+}
+
+fn isEmptyStructAttributeList(
+    node_handle: NodeWithHandle,
+    expected_len: usize,
+) bool {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return false;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return false;
+    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return false;
+    for (literal.ast.elements) |element| {
+        if (!isEmptyStructLiteral(.of(element, node_handle.handle))) return false;
+    }
+    return true;
+}
+
 fn floatReduceValue(
     comptime T: type,
     analyser: *Analyser,
@@ -7709,6 +7732,31 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .flags = flags,
                     } });
                     return Type.fromIP(analyser, .type_type, pointer_type);
+                },
+                .Fn => {
+                    if (params.len != 4) return .unknown_type;
+                    const parameter_tuple = try analyser.resolveTupleTypeConstructor(.{
+                        .node_handle = .of(params[0], handle),
+                        .container_type = options.container_type,
+                    }) orelse return .unknown_type;
+                    const parameter_tuple_index = parameter_tuple.ipIndex() orelse return .unknown_type;
+                    const parameter_types = switch (analyser.ip.indexToKey(parameter_tuple_index)) {
+                        .tuple_type => |tuple| tuple.types,
+                        else => return .unknown_type,
+                    };
+                    if (!isEmptyStructAttributeList(.of(params[1], handle), parameter_types.len)) return .unknown_type;
+                    const return_type = try analyser.resolveTypeOfNodeInternal(.{
+                        .node_handle = .of(params[2], handle),
+                        .container_type = options.container_type,
+                    }) orelse return .unknown_type;
+                    if (!return_type.is_type_val) return .unknown_type;
+                    const return_type_index = return_type.ipIndex() orelse return .unknown_type;
+                    if (!isEmptyStructLiteral(.of(params[3], handle))) return .unknown_type;
+                    const function_type = try analyser.ip.get(.{ .function_type = .{
+                        .args = parameter_types,
+                        .return_type = return_type_index,
+                    } });
+                    return Type.fromIP(analyser, .type_type, function_type);
                 },
                 .Vector => {
                     if (params.len != 2) return null;

@@ -800,6 +800,8 @@ const Fn = @Fn(&.{i32}, &.{.{}}, undefined, .{});
 //                       ^ ([?]Attributes)()
 //                         ^ (Attributes)()
 //                                          ^ (Attributes)()
+const ConcreteFn = @Fn(&.{ i32, bool }, &.{ .{}, .{} }, u8, .{});
+//    ^^^^^^^^^^ (type)(fn(i32, bool) u8)
 
 const type_enum_literal: @EnumLiteral() = .foo;
 //    ^^^^^^^^^^^^^^^^^ (@EnumLiteral())()

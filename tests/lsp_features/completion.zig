@@ -1909,6 +1909,31 @@ test "generic function with dependent comptime value parameter" {
     });
 }
 
+test "generic function with comptime Fn type constructor" {
+    try testCompletion(
+        \\fn Holder(comptime T: type, comptime U: type) type {
+        \\    const Callback = @Fn(&.{T}, &.{.{}}, U, .{});
+        \\    return struct { callback: *const Callback };
+        \\}
+        \\const holder: Holder(u8, i16) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "*const fn(u8) i16" },
+    });
+
+    try testCompletion(
+        \\fn Holder(comptime T: type, comptime U: type) type {
+        \\    const parameters = &.{ T, bool };
+        \\    const Callback = @Fn(parameters, &.{ .{}, .{} }, U, .{});
+        \\    return struct { callback: *const Callback };
+        \\}
+        \\const holder: Holder(u16, void) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "*const fn(u16, bool) void" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },
