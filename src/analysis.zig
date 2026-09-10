@@ -3066,6 +3066,7 @@ fn resolveTypeInfoTag(analyser: *Analyser, ty: Type) ?std.builtin.TypeId {
     return switch (ty.data) {
         .pointer => .pointer,
         .array => .array,
+        .vector => .vector,
         .tuple => .@"struct",
         .optional => .optional,
         .error_union => .error_union,
@@ -3197,6 +3198,7 @@ fn resolveTypeInfoFieldAccess(
         .array, .vector => {
             const len, const child, const sentinel = switch (value.reflected_type.data) {
                 .array => |array| .{ array.elem_count orelse return field_value_type, array.elem_ty.*, array.sentinel },
+                .vector => |vector| .{ @as(u64, vector.len), vector.elem_ty.*, InternPool.Index.none },
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .array_type => |array| .{ array.len, Type.fromIP(analyser, .type_type, array.child), array.sentinel },
                     .vector_type => |vector| .{ @as(u64, vector.len), Type.fromIP(analyser, .type_type, vector.child), InternPool.Index.none },
@@ -7475,6 +7477,7 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
         .array => |info| info.elem_count != null and
             info.sentinel != .unknown_unknown and
             try analyser.canResolveTypeName(info.elem_ty.*),
+        .vector => |info| try analyser.canResolveTypeName(info.elem_ty.*),
         .tuple => |types| for (types) |element_type| {
             if (!try analyser.canResolveTypeName(element_type)) break false;
         } else true,
@@ -9991,22 +9994,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const child_ty = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     if (!child_ty.is_type_val) return null;
 
-                    const child_ty_ip_index = switch (child_ty.data) {
-                        .ip_index => |payload| payload.index orelse try analyser.ip.getUnknown(payload.type),
-                        else => return null,
-                    };
-
                     const len = try analyser.resolveIntegerLiteral(u32, .of(params[0], handle)) orelse
                         return null; // `InternPool.Key.Vector.len` can't represent unknown length yet
-
-                    const vector_ty_ip_index = try analyser.ip.get(.{
-                        .vector_type = .{
-                            .len = len,
-                            .child = child_ty_ip_index,
-                        },
-                    });
-
-                    return Type.fromIP(analyser, .type_type, vector_ty_ip_index);
+                    return .{
+                        .data = try Type.Data.createVector(analyser, len, child_ty),
+                        .is_type_val = true,
+                    };
                 },
                 else => {
                     const data = version_data.builtins.get(call_name) orelse return null;
@@ -11145,6 +11138,11 @@ pub const Type = struct {
         elem_ty: *Type,
     };
 
+    const Vector = struct {
+        len: u32,
+        elem_ty: *Type,
+    };
+
     pub const Data = union(enum) {
         /// - `*const T`
         /// - `[*]T`
@@ -11159,6 +11157,9 @@ pub const Type = struct {
             sentinel: InternPool.Index,
             elem_ty: *Type,
         },
+
+        /// `@Vector(len, elem_ty)`
+        vector: Vector,
 
         /// `.{a,b}`
         tuple: []Type,
@@ -11345,6 +11346,21 @@ pub const Type = struct {
             };
         }
 
+        fn createVector(analyser: *Analyser, len: u32, elem_ty: Type) !Data {
+            std.debug.assert(elem_ty.is_type_val);
+            if (elem_ty.ipIndex()) |child| {
+                const index = try analyser.ip.get(.{ .vector_type = .{
+                    .len = len,
+                    .child = child,
+                } });
+                return .{ .ip_index = .{ .type = .type_type, .index = index } };
+            }
+            return .{ .vector = .{
+                .len = len,
+                .elem_ty = try analyser.allocType(elem_ty),
+            } };
+        }
+
         fn createTuple(analyser: *Analyser, elem_tys: []Type) !Data {
             const tys = try analyser.gpa.alloc(InternPool.Index, elem_tys.len);
             defer analyser.gpa.free(tys);
@@ -11446,6 +11462,10 @@ pub const Type = struct {
                     std.hash.autoHash(hasher, info.sentinel);
                     info.elem_ty.hashWithHasher(hasher);
                 },
+                .vector => |info| {
+                    std.hash.autoHash(hasher, info.len);
+                    info.elem_ty.hashWithHasher(hasher);
+                },
                 .tuple => |elem_ty_slice| {
                     for (elem_ty_slice) |elem_ty| {
                         elem_ty.hashWithHasher(hasher);
@@ -11541,6 +11561,11 @@ pub const Type = struct {
                     const b_type = b.array;
                     if (!std.meta.eql(a_type.elem_count, b_type.elem_count)) return false;
                     if (a_type.sentinel != b_type.sentinel) return false;
+                    if (!a_type.elem_ty.eql(b_type.elem_ty.*)) return false;
+                },
+                .vector => |a_type| {
+                    const b_type = b.vector;
+                    if (a_type.len != b_type.len) return false;
                     if (!a_type.elem_ty.eql(b_type.elem_ty.*)) return false;
                 },
                 .tuple => |a_slice| {
@@ -11654,6 +11679,7 @@ pub const Type = struct {
                 .anytype_parameter => true,
                 .pointer => |info| info.elem_ty.data.isGeneric(),
                 .array => |info| info.elem_ty.data.isGeneric(),
+                .vector => |info| info.elem_ty.data.isGeneric(),
                 .tuple => |types| {
                     for (types) |t| {
                         if (t.data.isGeneric()) {
@@ -11772,6 +11798,10 @@ pub const Type = struct {
                     const sentinel = info.sentinel;
                     const elem_ty = try analyser.resolveGenericTypeInternal(info.elem_ty.*, bound_params, visiting);
                     return try createArray(analyser, elem_count, sentinel, elem_ty);
+                },
+                .vector => |info| {
+                    const elem_ty = try analyser.resolveGenericTypeInternal(info.elem_ty.*, bound_params, visiting);
+                    return try createVector(analyser, info.len, elem_ty);
                 },
                 .tuple => |info| {
                     const elem_tys = blk: {
@@ -12130,6 +12160,7 @@ pub const Type = struct {
             .optional => |child_ty| child_ty.isConditional(),
             .pointer => |info| info.elem_ty.isConditional(),
             .array => |info| info.elem_ty.isConditional(),
+            .vector => |info| info.elem_ty.isConditional(),
             .tuple => |types| {
                 for (types) |t|
                     if (t.isConditional()) return true;
@@ -12209,7 +12240,7 @@ pub const Type = struct {
                     try all_types.put(arena, .{ .data = .{ .optional = new_child_ty }, .is_type_val = ty.is_type_val }, {});
                 }
             },
-            inline .pointer, .array => |info, tag| {
+            inline .pointer, .array, .vector => |info, tag| {
                 for (try info.elem_ty.getAllTypesWithHandles(analyser)) |t| {
                     if (all_types.count() >= analyser.max_conditional_combos) {
                         return true;
@@ -12436,6 +12467,7 @@ pub const Type = struct {
             .type_parameter, .anytype_parameter => true,
             .pointer => |info| info.elem_ty.hasUnresolvedGenericType(),
             .array => |info| info.elem_ty.hasUnresolvedGenericType(),
+            .vector => |info| info.elem_ty.hasUnresolvedGenericType(),
             .tuple => |types| for (types) |ty| {
                 if (ty.hasUnresolvedGenericType()) break true;
             } else false,
@@ -12878,6 +12910,11 @@ pub const Type = struct {
                 }
                 try writer.writeByte(']');
                 try info.elem_ty.rawStringify(writer, analyser, options);
+            },
+            .vector => |info| {
+                try writer.print("@Vector({d}, ", .{info.len});
+                try info.elem_ty.rawStringify(writer, analyser, options);
+                try writer.writeByte(')');
             },
             .tuple => |elem_ty_slice| {
                 try writer.writeAll("struct { ");

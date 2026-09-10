@@ -880,6 +880,10 @@ const nominal_fn_param = @typeInfo(NominalFn).@"fn".params[0].type.?;
 //    ^^^^^^^^^^^^^^^^ (type)(NominalFnChild)
 const nominal_fn_return = @typeInfo(NominalFn).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^^ (type)(NominalFnChild)
+const NominalVector = @Vector(4, *NominalFnChild);
+//    ^^^^^^^^^^^^^ (type)(@Vector(4, *NominalFnChild))
+const NominalVectorChild = @typeInfo(NominalVector).vector.child;
+//    ^^^^^^^^^^^^^^^^^^ (type)(*NominalFnChild)
 
 const type_enum_literal: @EnumLiteral() = .foo;
 //    ^^^^^^^^^^^^^^^^^ (@EnumLiteral())()

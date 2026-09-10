@@ -161,6 +161,14 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
                 .kind = .Field,
             });
         },
+        .vector => |info| {
+            if (ty.is_type_val) return;
+            builder.completions.appendAssumeCapacity(.{
+                .label = "len",
+                .detail = try std.fmt.allocPrint(builder.arena, "usize = {}", .{info.len}),
+                .kind = .Field,
+            });
+        },
         .tuple => |elem_ty_slice| {
             if (ty.is_type_val) return;
             try builder.completions.ensureUnusedCapacity(builder.arena, elem_ty_slice.len);

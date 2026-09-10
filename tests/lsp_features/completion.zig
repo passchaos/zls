@@ -2623,6 +2623,23 @@ test "generic function with comptime pointer type info attributes" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct { value: T };
+        \\    const V = @Vector(4, *S);
+        \\    const info = @typeInfo(V).vector;
+        \\    const Rebuilt = @Vector(info.len, info.child);
+        \\    return if (info.len == 4 and info.child == *S and Rebuilt == V)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "generic function with nominal tuple type info" {
