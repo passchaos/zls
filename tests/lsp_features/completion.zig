@@ -4118,6 +4118,23 @@ test "generic function with comptime optional condition" {
     });
 }
 
+test "generic function with runtime optional orelse null type" {
+    try testCompletion(
+        \\var runtime_optional: ?u8 = null;
+        \\fn Select(comptime Expected: type) type {
+        \\    const value = runtime_optional orelse null;
+        \\    return if (@TypeOf(value) == Expected)
+        \\        struct { preserved: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(?u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "preserved", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with runtime optional self equality" {
     try testCompletion(
         \\var runtime_integer: ?u8 = null;

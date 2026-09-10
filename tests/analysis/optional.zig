@@ -20,10 +20,18 @@ const epsilon = alpha.?;
 //    ^^^^^^^ (u32)()
 
 const zeta = alpha orelse null;
-// TODO   ^^^^ (?u32)()
+//    ^^^^ (?u32)()
 
 const eta = alpha orelse 5;
 //    ^^^ (u32)()
+
+const known_optional: ?u32 = 4;
+const known_optional_orelse_null = known_optional orelse null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u32)(4)
+
+const null_optional: ?u32 = null;
+const null_optional_orelse_null = null_optional orelse null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (@TypeOf(null))(null)
 
 var runtime_optional_u8: ?u8 = null;
 var runtime_optional_bool: ?bool = null;

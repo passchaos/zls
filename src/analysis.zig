@@ -1178,6 +1178,14 @@ pub fn resolveOrelseType(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfM
         .optional => rhs,
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
             .optional_type => rhs,
+            .simple_type => |simple_type| if (simple_type == .null_type) switch (lhs.data) {
+                .optional => lhs,
+                .ip_index => |lhs_payload| switch (analyser.ip.indexToKey(lhs_payload.type)) {
+                    .optional_type => lhs,
+                    else => try analyser.resolveOptionalUnwrap(lhs),
+                },
+                else => try analyser.resolveOptionalUnwrap(lhs),
+            } else try analyser.resolveOptionalUnwrap(lhs),
             else => try analyser.resolveOptionalUnwrap(lhs),
         },
         else => try analyser.resolveOptionalUnwrap(lhs),
