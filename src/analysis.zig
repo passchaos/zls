@@ -3255,8 +3255,8 @@ fn resolveFixedWidthIntegerBinaryValue(
 fn overflowTupleValue(
     analyser: *Analyser,
     result_type: InternPool.Index,
-    result_value: InternPool.Index,
-    overflowed: bool,
+    result_value: ?InternPool.Index,
+    overflowed: ?bool,
 ) error{OutOfMemory}!Type {
     const tuple_type = try analyser.ip.get(.{ .tuple_type = .{
         .types = try analyser.ip.getIndexSlice(&.{ result_type, .u1_type }),
@@ -3265,11 +3265,24 @@ fn overflowTupleValue(
     const aggregate = try analyser.ip.get(.{ .aggregate = .{
         .ty = tuple_type,
         .values = try analyser.ip.getIndexSlice(&.{
-            result_value,
-            if (overflowed) .one_u1 else .zero_u1,
+            result_value orelse try analyser.ip.getUnknown(result_type),
+            if (overflowed) |value|
+                if (value) .one_u1 else .zero_u1
+            else
+                try analyser.ip.getUnknown(.u1_type),
         }),
     } });
     return Type.fromIP(analyser, tuple_type, aggregate);
+}
+
+fn coerceKnownIntegerValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    value: ?InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const index = value orelse return null;
+    const int = analyser.ip.toInt(index, i256) orelse return null;
+    return (try analyser.intValueWithType(result_type, int) orelse return null).ipIndex();
 }
 
 fn resolveOverflowValue(
@@ -3278,18 +3291,55 @@ fn resolveOverflowValue(
     lhs: Type,
     rhs: Type,
 ) error{OutOfMemory}!?Type {
-    const lhs_index = lhs.ipIndex() orelse return null;
-    const rhs_index = rhs.ipIndex() orelse return null;
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
     const result_type = if (tag == .shl_with_overflow)
-        analyser.ip.typeOf(lhs_index)
+        lhs_payload.type
     else
-        try analyser.resolvePeerTypesIP(
-            analyser.ip.typeOf(lhs_index),
-            analyser.ip.typeOf(rhs_index),
-        ) orelse return null;
-    if (analyser.ip.zigTypeTag(result_type) != .int) return null;
+        try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    _ = analyser.fixedWidthIntegerBounds(result_type) orelse return null;
+    if (lhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+    if (rhs_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+
+    const lhs_value = if (lhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    const rhs_value = if (rhs_payload.index) |index| analyser.ip.toInt(index, i256) else null;
+    const zero = (try analyser.intValueWithType(result_type, 0) orelse return null).ipIndex().?;
+    switch (tag) {
+        .add_with_overflow => if (lhs_value == 0 or rhs_value == 0) {
+            const source_value = if (lhs_value == 0) rhs_payload.index else lhs_payload.index;
+            const result_value = try analyser.coerceKnownIntegerValue(result_type, source_value);
+            return try analyser.overflowTupleValue(result_type, result_value, false);
+        },
+        .sub_with_overflow => if (rhs_value == 0) {
+            const result_value = try analyser.coerceKnownIntegerValue(result_type, lhs_payload.index);
+            return try analyser.overflowTupleValue(result_type, result_value, false);
+        },
+        .mul_with_overflow => {
+            if (lhs_value == 0 or rhs_value == 0) {
+                return try analyser.overflowTupleValue(result_type, zero, false);
+            }
+            if (lhs_value == 1 or rhs_value == 1) {
+                const source_value = if (lhs_value == 1) rhs_payload.index else lhs_payload.index;
+                const result_value = try analyser.coerceKnownIntegerValue(result_type, source_value);
+                return try analyser.overflowTupleValue(result_type, result_value, false);
+            }
+        },
+        .shl_with_overflow => if (rhs_value == 0) {
+            const result_value = try analyser.coerceKnownIntegerValue(result_type, lhs_payload.index);
+            return try analyser.overflowTupleValue(result_type, result_value, false);
+        },
+        else => return null,
+    }
+
+    const lhs_index = lhs_payload.index orelse return null;
+    const rhs_index = rhs_payload.index orelse return null;
     const info = analyser.ip.intInfo(result_type, builtin.target);
-    if (info.bits == 0 or info.bits > 128) return null;
 
     const result: i256, const overflowed = switch (info.signedness) {
         .unsigned => unsigned: {
@@ -5992,15 +6042,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     if (lhs.is_type_val or rhs.is_type_val) return null;
-                    const lhs_index = lhs.ipIndex() orelse return null;
-                    const rhs_index = rhs.ipIndex() orelse return null;
+                    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+                    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
                     const result_type = if (tag == .shl_with_overflow)
-                        analyser.ip.typeOf(lhs_index)
+                        lhs_type
                     else
-                        try analyser.resolvePeerTypesIP(
-                            analyser.ip.typeOf(lhs_index),
-                            analyser.ip.typeOf(rhs_index),
-                        ) orelse return null;
+                        try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
                     if (analyser.ip.zigTypeTag(result_type) != .int) return null;
                     if (analyser.evaluate_comptime_values) {
                         if (try analyser.resolveOverflowValue(tag, lhs, rhs)) |value| return value;

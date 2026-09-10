@@ -310,6 +310,23 @@ const add_no_overflow_value = @addWithOverflow(@as(u8, 2), 3)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^ (u8)(5)
 const add_no_overflow_flag = @addWithOverflow(@as(u8, 2), 3)[1];
 //    ^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const add_zero_runtime = @addWithOverflow(runtime_u8, @as(u8, 0));
+const add_zero_runtime_value = add_zero_runtime[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)()
+const add_zero_runtime_flag = add_zero_runtime[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const sub_zero_runtime_flag = @subWithOverflow(runtime_u8, @as(u8, 0))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const mul_zero_runtime_value = @mulWithOverflow(runtime_i8, @as(i8, 0))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
+const mul_zero_runtime_flag = @mulWithOverflow(runtime_i8, @as(i8, 0))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const mul_one_runtime_flag = @mulWithOverflow(runtime_i8, @as(i8, 1))[1];
+//    ^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const shl_zero_runtime_flag = @shlWithOverflow(runtime_u8, @as(u3, 0))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u1)(0)
+const mul_zero_undefined_flag = @mulWithOverflow(@as(u8, undefined), @as(u8, 0))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u1)()
 const cmpxchg_strong = @cmpxchgStrong(u32, undefined, undefined, undefined, .unordered, .unordered);
 //    ^^^^^^^^^^^^^^ (unknown)() TODO this should be `?u32`
 //                                                                          ^^^^^^^^^^ (AtomicOrder)()
