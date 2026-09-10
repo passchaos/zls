@@ -7094,6 +7094,22 @@ test "either - fields and methods with same name" {
     });
 }
 
+test "either instance field preserves all candidate types" {
+    try testCompletion(
+        \\const AlphaValue = struct { alpha: u8 };
+        \\const BetaValue = struct { beta: u16 };
+        \\const Alpha = struct { nested: AlphaValue };
+        \\const Beta = struct { nested: BetaValue };
+        \\const Either = if (undefined) Alpha else Beta;
+        \\const value: Either = undefined;
+        \\const nested = value.nested;
+        \\const field = nested.<cursor>
+    , &.{
+        .{ .label = "alpha", .kind = .Field, .detail = "u8" },
+        .{ .label = "beta", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "container type inside switch case value" {
     try testCompletion(
         \\test {

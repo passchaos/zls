@@ -46,9 +46,8 @@ const EitherError = if (true) error{Foo} else error{Bar};
 const either: EitherType = .{};
 //    ^^^^^^ (either type)()
 
-// TODO this should be `either type`
 const field = either.field;
-//    ^^^^^ (u32)()
+//    ^^^^^ (either type)()
 
 const pointer = &either;
 //    ^^^^^^^ (*const either type)()
@@ -68,9 +67,8 @@ const error_union: EitherError!EitherType = error.Foo;
 const generic: GenericStruct(EitherType) = .{ .field = either };
 //    ^^^^^^^ (GenericStruct(either type))()
 
-// TODO this should be `either type`
 const function0 = EitherType.function;
-//    ^^^^^^^^^ (fn (StructU32) StructU32)()
+//    ^^^^^^^^^ (either type)()
 
 fn function1() EitherType {}
 // ^^^^^^^^^ (fn () either type)()

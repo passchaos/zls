@@ -776,6 +776,29 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
 
     // If we are accessing a pointer type, remove one pointerness level :)
     const left_type = (try analyser.resolveDerefType(lhs)) orelse lhs;
+    if (left_type.data == .either) {
+        var candidates: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+        var all_const = true;
+        for (left_type.data.either) |entry| {
+            const candidate: Type = .{
+                .data = entry.type_data,
+                .is_type_val = left_type.is_type_val,
+            };
+            const resolved = try analyser.resolveFieldAccessBinding(.{
+                .type = candidate,
+                .is_const = lhs_binding.is_const,
+            }, field_name) orelse continue;
+            try candidates.append(analyser.arena, .{
+                .type = resolved.type,
+                .descriptor = entry.descriptor,
+            });
+            all_const = all_const and resolved.is_const;
+        }
+        return .{
+            .type = try Type.fromEither(analyser, candidates.items) orelse return null,
+            .is_const = all_const,
+        };
+    }
 
     if (try analyser.resolvePropertyType(left_type, field_name)) |t|
         return .{
