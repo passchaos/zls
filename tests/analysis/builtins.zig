@@ -884,6 +884,12 @@ const NominalVector = @Vector(4, *NominalFnChild);
 //    ^^^^^^^^^^^^^ (type)(@Vector(4, *NominalFnChild))
 const NominalVectorChild = @typeInfo(NominalVector).vector.child;
 //    ^^^^^^^^^^^^^^^^^^ (type)(*NominalFnChild)
+const bit_size_of_nominal_vector = @bitSizeOf(NominalVector);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(256)
+const byte_size_of_nominal_vector = @sizeOf(NominalVector);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(32)
+const alignment_of_nominal_vector = @alignOf(NominalVector);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(32)
 
 const type_enum_literal: @EnumLiteral() = .foo;
 //    ^^^^^^^^^^^^^^^^^ (@EnumLiteral())()

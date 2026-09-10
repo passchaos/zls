@@ -2630,7 +2630,8 @@ test "generic function with comptime pointer type info attributes" {
         \\    const V = @Vector(4, *S);
         \\    const info = @typeInfo(V).vector;
         \\    const Rebuilt = @Vector(info.len, info.child);
-        \\    return if (info.len == 4 and info.child == *S and Rebuilt == V)
+        \\    return if (info.len == 4 and info.child == *S and Rebuilt == V and
+        \\        @bitSizeOf(V) == 256 and @sizeOf(V) == 32 and @alignOf(V) == 32)
         \\        struct { matched: T }
         \\    else
         \\        struct { fallback: u8 };

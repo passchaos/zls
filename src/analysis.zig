@@ -7208,6 +7208,10 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
             .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth(),
         },
+        .vector => |info| blk: {
+            const elem_bits = analyser.resolveTypeBitSize(info.elem_ty.*) orelse break :blk null;
+            break :blk std.math.mul(u64, info.len, elem_bits) catch null;
+        },
         .array => |info| blk: {
             const declared_len = info.elem_count orelse break :blk null;
             const len = std.math.add(u64, declared_len, @intFromBool(info.sentinel != .none)) catch break :blk null;
@@ -7285,6 +7289,12 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
             .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth() / 8,
         },
+        .vector => |info| blk: {
+            const elem_bits = analyser.resolveTypeBitSize(info.elem_ty.*) orelse break :blk null;
+            const total_bits = std.math.mul(u64, info.len, elem_bits) catch break :blk null;
+            const byte_count = std.math.divCeil(u64, total_bits, 8) catch break :blk null;
+            break :blk if (byte_count == 0) 0 else std.math.ceilPowerOfTwo(u64, byte_count) catch null;
+        },
         .array => |info| blk: {
             const declared_len = info.elem_count orelse break :blk null;
             const len = std.math.add(u64, declared_len, @intFromBool(info.sentinel != .none)) catch break :blk null;
@@ -7349,6 +7359,14 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
     return switch (ty.data) {
         .pointer => std.zig.target.intAlignment(&builtin.target, builtin.target.ptrBitWidth()),
         .array => |info| try analyser.resolveTypeAlignment(info.elem_ty.*),
+        .vector => |info| blk: {
+            if (info.len == 0) break :blk 1;
+            const elem_bits = analyser.resolveTypeBitSize(info.elem_ty.*) orelse break :blk null;
+            if (elem_bits == 0) break :blk 1;
+            const total_bits = std.math.mul(u64, info.len, elem_bits) catch break :blk null;
+            const byte_count = std.math.divCeil(u64, total_bits, 8) catch break :blk null;
+            break :blk std.math.ceilPowerOfTwo(u64, byte_count) catch null;
+        },
         .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
