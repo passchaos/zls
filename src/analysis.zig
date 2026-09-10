@@ -6673,15 +6673,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             };
             defer it.walker.deinit(analyser.gpa);
 
+            var breaks: std.ArrayList(Type.TypeWithDescriptor) = .empty;
             while (try it.next(analyser, handle, options.container_type)) |value| {
-                return switch (value) {
+                const value_type = switch (value) {
                     .operand => |operand| if (try analyser.resolveTypeOfNodeInternal(.of(operand, handle))) |operand_type|
                         operand_type.withoutIPIndex(analyser)
                     else
-                        null,
+                        continue,
                     .void => Type.fromIP(analyser, .void_type, .void_value),
                 };
+                try breaks.append(analyser.arena, .{
+                    .type = value_type,
+                    .descriptor = "break",
+                });
             }
+            return Type.fromEither(analyser, breaks.items);
         },
 
         .for_range => {},

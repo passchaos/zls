@@ -24,6 +24,13 @@ const labeled_block_void = blk: {
 //    ^^^^^^^^^^^^^^^^^^ (void)()
     break :blk;
 };
+
+var runtime_condition = true;
+const labeled_block_peer = blk: {
+//    ^^^^^^^^^^^^^^^^^^ (i64)()
+    if (runtime_condition) break :blk @as(i32, 1);
+    break :blk @as(i64, 2);
+};
 // zig fmt: on
 
 pub fn main() void {
