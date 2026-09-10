@@ -916,6 +916,7 @@ fn findKnownReturnExpression(
             .{ .expression = expression }
         else
             .unknown,
+        .@"comptime", .@"nosuspend" => analyser.findKnownReturnExpression(handle, tree.nodeData(node).node),
         .block, .block_semicolon, .block_two, .block_two_semicolon => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const statements = tree.blockStatements(&buffer, node) orelse break :blk .unknown;

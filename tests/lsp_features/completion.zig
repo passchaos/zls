@@ -2948,6 +2948,33 @@ test "generic function with comptime while return statements" {
     });
 }
 
+test "generic function with wrapped comptime return statements" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    comptime {
+        \\        if (enabled) return struct { selected: u8 };
+        \\    }
+        \\    return struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    nosuspend {
+        \\        return struct { selected: u8 };
+        \\    }
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
