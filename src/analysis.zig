@@ -4149,6 +4149,82 @@ fn resolveSignedness(
     };
 }
 
+fn resolvePointerSize(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+) Error!?std.builtin.Type.Pointer.Size {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) == .enum_literal) {
+        const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(node_handle.node)) orelse return null;
+        return std.meta.stringToEnum(std.builtin.Type.Pointer.Size, name);
+    }
+    const value = try analyser.resolveTypeOfNodeInternal(.of(node_handle.node, node_handle.handle)) orelse return null;
+    return switch (value.data) {
+        .enum_value => |enum_value| std.meta.stringToEnum(std.builtin.Type.Pointer.Size, enum_value.tag),
+        else => null,
+    };
+}
+
+fn resolveAddressSpace(
+    analyser: *Analyser,
+    options: ResolveOptions,
+) Error!?std.builtin.AddressSpace {
+    const tree = &options.node_handle.handle.tree;
+    if (tree.nodeTag(options.node_handle.node) == .enum_literal) {
+        const name = try analyser.identifierTokenName(tree, tree.nodeMainToken(options.node_handle.node)) orelse return null;
+        return std.meta.stringToEnum(std.builtin.AddressSpace, name);
+    }
+    const value = try analyser.resolveComptimeValue(options) orelse return null;
+    if (value.ipIndex()) |index| if (analyser.ip.isNull(index)) return .generic;
+    return switch (value.data) {
+        .enum_value => |enum_value| std.meta.stringToEnum(std.builtin.AddressSpace, enum_value.tag),
+        else => null,
+    };
+}
+
+fn resolvePointerAttributes(
+    analyser: *Analyser,
+    size: std.builtin.Type.Pointer.Size,
+    options: ResolveOptions,
+) Error!?InternPool.Key.Pointer.Flags {
+    const node_handle = options.node_handle;
+    const tree = &node_handle.handle.tree;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullStructInit(&buffer, node_handle.node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null) return null;
+
+    var flags: InternPool.Key.Pointer.Flags = .{ .size = size };
+    for (literal.ast.fields) |field_node| {
+        const field_name_token = tree.firstToken(field_node) - 2;
+        if (tree.tokenTag(field_name_token) != .identifier) return null;
+        const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
+        const field_options: ResolveOptions = .{
+            .node_handle = .of(field_node, node_handle.handle),
+            .container_type = options.container_type,
+        };
+        if (std.mem.eql(u8, field_name, "const")) {
+            flags.is_const = try analyser.resolveBoolValue(field_options) orelse return null;
+        } else if (std.mem.eql(u8, field_name, "volatile")) {
+            flags.is_volatile = try analyser.resolveBoolValue(field_options) orelse return null;
+        } else if (std.mem.eql(u8, field_name, "allowzero")) {
+            flags.is_allowzero = try analyser.resolveBoolValue(field_options) orelse return null;
+        } else if (std.mem.eql(u8, field_name, "align")) {
+            const alignment_value = try analyser.resolveComptimeValue(field_options) orelse return null;
+            if (alignment_value.ipIndex()) |index| {
+                if (analyser.ip.isNull(index)) continue;
+            }
+            const alignment = try analyser.resolveIntegerLiteral(u16, field_options) orelse return null;
+            if (!std.math.isPowerOfTwo(alignment)) return null;
+            flags.alignment = alignment;
+        } else if (std.mem.eql(u8, field_name, "addrspace")) {
+            flags.address_space = try analyser.resolveAddressSpace(field_options) orelse return null;
+        } else {
+            return null;
+        }
+    }
+    return flags;
+}
+
 fn resolveTupleTypeConstructor(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -6195,7 +6271,10 @@ fn resolveFunctionTypeFromCall(
     var has_callsite_bindings = false;
     for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
         const param_name_token = param.name_token orelse continue;
-        const param_type = param.type;
+        const param_type = if (param.type.isGenericType())
+            try analyser.resolveGenericType(param.type, meta_params)
+        else
+            param.type;
         const parameter_token_handle: TokenWithHandle = .{
             .token = param_name_token,
             .handle = func_info.handle,
@@ -7598,6 +7677,38 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .node_handle = .of(params[0], handle),
                         .container_type = options.container_type,
                     });
+                },
+                .Pointer => {
+                    if (params.len != 4) return .unknown_type;
+                    const size = try analyser.resolvePointerSize(.of(params[0], handle)) orelse return .unknown_type;
+                    const flags = try analyser.resolvePointerAttributes(size, .{
+                        .node_handle = .of(params[1], handle),
+                        .container_type = options.container_type,
+                    }) orelse return .unknown_type;
+                    const child = try analyser.resolveTypeOfNodeInternal(.{
+                        .node_handle = .of(params[2], handle),
+                        .container_type = options.container_type,
+                    }) orelse return .unknown_type;
+                    if (!child.is_type_val) return .unknown_type;
+                    const child_type = child.ipIndex() orelse return .unknown_type;
+                    const sentinel_value = try analyser.resolveComptimeValue(.{
+                        .node_handle = .of(params[3], handle),
+                        .container_type = options.container_type,
+                    }) orelse return .unknown_type;
+                    const sentinel = if (sentinel_value.ipIndex()) |index|
+                        if (analyser.ip.isNull(index))
+                            InternPool.Index.none
+                        else
+                            try analyser.coerceIP(child_type, index) orelse return .unknown_type
+                    else
+                        return .unknown_type;
+                    if (sentinel != .none and (size == .one or size == .c)) return .unknown_type;
+                    const pointer_type = try analyser.ip.get(.{ .pointer_type = .{
+                        .elem_type = child_type,
+                        .sentinel = sentinel,
+                        .flags = flags,
+                    } });
+                    return Type.fromIP(analyser, .type_type, pointer_type);
                 },
                 .Vector => {
                     if (params.len != 2) return null;

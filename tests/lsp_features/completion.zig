@@ -1870,6 +1870,45 @@ test "generic function with comptime Tuple type constructor" {
     });
 }
 
+test "generic function with comptime Pointer type constructor" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Holder(comptime size: std.builtin.Type.Pointer.Size, comptime T: type) type {
+        \\    return struct { ptr: @Pointer(size, .{ .@"const" = true }, T, null) };
+        \\}
+        \\const holder: Holder(.one, u8) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "ptr", .kind = .Field, .detail = "*const u8" },
+    });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Holder(comptime T: type, comptime sentinel: T) type {
+        \\    return struct { ptr: @Pointer(.slice, .{ .@"const" = true }, T, sentinel) };
+        \\}
+        \\const holder: Holder(u8, 0) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "ptr", .kind = .Field, .detail = "[:0]const u8" },
+    });
+}
+
+test "generic function with dependent comptime value parameter" {
+    try testCompletion(
+        \\fn Select(comptime T: type, comptime value: T) type {
+        \\    return if (value == @as(T, 4))
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16, 4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

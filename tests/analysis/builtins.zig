@@ -772,6 +772,14 @@ const AliasedTuple = @Tuple(TupleFields);
 const Pointer = @Pointer(.one, undefined, undefined, undefined);
 //    ^^^^^^^ (type)()
 //                       ^^^^ (Size)()
+const ConstPointer = @Pointer(.one, .{ .@"const" = true }, u8, null);
+//    ^^^^^^^^^^^^ (type)(*const u8)
+const SentinelSlice = @Pointer(.slice, .{ .@"const" = true }, u8, 0);
+//    ^^^^^^^^^^^^^ (type)([:0]const u8)
+const AttributedManyPointer = @Pointer(.many, .{ .@"volatile" = true, .@"allowzero" = true, .@"align" = 4 }, u32, null);
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)([*]allowzero align(4) volatile u32)
+const GenericAddressPointer = @Pointer(.one, .{ .@"addrspace" = .generic }, u8, null);
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)(*u8)
 const Struct = @Struct(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //    ^^^^^^ (type)()
 //                     ^^^^^ (ContainerLayout)()
