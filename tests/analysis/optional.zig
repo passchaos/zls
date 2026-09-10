@@ -25,6 +25,26 @@ const zeta = alpha orelse null;
 const eta = alpha orelse 5;
 //    ^^^ (u32)()
 
+var runtime_optional_u8: ?u8 = null;
+var runtime_optional_bool: ?bool = null;
+var pointer_storage: u8 = 0;
+var runtime_optional_pointer: ?*u8 = &pointer_storage;
+var runtime_optional_f32: ?f32 = null;
+const undefined_optional_u8: ?u8 = undefined;
+
+const optional_integer_self_equal = runtime_optional_u8 == runtime_optional_u8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const optional_integer_self_not_equal = runtime_optional_u8 != runtime_optional_u8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const optional_bool_self_equal = runtime_optional_bool == runtime_optional_bool;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const optional_pointer_self_equal = runtime_optional_pointer == runtime_optional_pointer;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const optional_float_self_equal = runtime_optional_f32 == runtime_optional_f32;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const undefined_optional_self_equal = undefined_optional_u8 == undefined_optional_u8;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+
 fn orelse_0() void {
     const foo: ?i32 = 5;
     const bar = foo orelse 0;

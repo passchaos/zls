@@ -3741,6 +3741,27 @@ test "generic function with comptime optional condition" {
     });
 }
 
+test "generic function with runtime optional self equality" {
+    try testCompletion(
+        \\var runtime_integer: ?u8 = null;
+        \\var runtime_boolean: ?bool = null;
+        \\var storage: u8 = 0;
+        \\var runtime_pointer: ?*u8 = &storage;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (runtime_integer == runtime_integer and
+        \\        !(runtime_boolean != runtime_boolean) and
+        \\        runtime_pointer == runtime_pointer)
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime optional payload" {
     try testCompletion(
         \\fn Buffer(comptime value: ?usize) type {

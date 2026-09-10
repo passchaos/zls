@@ -4296,6 +4296,19 @@ fn resolveSelfComparisonValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn hasReflexiveEquality(analyser: *Analyser, ty: InternPool.Index) bool {
+    const type_tag = analyser.ip.zigTypeTag(ty) orelse return false;
+    return switch (type_tag) {
+        .int, .bool, .error_set, .@"enum" => true,
+        .pointer => switch (analyser.ip.indexToKey(ty).pointer_type.flags.size) {
+            .one, .many, .c => true,
+            .slice => false,
+        },
+        .optional => analyser.hasReflexiveEquality(analyser.ip.childType(ty)),
+        else => false,
+    };
+}
+
 fn resolveComplementaryComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -7107,14 +7120,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (try analyser.resolveSelfComparisonValue(tree.nodeTag(node), lhs_ty)) |value| return value;
                     const tag = tree.nodeTag(node);
                     if ((tag == .equal_equal or tag == .bang_equal) and
-                        (try lhs_ty.typeOf(analyser)).isEnumType() and
                         try analyser.isMutableIdentifierExpression(tree, handle, lhs))
                     {
-                        return Type.fromIP(
-                            analyser,
-                            .bool_type,
-                            if (tag == .equal_equal) .bool_true else .bool_false,
-                        );
+                        const operand_type = try lhs_ty.typeOf(analyser);
+                        const reflexive = operand_type.isEnumType() or
+                            if (operand_type.ipIndex()) |type_index|
+                                analyser.hasReflexiveEquality(type_index)
+                            else
+                                false;
+                        if (reflexive) {
+                            return Type.fromIP(
+                                analyser,
+                                .bool_type,
+                                if (tag == .equal_equal) .bool_true else .bool_false,
+                            );
+                        }
                     }
                 }
                 var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
