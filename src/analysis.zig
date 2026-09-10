@@ -3416,18 +3416,26 @@ fn resolveSelectValue(
     const predicate_values = analyser.aggregateValues(predicate);
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
-    if (predicate_values == null or lhs_values == null or rhs_values == null) {
-        return Type.fromIP(analyser, result_type, null);
-    }
 
     const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const predicate_value = predicate_values.?.at(@intCast(i), analyser.ip);
+        const index: u32 = @intCast(i);
+        const predicate_value = if (predicate_values) |slice| slice.at(index, analyser.ip) else .unknown_unknown;
+        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else null;
+        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else null;
         value.* = switch (predicate_value) {
-            .bool_true => lhs_values.?.at(@intCast(i), analyser.ip),
-            .bool_false => rhs_values.?.at(@intCast(i), analyser.ip),
-            else => try analyser.ip.getUnknown(element_type),
+            .bool_true => lhs_value orelse try analyser.ip.getUnknown(element_type),
+            .bool_false => rhs_value orelse try analyser.ip.getUnknown(element_type),
+            else => if (!analyser.ip.isUndefined(predicate_value) and
+                lhs_value != null and
+                rhs_value != null and
+                lhs_value.? == rhs_value.? and
+                !analyser.ip.isUndefined(lhs_value.?) and
+                !analyser.ip.isUnknown(lhs_value.?))
+                lhs_value.?
+            else
+                try analyser.ip.getUnknown(element_type),
         };
     }
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);

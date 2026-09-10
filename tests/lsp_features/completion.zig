@@ -798,6 +798,42 @@ test "generic function with comptime vector select" {
     });
 }
 
+test "generic function with partially known vector select" {
+    try testCompletion(
+        \\var runtime_bool: bool = undefined;
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const partial = @select(
+        \\        u8,
+        \\        @as(@Vector(3, bool), .{ true, false, runtime_bool }),
+        \\        @as(@Vector(3, u8), .{ N, runtime_u8, 9 }),
+        \\        @as(@Vector(3, u8), .{ runtime_u8, N + 1, 9 }),
+        \\    );
+        \\    const equal = @select(
+        \\        u8,
+        \\        @as(@Vector(2, bool), @splat(runtime_bool)),
+        \\        @as(@Vector(2, u8), @splat(N + 2)),
+        \\        @as(@Vector(2, u8), @splat(N + 2)),
+        \\    );
+        \\    const runtime_lhs = @select(
+        \\        u8,
+        \\        @as(@Vector(2, bool), .{ false, true }),
+        \\        @as(@Vector(2, u8), @splat(runtime_u8)),
+        \\        @as(@Vector(2, u8), .{ N + 3, N + 4 }),
+        \\    );
+        \\    return if (partial[0] == 4 and partial[1] == 5 and partial[2] == 9 and
+        \\        equal[0] == 6 and runtime_lhs[0] == 7)
+        \\        struct { selected: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector arithmetic" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

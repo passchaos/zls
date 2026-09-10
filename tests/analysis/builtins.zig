@@ -182,6 +182,38 @@ const select_value = @select(
 );
 const select_value_index = select_value[1];
 //    ^^^^^^^^^^^^^^^^^^ (u8)(6)
+const select_equal_unknown_predicate = @select(
+    u8,
+    @as(@Vector(3, bool), .{ true, false, runtime_bool }),
+    @as(@Vector(3, u8), .{ 7, runtime_u8, 9 }),
+    @as(@Vector(3, u8), .{ runtime_u8, 8, 9 }),
+);
+const select_equal_unknown_predicate_value = select_equal_unknown_predicate[2];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(9)
+const select_equal_runtime_predicate = @select(
+    u8,
+    @as(@Vector(2, bool), @splat(runtime_bool)),
+    @as(@Vector(2, u8), @splat(5)),
+    @as(@Vector(2, u8), @splat(5)),
+);
+const select_equal_runtime_predicate_value = select_equal_runtime_predicate[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(5)
+const select_runtime_lhs = @select(
+    u8,
+    @as(@Vector(2, bool), .{ false, true }),
+    @as(@Vector(2, u8), @splat(runtime_u8)),
+    @as(@Vector(2, u8), .{ 3, 4 }),
+);
+const select_runtime_lhs_value = select_runtime_lhs[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(3)
+const select_undefined_predicate = @select(
+    u8,
+    @as(@Vector(1, bool), .{undefined}),
+    @as(@Vector(1, u8), .{5}),
+    @as(@Vector(1, u8), .{5}),
+);
+const select_undefined_predicate_value = select_undefined_predicate[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)()
 const shuffle_value = @shuffle(
     u8,
     @as(@Vector(2, u8), .{ 1, 2 }),
