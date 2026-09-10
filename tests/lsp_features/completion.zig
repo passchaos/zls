@@ -2961,6 +2961,24 @@ test "generic function with comptime while return statements" {
     });
 }
 
+test "generic function with runtime if before return" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    if (runtime) {
+        \\        _ = N;
+        \\    } else {
+        \\        _ = N + 1;
+        \\    }
+        \\    return struct { selected: [N]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with wrapped comptime return statements" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

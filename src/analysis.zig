@@ -931,7 +931,16 @@ fn findKnownReturnExpression(
         },
         .@"if", .if_simple => blk: {
             const if_node = ast.fullIf(tree, node).?;
-            const condition = try analyser.resolveIfConditionValue(.of(if_node.ast.cond_expr, handle)) orelse break :blk .unknown;
+            const condition = try analyser.resolveIfConditionValue(.of(if_node.ast.cond_expr, handle)) orelse {
+                if (try analyser.findKnownReturnExpression(handle, if_node.ast.then_expr) != .continues) {
+                    break :blk .unknown;
+                }
+                const else_expr = if_node.ast.else_expr.unwrap() orelse break :blk .continues;
+                break :blk if (try analyser.findKnownReturnExpression(handle, else_expr) == .continues)
+                    .continues
+                else
+                    .unknown;
+            };
             if (condition) {
                 break :blk try analyser.findKnownReturnExpression(handle, if_node.ast.then_expr);
             }
