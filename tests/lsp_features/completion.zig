@@ -1064,7 +1064,8 @@ test "generic function with partially known boolean operators" {
     try testCompletion(
         \\var runtime: bool = undefined;
         \\fn Select(comptime N: u8) type {
-        \\    return if (!(runtime and false) and (runtime or true))
+        \\    return if (!(runtime and false) and (runtime or true) and
+        \\        !(runtime & false) and (runtime | true))
         \\        struct { evaluated: [N]u8 }
         \\    else
         \\        struct { fallback: u8 };

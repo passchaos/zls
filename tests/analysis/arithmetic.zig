@@ -129,6 +129,22 @@ const bool_or_runtime_false = runtime_bool or false;
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const bool_and_undefined = @as(bool, undefined) and false;
 //    ^^^^^^^^^^^^^^^^^^ (bool)()
+const bool_bit_and_value = true & false;
+//    ^^^^^^^^^^^^^^^^^^ (bool)(false)
+const bool_bit_or_value = false | true;
+//    ^^^^^^^^^^^^^^^^^ (bool)(true)
+const bool_bit_xor_value = true ^ false;
+//    ^^^^^^^^^^^^^^^^^^ (bool)(true)
+const bool_bit_and_runtime_false = runtime_bool & false;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const bool_bit_or_runtime_true = runtime_bool | true;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const bool_bit_xor_runtime_true = runtime_bool ^ true;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const bool_bit_and_undefined = undefined_bool & false;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const bool_bit_or_undefined = undefined_bool | true;
+//    ^^^^^^^^^^^^^^^^^^^^^ (bool)()
 const unsigned_lte_max = runtime_u8 <= @as(u8, 255);
 //    ^^^^^^^^^^^^^^^^ (bool)(true)
 const unsigned_gt_max = runtime_u8 > @as(u8, 255);

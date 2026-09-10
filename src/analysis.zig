@@ -3250,6 +3250,49 @@ fn resolveVectorBinaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn resolveBoolBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) ?Type {
+    const lhs_payload = switch (lhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const rhs_payload = switch (rhs.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (lhs_payload.type != .bool_type or rhs_payload.type != .bool_type) return null;
+    const lhs_value = lhs_payload.index;
+    const rhs_value = rhs_payload.index;
+    if (lhs_value) |value| if (analyser.ip.isUndefined(value)) return null;
+    if (rhs_value) |value| if (analyser.ip.isUndefined(value)) return null;
+
+    const result: InternPool.Index = switch (tag) {
+        .bit_and => if (lhs_value == .bool_false or rhs_value == .bool_false)
+            .bool_false
+        else if (lhs_value == .bool_true and rhs_value == .bool_true)
+            .bool_true
+        else
+            return null,
+        .bit_or => if (lhs_value == .bool_true or rhs_value == .bool_true)
+            .bool_true
+        else if (lhs_value == .bool_false and rhs_value == .bool_false)
+            .bool_false
+        else
+            return null,
+        .bit_xor => if ((lhs_value == .bool_true or lhs_value == .bool_false) and
+            (rhs_value == .bool_true or rhs_value == .bool_false))
+            if ((lhs_value == .bool_true) != (rhs_value == .bool_true)) .bool_true else .bool_false
+        else
+            return null,
+        else => return null,
+    };
+    return Type.fromIP(analyser, .bool_type, result);
+}
+
 fn resolveVectorBoolBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -7481,6 +7524,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         try analyser.resolveVectorFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
                     else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveFloatBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
+                        analyser.resolveBoolBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveVectorBoolBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
                         try analyser.resolveVectorBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
                 };
