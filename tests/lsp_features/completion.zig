@@ -3960,6 +3960,24 @@ test "generic function with comptime errorName" {
     });
 }
 
+test "generic function with comptime catch" {
+    try testCompletion(
+        \\var runtime_error_union: error{Failure}!u8 = undefined;
+        \\fn Select(comptime err: anyerror) type {
+        \\    const fallback = err catch 9;
+        \\    const widened = runtime_error_union catch @as(u16, 11);
+        \\    return if (fallback == 9 and @TypeOf(widened) == u16)
+        \\        struct { caught: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(error.Failure) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "caught", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime typeName" {
     try testCompletion(
         \\const Fields = struct { @"[]const u8": u8 };

@@ -1222,6 +1222,21 @@ pub fn resolveUnwrapErrorUnionType(analyser: *Analyser, ty: Type, side: ErrorUni
     };
 }
 
+pub fn resolveCatchType(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMemory}!?Type {
+    if (lhs.is_type_val or rhs.is_type_val) return null;
+
+    const payload = switch (lhs.data) {
+        .error_union => |info| try info.payload.instanceTypeVal(analyser) orelse return null,
+        .ip_index => |lhs_payload| switch (analyser.ip.indexToKey(lhs_payload.type)) {
+            .error_union_type => |info| Type.fromIP(analyser, info.payload_type, null),
+            .error_set_type => return rhs,
+            else => return null,
+        },
+        else => return null,
+    };
+    return try analyser.resolvePeerTypes(payload, rhs) orelse payload;
+}
+
 fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
     if (!ty.is_type_val)
         return null;
@@ -6666,11 +6681,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             return try analyser.resolveOrelseType(lhs, rhs);
         },
         .@"catch" => {
-            const lhs_node, _ = tree.nodeData(node).node_and_node;
+            const lhs_node, const rhs_node = tree.nodeData(node).node_and_node;
 
             const lhs = try analyser.resolveTypeOfNodeInternal(.of(lhs_node, handle)) orelse return null;
+            if (analyser.evaluate_comptime_values) {
+                if (lhs.ipIndex()) |index| switch (analyser.ip.indexToKey(index)) {
+                    .error_value => return try analyser.resolveTypeOfNodeInternal(.of(rhs_node, handle)),
+                    else => {},
+                };
+            }
 
-            return try analyser.resolveUnwrapErrorUnionType(lhs, .payload);
+            const rhs = try analyser.resolveTypeOfNodeInternal(.of(rhs_node, handle)) orelse
+                return try analyser.resolveUnwrapErrorUnionType(lhs, .payload);
+            return try analyser.resolveCatchType(lhs, rhs);
         },
         .@"try" => {
             const expr_node = tree.nodeData(node).node;

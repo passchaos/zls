@@ -11,6 +11,13 @@ const InvalidErrorUnionTypeUnwrap = ErrorUnionType catch |err| err;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (unknown)()
 //                                                        ^^^ (unknown)()
 
+const known_error_catch = error.Foo catch 9;
+//    ^^^^^^^^^^^^^^^^^ (comptime_int)(9)
+
+var runtime_error_union: Error!u8 = undefined;
+const widened_catch = runtime_error_union catch @as(u16, 9);
+//    ^^^^^^^^^^^^^ (u16)()
+
 const DuplicateErrorName = error{ Foo, Foo } || error{Bar};
 //    ^^^^^^^^^^^^^^^^^^ (type)(error{Bar,Foo})
 
