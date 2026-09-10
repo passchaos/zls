@@ -1169,6 +1169,7 @@ pub fn resolveOptionalUnwrap(analyser: *Analyser, optional: Type) error{OutOfMem
     // TODO: some uses of this function don't expect C pointers to be unwrapped
     switch (optional.data) {
         .type_info_value => |value| {
+            if (value.optional_type_payload) |payload| return payload.*;
             if (value.collection == null or
                 value.collection.?.kind != .error_set_errors or
                 !value.collection.?.is_optional) return null;
@@ -2990,6 +2991,7 @@ fn resolveTypeInfoTag(analyser: *Analyser, ty: Type) ?std.builtin.TypeId {
         .tuple => .@"struct",
         .optional => .optional,
         .error_union => .error_union,
+        .union_tag => .@"enum",
         .container => switch (ty.getContainerKind() orelse return null) {
             .keyword_struct => .@"struct",
             .keyword_enum => .@"enum",
@@ -3203,7 +3205,12 @@ fn resolveTypeInfoFieldAccess(
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .union_type => |union_index| blk: {
                         const info = analyser.ip.getUnion(union_index);
-                        break :blk .{ info.layout, info.tag_type, info.fields.count(), 0 };
+                        break :blk .{
+                            info.layout,
+                            if (info.tag_type == .none) null else Type.fromIP(analyser, .type_type, info.tag_type),
+                            info.fields.count(),
+                            0,
+                        };
                     },
                     else => return field_value_type,
                 },
@@ -3211,15 +3218,15 @@ fn resolveTypeInfoFieldAccess(
                     var buffer: [2]Ast.Node.Index = undefined;
                     const info = astContainerTypeInfo(value.reflected_type.*, &buffer) orelse return field_value_type;
                     if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_union) return field_value_type;
-                    if (info.declaration.ast.enum_token != null and info.declaration.ast.arg.unwrap() == null)
-                        return field_value_type;
                     const tag_type = if (info.declaration.ast.arg.unwrap()) |arg|
-                        (try analyser.resolveTypeOfNodeInternal(.{
+                        try analyser.resolveTypeOfNodeInternal(.{
                             .node_handle = .of(arg, info.handle),
                             .container_type = value.reflected_type.*,
-                        }) orelse return field_value_type).ipIndex() orelse return field_value_type
-                    else
-                        InternPool.Index.none;
+                        }) orelse return field_value_type
+                    else if (info.declaration.ast.enum_token != null) tag: {
+                        const tag_value = try analyser.resolveUnionTag(value.reflected_type.*) orelse return field_value_type;
+                        break :tag try tag_value.typeOf(analyser);
+                    } else null;
                     break :blk .{
                         info.layout,
                         tag_type,
@@ -3234,7 +3241,10 @@ fn resolveTypeInfoFieldAccess(
                 return try analyser.enumValue(enum_type, @tagName(layout));
             }
             if (std.mem.eql(u8, field_name, "tag_type")) {
-                return try analyser.optionalTypeValue(field_value_type, tag_type);
+                if (tag_type) |payload| {
+                    return try analyser.typeInfoOptionalTypeValue(value, field_value_type, payload);
+                }
+                return try analyser.optionalTypeValue(field_value_type, .none);
             }
             if (std.mem.eql(u8, field_name, "fields")) {
                 return try analyser.typeInfoCollectionValue(value, field_value_type, .union_fields, field_count);
@@ -3270,6 +3280,18 @@ fn resolveTypeInfoFieldAccess(
                         is_exhaustive,
                         astEnumFieldCount(info.declaration, info.handle),
                         astContainerDeclarationCount(info.declaration, info.handle),
+                    };
+                },
+                .union_tag => |union_type| blk: {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const info = astContainerTypeInfo(union_type.*, &buffer) orelse return field_value_type;
+                    if (info.handle.tree.tokenTag(info.declaration.ast.main_token) != .keyword_union or
+                        info.declaration.ast.enum_token == null) return field_value_type;
+                    break :blk .{
+                        try analyser.astEnumTagType(union_type.*, info.declaration, info.handle) orelse return field_value_type,
+                        true,
+                        astContainerFieldCount(info.declaration, info.handle),
+                        0,
                     };
                 },
                 else => return field_value_type,
@@ -3439,6 +3461,22 @@ fn typeInfoErrorSetPayload(
     } }, .is_type_val = false };
 }
 
+fn typeInfoOptionalTypeValue(
+    analyser: *Analyser,
+    value: Type.TypeInfoValue,
+    optional_type: Type,
+    payload: Type,
+) error{OutOfMemory}!Type {
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(optional_type),
+        .reflected_type = value.reflected_type,
+        .tag = value.tag,
+        .is_payload = true,
+        .collection = null,
+        .optional_type_payload = try analyser.allocType(payload),
+    } }, .is_type_val = false };
+}
+
 fn resolveTypeInfoDescriptorField(
     analyser: *Analyser,
     value: Type.TypeInfoValue,
@@ -3590,6 +3628,11 @@ fn resolveTypeInfoDescriptorField(
                         ast_field.name,
                         try analyser.resolveEnumTagIntValue(value.reflected_type.*, ast_field.name) orelse return field_value_type,
                     };
+                },
+                .union_tag => |union_type| blk: {
+                    const ast_field = try analyser.astContainerFieldAt(union_type.*, index, false) orelse
+                        return field_value_type;
+                    break :blk .{ ast_field.name, try analyser.internComptimeInt(index) };
                 },
                 else => return field_value_type,
             };
@@ -6316,6 +6359,7 @@ fn integerBoundary(
 fn knownOptionalNull(analyser: *Analyser, value: Type) ?bool {
     if (value.data == .type_info_value) {
         const type_info = value.data.type_info_value;
+        if (type_info.optional_type_payload != null) return false;
         if (type_info.tag == .error_set and type_info.is_payload) {
             const collection = type_info.collection orelse return true;
             return if (collection.is_optional) false else null;
@@ -10640,6 +10684,7 @@ pub const Type = struct {
         tag: std.builtin.TypeId,
         is_payload: bool,
         collection: ?Collection,
+        optional_type_payload: ?*Type = null,
 
         const Collection = struct {
             kind: TypeInfoCollectionKind,
@@ -10999,6 +11044,7 @@ pub const Type = struct {
                     std.hash.autoHash(hasher, value.tag);
                     std.hash.autoHash(hasher, value.is_payload);
                     std.hash.autoHash(hasher, value.collection);
+                    if (value.optional_type_payload) |payload| payload.hashWithHasher(hasher);
                 },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
@@ -11107,6 +11153,10 @@ pub const Type = struct {
                     if (a_value.tag != b_value.tag) return false;
                     if (a_value.is_payload != b_value.is_payload) return false;
                     if (!std.meta.eql(a_value.collection, b_value.collection)) return false;
+                    if ((a_value.optional_type_payload == null) != (b_value.optional_type_payload == null)) return false;
+                    if (a_value.optional_type_payload) |a_payload| {
+                        if (!a_payload.eql(b_value.optional_type_payload.?.*)) return false;
+                    }
                 },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;
@@ -11933,6 +11983,7 @@ pub const Type = struct {
 
     pub fn isEnumType(self: Type, analyser: *Analyser) bool {
         return switch (self.data) {
+            .union_tag => true,
             .ip_index => |payload| self.is_type_val and
                 if (payload.index) |index|
                     analyser.ip.zigTypeTag(index) == .@"enum"
@@ -14160,6 +14211,7 @@ pub fn lookupSymbolContainer(
 ) error{OutOfMemory}!?DeclWithHandle {
     const info = switch (container_type.data) {
         .container => |info| info,
+        .union_tag => |union_type| return analyser.lookupSymbolContainer(union_type.*, symbol, kind),
         else => return null,
     };
     const container_scope = info.scope_handle;

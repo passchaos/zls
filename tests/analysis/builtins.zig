@@ -916,6 +916,13 @@ const type_info_tuple_is_tuple = @typeInfo(Tuple).@"struct".is_tuple;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_union_tag_null = @typeInfo(ConcreteUnion).@"union".tag_type == null;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const ImplicitTaggedUnion = union(enum) { alpha: u8, beta: u16 };
+const TypeInfoImplicitUnionTag = @typeInfo(ImplicitTaggedUnion).@"union".tag_type.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(@typeInfo(ImplicitTaggedUnion).@"union".tag_type.?)
+const type_info_implicit_union_tag_name = @tagName(TypeInfoImplicitUnionTag.beta)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(98)
+const type_info_implicit_union_tag_fields = @typeInfo(TypeInfoImplicitUnionTag).@"enum".fields.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const TypeInfoEnumTag = @typeInfo(ConcreteEnum).@"enum".tag_type;
 //    ^^^^^^^^^^^^^^^ (type)(u8)
 const type_info_enum_exhaustive = @typeInfo(ConcreteEnum).@"enum".is_exhaustive;

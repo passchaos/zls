@@ -2724,6 +2724,27 @@ test "generic function with AST function calling convention type info" {
     });
 }
 
+test "generic function with implicit tagged union type info" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const U = union(enum) { alpha: T, beta: u8 };
+        \\    const A = @typeInfo(U).@"union".tag_type.?;
+        \\    const B = @typeInfo(U).@"union".tag_type.?;
+        \\    const info = @typeInfo(A).@"enum";
+        \\    return if (A == B and @tagName(A.beta)[0] == 'b' and
+        \\        info.fields.len == 2 and info.fields[0].name[0] == 'a' and
+        \\        info.fields[1].name[0] == 'b')
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime error set type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
