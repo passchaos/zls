@@ -884,6 +884,22 @@ const TypeInfoOptionalChild = @typeInfo(?u32).optional.child;
 //    ^^^^^^^^^^^^^^^^^^^^^ (type)(u32)
 const TypeInfoErrorPayload = @typeInfo(error{Oops}!u64).error_union.payload;
 //    ^^^^^^^^^^^^^^^^^^^^ (type)(u64)
+const type_info_struct_layout_auto = @typeInfo(ConcreteStruct).@"struct".layout == .auto;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backing_integer == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_tuple_is_tuple = @typeInfo(Tuple).@"struct".is_tuple;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_union_tag_null = @typeInfo(ConcreteUnion).@"union".tag_type == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const TypeInfoEnumTag = @typeInfo(ConcreteEnum).@"enum".tag_type;
+//    ^^^^^^^^^^^^^^^ (type)(u8)
+const type_info_enum_exhaustive = @typeInfo(ConcreteEnum).@"enum".is_exhaustive;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_fn_varargs = @typeInfo(VariadicFn).@"fn".is_var_args;
+//    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const TypeInfoFnReturn = @typeInfo(ConcreteFn).@"fn".return_type.?;
+//    ^^^^^^^^^^^^^^^^ (type)(u8)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()

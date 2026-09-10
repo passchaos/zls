@@ -2338,6 +2338,34 @@ test "generic function with comptime type info payload values" {
     });
 }
 
+test "generic function with comptime container type info payload values" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\    const U = @Union(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\    const E = @Enum(u8, .exhaustive, &.{"value"}, &.{1});
+        \\    const F = @Fn(&.{T}, &.{.{}}, u8, .{ .@"callconv" = .c, .varargs = true });
+        \\    const struct_info = @typeInfo(S).@"struct";
+        \\    const tuple_info = @typeInfo(@Tuple(&.{T})).@"struct";
+        \\    const union_info = @typeInfo(U).@"union";
+        \\    const enum_info = @typeInfo(E).@"enum";
+        \\    const fn_info = @typeInfo(F).@"fn";
+        \\    return if (struct_info.layout == .auto and struct_info.backing_integer == null and
+        \\        !struct_info.is_tuple and tuple_info.is_tuple and union_info.layout == .auto and
+        \\        union_info.tag_type == null and enum_info.tag_type == u8 and
+        \\        enum_info.is_exhaustive and !fn_info.is_generic and fn_info.is_var_args and
+        \\        fn_info.return_type.? == u8)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

@@ -3075,9 +3075,86 @@ fn resolveTypeInfoFieldAccess(
             if (std.mem.eql(u8, field_name, "error_set")) return error_set;
             if (std.mem.eql(u8, field_name, "payload")) return payload;
         },
+        .@"struct" => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const layout, const backing_integer, const is_tuple = switch (analyser.ip.indexToKey(type_index)) {
+                .struct_type => |struct_index| blk: {
+                    const info = analyser.ip.getStruct(struct_index);
+                    break :blk .{ info.layout, info.backing_int_ty, false };
+                },
+                .tuple_type => .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true },
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "layout")) {
+                const enum_type = try field_value_type.typeOf(analyser);
+                return try analyser.enumValue(enum_type, @tagName(layout));
+            }
+            if (std.mem.eql(u8, field_name, "backing_integer")) {
+                return try analyser.optionalTypeValue(field_value_type, backing_integer);
+            }
+            if (std.mem.eql(u8, field_name, "is_tuple")) {
+                return Type.fromIP(analyser, .bool_type, if (is_tuple) .bool_true else .bool_false);
+            }
+        },
+        .@"union" => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const info = switch (analyser.ip.indexToKey(type_index)) {
+                .union_type => |union_index| analyser.ip.getUnion(union_index),
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "layout")) {
+                const enum_type = try field_value_type.typeOf(analyser);
+                return try analyser.enumValue(enum_type, @tagName(info.layout));
+            }
+            if (std.mem.eql(u8, field_name, "tag_type")) {
+                return try analyser.optionalTypeValue(field_value_type, info.tag_type);
+            }
+        },
+        .@"enum" => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const info = switch (analyser.ip.indexToKey(type_index)) {
+                .enum_type => |enum_index| analyser.ip.getEnum(enum_index),
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "tag_type")) {
+                return Type.fromIP(analyser, .type_type, info.tag_type);
+            }
+            if (std.mem.eql(u8, field_name, "is_exhaustive")) {
+                return Type.fromIP(analyser, .bool_type, if (info.is_exhaustive) .bool_true else .bool_false);
+            }
+        },
+        .@"fn" => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const info = switch (analyser.ip.indexToKey(type_index)) {
+                .function_type => |info| info,
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "is_generic")) {
+                return Type.fromIP(analyser, .bool_type, if (info.flags.is_generic) .bool_true else .bool_false);
+            }
+            if (std.mem.eql(u8, field_name, "is_var_args")) {
+                return Type.fromIP(analyser, .bool_type, if (info.flags.is_var_args) .bool_true else .bool_false);
+            }
+            if (std.mem.eql(u8, field_name, "return_type")) {
+                return try analyser.optionalTypeValue(field_value_type, info.return_type);
+            }
+        },
         else => {},
     }
     return field_value_type;
+}
+
+fn optionalTypeValue(
+    analyser: *Analyser,
+    optional_instance: Type,
+    value: InternPool.Index,
+) error{OutOfMemory}!Type {
+    const optional_type = (try optional_instance.typeOf(analyser)).ipIndex() orelse return optional_instance;
+    const optional_value = if (value == .none)
+        try analyser.ip.getNull(optional_type)
+    else
+        try analyser.ip.get(.{ .optional_value = .{ .ty = optional_type, .val = value } });
+    return Type.fromIP(analyser, optional_type, optional_value);
 }
 
 fn resolveEnumValueTag(
