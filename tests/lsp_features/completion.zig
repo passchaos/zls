@@ -2075,7 +2075,8 @@ test "generic function with comptime Struct type constructor" {
         \\    const Explicit = @Struct(.@"packed", i8, &.{ "low", "high" }, &.{ u3, T }, &.{ .{}, .{} });
         \\    return if (@typeInfo(Extern).@"struct".layout == .@"extern" and
         \\        @typeInfo(Packed).@"struct".backing_integer.? == u8 and
-        \\        @typeInfo(Explicit).@"struct".backing_integer.? == i8)
+        \\        @typeInfo(Explicit).@"struct".backing_integer.? == i8 and
+        \\        @bitSizeOf(Packed) == 8 and @sizeOf(Packed) == 1 and @alignOf(Packed) == 1)
         \\        struct { matched: T }
         \\    else
         \\        struct { fallback: u8 };
@@ -2233,6 +2234,24 @@ test "generic function with comptime Union type constructor" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Inferred = @Union(.@"packed", null, &.{ "unsigned", "signed" }, &.{ T, i5 }, &.{ .{}, .{} });
+        \\    const Explicit = @Union(.@"packed", i5, &.{ "unsigned", "signed" }, &.{ T, i5 }, &.{ .{}, .{} });
+        \\    return if (@typeInfo(Inferred).@"union".layout == .@"packed" and
+        \\        @typeInfo(Inferred).@"union".tag_type == null and
+        \\        @bitSizeOf(Inferred) == 5 and @sizeOf(Inferred) == 1 and
+        \\        @bitSizeOf(Explicit) == 5 and @alignOf(Explicit) == 1)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u5" },
     });
 }
 

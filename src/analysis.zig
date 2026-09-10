@@ -5810,20 +5810,22 @@ fn resolveUnionTypeConstructor(
 ) Error!?Type {
     if (params.len != 5) return null;
     const layout = try analyser.resolveContainerLayout(.of(params[0], handle)) orelse return null;
-    const tag_type_value = try analyser.resolveComptimeValue(.{
+    const argument_type_value = try analyser.resolveComptimeValue(.{
         .node_handle = .of(params[1], handle),
         .container_type = container_type,
     }) orelse return null;
-    const tag_type: InternPool.Index = if (tag_type_value.ipIndex()) |index|
-        if (analyser.ip.isNull(index))
-            .none
-        else if (tag_type_value.is_type_val and analyser.ip.zigTypeTag(index) == .@"enum")
-            index
-        else
-            return null
-    else
-        return null;
-    if (layout != .auto and tag_type != .none) return null;
+    const argument_type = argument_type_value.ipIndex() orelse return null;
+    const has_argument_type = !analyser.ip.isNull(argument_type);
+    if (has_argument_type and !argument_type_value.is_type_val) return null;
+    const tag_type: InternPool.Index = if (layout == .auto and has_argument_type) blk: {
+        if (analyser.ip.zigTypeTag(argument_type) != .@"enum") return null;
+        break :blk argument_type;
+    } else .none;
+    var backing_int_ty: InternPool.Index = if (layout == .@"packed" and has_argument_type) blk: {
+        if (analyser.ip.zigTypeTag(argument_type) != .int) return null;
+        break :blk argument_type;
+    } else .none;
+    if (layout == .@"extern" and has_argument_type) return null;
 
     const names = try analyser.resolveStringListLiteral(.{
         .node_handle = .of(params[2], handle),
@@ -5845,6 +5847,24 @@ fn resolveUnionTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
     defer analyser.gpa.free(field_types);
+    if (layout == .@"packed") {
+        if (field_types.len == 0) return null;
+        const field_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, field_types[0])) orelse return null;
+        for (field_types, alignments) |field_type, alignment| {
+            if (alignment != 0 or analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, field_type)) != field_bits) {
+                return null;
+            }
+        }
+        const field_bits_u16 = std.math.cast(u16, field_bits) orelse return null;
+        if (backing_int_ty == .none) {
+            backing_int_ty = try analyser.ip.get(.{ .int_type = .{
+                .signedness = .unsigned,
+                .bits = field_bits_u16,
+            } });
+        } else if (analyser.ip.intInfo(backing_int_ty, builtin.target).bits != field_bits_u16) {
+            return null;
+        }
+    }
     if (tag_type != .none) {
         const enum_info = analyser.ip.getEnum(analyser.ip.indexToKey(tag_type).enum_type);
         if (enum_info.fields.count() != names.len) return null;
@@ -5864,6 +5884,7 @@ fn resolveUnionTypeConstructor(
 
     const union_index = try analyser.ip.createUnion(.{
         .tag_type = tag_type,
+        .backing_int_ty = backing_int_ty,
         .fields = fields,
         .namespace = .none,
         .layout = layout,
@@ -7181,6 +7202,16 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                     const info = analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type);
                     break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.tag_type));
                 },
+                .@"struct" => {
+                    const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
+                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
+                    break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                },
+                .@"union" => {
+                    const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
+                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
+                    break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                },
                 else => null,
             };
         },
@@ -7244,6 +7275,16 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                     const info = analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type);
                     break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.tag_type));
                 },
+                .@"struct" => {
+                    const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
+                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
+                    break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                },
+                .@"union" => {
+                    const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
+                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
+                    break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                },
                 else => null,
             };
         },
@@ -7299,6 +7340,16 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                     .type_type,
                     analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type).tag_type,
                 )),
+                .@"struct" => packed_layout: {
+                    const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
+                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :packed_layout null;
+                    break :packed_layout try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                },
+                .@"union" => packed_layout: {
+                    const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
+                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :packed_layout null;
+                    break :packed_layout try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                },
                 else => null,
             };
         },

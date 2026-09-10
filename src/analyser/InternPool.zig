@@ -1019,6 +1019,7 @@ pub const Enum = struct {
 
 pub const Union = struct {
     tag_type: InternPool.Index,
+    backing_int_ty: InternPool.Index = .none,
     fields: std.array_hash_map.Auto(String, Field),
     namespace: NamespaceIndex,
     layout: std.builtin.Type.ContainerLayout = .auto,
@@ -4141,8 +4142,12 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                 .@"packed" => try writer.writeAll("packed "),
             }
             try writer.writeAll("union");
-            if (union_info.tag_type != .none) {
-                try writer.print("({f})", .{union_info.tag_type.fmtOptions(ip, options)});
+            const argument_type = if (union_info.layout == .@"packed")
+                union_info.backing_int_ty
+            else
+                union_info.tag_type;
+            if (argument_type != .none) {
+                try writer.print("({f})", .{argument_type.fmtOptions(ip, options)});
             }
             if (options.truncate_container) {
                 try writer.writeAll(" {...}");

@@ -820,6 +820,10 @@ const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 
 //    ^^^^^^^^^^^^ (type)(union { value: u8 align(4) })
 const ExternUnion = @Union(.@"extern", null, &.{ "small", "large" }, &.{ u8, u32 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^ (type)(extern union { small: u8, large: u32 })
+const PackedUnion = @Union(.@"packed", null, &.{ "unsigned", "signed" }, &.{ u5, i5 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^ (type)(packed union(u5) { unsigned: u5, signed: i5 })
+const ExplicitPackedUnion = @Union(.@"packed", i5, &.{ "unsigned", "signed" }, &.{ u5, i5 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^^^^^^^^^ (type)(packed union(i5) { unsigned: u5, signed: i5 })
 const GeneratedUnionTag = @Enum(u8, .exhaustive, &.{ "foo", "bar" }, &.{ 1, 2 });
 const TaggedUnion = @Union(.auto, GeneratedUnionTag, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^ (type)(union(enum(u8) { foo = 1, bar = 2 }) { foo: u8, bar: i16 })
@@ -954,6 +958,10 @@ const TypeInfoPackedStructBacking = @typeInfo(PackedStruct).@"struct".backing_in
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
 const TypeInfoExplicitPackedStructBacking = @typeInfo(ExplicitPackedStruct).@"struct".backing_integer.?;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(i8)
+const bit_size_of_packed_struct = @bitSizeOf(PackedStruct);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(8)
+const byte_size_of_packed_struct = @sizeOf(PackedStruct);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
 const type_info_tuple_is_tuple = @typeInfo(Tuple).@"struct".is_tuple;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const NominalTuple = @Tuple(&.{ TypeInfoNominalChild, u8 });
@@ -965,6 +973,14 @@ const type_info_union_tag_null = @typeInfo(ConcreteUnion).@"union".tag_type == n
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_extern_union_layout = @typeInfo(ExternUnion).@"union".layout == .@"extern";
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_packed_union_layout = @typeInfo(PackedUnion).@"union".layout == .@"packed";
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_packed_union_tag_null = @typeInfo(PackedUnion).@"union".tag_type == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const bit_size_of_packed_union = @bitSizeOf(PackedUnion);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(5)
+const byte_size_of_packed_union = @sizeOf(PackedUnion);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
 const ImplicitTaggedUnion = union(enum) { alpha: u8, beta: u16 };
 const TypeInfoImplicitUnionTag = @typeInfo(ImplicitTaggedUnion).@"union".tag_type.?;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(@typeInfo(ImplicitTaggedUnion).@"union".tag_type.?)
