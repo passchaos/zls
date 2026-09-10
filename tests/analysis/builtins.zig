@@ -805,6 +805,8 @@ const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //                            ^^^^^^^^^^^ (Mode)()
 const ConcreteEnum = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
 //    ^^^^^^^^^^^^ (type)(enum(u8) { low = 1, high = 7 })
+const NonexhaustiveEnum = @Enum(u8, .nonexhaustive, &.{"known"}, &.{1});
+//    ^^^^^^^^^^^^^^^^^ (type)(enum(u8) { known = 1, _ })
 const Fn = @Fn(&.{i32}, &.{.{}}, undefined, .{});
 //    ^^ (type)()
 //                       ^ ([?]Attributes)()

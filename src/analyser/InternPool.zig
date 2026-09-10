@@ -1012,7 +1012,7 @@ pub const Enum = struct {
     fields: std.array_hash_map.Auto(String, void),
     values: std.array_hash_map.Auto(InternPool.Index, void),
     namespace: NamespaceIndex,
-    tag_type_inferred: bool,
+    is_exhaustive: bool,
 
     pub const Index = enum(u32) { _ };
 };
@@ -3693,6 +3693,7 @@ pub fn onePossibleValue(ip: *InternPool, ty: Index) Index {
         .error_set_type => Index.none,
         .enum_type => |enum_index| {
             const enum_info = ip.getEnum(enum_index);
+            if (!enum_info.is_exhaustive) return Index.none;
             return switch (enum_info.fields.count()) {
                 0 => Index.unreachable_value,
                 1 => enum_info.values.keys()[0],
@@ -4070,7 +4071,7 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                 if (i != 0) try writer.writeAll(", ");
                 try writer.print("{f} = {f}", .{ ip.fmtId(name), value.fmtOptions(ip, options) });
             }
-            if (!enum_info.tag_type_inferred) {
+            if (enum_info.is_exhaustive) {
                 try writer.writeAll(" }");
             } else {
                 if (enum_info.fields.count() != 0) try writer.writeAll(", ");
@@ -4756,11 +4757,27 @@ test "enum type" {
         .fields = fields,
         .values = values,
         .namespace = .none,
-        .tag_type_inferred = false,
+        .is_exhaustive = true,
     });
     const enum_type = try ip.get(.{ .enum_type = enum_index });
 
     try expectFmt("enum(u8) { low = 1, high = 7 }", "{f}", .{enum_type.fmt(&ip)});
+
+    const open_name = try ip.string_pool.getOrPutString(io, gpa, "known");
+    var open_fields: std.array_hash_map.Auto(String, void) = .empty;
+    try open_fields.put(gpa, open_name, {});
+    var open_values: std.array_hash_map.Auto(Index, void) = .empty;
+    try open_values.put(gpa, .one_u8, {});
+    const open_enum_index = try ip.createEnum(.{
+        .tag_type = .u8_type,
+        .fields = open_fields,
+        .values = open_values,
+        .namespace = .none,
+        .is_exhaustive = false,
+    });
+    const open_enum_type = try ip.get(.{ .enum_type = open_enum_index });
+    try expectFmt("enum(u8) { known = 1, _ }", "{f}", .{open_enum_type.fmt(&ip)});
+    try expect(ip.onePossibleValue(open_enum_type) == .none);
 }
 
 test "function type" {

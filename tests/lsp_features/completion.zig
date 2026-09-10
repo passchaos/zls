@@ -2040,6 +2040,16 @@ test "generic function with comptime Enum type constructor" {
         .{ .label = "low", .kind = .Field, .detail = "1" },
         .{ .label = "high", .kind = .Field, .detail = "9" },
     });
+
+    try testCompletion(
+        \\fn Mode(comptime Tag: type) type {
+        \\    return @Enum(Tag, .nonexhaustive, &.{"known"}, &.{1});
+        \\}
+        \\const value: Mode(u8) = undefined;
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "known", .kind = .Field, .detail = "1" },
+    });
 }
 
 test "generic function with comptime value builtins" {

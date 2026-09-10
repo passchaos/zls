@@ -4613,7 +4613,7 @@ fn resolveEnumTypeConstructor(
     if (!tag_type.is_type_val) return null;
     const tag_type_index = tag_type.ipIndex() orelse return null;
     if (analyser.ip.zigTypeTag(tag_type_index) != .int) return null;
-    if (try analyser.resolveEnumMode(.of(params[1], handle)) != .exhaustive) return null;
+    const mode = try analyser.resolveEnumMode(.of(params[1], handle)) orelse return null;
 
     const names = try analyser.resolveStringListLiteral(.{
         .node_handle = .of(params[2], handle),
@@ -4643,7 +4643,7 @@ fn resolveEnumTypeConstructor(
         .fields = fields,
         .values = values,
         .namespace = .none,
-        .tag_type_inferred = false,
+        .is_exhaustive = mode == .exhaustive,
     });
     fields = .empty;
     values = .empty;
