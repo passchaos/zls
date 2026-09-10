@@ -788,6 +788,8 @@ const Struct = @Struct(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //                                                              ^ (Attributes)()
 const ConcreteStruct = @Struct(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^^^^ (type)(struct { foo: u8, bar: i16 })
+const AlignedStruct = @Struct(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
+//    ^^^^^^^^^^^^^ (type)(struct { value: u8 align(4) })
 const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //    ^^^^^ (type)()
 //                   ^^^^^ (ContainerLayout)()

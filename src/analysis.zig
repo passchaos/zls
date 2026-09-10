@@ -4353,6 +4353,58 @@ fn isEmptyStructAttributeList(
     return true;
 }
 
+fn resolveStructFieldAlignments(
+    analyser: *Analyser,
+    options: ResolveOptions,
+    expected_len: usize,
+) Error!?[]const u16 {
+    const node_handle = options.node_handle;
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
+    const literal_node = tree.nodeData(node_handle.node).node;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return null;
+
+    const alignments = try analyser.arena.alloc(u16, expected_len);
+    @memset(alignments, 0);
+    for (literal.ast.elements, alignments) |element, *alignment| {
+        var struct_buffer: [2]Ast.Node.Index = undefined;
+        const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
+        if (attributes.ast.type_expr.unwrap() != null) return null;
+        var seen_comptime = false;
+        var seen_align = false;
+        var seen_default = false;
+        for (attributes.ast.fields) |field_node| {
+            const field_name_token = tree.firstToken(field_node) - 2;
+            if (tree.tokenTag(field_name_token) != .identifier) return null;
+            const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
+            const field_options: ResolveOptions = .{
+                .node_handle = .of(field_node, node_handle.handle),
+                .container_type = options.container_type,
+            };
+            if (std.mem.eql(u8, field_name, "comptime")) {
+                if (seen_comptime) return null;
+                seen_comptime = true;
+                if (try analyser.resolveBoolValue(field_options) orelse return null) return null;
+            } else if (std.mem.eql(u8, field_name, "align")) {
+                if (seen_align) return null;
+                seen_align = true;
+                if (try analyser.isNullComptimeValue(field_options)) continue;
+                alignment.* = try analyser.resolveIntegerLiteral(u16, field_options) orelse return null;
+                if (!std.math.isPowerOfTwo(alignment.*)) return null;
+            } else if (std.mem.eql(u8, field_name, "default_value_ptr")) {
+                if (seen_default) return null;
+                seen_default = true;
+                if (!try analyser.isNullComptimeValue(field_options)) return null;
+            } else {
+                return null;
+            }
+        }
+    }
+    return alignments;
+}
+
 fn resolveStructTypeConstructor(
     analyser: *Analyser,
     params: []const Ast.Node.Index,
@@ -4380,17 +4432,20 @@ fn resolveStructTypeConstructor(
         .tuple_type => |tuple| tuple.types,
         else => return null,
     };
-    if (names.len != field_type_slice.len or
-        !isEmptyStructAttributeList(.of(params[4], handle), names.len)) return null;
+    if (names.len != field_type_slice.len) return null;
+    const alignments = try analyser.resolveStructFieldAlignments(.{
+        .node_handle = .of(params[4], handle),
+        .container_type = container_type,
+    }, names.len) orelse return null;
     const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
     defer analyser.gpa.free(field_types);
 
     var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Struct.Field) = .empty;
     errdefer fields.deinit(analyser.gpa);
     try fields.ensureTotalCapacity(analyser.gpa, names.len);
-    for (names, field_types) |name, field_type| {
+    for (names, field_types, alignments) |name, field_type, alignment| {
         const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
-        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type });
+        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type, .alignment = alignment });
     }
 
     const struct_index = try analyser.ip.createStruct(.{
