@@ -1015,6 +1015,10 @@ const byte_size_of_generated_enum = @sizeOf(@Enum(u13, .exhaustive, &.{"value"},
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()
+const tuple_type_name_len = @typeName(@Tuple(&.{ u16, bool })).len;
+//    ^^^^^^^^^^^^^^^^^^^ (usize)(20)
+const tuple_type_name_first = @typeName(@Tuple(&.{ u16, bool }))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(115)
 
 const tag_name = @tagName(type_enum_literal);
 //    ^^^^^^^^ ([:0]const u8)()

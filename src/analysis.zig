@@ -7202,6 +7202,9 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
         .array => |info| info.elem_count != null and
             info.sentinel != .unknown_unknown and
             analyser.canResolveTypeName(info.elem_ty.*),
+        .tuple => |types| for (types) |element_type| {
+            if (!analyser.canResolveTypeName(element_type)) break false;
+        } else true,
         .optional => |child_ty| analyser.canResolveTypeName(child_ty.*),
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
             .simple_type => |simple| switch (simple) {
@@ -7248,6 +7251,13 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) bool {
                 analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
             .optional_type => |info| analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.payload_type)),
             .vector_type => |info| analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
+            .tuple_type => |info| types: {
+                for (0..info.types.len) |index| {
+                    const element_type = Type.fromIP(analyser, .type_type, info.types.at(@intCast(index), analyser.ip));
+                    if (!analyser.canResolveTypeName(element_type)) break :types false;
+                }
+                break :types true;
+            },
             else => false,
         },
         else => false,

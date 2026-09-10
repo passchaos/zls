@@ -5068,6 +5068,21 @@ test "generic function with comptime typeName" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Pair = @Tuple(&.{ T, bool });
+        \\    const name = @typeName(Pair);
+        \\    return if (name.len == 20 and name[0] == 's' and name[9] == 'u' and name[14] == 'b')
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "enum declarations are not comptime enum values" {
