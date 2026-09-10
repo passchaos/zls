@@ -2051,6 +2051,67 @@ test "generic function with comptime generated Struct values" {
     });
 }
 
+test "generic generated type identity" {
+    try testCompletion(
+        \\fn Record(comptime T: type) type {
+        \\    return @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\}
+        \\fn Select(comptime T: type) type {
+        \\    const A = Record(T);
+        \\    const B = Record(T);
+        \\    const Other = Record(u8);
+        \\    const value = A{ .value = 1 };
+        \\    return if (A == B and A != Other and @TypeOf(value) == A)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Value(comptime T: type) type {
+        \\    return @Union(.auto, null, &.{"value"}, &.{T}, &.{.{}});
+        \\}
+        \\fn Select(comptime T: type) type {
+        \\    const A = Value(T);
+        \\    const B = Value(T);
+        \\    const Other = Value(u8);
+        \\    const value = A{ .value = 1 };
+        \\    return if (A == B and A != Other and @TypeOf(value) == A)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\fn Mode(comptime T: type) type {
+        \\    return @Enum(T, .exhaustive, &.{"value"}, &.{1});
+        \\}
+        \\fn Select(comptime T: type) type {
+        \\    const A = Mode(T);
+        \\    const B = Mode(T);
+        \\    const Other = Mode(u8);
+        \\    return if (A == B and A != Other and @TypeOf(A.value) == A)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime Union type constructor" {
     try testCompletion(
         \\fn Value(comptime T: type) type {

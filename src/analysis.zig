@@ -36,6 +36,7 @@ resolved_callsites: std.AutoHashMapUnmanaged(Declaration.Param, ?Type) = .empty,
 resolved_nodes: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
+generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
 /// avoid unnecessarily parsing number literals
@@ -80,6 +81,7 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_nodes.deinit(self.gpa);
     self.resolved_values.deinit(self.gpa);
     self.resolved_control_flow_values.deinit(self.gpa);
+    self.generated_container_types.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
 }
 
@@ -7206,6 +7208,34 @@ fn resolveTypeOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Error
     return binding.type;
 }
 
+fn cachedGeneratedContainerType(analyser: *Analyser, options: ResolveOptions) ?Type {
+    const bindings = analyser.generic_bindings orelse return null;
+    return analyser.generated_container_types.get(.{
+        .node = .{
+            .node = options.node_handle.node,
+            .uri = options.node_handle.handle.uri,
+        },
+        .container_type = options.container_type,
+        .bindings = bindings.*,
+    });
+}
+
+fn cacheGeneratedContainerType(
+    analyser: *Analyser,
+    options: ResolveOptions,
+    generated_type: Type,
+) error{OutOfMemory}!void {
+    const bindings = analyser.generic_bindings orelse return;
+    try analyser.generated_container_types.put(analyser.gpa, .{
+        .node = .{
+            .node = options.node_handle.node,
+            .uri = options.node_handle.handle.uri,
+        },
+        .container_type = options.container_type,
+        .bindings = try bindings.clone(analyser.arena),
+    }, generated_type);
+}
+
 pub fn resolveBindingOfNode(analyser: *Analyser, options: ResolveOptions) Error!?Binding {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -8366,21 +8396,29 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     } });
                     return Type.fromIP(analyser, .type_type, function_type);
                 },
-                .Struct => return try analyser.resolveStructTypeConstructor(
-                    params,
-                    handle,
-                    options.container_type,
-                ) orelse .unknown_type,
-                .Union => return try analyser.resolveUnionTypeConstructor(
-                    params,
-                    handle,
-                    options.container_type,
-                ) orelse .unknown_type,
-                .Enum => return try analyser.resolveEnumTypeConstructor(
-                    params,
-                    handle,
-                    options.container_type,
-                ) orelse .unknown_type,
+                .Struct, .Union, .Enum => |tag| {
+                    if (analyser.cachedGeneratedContainerType(options)) |generated_type| return generated_type;
+                    const generated_type = switch (tag) {
+                        .Struct => try analyser.resolveStructTypeConstructor(
+                            params,
+                            handle,
+                            options.container_type,
+                        ),
+                        .Union => try analyser.resolveUnionTypeConstructor(
+                            params,
+                            handle,
+                            options.container_type,
+                        ),
+                        .Enum => try analyser.resolveEnumTypeConstructor(
+                            params,
+                            handle,
+                            options.container_type,
+                        ),
+                        else => unreachable,
+                    } orelse return .unknown_type;
+                    try analyser.cacheGeneratedContainerType(options, generated_type);
+                    return generated_type;
+                },
                 .Vector => {
                     if (params.len != 2) return null;
 
@@ -11444,6 +11482,49 @@ pub const NodeWithUri = struct {
             _ = self;
             if (a.node != b.node) return false;
             return a.uri.eql(b.uri);
+        }
+    };
+};
+
+const GeneratedContainerTypeKey = struct {
+    node: NodeWithUri,
+    container_type: ?Type,
+    bindings: TokenToTypeMap,
+
+    const Context = struct {
+        pub fn hash(_: Context, key: GeneratedContainerTypeKey) u64 {
+            var hasher: std.hash.Wyhash = .init(0);
+            std.hash.autoHash(&hasher, key.node.node);
+            hasher.update(key.node.uri.raw);
+            if (key.container_type) |container_type| {
+                _ = container_type;
+                hasher.update(&.{1});
+            } else {
+                hasher.update(&.{0});
+            }
+            var bindings_hash: u64 = 0;
+            for (key.bindings.keys()) |token_handle| {
+                var binding_hasher: std.hash.Wyhash = .init(0);
+                token_handle.hashWithHasher(&binding_hasher);
+                bindings_hash ^= binding_hasher.final();
+            }
+            std.hash.autoHash(&hasher, key.bindings.count());
+            std.hash.autoHash(&hasher, bindings_hash);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: GeneratedContainerTypeKey, b: GeneratedContainerTypeKey) bool {
+            if (a.node.node != b.node.node or !a.node.uri.eql(b.node.uri)) return false;
+            if ((a.container_type == null) != (b.container_type == null)) return false;
+            if (a.container_type) |container_type| {
+                if (!container_type.eql(b.container_type.?)) return false;
+            }
+            if (a.bindings.count() != b.bindings.count()) return false;
+            for (a.bindings.keys(), a.bindings.values()) |token_handle, ty| {
+                const other = b.bindings.get(token_handle) orelse return false;
+                if (!ty.eql(other)) return false;
+            }
+            return true;
         }
     };
 };
