@@ -950,6 +950,23 @@ test "generic function with comptime wide integer unary operators" {
     });
 }
 
+test "generic function with comptime wide integer bitwise operations" {
+    try testCompletion(
+        \\fn Select(comptime N: u256) type {
+        \\    const high = N | @as(u256, 57896044618658097711785492504343953926634992332820282019728792003956564819968);
+        \\    return if (@ctz(high & (high | 2)) == 0 and
+        \\        @popCount(high ^ 3) == 2 and (@as(i256, -8) | 3) == -5)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(1) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector wrapping and saturating arithmetic" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

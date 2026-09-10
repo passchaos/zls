@@ -3295,7 +3295,10 @@ fn resolveIntegerBinaryValue(
     const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     const lhs_value = analyser.ip.toInt(lhs_index, i256);
     const rhs_value = analyser.ip.toInt(rhs_index, i256);
-    const supports_big_integer = tag == .add or tag == .sub or tag == .mul;
+    const supports_big_integer = switch (tag) {
+        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => true,
+        else => false,
+    };
     const wide_result = analyser.ip.zigTypeTag(result_type) == .int and
         analyser.ip.intInfo(result_type, builtin.target).bits > 128;
     if (supports_big_integer and (wide_result or lhs_value == null or rhs_value == null)) {
@@ -3309,6 +3312,9 @@ fn resolveIntegerBinaryValue(
             .add => try result.add(&lhs_big, &rhs_big),
             .sub => try result.sub(&lhs_big, &rhs_big),
             .mul => try result.mul(&lhs_big, &rhs_big),
+            .bit_and => try result.bitAnd(&lhs_big, &rhs_big),
+            .bit_or => try result.bitOr(&lhs_big, &rhs_big),
+            .bit_xor => try result.bitXor(&lhs_big, &rhs_big),
             else => unreachable,
         }
         if (result_type != .comptime_int_type) {
