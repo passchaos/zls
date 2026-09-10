@@ -898,6 +898,16 @@ const TypeInfoOptionalChild = @typeInfo(?u32).optional.child;
 //    ^^^^^^^^^^^^^^^^^^^^^ (type)(u32)
 const TypeInfoErrorPayload = @typeInfo(error{Oops}!u64).error_union.payload;
 //    ^^^^^^^^^^^^^^^^^^^^ (type)(u64)
+const type_info_error_set_len = @typeInfo(error{ Oops, Failed }).error_set.?.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const type_info_empty_error_set_len = @typeInfo(error{}).error_set.?.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
+const type_info_error_name_first = @typeInfo(error{ Oops, Failed }).error_set.?[0].name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(79)
+const type_info_error_set_present = @typeInfo(error{Oops}).error_set != null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_anyerror_null = @typeInfo(anyerror).error_set == null;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_struct_layout_auto = @typeInfo(ConcreteStruct).@"struct".layout == .auto;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backing_integer == null;

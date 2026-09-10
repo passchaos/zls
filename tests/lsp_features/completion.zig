@@ -2704,6 +2704,25 @@ test "generic function rebuilding types from comptime type info" {
     });
 }
 
+test "generic function with comptime error set type info" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const errors = @typeInfo(error{ Oops, Failed }).error_set.?;
+        \\    return if (errors.len == 2 and @typeInfo(error{}).error_set.?.len == 0 and
+        \\        errors[0].name[0] == 'O' and
+        \\        errors[1].name[0] == 'F' and @typeInfo(error{Oops}).error_set != null and
+        \\        @typeInfo(anyerror).error_set == null)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime alignOf" {
     try testCompletion(
         \\fn Select(comptime bits: u16) type {

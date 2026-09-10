@@ -1168,6 +1168,21 @@ pub fn resolveOptionalUnwrap(analyser: *Analyser, optional: Type) error{OutOfMem
 
     // TODO: some uses of this function don't expect C pointers to be unwrapped
     switch (optional.data) {
+        .type_info_value => |value| {
+            if (value.collection == null or
+                value.collection.?.kind != .error_set_errors or
+                !value.collection.?.is_optional) return null;
+            const unwrapped_type = try analyser.resolveOptionalUnwrap(value.value_type.*) orelse return null;
+            var collection = value.collection.?;
+            collection.is_optional = false;
+            return .{ .data = .{ .type_info_value = .{
+                .value_type = try analyser.allocType(unwrapped_type),
+                .reflected_type = value.reflected_type,
+                .tag = value.tag,
+                .is_payload = value.is_payload,
+                .collection = collection,
+            } }, .is_type_val = false };
+        },
         .optional => |child_ty| return try child_ty.instanceUnchecked(analyser),
         .pointer => |ptr| {
             if (ptr.size == .c) return optional;
@@ -1901,7 +1916,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
         const value = lhs_binding.type.data.type_info_value;
         if (value.collection) |collection| switch (rhs) {
             .single => |index_optional| if (index_optional) |index| {
-                if (collection.index == null and index < collection.len) {
+                if (!collection.is_optional and collection.index == null and index < collection.len) {
                     const element_type = try analyser.resolveBracketAccessType(value.value_type.*, rhs) orelse return null;
                     return .{
                         .type = .{ .data = .{ .type_info_value = .{
@@ -2994,13 +3009,15 @@ fn resolveTypeInfoFieldAccess(
     field_name: []const u8,
 ) Error!?Type {
     if (value.collection) |collection| {
-        if (collection.index) |index| {
-            return analyser.resolveTypeInfoDescriptorField(value, collection.kind, index, field_name);
-        }
-        const len = collection.len;
-        if (std.mem.eql(u8, field_name, "len")) {
-            const index = try analyser.ip.get(.{ .int_u64_value = .{ .ty = .usize_type, .int = len } });
-            return Type.fromIP(analyser, .usize_type, index);
+        if (!collection.is_optional) {
+            if (collection.index) |index| {
+                return analyser.resolveTypeInfoDescriptorField(value, collection.kind, index, field_name);
+            }
+            const len = collection.len;
+            if (std.mem.eql(u8, field_name, "len")) {
+                const index = try analyser.ip.get(.{ .int_u64_value = .{ .ty = .usize_type, .int = len } });
+                return Type.fromIP(analyser, .usize_type, index);
+            }
         }
     }
     const field = try value.value_type.lookupSymbol(analyser, field_name) orelse return null;
@@ -3008,6 +3025,9 @@ fn resolveTypeInfoFieldAccess(
 
     if (!value.is_payload) {
         if (!std.mem.eql(u8, field_name, @tagName(value.tag))) return null;
+        if (value.tag == .error_set) {
+            return @as(?Type, try analyser.typeInfoErrorSetPayload(value, field_value_type));
+        }
         return .{ .data = .{ .type_info_value = .{
             .value_type = try analyser.allocType(field_value_type),
             .reflected_type = value.reflected_type,
@@ -3350,6 +3370,39 @@ fn typeInfoCollectionValue(
     } }, .is_type_val = false };
 }
 
+fn typeInfoErrorSetPayload(
+    analyser: *Analyser,
+    value: Type.TypeInfoValue,
+    payload_type: Type,
+) error{OutOfMemory}!Type {
+    const reflected_type = value.reflected_type.ipIndex() orelse return payload_type;
+    if (reflected_type == .anyerror_type) {
+        return .{ .data = .{ .type_info_value = .{
+            .value_type = try analyser.allocType(payload_type),
+            .reflected_type = value.reflected_type,
+            .tag = value.tag,
+            .is_payload = true,
+            .collection = null,
+        } }, .is_type_val = false };
+    }
+    const error_set = switch (analyser.ip.indexToKey(reflected_type)) {
+        .error_set_type => |error_set| error_set,
+        else => return payload_type,
+    };
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(payload_type),
+        .reflected_type = value.reflected_type,
+        .tag = value.tag,
+        .is_payload = true,
+        .collection = .{
+            .kind = .error_set_errors,
+            .len = error_set.names.len,
+            .index = null,
+            .is_optional = true,
+        },
+    } }, .is_type_val = false };
+}
+
 fn resolveTypeInfoDescriptorField(
     analyser: *Analyser,
     value: Type.TypeInfoValue,
@@ -3543,6 +3596,22 @@ fn resolveTypeInfoDescriptorField(
             }
             if (std.mem.eql(u8, field_name, "type")) {
                 return try analyser.optionalTypeValue(field_value_type, param_type);
+            }
+        },
+        .error_set_errors => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const error_set = switch (analyser.ip.indexToKey(type_index)) {
+                .error_set_type => |error_set| error_set,
+                else => return field_value_type,
+            };
+            if (index >= error_set.names.len) return field_value_type;
+            if (std.mem.eql(u8, field_name, "name")) {
+                const name = try analyser.ip.string_pool.stringToSliceAlloc(
+                    analyser.store.io,
+                    analyser.arena,
+                    error_set.names.at(index, analyser.ip),
+                );
+                return try analyser.stringValueWithType(name, try field_value_type.typeOf(analyser));
             }
         },
     }
@@ -6135,6 +6204,24 @@ fn integerBoundary(
     };
 }
 
+fn knownOptionalNull(analyser: *Analyser, value: Type) ?bool {
+    if (value.data == .type_info_value) {
+        const type_info = value.data.type_info_value;
+        if (type_info.tag == .error_set and type_info.is_payload) {
+            const collection = type_info.collection orelse return true;
+            return if (collection.is_optional) false else null;
+        }
+        return null;
+    }
+    const index = value.ipIndex() orelse return null;
+    return switch (analyser.ip.indexToKey(index)) {
+        .simple_value => |simple| if (simple == .null_value) true else null,
+        .null_value => true,
+        .optional_value => false,
+        else => null,
+    };
+}
+
 fn resolveComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -6158,6 +6245,20 @@ fn resolveComparisonValue(
 
     const lhs_index = lhs.ipIndex();
     const rhs_index = rhs.ipIndex();
+    if (tag == .equal_equal or tag == .bang_equal) {
+        const lhs_optional_null = analyser.knownOptionalNull(lhs);
+        const rhs_optional_null = analyser.knownOptionalNull(rhs);
+        if (lhs_optional_null != null and rhs_optional_null != null and
+            (lhs_optional_null.? or rhs_optional_null.?))
+        {
+            const equal = lhs_optional_null.? == rhs_optional_null.?;
+            return Type.fromIP(
+                analyser,
+                .bool_type,
+                if (equal == (tag == .equal_equal)) .bool_true else .bool_false,
+            );
+        }
+    }
     if (lhs_index) |index| {
         if (analyser.ip.isUndefined(index) or analyser.ip.isUnknown(index)) return null;
     }
@@ -10424,10 +10525,11 @@ pub const Type = struct {
             kind: TypeInfoCollectionKind,
             len: u64,
             index: ?u32,
+            is_optional: bool = false,
         };
     };
 
-    const TypeInfoCollectionKind = enum { struct_fields, union_fields, enum_fields, fn_params };
+    const TypeInfoCollectionKind = enum { struct_fields, union_fields, enum_fields, fn_params, error_set_errors };
 
     pub const Data = union(enum) {
         /// - `*const T`
