@@ -5689,11 +5689,20 @@ fn resolveStructTypeConstructor(
 ) Error!?Type {
     if (params.len != 5) return null;
     const layout = try analyser.resolveContainerLayout(.of(params[0], handle)) orelse return null;
-    if (layout != .auto) return null;
-    if (!try analyser.isNullComptimeValue(.{
+    const backing_type_value = try analyser.resolveComptimeValue(.{
         .node_handle = .of(params[1], handle),
         .container_type = container_type,
-    })) return null;
+    }) orelse return null;
+    var backing_type: InternPool.Index = if (backing_type_value.ipIndex()) |index|
+        if (analyser.ip.isNull(index))
+            .none
+        else if (backing_type_value.is_type_val and analyser.ip.zigTypeTag(index) == .int)
+            index
+        else
+            return null
+    else
+        return null;
+    if (layout != .@"packed" and backing_type != .none) return null;
 
     const names = try analyser.resolveStringListLiteral(.{
         .node_handle = .of(params[2], handle),
@@ -5715,6 +5724,23 @@ fn resolveStructTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
     defer analyser.gpa.free(field_types);
+    if (layout == .@"packed") {
+        var total_bits: u64 = 0;
+        for (field_types, alignments) |field_type, alignment| {
+            if (alignment != 0) return null;
+            const field_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, field_type)) orelse return null;
+            total_bits = std.math.add(u64, total_bits, field_bits) catch return null;
+        }
+        const total_bits_u16 = std.math.cast(u16, total_bits) orelse return null;
+        if (backing_type == .none) {
+            backing_type = try analyser.ip.get(.{ .int_type = .{
+                .signedness = .unsigned,
+                .bits = total_bits_u16,
+            } });
+        } else if (analyser.ip.intInfo(backing_type, builtin.target).bits != total_bits_u16) {
+            return null;
+        }
+    }
 
     var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Struct.Field) = .empty;
     errdefer fields.deinit(analyser.gpa);
@@ -5728,8 +5754,8 @@ fn resolveStructTypeConstructor(
         .fields = fields,
         .owner_decl = .none,
         .namespace = .none,
-        .layout = .auto,
-        .backing_int_ty = .none,
+        .layout = layout,
+        .backing_int_ty = backing_type,
         .status = .fully_resolved,
     });
     fields = .empty;

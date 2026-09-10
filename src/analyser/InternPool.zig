@@ -4013,11 +4013,20 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                 const decl = ip.getDecl(decl_index);
                 try writer.print("{f}", .{ip.fmtId(decl.name)});
             } else {
+                switch (struct_info.layout) {
+                    .auto => {},
+                    .@"extern" => try writer.writeAll("extern "),
+                    .@"packed" => try writer.writeAll("packed "),
+                }
+                try writer.writeAll("struct");
+                if (struct_info.layout == .@"packed" and struct_info.backing_int_ty != .none) {
+                    try writer.print("({f})", .{struct_info.backing_int_ty.fmtOptions(ip, options)});
+                }
                 if (options.truncate_container) {
-                    try writer.writeAll("struct {...}");
+                    try writer.writeAll(" {...}");
                     return null;
                 }
-                try writer.writeAll("struct { ");
+                try writer.writeAll(" { ");
                 for (struct_info.fields.keys(), struct_info.fields.values(), 0..) |name, field, i| {
                     if (i != 0) try writer.writeAll(", ");
                     if (field.is_comptime) try writer.writeAll("comptime ");

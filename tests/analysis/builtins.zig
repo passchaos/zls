@@ -790,6 +790,12 @@ const ConcreteStruct = @Struct(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &
 //    ^^^^^^^^^^^^^^ (type)(struct { foo: u8, bar: i16 })
 const AlignedStruct = @Struct(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
 //    ^^^^^^^^^^^^^ (type)(struct { value: u8 align(4) })
+const ExternStruct = @Struct(.@"extern", null, &.{ "small", "large" }, &.{ u8, u32 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^^ (type)(extern struct { small: u8, large: u32 })
+const PackedStruct = @Struct(.@"packed", null, &.{ "low", "high" }, &.{ u3, u5 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^^ (type)(packed struct(u8) { low: u3, high: u5 })
+const ExplicitPackedStruct = @Struct(.@"packed", i8, &.{ "low", "high" }, &.{ u3, u5 }, &.{ .{}, .{} });
+//    ^^^^^^^^^^^^^^^^^^^^ (type)(packed struct(i8) { low: u3, high: u5 })
 const GeneratedStructFieldType = @FieldType(ConcreteStruct, "foo");
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
 const GeneratedStructHasField = @hasField(ConcreteStruct, "bar");
@@ -940,6 +946,12 @@ const type_info_struct_layout_auto = @typeInfo(ConcreteStruct).@"struct".layout 
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backing_integer == null;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const type_info_extern_struct_layout = @typeInfo(ExternStruct).@"struct".layout == .@"extern";
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const TypeInfoPackedStructBacking = @typeInfo(PackedStruct).@"struct".backing_integer.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const TypeInfoExplicitPackedStructBacking = @typeInfo(ExplicitPackedStruct).@"struct".backing_integer.?;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(i8)
 const type_info_tuple_is_tuple = @typeInfo(Tuple).@"struct".is_tuple;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const NominalTuple = @Tuple(&.{ TypeInfoNominalChild, u8 });

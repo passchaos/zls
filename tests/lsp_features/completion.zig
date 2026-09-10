@@ -2067,6 +2067,24 @@ test "generic function with comptime Struct type constructor" {
         .{ .label = "value", .kind = .Field, .detail = "value: align(8) u16" },
         .{ .label = "enabled", .kind = .Field, .detail = "enabled: bool" },
     });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Extern = @Struct(.@"extern", null, &.{"value"}, &.{T}, &.{.{} });
+        \\    const Packed = @Struct(.@"packed", null, &.{ "low", "high" }, &.{ u3, T }, &.{ .{}, .{} });
+        \\    const Explicit = @Struct(.@"packed", i8, &.{ "low", "high" }, &.{ u3, T }, &.{ .{}, .{} });
+        \\    return if (@typeInfo(Extern).@"struct".layout == .@"extern" and
+        \\        @typeInfo(Packed).@"struct".backing_integer.? == u8 and
+        \\        @typeInfo(Explicit).@"struct".backing_integer.? == i8)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u5" },
+    });
 }
 
 test "generic function with comptime generated Struct values" {
