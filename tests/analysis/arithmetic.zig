@@ -270,6 +270,30 @@ const vector_integer_self_sub_sat = (runtime_i8_vector -| runtime_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)(0)
 const vector_undefined_self_xor = (undefined_i8_vector ^ undefined_i8_vector)[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (i8)()
+const vector_integer_self_equal = (runtime_i8_vector == runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_integer_self_not_equal = (runtime_i8_vector != runtime_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_integer_self_lte = (runtime_i8_vector <= runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_integer_self_gte = (runtime_i8_vector >= runtime_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_integer_self_lt = (runtime_i8_vector < runtime_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_integer_self_gt = (runtime_i8_vector > runtime_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_bool_self_equal = (runtime_bool_vector == runtime_bool_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_bool_self_not_equal = (runtime_bool_vector != runtime_bool_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_float_self_equal = (runtime_f32_vector == runtime_f32_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_undefined_self_equal = (undefined_i8_vector == undefined_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_partially_undefined_self_equal = (partially_undefined_i8_vector == partially_undefined_i8_vector)[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_known_lane_self_equal = (partially_undefined_i8_vector == partially_undefined_i8_vector)[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_unsigned_lte_max = (runtime_u8_vector <= @as(@Vector(2, u8), @splat(255)))[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_unsigned_lt_min = (runtime_u8_vector < @as(@Vector(2, u8), @splat(0)))[1];
@@ -303,8 +327,10 @@ var runtime_i16: i16 = -16;
 var runtime_bool: bool = undefined;
 var runtime_f32: f32 = undefined;
 var runtime_bool_vector: @Vector(2, bool) = undefined;
+var runtime_f32_vector: @Vector(2, f32) = undefined;
 var runtime_u3: u3 = undefined;
 var runtime_u3_vector: @Vector(2, u3) = undefined;
 var runtime_u8_vector: @Vector(2, u8) = undefined;
 var runtime_i8_vector: @Vector(2, i8) = undefined;
 const undefined_i8_vector: @Vector(2, i8) = undefined;
+const partially_undefined_i8_vector: @Vector(2, i8) = .{ undefined, 1 };

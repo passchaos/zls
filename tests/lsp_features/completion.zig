@@ -1094,6 +1094,30 @@ test "generic function with runtime self comparisons" {
     });
 }
 
+test "generic function with runtime vector self comparisons" {
+    try testCompletion(
+        \\var runtime: @Vector(2, i8) = undefined;
+        \\var runtime_bool: @Vector(2, bool) = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    return if (@reduce(.And, runtime == runtime) and
+        \\        !@reduce(.Or, runtime != runtime) and
+        \\        @reduce(.And, runtime <= runtime) and
+        \\        @reduce(.And, runtime >= runtime) and
+        \\        !@reduce(.Or, runtime < runtime) and
+        \\        !@reduce(.Or, runtime > runtime) and
+        \\        @reduce(.And, runtime_bool == runtime_bool) and
+        \\        !@reduce(.Or, runtime_bool != runtime_bool))
+        \\        struct { matched: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with runtime self integer operations" {
     try testCompletion(
         \\var runtime: i8 = undefined;

@@ -4091,6 +4091,63 @@ fn resolveComparisonValue(
     return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
 }
 
+fn resolveSelfComparisonValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const result = switch (tag) {
+        .equal_equal, .less_or_equal, .greater_or_equal => true,
+        .bang_equal, .less_than, .greater_than => false,
+        else => return null,
+    };
+    const type_tag = analyser.ip.zigTypeTag(payload.type);
+    if (type_tag == .int or
+        (type_tag == .bool and (tag == .equal_equal or tag == .bang_equal)))
+    {
+        if (payload.index) |index| {
+            if (analyser.ip.isUndefined(index)) return Type.fromIP(analyser, .bool_type, null);
+        }
+        return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+    }
+
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const child_tag = analyser.ip.zigTypeTag(vector.child);
+    if (child_tag != .int and
+        !(child_tag == .bool and (tag == .equal_equal or tag == .bang_equal)))
+    {
+        return null;
+    }
+    const result_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = vector.len,
+        .child = .bool_type,
+    } });
+    if (payload.index) |index| {
+        if (analyser.ip.isUndefined(index)) return Type.fromIP(analyser, result_type, null);
+    }
+
+    const source_values = analyser.aggregateValues(operand);
+    if (source_values) |values| if (values.len != vector.len) return null;
+    const known = if (result) InternPool.Index.bool_true else .bool_false;
+    const unknown = try analyser.ip.getUnknown(.bool_type);
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        value.* = if (source_values) |source|
+            if (analyser.ip.isUndefined(source.at(@intCast(i), analyser.ip))) unknown else known
+        else
+            known;
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn resolveVectorComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -6837,20 +6894,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 var lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
                 const same_operand = try analyser.areSameIdentifierExpression(tree, lhs, rhs);
-                if (same_operand and lhs_ty.data == .ip_index) {
-                    const payload = lhs_ty.data.ip_index;
-                    if (payload.index) |index| {
-                        if (analyser.ip.isUndefined(index)) return Type.fromIP(analyser, .bool_type, null);
-                    }
-                    const type_tag = analyser.ip.zigTypeTag(payload.type);
-                    if (type_tag == .int or type_tag == .bool) {
-                        const result = switch (tree.nodeTag(node)) {
-                            .equal_equal, .less_or_equal, .greater_or_equal => true,
-                            .bang_equal, .less_than, .greater_than => false,
-                            else => unreachable,
-                        };
-                        return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
-                    }
+                if (same_operand) {
+                    if (try analyser.resolveSelfComparisonValue(tree.nodeTag(node), lhs_ty)) |value| return value;
                 }
                 var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (try analyser.resolveVectorComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| {
