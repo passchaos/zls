@@ -4235,6 +4235,54 @@ fn resolveSelfComparisonValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn resolveComplementaryComparisonValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const result = switch (tag) {
+        .equal_equal => false,
+        .bang_equal => true,
+        else => return null,
+    };
+    if (payload.index) |index| {
+        if (analyser.ip.isUndefined(index)) return null;
+    }
+
+    const type_tag = analyser.ip.zigTypeTag(payload.type);
+    if (type_tag == .bool or analyser.fixedWidthIntegerBounds(payload.type) != null) {
+        return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+    }
+
+    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const child_tag = analyser.ip.zigTypeTag(vector.child);
+    if (child_tag != .bool and analyser.fixedWidthIntegerBounds(vector.child) == null) return null;
+    const result_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = vector.len,
+        .child = .bool_type,
+    } });
+    const source_values = analyser.aggregateValues(operand);
+    if (source_values) |values| if (values.len != vector.len) return null;
+    const known = if (result) InternPool.Index.bool_true else .bool_false;
+    const unknown = try analyser.ip.getUnknown(.bool_type);
+    const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
+    defer analyser.gpa.free(values);
+    for (values, 0..) |*value, i| {
+        value.* = if (source_values) |source|
+            if (analyser.ip.isUndefined(source.at(@intCast(i), analyser.ip))) unknown else known
+        else
+            known;
+    }
+    return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
+}
+
 fn resolveVectorComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -6982,6 +7030,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const lhs, const rhs = tree.nodeData(node).node_and_node;
             if (analyser.evaluate_comptime_values) {
                 var lhs_ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
+                const complementary_operand = try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not) orelse
+                    try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bool_not);
+                if (complementary_operand) |operand| {
+                    const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse return null;
+                    if (try analyser.resolveComplementaryComparisonValue(tree.nodeTag(node), operand_type)) |value| return value;
+                }
                 const same_operand = try analyser.areSameIdentifierExpression(tree, lhs, rhs);
                 if (same_operand) {
                     if (try analyser.resolveSelfComparisonValue(tree.nodeTag(node), lhs_ty)) |value| return value;
