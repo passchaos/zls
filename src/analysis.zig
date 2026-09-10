@@ -712,7 +712,7 @@ pub fn resolveVarDeclAlias(analyser: *Analyser, decl: DeclWithHandle) Error!?Dec
                 const name_token = ast.identifierTokenFromIdentifierNode(tree, node) orelse break :blk null;
                 const name = offsets.identifierTokenToNameSlice(tree, name_token);
                 if (current.container_type) |ty| {
-                    break :blk try ty.lookupSymbol(analyser, name);
+                    if (try ty.lookupSymbol(analyser, name)) |symbol| break :blk symbol;
                 }
                 break :blk try analyser.lookupSymbolGlobal(
                     handle,
@@ -4234,7 +4234,8 @@ fn resolvePointerAttributes(
     size: std.builtin.Type.Pointer.Size,
     options: ResolveOptions,
 ) Error!?InternPool.Key.Pointer.Flags {
-    const node_handle = options.node_handle;
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
     var buffer: [2]Ast.Node.Index = undefined;
     const literal = tree.fullStructInit(&buffer, node_handle.node) orelse return null;
@@ -4247,7 +4248,7 @@ fn resolvePointerAttributes(
         const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
         const field_options: ResolveOptions = .{
             .node_handle = .of(field_node, node_handle.handle),
-            .container_type = options.container_type,
+            .container_type = literal_options.container_type,
         };
         if (std.mem.eql(u8, field_name, "const")) {
             flags.is_const = try analyser.resolveBoolValue(field_options) orelse return null;
@@ -4704,7 +4705,8 @@ fn resolveFnParameterAttributes(
     expected_len: usize,
 ) Error!?std.StaticBitSet(32) {
     if (expected_len > 32) return null;
-    const node_handle = options.node_handle;
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
     if (tree.nodeTag(node_handle.node) != .address_of) return null;
     const literal_node = tree.nodeData(node_handle.node).node;
@@ -4724,7 +4726,7 @@ fn resolveFnParameterAttributes(
             if (!std.mem.eql(u8, field_name, "noalias")) return null;
             const value = try analyser.resolveBoolValue(.{
                 .node_handle = .of(field_node, node_handle.handle),
-                .container_type = options.container_type,
+                .container_type = literal_options.container_type,
             }) orelse return null;
             noalias_bits.setValue(i, value);
         }
@@ -4754,7 +4756,8 @@ fn resolveFnAttributes(
     analyser: *Analyser,
     options: ResolveOptions,
 ) Error!?InternPool.Key.Function.Flags {
-    const node_handle = options.node_handle;
+    const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
+    const node_handle = literal_options.node_handle;
     const tree = &node_handle.handle.tree;
     var buffer: [2]Ast.Node.Index = undefined;
     const literal = tree.fullStructInit(&buffer, node_handle.node) orelse return null;
@@ -4776,7 +4779,7 @@ fn resolveFnAttributes(
             seen_varargs = true;
             flags.is_var_args = try analyser.resolveBoolValue(.{
                 .node_handle = .of(field_node, node_handle.handle),
-                .container_type = options.container_type,
+                .container_type = literal_options.container_type,
             }) orelse return null;
         } else {
             return null;

@@ -1892,6 +1892,18 @@ test "generic function with comptime Pointer type constructor" {
     , &.{
         .{ .label = "ptr", .kind = .Field, .detail = "[:0]const u8" },
     });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Holder(comptime T: type) type {
+        \\    const attrs = .{ .@"const" = true, .@"align" = 4 };
+        \\    return struct { ptr: @Pointer(.many, attrs, T, null) };
+        \\}
+        \\const holder: Holder(u32) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "ptr", .kind = .Field, .detail = "[*]align(4) const u32" },
+    });
 }
 
 test "generic function with dependent comptime value parameter" {
@@ -1953,6 +1965,19 @@ test "generic function with comptime Fn type constructor" {
         \\const field = holder.<cursor>
     , &.{
         .{ .label = "callback", .kind = .Field, .detail = "*const fn(u8, ...) callconv(.c) void" },
+    });
+
+    try testCompletion(
+        \\fn Holder(comptime T: type) type {
+        \\    const param_attrs = &.{.{ .@"noalias" = true }};
+        \\    const fn_attrs = .{ .@"callconv" = .c, .varargs = true };
+        \\    const Callback = @Fn(&.{*T}, param_attrs, void, fn_attrs);
+        \\    return struct { callback: *const Callback };
+        \\}
+        \\const holder: Holder(u8) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "*const fn(noalias *u8, ...) callconv(.c) void" },
     });
 }
 
