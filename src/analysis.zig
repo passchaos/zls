@@ -7236,6 +7236,8 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
             break :function true;
         },
         .optional => |child_ty| try analyser.canResolveTypeName(child_ty.*),
+        .error_union => |info| (info.error_set == null or try analyser.canResolveTypeName(info.error_set.?.*)) and
+            try analyser.canResolveTypeName(info.payload.*),
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
             .simple_type => |simple| switch (simple) {
                 .empty_struct_type,
@@ -7280,6 +7282,10 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
             .array_type => |info| info.sentinel != .unknown_unknown and
                 try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
             .optional_type => |info| try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.payload_type)),
+            .error_union_type => |info| (info.error_set_type == .none or
+                try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.error_set_type))) and
+                try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.payload_type)),
+            .error_set_type => true,
             .vector_type => |info| try analyser.canResolveTypeName(Type.fromIP(analyser, .type_type, info.child)),
             .function_type => |info| function: {
                 if (info.flags.is_generic or info.flags.alignment != 0) break :function false;
@@ -7303,6 +7309,20 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
 }
 
 fn resolveTypeNameValue(analyser: *Analyser, ty: Type) error{OutOfMemory}![]const u8 {
+    if (ty.data == .ip_index) {
+        const index = ty.data.ip_index.index.?;
+        switch (analyser.ip.indexToKey(index)) {
+            .error_set_type => return analyser.canonicalErrorSetTypeName(index),
+            .error_union_type => |info| if (info.error_set_type != .none and
+                analyser.ip.indexToKey(info.error_set_type) == .error_set_type)
+            {
+                const error_set_name = try analyser.canonicalErrorSetTypeName(info.error_set_type);
+                const payload_name = try analyser.resolveTypeNameValue(Type.fromIP(analyser, .type_type, info.payload_type));
+                return std.mem.concat(analyser.arena, u8, &.{ error_set_name, "!", payload_name });
+            },
+            else => {},
+        }
+    }
     const bytes = try ty.stringifyTypeVal(analyser, .{ .truncate_container_decls = false });
     const is_interned_function = switch (ty.data) {
         .ip_index => |payload| analyser.ip.indexToKey(payload.index.?) == .function_type,
@@ -7312,6 +7332,23 @@ fn resolveTypeNameValue(analyser: *Analyser, ty: Type) error{OutOfMemory}![]cons
         return std.mem.concat(analyser.arena, u8, &.{ "fn ", bytes[2..] });
     }
     return bytes;
+}
+
+fn canonicalErrorSetTypeName(analyser: *Analyser, type_index: InternPool.Index) error{OutOfMemory}![]const u8 {
+    const error_set = analyser.ip.indexToKey(type_index).error_set_type;
+    const names = try error_set.names.dupe(analyser.arena, analyser.ip);
+    analyser.ip.string_pool.sortStrings(analyser.store.io, names);
+
+    var result: std.Io.Writer.Allocating = .init(analyser.arena);
+    defer result.deinit();
+    result.writer.writeAll("error{") catch return error.OutOfMemory;
+    for (names, 0..) |name, index| {
+        if (index != 0) result.writer.writeByte(',') catch return error.OutOfMemory;
+        const bytes = try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, name);
+        result.writer.writeAll(bytes) catch return error.OutOfMemory;
+    }
+    result.writer.writeByte('}') catch return error.OutOfMemory;
+    return result.toOwnedSlice();
 }
 
 fn resolveBitCountValue(

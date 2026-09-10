@@ -1037,6 +1037,10 @@ const generated_fn_type_name_len = @typeName(ConcreteFn).len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(17)
 const generated_variadic_fn_type_name_len = @typeName(VariadicFn).len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(31)
+const error_set_type_name_len = @typeName(error{ Zebra, Apple }).len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(18)
+const error_union_type_name_len = @typeName(error{ Zebra, Apple }!u16).len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(22)
 
 const tag_name = @tagName(type_enum_literal);
 //    ^^^^^^^^ ([:0]const u8)()

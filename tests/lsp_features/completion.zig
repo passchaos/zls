@@ -5169,6 +5169,27 @@ test "generic function with comptime typeName" {
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\const Names = struct {
+        \\    @"error{Apple,Zebra}": void,
+        \\    @"error{Apple,Zebra}!u16": void,
+        \\};
+        \\fn Select(comptime T: type) type {
+        \\    const E = error{ Zebra, Apple };
+        \\    const error_name = @typeName(E);
+        \\    const union_name = @typeName(E!T);
+        \\    return if (error_name.len == 18 and @hasField(Names, error_name) and
+        \\        union_name.len == 22 and @hasField(Names, union_name))
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "enum declarations are not comptime enum values" {
