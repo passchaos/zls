@@ -3292,30 +3292,61 @@ fn resolveIntegerBinaryValue(
     }
     const lhs_index = lhs_payload.index orelse return null;
     const rhs_index = rhs_payload.index orelse return null;
-    const lhs_value = analyser.ip.toInt(lhs_index, i256) orelse return null;
-    const rhs_value = analyser.ip.toInt(rhs_index, i256) orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const lhs_value = analyser.ip.toInt(lhs_index, i256);
+    const rhs_value = analyser.ip.toInt(rhs_index, i256);
+    const supports_big_integer = tag == .add or tag == .sub or tag == .mul;
+    const wide_result = analyser.ip.zigTypeTag(result_type) == .int and
+        analyser.ip.intInfo(result_type, builtin.target).bits > 128;
+    if (supports_big_integer and (wide_result or lhs_value == null or rhs_value == null)) {
+        var lhs_big = try analyser.managedIntegerValue(lhs_index) orelse return null;
+        defer lhs_big.deinit();
+        var rhs_big = try analyser.managedIntegerValue(rhs_index) orelse return null;
+        defer rhs_big.deinit();
+        var result: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer result.deinit();
+        switch (tag) {
+            .add => try result.add(&lhs_big, &rhs_big),
+            .sub => try result.sub(&lhs_big, &rhs_big),
+            .mul => try result.mul(&lhs_big, &rhs_big),
+            else => unreachable,
+        }
+        if (result_type != .comptime_int_type) {
+            const info = analyser.ip.intInfo(result_type, builtin.target);
+            if (!result.fitsInTwosComp(info.signedness, info.bits)) return null;
+        }
+        if (result.toInt(i256)) |scalar| {
+            return analyser.intValueWithType(result_type, scalar);
+        } else |_| {
+            return Type.fromIP(
+                analyser,
+                result_type,
+                try analyser.ip.getBigInt(result_type, result.toConst()),
+            );
+        }
+    }
+    if (lhs_value == null or rhs_value == null) return null;
 
     const value: i256 = switch (tag) {
-        .add => std.math.add(i256, lhs_value, rhs_value) catch return null,
-        .sub => std.math.sub(i256, lhs_value, rhs_value) catch return null,
-        .mul => std.math.mul(i256, lhs_value, rhs_value) catch return null,
-        .div => std.math.divTrunc(i256, lhs_value, rhs_value) catch return null,
-        .mod => std.math.mod(i256, lhs_value, rhs_value) catch return null,
-        .bit_and => lhs_value & rhs_value,
-        .bit_xor => lhs_value ^ rhs_value,
-        .bit_or => lhs_value | rhs_value,
+        .add => std.math.add(i256, lhs_value.?, rhs_value.?) catch return null,
+        .sub => std.math.sub(i256, lhs_value.?, rhs_value.?) catch return null,
+        .mul => std.math.mul(i256, lhs_value.?, rhs_value.?) catch return null,
+        .div => std.math.divTrunc(i256, lhs_value.?, rhs_value.?) catch return null,
+        .mod => std.math.mod(i256, lhs_value.?, rhs_value.?) catch return null,
+        .bit_and => lhs_value.? & rhs_value.?,
+        .bit_xor => lhs_value.? ^ rhs_value.?,
+        .bit_or => lhs_value.? | rhs_value.?,
         .shl => blk: {
-            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i256)) return null;
-            break :blk std.math.shlExact(i256, lhs_value, @intCast(rhs_value)) catch return null;
+            if (rhs_value.? < 0 or rhs_value.? >= @bitSizeOf(i256)) return null;
+            break :blk std.math.shlExact(i256, lhs_value.?, @intCast(rhs_value.?)) catch return null;
         },
         .shr => blk: {
-            if (rhs_value < 0 or rhs_value >= @bitSizeOf(i256)) return null;
-            break :blk lhs_value >> @intCast(rhs_value);
+            if (rhs_value.? < 0 or rhs_value.? >= @bitSizeOf(i256)) return null;
+            break :blk lhs_value.? >> @intCast(rhs_value.?);
         },
         else => return null,
     };
 
-    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
     return analyser.intValueWithType(result_type, value);
 }
 

@@ -1582,6 +1582,21 @@ test "generic function with comptime integer expressions" {
 
 test "generic function with full-width comptime integer expressions" {
     try testCompletion(
+        \\fn Select(comptime N: u256) type {
+        \\    return if (N + 5 == 28948022309329048855892746252171976963317496166410141009864396001978282409989 and
+        \\        N - 5 == 28948022309329048855892746252171976963317496166410141009864396001978282409979 and
+        \\        N * 3 == 86844066927987146567678238756515930889952488499230423029593188005934847229952)
+        \\        struct { wide: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(28948022309329048855892746252171976963317496166410141009864396001978282409984) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wide", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime N: u128) type {
         \\    return if (N + 5 == 170141183460469231731687303715884105733 and
         \\        N - 5 == 170141183460469231731687303715884105723 and
