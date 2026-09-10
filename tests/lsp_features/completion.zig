@@ -1614,6 +1614,21 @@ test "generic function with full-width comptime integer expressions" {
     });
 
     try testCompletion(
+        \\fn Select(comptime N: u256) type {
+        \\    return if (N << 255 == 57896044618658097711785492504343953926634992332820282019728792003956564819968 and
+        \\        @as(u256, 115792089237316195423570985008687907853269984665640564039457584007913129639935) >> 200 == 72057594037927935 and
+        \\        @as(i512, -2037035976334486086268445688409378161051468393665936250636140449354381299763336706183397376) >> 300 == -1)
+        \\        struct { shifted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(1) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "shifted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime N: u128) type {
         \\    return if (N + 5 == 170141183460469231731687303715884105733 and
         \\        N - 5 == 170141183460469231731687303715884105723 and

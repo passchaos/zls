@@ -3296,7 +3296,7 @@ fn resolveIntegerBinaryValue(
     const lhs_value = analyser.ip.toInt(lhs_index, i256);
     const rhs_value = analyser.ip.toInt(rhs_index, i256);
     const supports_big_integer = switch (tag) {
-        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => true,
+        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
         else => false,
     };
     const wide_result = analyser.ip.zigTypeTag(result_type) == .int and
@@ -3315,6 +3315,27 @@ fn resolveIntegerBinaryValue(
             .bit_and => try result.bitAnd(&lhs_big, &rhs_big),
             .bit_or => try result.bitOr(&lhs_big, &rhs_big),
             .bit_xor => try result.bitXor(&lhs_big, &rhs_big),
+            .shl, .shr => {
+                const shift = analyser.ip.toInt(rhs_index, u16) orelse return null;
+                const lhs_type_tag = analyser.ip.zigTypeTag(lhs_payload.type) orelse return null;
+                if (lhs_type_tag == .int) {
+                    const info = analyser.ip.intInfo(lhs_payload.type, builtin.target);
+                    if (info.bits == 0 or shift >= info.bits) return null;
+                    if (tag == .shl) {
+                        try result.shiftLeft(&lhs_big, shift);
+                        if (!result.fitsInTwosComp(info.signedness, info.bits)) return null;
+                    } else {
+                        try result.shiftRight(&lhs_big, shift);
+                    }
+                } else if (lhs_type_tag == .comptime_int) {
+                    if (tag == .shl)
+                        try result.shiftLeft(&lhs_big, shift)
+                    else
+                        try result.shiftRight(&lhs_big, shift);
+                } else {
+                    return null;
+                }
+            },
             else => unreachable,
         }
         if (result_type != .comptime_int_type) {
