@@ -2285,6 +2285,38 @@ test "generic function switching on comptime type info" {
     });
 }
 
+test "generic function with comptime type info payload values" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const info = @typeInfo(T).int;
+        \\    return if (info.signedness == .signed and info.bits == 16)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(i16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "i16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const P = @Pointer(.one, .{ .@"const" = true, .@"volatile" = true }, T, null);
+        \\    const info = @typeInfo(P).pointer;
+        \\    return if (info.size == .one and info.is_const and info.is_volatile and
+        \\        info.child == T and !info.is_allowzero)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime value builtins" {
     const cases = [_]struct { expression: []const u8, detail: []const u8 }{
         .{ .expression = "@intFromFloat(@sqrt(@as(f32, 81.0)))", .detail = "[9]u8" },

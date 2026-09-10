@@ -778,6 +778,11 @@ pub fn resolveFieldAccess(analyser: *Analyser, lhs: Type, field_name: []const u8
 
 pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, field_name: []const u8) Error!?Binding {
     const lhs = lhs_binding.type;
+    if (lhs.data == .type_info_value) {
+        if (try analyser.resolveTypeInfoFieldAccess(lhs.data.type_info_value, field_name)) |field| {
+            return .{ .type = field, .is_const = true };
+        }
+    }
     if (lhs.is_type_val) if (lhs.ipIndex()) |type_index| {
         if (analyser.ip.zigTypeTag(type_index) == .@"enum" and
             try analyser.resolveEnumTagIntValue(lhs, field_name) != null)
@@ -2956,6 +2961,67 @@ fn resolveTypeInfoTag(analyser: *Analyser, ty: Type) ?std.builtin.TypeId {
         .ip_index => |payload| analyser.ip.zigTypeTag(payload.index orelse return null),
         else => null,
     };
+}
+
+fn resolveTypeInfoFieldAccess(
+    analyser: *Analyser,
+    value: Type.TypeInfoValue,
+    field_name: []const u8,
+) Error!?Type {
+    const field = try value.value_type.lookupSymbol(analyser, field_name) orelse return null;
+    const field_value_type = try field.resolveType(analyser) orelse return null;
+
+    if (!value.is_payload) {
+        if (!std.mem.eql(u8, field_name, @tagName(value.tag))) return null;
+        return .{ .data = .{ .type_info_value = .{
+            .value_type = try analyser.allocType(field_value_type),
+            .reflected_type = value.reflected_type,
+            .tag = value.tag,
+            .is_payload = true,
+        } }, .is_type_val = false };
+    }
+
+    switch (value.tag) {
+        .int => {
+            const type_index = value.reflected_type.ipIndex() orelse return field_value_type;
+            const info = analyser.ip.intInfo(type_index, builtin.target);
+            if (std.mem.eql(u8, field_name, "signedness")) {
+                const enum_type = try field_value_type.typeOf(analyser);
+                return try analyser.enumValue(enum_type, @tagName(info.signedness));
+            }
+            if (std.mem.eql(u8, field_name, "bits")) {
+                const field_type = (try field_value_type.typeOf(analyser)).ipIndex() orelse return field_value_type;
+                return try analyser.intValueWithType(field_type, info.bits);
+            }
+        },
+        .pointer => {
+            const pointer = switch (value.reflected_type.data) {
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
+                    .pointer_type => |pointer| pointer,
+                    else => return field_value_type,
+                },
+                else => return field_value_type,
+            };
+            if (std.mem.eql(u8, field_name, "size")) {
+                const enum_type = try field_value_type.typeOf(analyser);
+                return try analyser.enumValue(enum_type, @tagName(pointer.flags.size));
+            }
+            if (std.mem.eql(u8, field_name, "is_const")) {
+                return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_const) .bool_true else .bool_false);
+            }
+            if (std.mem.eql(u8, field_name, "is_volatile")) {
+                return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_volatile) .bool_true else .bool_false);
+            }
+            if (std.mem.eql(u8, field_name, "child")) {
+                return Type.fromIP(analyser, .type_type, pointer.elem_type);
+            }
+            if (std.mem.eql(u8, field_name, "is_allowzero")) {
+                return Type.fromIP(analyser, .bool_type, if (pointer.flags.is_allowzero) .bool_true else .bool_false);
+            }
+        },
+        else => {},
+    }
+    return field_value_type;
 }
 
 fn resolveEnumValueTag(
@@ -7979,7 +8045,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const tag = analyser.resolveTypeInfoTag(operand) orelse return result_type;
                     return .{ .data = .{ .type_info_value = .{
                         .value_type = try analyser.allocType(result_type),
+                        .reflected_type = try analyser.allocType(operand),
                         .tag = tag,
+                        .is_payload = false,
                     } }, .is_type_val = false };
                 },
                 .bit_size_of, .size_of => |tag| {
@@ -9675,6 +9743,13 @@ pub const Type = struct {
     /// if `data == .ip_index` then this field is equivalent to `data.ip_index.type == .type_type`
     is_type_val: bool,
 
+    const TypeInfoValue = struct {
+        value_type: *Type,
+        reflected_type: *Type,
+        tag: std.builtin.TypeId,
+        is_payload: bool,
+    };
+
     pub const Data = union(enum) {
         /// - `*const T`
         /// - `[*]T`
@@ -9737,7 +9812,7 @@ pub const Type = struct {
         /// Branching types
         either: []const EitherEntry,
 
-        /// A comptime-known value of an AST-backed enum type.
+        /// A comptime-known enum value.
         enum_value: struct {
             enum_type: *Type,
             tag: []const u8,
@@ -9751,10 +9826,7 @@ pub const Type = struct {
         },
 
         /// A comptime-known `std.builtin.Type` value.
-        type_info_value: struct {
-            value_type: *Type,
-            tag: std.builtin.TypeId,
-        },
+        type_info_value: TypeInfoValue,
 
         /// Primitive type: `u8`, `bool`, `type`, etc.
         /// Primitive value: `true`, `false`, `null`, `undefined`
@@ -10020,7 +10092,9 @@ pub const Type = struct {
                 },
                 .type_info_value => |value| {
                     value.value_type.hashWithHasher(hasher);
+                    value.reflected_type.hashWithHasher(hasher);
                     std.hash.autoHash(hasher, value.tag);
+                    std.hash.autoHash(hasher, value.is_payload);
                 },
                 .ip_index => |payload| {
                     std.hash.autoHash(hasher, payload.type);
@@ -10124,7 +10198,9 @@ pub const Type = struct {
                 .type_info_value => |a_value| {
                     const b_value = b.type_info_value;
                     if (!a_value.value_type.eql(b_value.value_type.*)) return false;
+                    if (!a_value.reflected_type.eql(b_value.reflected_type.*)) return false;
                     if (a_value.tag != b_value.tag) return false;
+                    if (a_value.is_payload != b_value.is_payload) return false;
                 },
                 .ip_index => |a_payload| {
                     const b_payload = b.ip_index;

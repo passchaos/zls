@@ -866,6 +866,12 @@ const type_info_tag_name = @tagName(type_info);
 //    ^^^^^^^^^^^^^^^^^^ (*const [3:0]u8)()
 const type_info_tag_name_first = type_info_tag_name[0];
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(105)
+const type_info_int_bits = @typeInfo(i16).int.bits;
+//    ^^^^^^^^^^^^^^^^^^ (u16)(16)
+const type_info_pointer_const = @typeInfo(*const u8).pointer.is_const;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const TypeInfoPointerChild = @typeInfo(*const u8).pointer.child;
+//    ^^^^^^^^^^^^^^^^^^^^ (type)(u8)
 
 const type_name = @typeName(u8);
 //    ^^^^^^^^^ (*const [2:0]u8)()
