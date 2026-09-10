@@ -130,6 +130,14 @@ const vector_bool_xor_value = (@as(@Vector(2, bool), .{ true, false }) ^ @as(@Ve
 //    ^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const vector_bool_not_runtime = !runtime_bool_vector;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (@Vector(2,bool))()
+const vector_bool_and_runtime = (runtime_bool_vector & @as(@Vector(2, bool), @splat(false)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(false)
+const vector_bool_or_runtime = (runtime_bool_vector | @as(@Vector(2, bool), @splat(true)))[1];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const vector_bool_xor_runtime = (runtime_bool_vector ^ @as(@Vector(2, bool), @splat(true)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
+const vector_bool_and_undefined = (@as(@Vector(2, bool), .{ undefined, true }) & @as(@Vector(2, bool), @splat(false)))[0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)()
 
 var runtime_u4: u4 = 4;
 var runtime_u8: u8 = 8;

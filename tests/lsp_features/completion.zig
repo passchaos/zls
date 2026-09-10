@@ -940,6 +940,25 @@ test "generic function with comptime boolean vector operators" {
     });
 }
 
+test "generic function with partially known boolean vector operators" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select(comptime N: u8) type {
+        \\    const values: @Vector(2, bool) = @splat(runtime);
+        \\    const falses: @Vector(2, bool) = @splat(false);
+        \\    const truths: @Vector(2, bool) = @splat(true);
+        \\    return if (!(values & falses)[0] and (values | truths)[1])
+        \\        struct { evaluated: [N]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector int from bool" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

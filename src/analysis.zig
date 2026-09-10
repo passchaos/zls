@@ -2816,15 +2816,21 @@ fn resolveVectorBoolBinaryValue(
     if (lhs_vector.len != rhs_vector.len or lhs_vector.child != .bool_type or rhs_vector.child != .bool_type) {
         return null;
     }
-    const lhs_values = analyser.aggregateValues(lhs) orelse return Type.fromIP(analyser, lhs_payload.type, null);
-    const rhs_values = analyser.aggregateValues(rhs) orelse return Type.fromIP(analyser, lhs_payload.type, null);
-    if (lhs_values.len != lhs_vector.len or rhs_values.len != rhs_vector.len) return null;
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+        (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const lhs_value = lhs_values.at(@intCast(i), analyser.ip);
-        const rhs_value = rhs_values.at(@intCast(i), analyser.ip);
+        const index: u32 = @intCast(i);
+        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else .unknown_unknown;
+        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else .unknown_unknown;
+        if (analyser.ip.isUndefined(lhs_value) or analyser.ip.isUndefined(rhs_value)) {
+            value.* = try analyser.ip.getUnknown(.bool_type);
+            continue;
+        }
         value.* = switch (tag) {
             .bit_and => if (lhs_value == .bool_false or rhs_value == .bool_false)
                 .bool_false
