@@ -933,6 +933,23 @@ test "generic function with comptime vector unary operators" {
     });
 }
 
+test "generic function with comptime wide integer unary operators" {
+    try testCompletion(
+        \\fn Select(comptime N: i256) type {
+        \\    return if (@ctz(~@as(u256, 1)) == 1 and
+        \\        ~@as(i256, -8) == 7 and -N == -4 and
+        \\        @popCount(-%@as(u256, 1)) == 256)
+        \\        struct { evaluated: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime vector wrapping and saturating arithmetic" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

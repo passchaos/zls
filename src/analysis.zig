@@ -4762,6 +4762,23 @@ fn resolveComparisonBool(
     };
 }
 
+fn managedIntegerValue(
+    analyser: *Analyser,
+    index: InternPool.Index,
+) error{OutOfMemory}!?std.math.big.int.Managed {
+    var result: std.math.big.int.Managed = try .init(analyser.gpa);
+    errdefer result.deinit();
+    switch (analyser.ip.indexToKey(index)) {
+        inline .int_u64_value, .int_i64_value => |int_value| try result.set(int_value.int),
+        .int_big_value => |int_value| try result.copy(int_value.getConst(analyser.ip)),
+        else => {
+            result.deinit();
+            return null;
+        },
+    }
+    return result;
+}
+
 fn resolveBitNotValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
     const payload = switch (operand.data) {
         .ip_index => |payload| payload,
@@ -4777,7 +4794,18 @@ fn resolveBitNotValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Ty
 
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
-    if (int_info.bits > 128) return null;
+    if (int_info.bits > 128) {
+        var source = try analyser.managedIntegerValue(index) orelse return null;
+        defer source.deinit();
+        var result: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer result.deinit();
+        try result.bitNotWrap(&source, int_info.signedness, int_info.bits);
+        return Type.fromIP(
+            analyser,
+            payload.type,
+            try analyser.ip.getBigInt(payload.type, result.toConst()),
+        );
+    }
 
     const result: i256 = switch (int_info.signedness) {
         .unsigned => blk: {
@@ -4824,11 +4852,10 @@ fn resolveNegationValue(
 
     if (payload.type == .comptime_int_type) {
         if (analyser.ip.indexToKey(index) == .int_big_value) {
-            const int_value = analyser.ip.indexToKey(index).int_big_value;
-            const result_index = try analyser.ip.getBigInt(payload.type, .{
-                .positive = !int_value.isPositive(),
-                .limbs = int_value.getConst(analyser.ip).limbs,
-            });
+            var result = try analyser.managedIntegerValue(index) orelse return null;
+            defer result.deinit();
+            result.negate();
+            const result_index = try analyser.ip.getBigInt(payload.type, result.toConst());
             return Type.fromIP(analyser, payload.type, result_index);
         }
         const value = analyser.ip.toInt(index, i256) orelse return null;
@@ -4838,7 +4865,31 @@ fn resolveNegationValue(
 
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
-    if (int_info.bits == 0 or int_info.bits > 128) return null;
+    if (int_info.bits == 0) return null;
+    if (int_info.bits > 128) {
+        if (!wrapping and int_info.signedness == .unsigned) {
+            return if (analyser.ip.isZero(index)) operand else null;
+        }
+
+        var source = try analyser.managedIntegerValue(index) orelse return null;
+        defer source.deinit();
+        var result: std.math.big.int.Managed = try .init(analyser.gpa);
+        defer result.deinit();
+        if (wrapping) {
+            var zero: std.math.big.int.Managed = try .initSet(analyser.gpa, 0);
+            defer zero.deinit();
+            _ = try result.subWrap(&zero, &source, int_info.signedness, int_info.bits);
+        } else {
+            try result.copy(source.toConst());
+            result.negate();
+            if (!result.fitsInTwosComp(int_info.signedness, int_info.bits)) return null;
+        }
+        return Type.fromIP(
+            analyser,
+            payload.type,
+            try analyser.ip.getBigInt(payload.type, result.toConst()),
+        );
+    }
 
     const result: i256 = switch (int_info.signedness) {
         .unsigned => blk: {
