@@ -69,11 +69,18 @@ const switch_non_exhaustive_enum = switch (some_non_exhaustive_enum) {
 
 const switch_null = switch (null) {
     .foo => |a| a,
-    //       ^ (@TypeOf(null))() TODO this should be `unknown`
+    //       ^ (unknown)()
     .bar => |a| a,
-    //       ^ (@TypeOf(null))() TODO this should be `unknown`
+    //       ^ (unknown)()
     else => |a| a,
-    //       ^ (@TypeOf(null))() TODO this should be `unknown`
+    //       ^ (unknown)()
+};
+
+const switch_undefined = switch (undefined) {
+    .foo => |a| a,
+    //       ^ (unknown)()
+    else => |a| a,
+    //       ^ (unknown)()
 };
 
 const switch_u8_inline = switch (some_u8) {
@@ -114,13 +121,22 @@ const switch_tagged_union_inline = switch (some_tagged_union) {
 
 const switch_null_inline = switch (null) {
     inline .foo => |a, b| .{ a, b },
-    //              ^ (@TypeOf(null))() TODO this should be `unknown`
+    //              ^ (unknown)()
     //                 ^ (unknown)()
     inline .bar => |a, b| .{ a, b },
-    //              ^ (@TypeOf(null))() TODO this should be `unknown`
+    //              ^ (unknown)()
     //                 ^ (unknown)()
     inline else => |a, b| .{ a, b },
-    //              ^ (@TypeOf(null))() TODO this should be `unknown`
+    //              ^ (unknown)()
+    //                 ^ (unknown)()
+};
+
+const switch_undefined_inline = switch (undefined) {
+    inline .foo => |a, b| .{ a, b },
+    //              ^ (unknown)()
+    //                 ^ (unknown)()
+    inline else => |a, b| .{ a, b },
+    //              ^ (unknown)()
     //                 ^ (unknown)()
 };
 

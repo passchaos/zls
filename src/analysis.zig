@@ -10877,9 +10877,14 @@ pub const DeclWithHandle = struct {
                 const case = payload.getCase(tree);
 
                 const switch_expr_type: Type = (try analyser.resolveTypeOfNodeInternal(.of(cond, self.handle))) orelse return null;
+                const switch_expr_type_type = try switch_expr_type.typeOf(analyser);
+                if (switch_expr_type_type.ipIndex()) |type_index| {
+                    const type_tag = analyser.ip.zigTypeTag(type_index);
+                    if (type_tag == .null or type_tag == .undefined) return null;
+                }
 
                 if (self.decl == .switch_inline_tag_payload) {
-                    return try analyser.resolveUnionTag(try switch_expr_type.typeOf(analyser));
+                    return try analyser.resolveUnionTag(switch_expr_type_type);
                 }
 
                 if (switch_expr_type.isEnumType()) break :blk switch_expr_type;
