@@ -1002,7 +1002,7 @@ const type_info_ast_fn_callconv_compare = @typeInfo(fn () callconv(.naked) noret
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoFnReturn = @typeInfo(ConcreteFn).@"fn".return_type.?;
 //    ^^^^^^^^^^^^^^^^ (type)(u8)
-const AstPacked = packed struct(u16) { value: u8 };
+const AstPacked = packed struct(u16) { value: u16 };
 const AstPackedInferred = packed struct { low: u3, high: u5 };
 const AstExtern = extern union { value: u8 };
 const AstOpenEnum = enum(u8) { value = 1, _ };

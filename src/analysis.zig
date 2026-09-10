@@ -3955,7 +3955,7 @@ fn astPackedStructBackingType(
     handle: *DocumentStore.Handle,
 ) Error!?Type {
     std.debug.assert(struct_type.isStructType(analyser));
-    if (declaration.ast.arg.unwrap()) |arg| {
+    const explicit_backing_type: ?Type = if (declaration.ast.arg.unwrap()) |arg| blk: {
         const backing_type = try analyser.resolveTypeOfNodeInternal(.{
             .node_handle = .of(arg, handle),
             .container_type = struct_type,
@@ -3963,8 +3963,8 @@ fn astPackedStructBackingType(
         if (!backing_type.is_type_val) return null;
         const backing_type_index = backing_type.ipIndex() orelse return null;
         if (analyser.ip.zigTypeTag(backing_type_index) != .int) return null;
-        return backing_type;
-    }
+        break :blk backing_type;
+    } else null;
 
     var total_bits: u64 = 0;
     for (declaration.ast.members) |member| {
@@ -3978,6 +3978,10 @@ fn astPackedStructBackingType(
         total_bits = std.math.add(u64, total_bits, field_bits) catch return null;
     }
     const bits = std.math.cast(u16, total_bits) orelse return null;
+    if (explicit_backing_type) |backing_type| {
+        if (analyser.ip.intInfo(backing_type.ipIndex().?, builtin.target).bits != bits) return null;
+        return backing_type;
+    }
     const backing_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
     return Type.fromIP(analyser, .type_type, backing_type);
 }
