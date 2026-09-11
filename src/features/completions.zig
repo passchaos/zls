@@ -909,7 +909,10 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
     const used_members_set = try collectUsedMembersSet(builder, dot_context.likely, dot_token_index);
     const containers = try collectContainerNodes(builder, builder.orig_handle, dot_context);
     for (containers) |container| {
-        if (dot_context.likely == .enum_arg and container.isEnumType(builder.analyser)) {
+        if (dot_context.likely == .enum_arg and
+            container.data == .ip_index and
+            container.isEnumType(builder.analyser))
+        {
             try typeToCompletion(builder, container);
             continue;
         }
