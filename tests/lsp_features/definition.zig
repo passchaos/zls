@@ -135,6 +135,57 @@ test "decl literal on generic type" {
     );
 }
 
+test "method on forwarded type function with dependent comptime value" {
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Reader = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\    fn Methods(comptime Self: type, comptime assoc: Associated) type {
+        \\        return struct { read: fn (Self, []u8) assoc.Error!usize };
+        \\    }
+        \\};
+        \\fn associatedFor(comptime C: type, comptime _: type) C.Associated {
+        \\    return .{};
+        \\}
+        \\fn methodsType(comptime C: type, comptime Subject: type, comptime associated: C.Associated) type {
+        \\    return C.Methods(Subject, associated);
+        \\}
+        \\fn Method(comptime C: type, comptime Subject: type, comptime associated: C.Associated) type {
+        \\    return std.meta.FieldEnum(methodsType(C, Subject, associated));
+        \\}
+        \\fn methodType(comptime C: type, comptime Subject: type, comptime associated: C.Associated, comptime method: Method(C, Subject, associated)) type {
+        \\    return @FieldType(methodsType(C, Subject, associated), @tagName(method));
+        \\}
+        \\fn Impl(comptime C: type, comptime Subject: type) type {
+        \\    return ImplWith(C, Subject, associatedFor(C, Subject));
+        \\}
+        \\fn ImplWith(
+        \\    comptime C: type,
+        \\    comptime Subject: type,
+        \\    comptime associated: C.Associated,
+        \\) type {
+        \\    const M = Method(C, Subject, associated);
+        \\    return struct {
+        \\        bindings: u8 = 0,
+        \\        const Self = @This();
+        \\        pub inline <tdef>fn</tdef> <def><decl>call</decl></def>(
+        \\            comptime _: Self,
+        \\            comptime method: M,
+        \\            args: std.meta.ArgsTuple(methodType(C, Subject, associated, method)),
+        \\        ) @typeInfo(methodType(C, Subject, associated, method)).@"fn".return_type.? {
+        \\            return @call(.auto, @field(Subject, @tagName(method)), args);
+        \\        }
+        \\    };
+        \\}
+        \\const Buffer = struct {
+        \\    fn read(_: *Buffer, _: []u8) anyerror!usize { return 0; }
+        \\};
+        \\fn count(comptime impl: Impl(Reader, *Buffer)) void {
+        \\    _ = impl.ca<>ll(.read, .{ undefined, undefined });
+        \\}
+    );
+}
+
 test "decl literal pointer" {
     try testDefinition(
         \\const S = <tdef>struct</tdef> {

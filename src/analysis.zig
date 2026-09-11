@@ -499,7 +499,6 @@ pub fn firstParamIs(
         },
         else => expected_type,
     };
-
     return switch (deref_type.data) {
         .either => |entries| {
             for (entries) |entry| {
@@ -509,8 +508,29 @@ pub fn firstParamIs(
             }
             return false;
         },
+        .container => |actual| switch (deref_expected_type.data) {
+            .container => |expected| containersHaveCompatibleIdentity(actual, expected),
+            else => false,
+        },
         else => deref_type.eql(deref_expected_type),
     };
+}
+
+fn containersHaveCompatibleIdentity(actual: Type.Data.Container, expected: Type.Data.Container) bool {
+    if (!actual.scope_handle.eql(expected.scope_handle)) return false;
+    if (actual.bound_params.count() > expected.bound_params.count()) return false;
+    if (actual.bound_params.count() == 0) return expected.bound_params.count() == 0;
+
+    // A generated container may be reached through a forwarding type function
+    // before ZLS can model every comptime value passed to it. Treat a missing
+    // binding as unknown, while still rejecting bindings that are known to
+    // disagree. This keeps instance methods visible without conflating
+    // concrete specializations such as Foo(u8) and Foo(u16).
+    for (actual.bound_params.keys(), actual.bound_params.values()) |key, actual_value| {
+        const expected_value = expected.bound_params.get(key) orelse return false;
+        if (!actual_value.eql(expected_value)) return false;
+    }
+    return true;
 }
 
 pub fn getVariableSignature(
