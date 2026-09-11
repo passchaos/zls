@@ -2579,6 +2579,33 @@ test "generic function with comptime std meta declarations" {
     });
 }
 
+test "generic function with comptime std meta DeclEnum" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct {
+        \\        pub const Alpha = T;
+        \\        const hidden = false;
+        \\        pub fn beta() void {}
+        \\    };
+        \\    const Names = std.meta.DeclEnum(S);
+        \\    const Generated = @Struct(.auto, null, &.{"value"}, &.{T}, &.{.{} });
+        \\    const EmptyNames = std.meta.DeclEnum(Generated);
+        \\    return if (Names == std.meta.DeclEnum(S) and @intFromEnum(Names.Alpha) == 0 and
+        \\        @intFromEnum(Names.beta) == 1 and
+        \\        @tagName(Names.beta)[0] == 'b' and std.meta.Tag(Names) == u1 and
+        \\        std.meta.Tag(EmptyNames) == u0)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

@@ -80,6 +80,8 @@ const StructFieldEnum = std.meta.FieldEnum(FieldStruct);
 const FieldUnion = union { alpha: u8, beta: u16 };
 const UnionFieldEnum = std.meta.FieldEnum(FieldUnion);
 //    ^^^^^^^^^^^^^^ (type)(enum(u1) { alpha = 0, beta = 1 })
+const structurally_same_field_enums = StructFieldEnum == UnionFieldEnum;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const ConsecutiveTag = enum { alpha, beta };
 const ConsecutiveUnion = union(ConsecutiveTag) { alpha: u8, beta: u16 };
 const ReusedFieldEnum = std.meta.FieldEnum(ConsecutiveUnion);
@@ -122,3 +124,48 @@ const struct_decl_second_name = StructDecls[1].name[0];
 const GeneratedDecls = std.meta.declarations(MetaPacked);
 const generated_decls_len = GeneratedDecls.len;
 //    ^^^^^^^^^^^^^^^^^^^ (usize)(0)
+
+const DeclNames = std.meta.DeclEnum(DeclStruct);
+const decl_alpha_value = @intFromEnum(DeclNames.Alpha);
+//    ^^^^^^^^^^^^^^^^ (u1)(0)
+const decl_beta_name = @tagName(DeclNames.beta)[0];
+//    ^^^^^^^^^^^^^^ (u8)(98)
+const same_decl_names = std.meta.DeclEnum(DeclStruct) == std.meta.DeclEnum(DeclStruct);
+//    ^^^^^^^^^^^^^^^ (bool)(true)
+const SameDeclStruct = struct {
+    pub const Alpha = 2;
+    pub fn beta() void {}
+};
+const structurally_same_decl_names = std.meta.DeclEnum(DeclStruct) == std.meta.DeclEnum(SameDeclStruct);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const CrossHelperNames = struct { Alpha: u8, beta: u8 };
+const cross_helper_enum_distinct = std.meta.DeclEnum(DeclStruct) != std.meta.FieldEnum(CrossHelperNames);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const EmptyDeclNames = std.meta.DeclEnum(MetaPacked);
+const empty_decl_tag = std.meta.Tag(EmptyDeclNames);
+//    ^^^^^^^^^^^^^^ (type)(u0)
+
+const DeclUnion = union {
+    payload: u8,
+    pub const Gamma = 1;
+};
+const union_decl_value = @intFromEnum(std.meta.DeclEnum(DeclUnion).Gamma);
+//    ^^^^^^^^^^^^^^^^ (u0)(0)
+const DeclTag = enum {
+    payload,
+    pub const delta = 1;
+};
+const enum_decl_name = @tagName(std.meta.DeclEnum(DeclTag).delta)[0];
+//    ^^^^^^^^^^^^^^ (u8)(100)
+const DeclOpaque = opaque {
+    pub const Omega = 1;
+};
+const opaque_decl_value = @intFromEnum(std.meta.DeclEnum(DeclOpaque).Omega);
+//    ^^^^^^^^^^^^^^^^^ (u0)(0)
+const AnyopaqueDeclNames = std.meta.DeclEnum(anyopaque);
+const anyopaque_decl_tag = std.meta.Tag(AnyopaqueDeclNames);
+//    ^^^^^^^^^^^^^^^^^^ (type)(u0)
+const DeclTaggedUnion = union(enum) { payload: u8 };
+const ImplicitTagDeclNames = std.meta.DeclEnum(std.meta.Tag(DeclTaggedUnion));
+const implicit_tag_decl_tag = std.meta.Tag(ImplicitTagDeclNames);
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)(u0)

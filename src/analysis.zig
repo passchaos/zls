@@ -37,6 +37,7 @@ resolved_nodes: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context,
 resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
+sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
 /// avoid unnecessarily parsing number literals
@@ -82,6 +83,7 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_values.deinit(self.gpa);
     self.resolved_control_flow_values.deinit(self.gpa);
     self.generated_container_types.deinit(self.gpa);
+    self.sequential_enum_types.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
 }
 
@@ -1480,6 +1482,16 @@ fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
         }
         return tag_type;
     }
+    return analyser.createSequentialEnumType(.field, names);
+}
+
+fn createSequentialEnumType(
+    analyser: *Analyser,
+    kind: SequentialEnumKey.Kind,
+    names: []const []const u8,
+) Error!?Type {
+    const key: SequentialEnumKey = .{ .kind = kind, .names = names };
+    if (analyser.sequential_enum_types.get(key)) |enum_type| return enum_type;
 
     const bits: u16 = if (names.len == 0) 0 else @intCast(std.math.log2_int_ceil(usize, names.len));
     const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
@@ -1504,7 +1516,46 @@ fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
     });
     fields = .empty;
     values = .empty;
-    return Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
+    const enum_type = Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
+    const owned_names = try analyser.arena.alloc([]const u8, names.len);
+    for (names, owned_names) |name, *owned_name| {
+        owned_name.* = try analyser.arena.dupe(u8, name);
+    }
+    try analyser.sequential_enum_types.put(analyser.gpa, .{ .kind = kind, .names = owned_names }, enum_type);
+    return enum_type;
+}
+
+fn metaDeclarationNames(analyser: *Analyser, container_type: Type) Error!?[]const []const u8 {
+    return switch (container_type.data) {
+        .tuple => &.{},
+        .container => blk: {
+            const kind = container_type.getContainerKind() orelse return null;
+            if (kind != .keyword_struct and kind != .keyword_union and
+                kind != .keyword_enum and kind != .keyword_opaque) return null;
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
+            const names = try analyser.arena.alloc([]const u8, astContainerDeclarationCount(info.declaration, info.handle));
+            var index: usize = 0;
+            for (info.declaration.ast.members) |member| {
+                const name_token = astContainerDeclarationNameToken(&info.handle.tree, member) orelse continue;
+                names[index] = try analyser.identifierTokenName(&info.handle.tree, name_token) orelse return null;
+                index += 1;
+            }
+            break :blk names;
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .struct_type, .tuple_type, .union_type, .enum_type => &.{},
+            .simple_type => |simple| if (simple == .anyopaque) &.{} else null,
+            else => null,
+        },
+        .union_tag => &.{},
+        else => null,
+    };
+}
+
+fn resolveDeclEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
+    const names = try analyser.metaDeclarationNames(container_type) orelse return null;
+    return analyser.createSequentialEnumType(.declaration, names);
 }
 
 fn resolveMetaFieldsValue(
@@ -1536,28 +1587,13 @@ fn resolveMetaDeclarationsValue(
     value_type: Type,
 ) Error!?Type {
     const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
-    const declaration_count = switch (container_type.data) {
-        .tuple => 0,
-        .container => blk: {
-            const kind = container_type.getContainerKind() orelse return null;
-            if (kind != .keyword_struct and kind != .keyword_union and
-                kind != .keyword_enum and kind != .keyword_opaque) return null;
-            var buffer: [2]Ast.Node.Index = undefined;
-            const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
-            break :blk astContainerDeclarationCount(info.declaration, info.handle);
-        },
-        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
-            .struct_type, .tuple_type, .union_type, .enum_type => 0,
-            else => return null,
-        },
-        else => return null,
-    };
+    const declaration_names = try analyser.metaDeclarationNames(container_type) orelse return null;
     return .{ .data = .{ .type_info_value = .{
         .value_type = try analyser.allocType(value_type),
         .reflected_type = try analyser.allocType(container_type),
         .tag = tag,
         .is_payload = true,
-        .collection = .{ .kind = .container_decls, .len = declaration_count, .index = null },
+        .collection = .{ .kind = .container_decls, .len = declaration_names.len, .index = null },
     } }, .is_type_val = false };
 }
 
@@ -4079,27 +4115,35 @@ fn astEnumFieldCount(declaration: Ast.full.ContainerDecl, handle: *DocumentStore
 fn astContainerDeclarationCount(declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle) usize {
     var count: usize = 0;
     for (declaration.ast.members) |member| {
-        const is_public = switch (handle.tree.nodeTag(member)) {
-            .global_var_decl,
-            .local_var_decl,
-            .simple_var_decl,
-            .aligned_var_decl,
-            => handle.tree.fullVarDecl(member).?.visib_token != null,
-            .fn_proto,
-            .fn_proto_multi,
-            .fn_proto_one,
-            .fn_proto_simple,
-            .fn_decl,
-            => blk: {
-                var buffer: [1]Ast.Node.Index = undefined;
-                const function = handle.tree.fullFnProto(&buffer, member).?;
-                break :blk function.visib_token != null and function.name_token != null;
-            },
-            else => false,
-        };
-        count += @intFromBool(is_public);
+        count += @intFromBool(astContainerDeclarationNameToken(&handle.tree, member) != null);
     }
     return count;
+}
+
+fn astContainerDeclarationNameToken(tree: *const Ast, member: Ast.Node.Index) ?Ast.TokenIndex {
+    return switch (tree.nodeTag(member)) {
+        .global_var_decl,
+        .local_var_decl,
+        .simple_var_decl,
+        .aligned_var_decl,
+        => blk: {
+            const variable = tree.fullVarDecl(member).?;
+            if (variable.visib_token == null) return null;
+            break :blk variable.ast.mut_token + 1;
+        },
+        .fn_proto,
+        .fn_proto_multi,
+        .fn_proto_one,
+        .fn_proto_simple,
+        .fn_decl,
+        => blk: {
+            var buffer: [1]Ast.Node.Index = undefined;
+            const function = tree.fullFnProto(&buffer, member).?;
+            if (function.visib_token == null) return null;
+            break :blk function.name_token;
+        },
+        else => null,
+    };
 }
 
 fn astContainerDeclarationAt(
@@ -4111,29 +4155,7 @@ fn astContainerDeclarationAt(
     const info = astContainerTypeInfo(container_type, &container_buffer) orelse return null;
     var index: u32 = 0;
     for (info.declaration.ast.members) |member| {
-        const name_token = switch (info.handle.tree.nodeTag(member)) {
-            .global_var_decl,
-            .local_var_decl,
-            .simple_var_decl,
-            .aligned_var_decl,
-            => blk: {
-                const variable = info.handle.tree.fullVarDecl(member).?;
-                if (variable.visib_token == null) continue;
-                break :blk variable.ast.mut_token + 1;
-            },
-            .fn_proto,
-            .fn_proto_multi,
-            .fn_proto_one,
-            .fn_proto_simple,
-            .fn_decl,
-            => blk: {
-                var function_buffer: [1]Ast.Node.Index = undefined;
-                const function = info.handle.tree.fullFnProto(&function_buffer, member).?;
-                if (function.visib_token == null) continue;
-                break :blk function.name_token orelse continue;
-            },
-            else => continue,
-        };
+        const name_token = astContainerDeclarationNameToken(&info.handle.tree, member) orelse continue;
         if (index == wanted_index) {
             return .{ .name = try analyser.identifierTokenName(&info.handle.tree, name_token) orelse return null };
         }
@@ -9152,6 +9174,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return try analyser.resolveFieldEnumType(arg_type) orelse .unknown_type;
                 }
 
+                if (std.mem.eql(u8, func_name, "DeclEnum")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveDeclEnumType(arg_type) orelse .unknown_type;
+                }
+
                 if (std.mem.eql(u8, func_name, "fieldIndex")) {
                     if (call.ast.params.len < 2) return .unknown_type;
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
@@ -13628,6 +13657,34 @@ const GeneratedContainerTypeKey = struct {
             for (a.bindings.keys(), a.bindings.values()) |token_handle, ty| {
                 const other = b.bindings.get(token_handle) orelse return false;
                 if (!ty.eql(other)) return false;
+            }
+            return true;
+        }
+    };
+};
+
+const SequentialEnumKey = struct {
+    kind: Kind,
+    names: []const []const u8,
+
+    const Kind = enum { field, declaration };
+
+    const Context = struct {
+        pub fn hash(_: Context, key: SequentialEnumKey) u64 {
+            var hasher: std.hash.Wyhash = .init(0);
+            std.hash.autoHash(&hasher, key.kind);
+            std.hash.autoHash(&hasher, key.names.len);
+            for (key.names) |name| {
+                std.hash.autoHash(&hasher, name.len);
+                hasher.update(name);
+            }
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: SequentialEnumKey, b: SequentialEnumKey) bool {
+            if (a.kind != b.kind or a.names.len != b.names.len) return false;
+            for (a.names, b.names) |a_name, b_name| {
+                if (!std.mem.eql(u8, a_name, b_name)) return false;
             }
             return true;
         }
