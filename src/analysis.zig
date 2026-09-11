@@ -36,6 +36,7 @@ resolved_callsites: std.AutoHashMapUnmanaged(Declaration.Param, ?Type) = .empty,
 resolved_nodes: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
+resolved_specialized_nodes: std.HashMapUnmanaged(GeneratedContainerTypeKey, ?Binding, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
@@ -82,6 +83,7 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_nodes.deinit(self.gpa);
     self.resolved_values.deinit(self.gpa);
     self.resolved_control_flow_values.deinit(self.gpa);
+    self.resolved_specialized_nodes.deinit(self.gpa);
     self.generated_container_types.deinit(self.gpa);
     self.sequential_enum_types.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
@@ -9271,15 +9273,30 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
     }
 
     // Specializations must not populate caches keyed only by the source node.
-    if (analyser.generic_bindings != null) {
+    if (analyser.generic_bindings) |bindings| {
         const node_with_uri: NodeWithUri = .{
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
         };
+        const key: GeneratedContainerTypeKey = .{
+            .node = node_with_uri,
+            .container_type = options.container_type,
+            .bindings = bindings.*,
+        };
+        const cached = try analyser.resolved_specialized_nodes.getOrPut(analyser.gpa, key);
+        if (cached.found_existing) return cached.value_ptr.*;
+        cached.key_ptr.bindings = try bindings.clone(analyser.arena);
+        cached.value_ptr.* = null;
+
         const gop = try analyser.resolving_specialized_nodes.getOrPut(analyser.gpa, node_with_uri);
-        if (gop.found_existing) return null;
+        if (gop.found_existing) {
+            _ = analyser.resolved_specialized_nodes.remove(key);
+            return null;
+        }
         defer std.debug.assert(analyser.resolving_specialized_nodes.remove(node_with_uri));
-        return analyser.resolveBindingOfNodeUncached(options);
+        const binding = try analyser.resolveBindingOfNodeUncached(options);
+        analyser.resolved_specialized_nodes.getPtr(key).?.* = binding;
+        return binding;
     }
 
     const node_handle = options.node_handle;
