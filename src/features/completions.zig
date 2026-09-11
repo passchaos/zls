@@ -196,17 +196,40 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
                 try declToCompletion(builder, decl_with_handle);
             }
         },
-        .ip_index => |payload| try analyser_completions.dotCompletions(
-            builder.arena,
-            &builder.completions,
-            builder.analyser.ip,
-            payload.index orelse try builder.analyser.ip.getUnknown(payload.type),
-        ),
+        .ip_index => |payload| {
+            try analyser_completions.dotCompletions(
+                builder.arena,
+                &builder.completions,
+                builder.analyser.ip,
+                payload.index orelse try builder.analyser.ip.getUnknown(payload.type),
+            );
+            if (builder.analyser.generated_struct_fields.get(payload.type)) |fields| {
+                for (fields) |field| {
+                    if (builder.completions.map.getPtr(field.name)) |item| {
+                        item.detail = if (field.alignment != 0)
+                            try std.fmt.allocPrint(builder.arena, "{s}: align({d}) {s}", .{
+                                field.name,
+                                field.alignment,
+                                try field.ty.stringifyTypeVal(builder.analyser, .{ .truncate_container_decls = true }),
+                            })
+                        else
+                            try std.fmt.allocPrint(builder.arena, "{s}: {s}", .{
+                                field.name,
+                                try field.ty.stringifyTypeVal(builder.analyser, .{ .truncate_container_decls = true }),
+                            });
+                    }
+                }
+            }
+        },
         .either => |either_entries| {
             for (either_entries) |entry| {
                 const entry_ty: Analyser.Type = .{ .data = entry.type_data, .is_type_val = ty.is_type_val };
                 try typeToCompletion(builder, entry_ty);
             }
+        },
+        .comptime_value => |value| switch (value.data) {
+            .optional => |payload| if (payload) |item| try typeToCompletion(builder, item.runtimeTypeValue(builder.analyser)),
+            else => try typeToCompletion(builder, try value.ty.instanceUnchecked(builder.analyser)),
         },
         .anytype_parameter => |info| {
             if (info.type_from_callsite_references) |t| {

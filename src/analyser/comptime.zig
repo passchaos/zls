@@ -1,0 +1,379 @@
+const std = @import("std");
+const Analyser = @import("../analysis.zig");
+const ast = @import("../ast.zig");
+const offsets = @import("../offsets.zig");
+const Ast = std.zig.Ast;
+const Type = Analyser.Type;
+const Handle = @import("../DocumentStore.zig").Handle;
+const Error = Analyser.Error;
+
+pub const Value = struct {
+    ty: Type,
+    data: union(enum) {
+        array: []const Type,
+        fields: []const Field,
+        optional: ?Type,
+        reference: *Cell,
+    },
+
+    pub const Field = struct { name: []const u8, value: Type };
+    pub const Cell = struct { value: Type };
+
+    pub fn hash(self: *const Value, hasher: anytype) void {
+        self.ty.hashWithHasher(hasher);
+        std.hash.autoHash(hasher, std.meta.activeTag(self.data));
+        switch (self.data) {
+            .array => |items| for (items) |item| item.hashWithHasher(hasher),
+            .fields => |fields| for (fields) |entry| {
+                hasher.update(entry.name);
+                entry.value.hashWithHasher(hasher);
+            },
+            .optional => |payload| {
+                std.hash.autoHash(hasher, payload != null);
+                if (payload) |value| value.hashWithHasher(hasher);
+            },
+            .reference => |cell| std.hash.autoHash(hasher, @intFromPtr(cell)),
+        }
+    }
+
+    pub fn eql(self: *const Value, other: *const Value) bool {
+        if (!self.ty.eql(other.ty) or std.meta.activeTag(self.data) != std.meta.activeTag(other.data)) return false;
+        switch (self.data) {
+            .array => |items| {
+                if (items.len != other.data.array.len) return false;
+                for (items, other.data.array) |a, b| if (!a.eql(b)) return false;
+            },
+            .fields => |fields| {
+                if (fields.len != other.data.fields.len) return false;
+                for (fields, other.data.fields) |a, b| {
+                    if (!std.mem.eql(u8, a.name, b.name) or !a.value.eql(b.value)) return false;
+                }
+            },
+            .optional => |payload| {
+                if ((payload == null) != (other.data.optional == null)) return false;
+                if (payload) |value| if (!value.eql(other.data.optional.?)) return false;
+            },
+            .reference => |cell| return cell == other.data.reference,
+        }
+        return true;
+    }
+
+    pub fn create(analyser: *Analyser, ty: Type, data: @FieldType(Value, "data")) error{OutOfMemory}!Type {
+        const value = try analyser.arena.create(Value);
+        value.* = .{ .ty = ty, .data = data };
+        return .{ .data = .{ .comptime_value = value }, .is_type_val = false };
+    }
+
+    pub fn deref(value: Type) Type {
+        if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
+            return value.data.comptime_value.data.reference.value;
+        return value;
+    }
+
+    pub fn elements(value: Type) ?[]const Type {
+        const resolved = deref(value);
+        if (resolved.data != .comptime_value or resolved.data.comptime_value.data != .array) return null;
+        return resolved.data.comptime_value.data.array;
+    }
+
+    pub fn field(value: Type, name: []const u8) ?Type {
+        const resolved = deref(value);
+        if (resolved.data != .comptime_value or resolved.data.comptime_value.data != .fields) return null;
+        for (resolved.data.comptime_value.data.fields) |entry| {
+            if (std.mem.eql(u8, entry.name, name)) return entry.value;
+        }
+        return null;
+    }
+};
+
+pub const Interpreter = struct {
+    analyser: *Analyser,
+    bindings: Analyser.TokenToTypeMap,
+    cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
+    budget: *Budget,
+
+    const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
+    const Flow = union(enum) { next, returned: Type, continued, stopped, unknown };
+
+    pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
+        const tree = &handle.tree;
+        var buffer: [2]Ast.Node.Index = undefined;
+        const statements = tree.blockStatements(&buffer, body) orelse return false;
+        for (statements) |node| {
+            if (tree.fullVarDecl(node)) |decl| {
+                if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) return true;
+            }
+            if (tree.nodeTag(node) == .@"comptime") return true;
+        }
+        return false;
+    }
+
+    pub fn evaluate(analyser: *Analyser, handle: *Handle, body: Ast.Node.Index) Error!?Type {
+        var budget: Budget = .{};
+        var interpreter: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
+        };
+        return switch (try interpreter.run(handle, body)) {
+            .returned => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn enterExpression(self: *Interpreter) bool {
+        if (self.budget.expression_depth >= 128 or !self.tick()) return false;
+        self.budget.expression_depth += 1;
+        return true;
+    }
+
+    pub fn leaveExpression(self: *Interpreter) void {
+        self.budget.expression_depth -= 1;
+    }
+
+    fn tick(self: *Interpreter) bool {
+        if (self.budget.steps == 0) return false;
+        self.budget.steps -= 1;
+        return true;
+    }
+
+    fn run(self: *Interpreter, handle: *Handle, body: Ast.Node.Index) Error!Flow {
+        if (self.budget.depth >= 32 or !self.tick()) return .unknown;
+        self.budget.depth += 1;
+        defer self.budget.depth -= 1;
+        const analyser = self.analyser;
+        const old_interpreter = analyser.comptime_interpreter;
+        const old_bindings = analyser.generic_bindings;
+        const old_values = analyser.evaluate_comptime_values;
+        const old_numbers = analyser.resolve_number_literal_values;
+        const old_flow = analyser.evaluate_comptime_control_flow;
+        analyser.comptime_interpreter = self;
+        analyser.generic_bindings = &self.bindings;
+        analyser.evaluate_comptime_values = true;
+        analyser.resolve_number_literal_values = true;
+        analyser.evaluate_comptime_control_flow = true;
+        defer {
+            analyser.comptime_interpreter = old_interpreter;
+            analyser.generic_bindings = old_bindings;
+            analyser.evaluate_comptime_values = old_values;
+            analyser.resolve_number_literal_values = old_numbers;
+            analyser.evaluate_comptime_control_flow = old_flow;
+        }
+        return self.statement(handle, body);
+    }
+
+    fn eval(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        if (!self.tick()) return null;
+        return self.analyser.resolveTypeOfNode(.of(node, handle));
+    }
+
+    fn integer(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?usize {
+        const value = try self.eval(handle, node) orelse return null;
+        return self.analyser.ip.toInt(value.ipIndex() orelse return null, usize);
+    }
+
+    fn bind(self: *Interpreter, handle: *Handle, token: Ast.TokenIndex, value: Type) Error!void {
+        try self.bindings.put(self.analyser.arena, .{ .handle = handle, .token = token }, value);
+    }
+
+    pub fn cell(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Cell {
+        const tree = &handle.tree;
+        if (tree.nodeTag(node) != .identifier) return null;
+        const token = tree.nodeMainToken(node);
+        const name = offsets.identifierTokenToNameSlice(tree, token);
+        const decl = try self.analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(token)) orelse return null;
+        return self.cells.get(.{ .handle = decl.handle, .token = decl.nameToken() });
+    }
+
+    pub fn read(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        const storage = try self.cell(handle, node) orelse return null;
+        return storage.value;
+    }
+
+    pub fn address(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        const storage = try self.cell(handle, node) orelse return null;
+        const ty = try self.analyser.resolveAddressOf(false, storage.value);
+        return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = storage });
+    }
+
+    fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+        if (!self.tick()) return .unknown;
+        const analyser = self.analyser;
+        const tree = &handle.tree;
+        var buffer: [2]Ast.Node.Index = undefined;
+        if (tree.blockStatements(&buffer, node)) |statements| {
+            for (statements) |child| {
+                const flow = try self.statement(handle, child);
+                if (flow != .next) return flow;
+            }
+            return .next;
+        }
+        if (tree.fullVarDecl(node)) |decl| {
+            const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
+            var value = try self.eval(handle, init_node) orelse Type.unknown_type;
+            if (decl.ast.type_node.unwrap()) |type_node| {
+                const ty = try self.eval(handle, type_node) orelse return .unknown;
+                if (tree.fullArrayType(type_node)) |array| {
+                    const len = try self.integer(handle, array.ast.elem_count) orelse return .unknown;
+                    if (len > self.budget.steps) return .unknown;
+                    if (Value.elements(value) == null) {
+                        const items = try analyser.arena.alloc(Type, len);
+                        @memset(items, Type.fromIP(analyser, .undefined_type, .undefined_value));
+                        value = try Value.create(analyser, ty, .{ .array = items });
+                    }
+                } else if (!ty.isMetaType() and value.data != .comptime_value and !value.is_type_val) {
+                    if (ty.ipIndex()) |type_index| {
+                        if (value.ipIndex()) |index| {
+                            const coerced = try analyser.coerceIP(type_index, index) orelse return .unknown;
+                            value = Type.fromIP(analyser, type_index, coerced);
+                        } else value = try ty.instanceTypeVal(analyser) orelse value;
+                    }
+                }
+            }
+            const token = decl.ast.mut_token + 1;
+            if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) {
+                const storage = try analyser.arena.create(Value.Cell);
+                storage.* = .{ .value = value };
+                try self.cells.put(analyser.arena, .{ .handle = handle, .token = token }, storage);
+            }
+            try self.bind(handle, token, value);
+            return .next;
+        }
+        switch (tree.nodeTag(node)) {
+            .@"comptime" => return self.statement(handle, tree.nodeData(node).node),
+            .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression|
+                try self.eval(handle, expression) orelse return .unknown
+            else
+                Type.fromIP(analyser, .void_type, .void_value) },
+            .@"continue" => return if (tree.nodeData(node).opt_token_and_opt_node[0] != .none) .unknown else .continued,
+            .@"break" => {
+                const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
+                return if (label != .none or operand != .none) .unknown else .stopped;
+            },
+            .if_simple, .@"if" => {
+                const branch = ast.fullIf(tree, node).?;
+                const condition = try self.eval(handle, branch.ast.cond_expr) orelse return .unknown;
+                const known = switch (condition.ipIndex() orelse return .unknown) {
+                    .bool_true => true,
+                    .bool_false => false,
+                    else => return .unknown,
+                };
+                return self.statement(handle, if (known) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse return .next);
+            },
+            .for_simple, .@"for" => return self.loop(handle, tree.fullFor(node).?),
+            .assign => {
+                const lhs, const rhs = tree.nodeData(node).node_and_node;
+                if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) {
+                    _ = try self.eval(handle, rhs);
+                    return .next;
+                }
+                const value = try self.eval(handle, rhs) orelse return .unknown;
+                if (tree.nodeTag(lhs) == .array_access) {
+                    const base, const index_node = tree.nodeData(lhs).node_and_node;
+                    var storage = try self.cell(handle, base);
+                    if (storage == null or Value.elements(storage.?.value) == null) {
+                        const pointer = try self.eval(handle, base) orelse return .unknown;
+                        if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return .unknown;
+                        storage = pointer.data.comptime_value.data.reference;
+                    }
+                    const current = storage.?.value;
+                    const items = Value.elements(current) orelse return .unknown;
+                    const index = try self.integer(handle, index_node) orelse return .unknown;
+                    if (index >= items.len) return .unknown;
+                    const updated = try analyser.arena.dupe(Type, items);
+                    updated[index] = value;
+                    storage.?.value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
+                } else {
+                    const storage = try self.cell(handle, lhs) orelse return .unknown;
+                    storage.value = value;
+                }
+                return .next;
+            },
+            .call, .call_comma, .call_one, .call_one_comma => return self.call(handle, node),
+            else => return .unknown,
+        }
+    }
+
+    fn loop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For) Error!Flow {
+        const analyser = self.analyser;
+        const tree = &handle.tree;
+        const Input = union(enum) { sequence: Type, range: usize };
+        const inputs = try analyser.arena.alloc(Input, loop_node.ast.inputs.len);
+        var len: ?usize = null;
+        for (loop_node.ast.inputs, inputs) |input, *resolved| {
+            var count: ?usize = null;
+            if (tree.nodeTag(input) == .for_range) {
+                const start_node, const end_node = tree.nodeData(input).node_and_opt_node;
+                const start = try self.integer(handle, start_node) orelse return .unknown;
+                resolved.* = .{ .range = start };
+                if (end_node.unwrap()) |end| {
+                    const end_value = try self.integer(handle, end) orelse return .unknown;
+                    count = std.math.sub(usize, end_value, start) catch return .unknown;
+                }
+            } else {
+                const sequence = try self.eval(handle, input) orelse return .unknown;
+                resolved.* = .{ .sequence = sequence };
+                const length = try analyser.resolveFieldAccess(sequence, "len") orelse return .unknown;
+                count = analyser.ip.toInt(length.ipIndex() orelse return .unknown, usize) orelse return .unknown;
+            }
+            if (count) |n| {
+                if (len != null and len.? != n) return .unknown;
+                len = n;
+            }
+        }
+        const count = len orelse return .unknown;
+        if (count > self.budget.steps) return .unknown;
+        for (0..count) |index| {
+            var token = loop_node.payload_token;
+            for (inputs) |input| {
+                if (tree.tokenTag(token) == .asterisk) return .unknown;
+                const value = switch (input) {
+                    .sequence => |sequence| try analyser.resolveBracketAccessType(sequence, .{ .single = index }) orelse return .unknown,
+                    .range => |start| Type.fromIP(analyser, .comptime_int_type, try analyser.ip.get(.{ .int_u64_value = .{
+                        .ty = .comptime_int_type,
+                        .int = std.math.add(usize, start, index) catch return .unknown,
+                    } })),
+                };
+                try self.bind(handle, token, value);
+                token += 2;
+            }
+            const flow = try self.statement(handle, loop_node.ast.then_expr);
+            switch (flow) {
+                .next, .continued => {},
+                .stopped => return .next,
+                .returned, .unknown => return flow,
+            }
+        }
+        if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
+        return .next;
+    }
+
+    fn call(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+        const analyser = self.analyser;
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call_node = handle.tree.fullCall(&buffer, node).?;
+        const callable = try self.eval(handle, call_node.ast.fn_expr) orelse return .unknown;
+        const function = try analyser.resolveFuncProtoOfCallable(callable) orelse return .unknown;
+        const info = function.data.function;
+        if (info.parameters.len != call_node.ast.params.len or info.handle.tree.nodeTag(info.fn_node) != .fn_decl) return .unknown;
+        var child: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (info.container_type.data == .container)
+                try info.container_type.data.container.bound_params.clone(analyser.arena)
+            else
+                .empty,
+            .budget = self.budget,
+        };
+        for (info.parameters, call_node.ast.params) |parameter, argument| {
+            const value = try self.eval(handle, argument) orelse return .unknown;
+            try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
+            if (parameter.type.data == .anytype_parameter) {
+                try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
+            }
+        }
+        return switch (try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1])) {
+            .next, .returned => .next,
+            else => .unknown,
+        };
+    }
+};

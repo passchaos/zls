@@ -266,3 +266,17 @@ const error_tag_differs = ErrorTags[0] != error.Beta;
 const GeneratedTags = std.meta.tags(@Enum(u13, .exhaustive, &.{ "first", "second" }, &.{ 3, 21 }));
 const generated_tag_value = @intFromEnum(GeneratedTags[1]);
 //    ^^^^^^^^^^^^^^^^^^^ (u13)(21)
+
+const NamedTag = enum(u8) { alpha = 3, beta = 7 };
+const parsed_tag = std.meta.stringToEnum(NamedTag, "beta").?;
+//    ^^^^^^^^^^ (NamedTag)(.beta)
+const parsed_tag_value = @intFromEnum(parsed_tag);
+//    ^^^^^^^^^^^^^^^^ (u8)(7)
+const parsed_tag_name = @tagName(parsed_tag)[0];
+//    ^^^^^^^^^^^^^^^ (u8)(98)
+const missing_tag = std.meta.stringToEnum(NamedTag, "missing") == null;
+//    ^^^^^^^^^^^ (bool)(true)
+const GeneratedNamedTag = @Enum(u13, .exhaustive, &.{ "first", "second" }, &.{ 3, 21 });
+const generated_parsed_tag = std.meta.stringToEnum(GeneratedNamedTag, "second").?;
+const generated_parsed_value = @intFromEnum(generated_parsed_tag);
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u13)(21)

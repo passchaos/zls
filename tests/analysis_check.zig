@@ -242,7 +242,7 @@ pub fn main(init: std.process.Init) Error!void {
         }
 
         if (test_item.expected_value) |expected_value| {
-            if (ty.data != .ip_index and !ty.is_type_val) {
+            if (ty.data != .ip_index and ty.data != .enum_value and !ty.is_type_val) {
                 try error_builder.msgAtLoc("unsupported value check `{s}`", file_path, identifier_loc, .err, .{
                     expected_value,
                 });

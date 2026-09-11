@@ -2088,6 +2088,157 @@ test "generic function with comptime Struct type constructor" {
     });
 }
 
+test "generic Struct with mutable comptime field arrays" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Record(comptime T: type) type {
+        \\    comptime var names: [2][:0]const u8 = undefined;
+        \\    comptime var types: [2]type = undefined;
+        \\    comptime var attrs: [2]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (.{ "value", "enabled" }, .{ T, bool }, 0..) |name, Field, index| {
+        \\        names[index] = name;
+        \\        types[index] = Field;
+        \\        attrs[index] = .{};
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const record: Record(u16) = undefined;
+        \\const field = record.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "value: u16" },
+        .{ .label = "enabled", .kind = .Field, .detail = "enabled: bool" },
+    });
+}
+
+test "generic Struct with helper writes and AST field types" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Model(comptime T: type) type {
+        \\    return struct {
+        \\        value: T = 0,
+        \\        pub fn call(_: @This(), value: T) T { return value; }
+        \\    };
+        \\}
+        \\fn setField(comptime index: usize, comptime name: [:0]const u8, comptime T: type,
+        \\    names: anytype, types: anytype, attrs: anytype) void
+        \\{
+        \\    const Default = struct { const value: T = .{}; };
+        \\    names[index] = name;
+        \\    types[index] = T;
+        \\    attrs[index] = .{ .default_value_ptr = @ptrCast(&Default.value) };
+        \\}
+        \\fn Requirements(comptime capabilities: anytype) type {
+        \\    const fields = @typeInfo(@TypeOf(capabilities)).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        const T = @field(capabilities, field.name);
+        \\        if (@TypeOf(T) == type) {
+        \\            setField(index, field.name, Model(T), &names, &types, &attrs);
+        \\            continue;
+        \\        }
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const capabilities: Requirements(.{ .reader = u8, .seekable = u64 }) = .{};
+        \\const method = capabilities.seekable.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "u64" },
+        .{ .label = "call", .kind = .Method },
+    });
+}
+
+test "named generic Struct result preserves generated fields" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Model(comptime T: type) type {
+        \\    return struct {
+        \\        value: T = 0,
+        \\        pub fn call(_: @This(), value: T) T { return value; }
+        \\    };
+        \\}
+        \\fn setField(comptime index: usize, comptime name: [:0]const u8, comptime T: type,
+        \\    names: anytype, types: anytype, attrs: anytype) void
+        \\{
+        \\    const Default = struct { const value: T = .{}; };
+        \\    names[index] = name;
+        \\    types[index] = T;
+        \\    attrs[index] = .{ .default_value_ptr = @ptrCast(&Default.value) };
+        \\}
+        \\fn Requirements(comptime capabilities: anytype) type {
+        \\    const fields = @typeInfo(@TypeOf(capabilities)).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        const T = @field(capabilities, field.name);
+        \\        setField(index, field.name, Model(T), &names, &types, &attrs);
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const Capabilities = Requirements(.{
+        \\    .reader = u8,
+        \\    .seekable = u64,
+        \\});
+        \\const capabilities: Capabilities = .{};
+        \\const capability = capabilities.<cursor>
+    , &.{
+        .{ .label = "reader", .kind = .Field },
+        .{ .label = "seekable", .kind = .Field },
+    });
+}
+
+test "generic Struct rejects unknown or invalid field arrays" {
+    const template =
+        \\const std = @import("std");
+        \\var runtime: bool = false;
+        \\fn Record(comptime T: type) type {
+        \\    comptime var names: [1][:0]const u8 = undefined;
+        \\    comptime var types: [1]type = undefined;
+        \\    comptime var attrs: [1]std.builtin.Type.StructField.Attributes = undefined;
+        \\    BODY
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const record: Record(u16) = undefined;
+        \\const field = record.<cursor>
+    ;
+    for ([_][]const u8{
+        "types[0] = T; attrs[0] = .{};",
+        "names[1] = \"bad\"; types[0] = T; attrs[0] = .{};",
+        "if (runtime) names[0] = \"a\" else names[0] = \"b\"; types[0] = T; attrs[0] = .{};",
+        "inline for (0..1000000) |_| {} names[0] = \"value\"; types[0] = T; attrs[0] = .{};",
+        "const recurse = struct { fn run() void { run(); } }; recurse.run(); names[0] = \"value\"; types[0] = T; attrs[0] = .{};",
+    }) |body| {
+        const source = try std.mem.replaceOwned(u8, allocator, template, "BODY", body);
+        defer allocator.free(source);
+        try testCompletion(source, &.{});
+    }
+}
+
+test "generic Struct preserves explicit implementation values" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Model(comptime T: type) type { return struct { value: T = 0 }; }
+        \\fn Record(comptime capabilities: anytype) type {
+        \\    const fields = @typeInfo(@TypeOf(capabilities)).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        names[index] = field.name;
+        \\        const capability = @field(capabilities, field.name);
+        \\        types[index] = if (@TypeOf(capability) == type) Model(capability) else @TypeOf(capability);
+        \\        attrs[index] = .{};
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const model = Model(u32){ .value = 42 };
+        \\const record: Record(.{ .first = u8, .second = model }) = undefined;
+        \\const value = record.second.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "u32" }});
+}
+
 test "generic function with comptime generated Struct values" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
@@ -2684,6 +2835,26 @@ test "generic function with comptime std meta tags" {
         \\        @intFromEnum(enum_tags[1]) == 9 and @tagName(enum_tags[1])[0] == 'h' and
         \\        union_tags.len == 2 and @intFromEnum(union_tags[1]) == 1 and
         \\        error_tags.len == 2 and error_tags[1] == error.Failed)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
+test "generic function with comptime std meta string to enum" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const E = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 4, 9 });
+        \\    const found = std.meta.stringToEnum(E, "high");
+        \\    const missing = std.meta.stringToEnum(E, "missing");
+        \\    return if (found != null and found.? == E.high and
+        \\        @intFromEnum(found.?) == 9 and @tagName(found.?)[0] == 'h' and missing == null)
         \\        struct { matched: T }
         \\    else
         \\        struct { fallback: u8 };
