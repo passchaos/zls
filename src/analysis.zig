@@ -1581,6 +1581,33 @@ fn resolveMetaFieldsValue(
     } }, .is_type_val = false };
 }
 
+fn resolveMetaFieldValue(
+    analyser: *Analyser,
+    container_type: Type,
+    field_name: []const u8,
+    value_type: Type,
+) Error!?Type {
+    const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
+    const kind: Type.TypeInfoCollectionKind = switch (tag) {
+        .@"struct" => .struct_fields,
+        .@"union" => .union_fields,
+        .@"enum" => .enum_fields,
+        .error_set => .error_set_errors,
+        else => return null,
+    };
+    const names = try analyser.metaFieldNames(container_type) orelse return null;
+    const field_index = for (names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, field_name)) break index;
+    } else return null;
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(value_type),
+        .reflected_type = try analyser.allocType(container_type),
+        .tag = tag,
+        .is_payload = true,
+        .collection = .{ .kind = kind, .len = names.len, .index = @intCast(field_index) },
+    } }, .is_type_val = false };
+}
+
 fn resolveMetaDeclarationsValue(
     analyser: *Analyser,
     container_type: Type,
@@ -9223,6 +9250,22 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
                         return .unknown_type;
                     return try analyser.resolveMetaFieldsValue(arg_type, func_info.return_value.*) orelse .unknown_type;
+                }
+
+                if (std.mem.eql(u8, func_name, "fieldInfo")) {
+                    if (call.ast.params.len < 2) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    const field_enum_type = try analyser.resolveFieldEnumType(arg_type) orelse return .unknown_type;
+                    const field_name = try analyser.resolveEnumValueTag(
+                        field_enum_type,
+                        .of(call.ast.params[1], handle),
+                    ) orelse return .unknown_type;
+                    return try analyser.resolveMetaFieldValue(
+                        arg_type,
+                        field_name,
+                        func_info.return_value.*,
+                    ) orelse .unknown_type;
                 }
 
                 if (std.mem.eql(u8, func_name, "declarations")) {

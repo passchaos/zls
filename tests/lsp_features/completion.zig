@@ -2629,6 +2629,29 @@ test "generic function with comptime std meta declaration info" {
     });
 }
 
+test "generic function with comptime std meta field info" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct {
+        \\        payload: T,
+        \\        comptime enabled: bool = true,
+        \\    };
+        \\    const payload = std.meta.fieldInfo(S, .payload);
+        \\    const enabled = std.meta.fieldInfo(S, .enabled);
+        \\    return if (payload.type == T and payload.name[0] == 'p' and
+        \\        !payload.is_comptime and enabled.type == bool and enabled.is_comptime)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

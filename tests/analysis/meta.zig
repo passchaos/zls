@@ -191,3 +191,33 @@ const EscapedDecl = struct {
 const EscapedDeclInfo = std.meta.declarationInfo(EscapedDecl, "quoted-name");
 const escaped_decl_name = EscapedDeclInfo.name[0];
 //    ^^^^^^^^^^^^^^^^^ (u8)(113)
+
+const FieldInfoStruct = struct {
+    payload: u16,
+    comptime enabled: bool = true,
+};
+const PayloadFieldInfo = std.meta.fieldInfo(FieldInfoStruct, .payload);
+const payload_field_info_type = PayloadFieldInfo.type;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(u16)
+const EnabledFieldInfo = std.meta.fieldInfo(FieldInfoStruct, .enabled);
+const enabled_field_is_comptime = EnabledFieldInfo.is_comptime;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const UnionFieldInfo = std.meta.fieldInfo(FieldUnion, .beta);
+const union_field_info_type = UnionFieldInfo.type;
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)(u16)
+const EnumFieldInfo = std.meta.fieldInfo(ConsecutiveTag, .beta);
+const enum_field_info_value = EnumFieldInfo.value;
+//    ^^^^^^^^^^^^^^^^^^^^^ (comptime_int)(1)
+const ErrorFieldInfo = std.meta.fieldInfo(error{ Alpha, Beta }, .Beta);
+const error_field_info_name = ErrorFieldInfo.name[0];
+//    ^^^^^^^^^^^^^^^^^^^^^ (u8)(66)
+const StructFieldNames = std.meta.FieldEnum(FieldInfoStruct);
+const QualifiedFieldInfo = std.meta.fieldInfo(FieldInfoStruct, StructFieldNames.enabled);
+const qualified_field_is_comptime = QualifiedFieldInfo.is_comptime;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const IntegerFieldInfo = std.meta.fieldInfo(FieldInfoStruct, @enumFromInt(0));
+const integer_field_info_type = IntegerFieldInfo.type;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(u16)
+const GeneratedFieldInfo = std.meta.fieldInfo(MetaPacked, .value);
+const generated_field_info_type = GeneratedFieldInfo.type;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
