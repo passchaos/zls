@@ -8689,6 +8689,45 @@ test "generic method from forwarded type function with dependent comptime value"
     });
 }
 
+test "enum argument of method on generated type" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\const Reader = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\    fn Methods(comptime Subject: type, comptime assoc: Associated) type {
+        \\        return struct { read: fn (Subject, []u8) assoc.Error!usize };
+        \\    }
+        \\};
+        \\fn associatedFor(comptime C: type, comptime _: type) C.Associated {
+        \\    return .{};
+        \\}
+        \\fn methodsType(comptime C: type, comptime Subject: type, comptime associated: C.Associated) type {
+        \\    return C.Methods(Subject, associated);
+        \\}
+        \\fn Method(comptime C: type, comptime Subject: type, comptime associated: C.Associated) type {
+        \\    return std.meta.FieldEnum(methodsType(C, Subject, associated));
+        \\}
+        \\fn Impl(comptime C: type, comptime Subject: type) type {
+        \\    return ImplWith(C, Subject, associatedFor(C, Subject));
+        \\}
+        \\fn ImplWith(comptime C: type, comptime Subject: type, comptime associated: C.Associated) type {
+        \\    const M = Method(C, Subject, associated);
+        \\    return struct {
+        \\        state: u8 = 0,
+        \\        const Self = @This();
+        \\        fn call(comptime _: Self, comptime method: M) void {
+        \\            _ = method;
+        \\        }
+        \\    };
+        \\}
+        \\fn count(comptime impl: Impl(Reader, *u8)) void {
+        \\    impl.call(.<cursor>);
+        \\}
+    , &.{
+        .{ .label = "read", .kind = .EnumMember },
+    });
+}
+
 test "function taking a generic struct arg" {
     try testCompletion(
         \\fn Foo(T: type) type {

@@ -9257,7 +9257,8 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
         if (container_type.data == .container) {
             const bindings = &container_type.data.container.bound_params;
             for (bindings.values()) |binding| {
-                if (!binding.hasKnownValue(analyser)) continue;
+                const is_concrete_type = binding.is_type_val and !binding.hasUnresolvedGenericType();
+                if (!is_concrete_type and !binding.hasKnownValue(analyser)) continue;
                 if (old_bindings) |outer_bindings| {
                     merged_bindings = try outer_bindings.clone(analyser.arena);
                     for (bindings.keys(), bindings.values()) |key, bound| {
