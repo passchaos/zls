@@ -1597,6 +1597,30 @@ fn resolveMetaDeclarationsValue(
     } }, .is_type_val = false };
 }
 
+fn resolveMetaDeclarationValue(
+    analyser: *Analyser,
+    container_type: Type,
+    declaration_name: []const u8,
+    value_type: Type,
+) Error!?Type {
+    const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
+    const declaration_names = try analyser.metaDeclarationNames(container_type) orelse return null;
+    const declaration_index = for (declaration_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, declaration_name)) break index;
+    } else return null;
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(value_type),
+        .reflected_type = try analyser.allocType(container_type),
+        .tag = tag,
+        .is_payload = true,
+        .collection = .{
+            .kind = .container_decls,
+            .len = declaration_names.len,
+            .index = @intCast(declaration_index),
+        },
+    } }, .is_type_val = false };
+}
+
 fn resolveSwitchUnionPayload(
     analyser: *Analyser,
     union_type: Type,
@@ -9206,6 +9230,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
                         return .unknown_type;
                     return try analyser.resolveMetaDeclarationsValue(arg_type, func_info.return_value.*) orelse .unknown_type;
+                }
+
+                if (std.mem.eql(u8, func_name, "declarationInfo")) {
+                    if (call.ast.params.len < 2) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    const declaration_name = try analyser.resolveStringLiteral(.of(call.ast.params[1], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveMetaDeclarationValue(
+                        arg_type,
+                        declaration_name,
+                        func_info.return_value.*,
+                    ) orelse .unknown_type;
                 }
             }
 

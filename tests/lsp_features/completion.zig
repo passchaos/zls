@@ -2606,6 +2606,29 @@ test "generic function with comptime std meta DeclEnum" {
     });
 }
 
+test "generic function with comptime std meta declaration info" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = struct {
+        \\        pub const Alpha = T;
+        \\        const hidden = false;
+        \\        pub fn beta() void {}
+        \\    };
+        \\    const alpha = std.meta.declarationInfo(S, "Alpha");
+        \\    const beta = std.meta.declarationInfo(S, "beta");
+        \\    return if (alpha.name[0] == 'A' and beta.name[0] == 'b')
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

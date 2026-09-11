@@ -169,3 +169,25 @@ const DeclTaggedUnion = union(enum) { payload: u8 };
 const ImplicitTagDeclNames = std.meta.DeclEnum(std.meta.Tag(DeclTaggedUnion));
 const implicit_tag_decl_tag = std.meta.Tag(ImplicitTagDeclNames);
 //    ^^^^^^^^^^^^^^^^^^^^^ (type)(u0)
+
+const AlphaDecl = std.meta.declarationInfo(DeclStruct, "Alpha");
+const alpha_decl_name = AlphaDecl.name[0];
+//    ^^^^^^^^^^^^^^^ (u8)(65)
+const BetaDecl = std.meta.declarationInfo(DeclStruct, "beta");
+const beta_decl_name = BetaDecl.name[0];
+//    ^^^^^^^^^^^^^^ (u8)(98)
+const UnionDeclInfo = std.meta.declarationInfo(DeclUnion, "Gamma");
+const union_decl_name = UnionDeclInfo.name[0];
+//    ^^^^^^^^^^^^^^^ (u8)(71)
+const EnumDeclInfo = std.meta.declarationInfo(DeclTag, "delta");
+const enum_decl_info_name = EnumDeclInfo.name[0];
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(100)
+const OpaqueDeclInfo = std.meta.declarationInfo(DeclOpaque, "Omega");
+const opaque_decl_name = OpaqueDeclInfo.name[0];
+//    ^^^^^^^^^^^^^^^^ (u8)(79)
+const EscapedDecl = struct {
+    pub const @"quoted-name" = 1;
+};
+const EscapedDeclInfo = std.meta.declarationInfo(EscapedDecl, "quoted-name");
+const escaped_decl_name = EscapedDeclInfo.name[0];
+//    ^^^^^^^^^^^^^^^^^ (u8)(113)
