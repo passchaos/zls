@@ -1449,6 +1449,7 @@ fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const []co
             },
             else => null,
         },
+        .union_tag => |union_type| analyser.metaFieldNames(union_type.*),
         else => null,
     };
 }
@@ -1700,6 +1701,51 @@ fn resolveMetaFieldNamesValue(
         .is_payload = true,
         .collection = .{ .kind = .field_names, .len = names.len, .index = null },
     } }, .is_type_val = false };
+}
+
+fn resolveMetaTagsValue(
+    analyser: *Analyser,
+    container_type: Type,
+    value_type: Type,
+) Error!?Type {
+    const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
+    switch (tag) {
+        .@"enum", .error_set => {},
+        else => return null,
+    }
+    const names = try analyser.metaFieldNames(container_type) orelse return null;
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(value_type),
+        .reflected_type = try analyser.allocType(container_type),
+        .tag = tag,
+        .is_payload = true,
+        .collection = .{ .kind = .tags, .len = names.len, .index = null },
+    } }, .is_type_val = false };
+}
+
+fn metaTagValueAt(
+    analyser: *Analyser,
+    container_type: Type,
+    wanted_index: u32,
+) error{OutOfMemory}!?Type {
+    const name = try analyser.metaFieldNameAt(container_type, wanted_index) orelse return null;
+    return switch (analyser.resolveTypeInfoTag(container_type) orelse return null) {
+        .@"enum" => analyser.enumValue(container_type, name) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Canceled => return null,
+        },
+        .error_set => blk: {
+            const error_set_type = container_type.ipIndex() orelse return null;
+            if (analyser.ip.indexToKey(error_set_type) != .error_set_type) return null;
+            const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
+            const error_value = try analyser.ip.get(.{ .error_value = .{
+                .ty = error_set_type,
+                .error_tag_name = name_index,
+            } });
+            break :blk Type.fromIP(analyser, error_set_type, error_value);
+        },
+        else => null,
+    };
 }
 
 fn resolveMetaDeclarationsValue(
@@ -2370,6 +2416,12 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                                 name,
                                 try element_type.typeOf(analyser),
                             ),
+                            .is_const = true,
+                        };
+                    }
+                    if (collection.kind == .tags) {
+                        return .{
+                            .type = try analyser.metaTagValueAt(value.reflected_type.*, @intCast(index)) orelse return null,
                             .is_const = true,
                         };
                     }
@@ -4216,7 +4268,7 @@ fn resolveTypeInfoDescriptorField(
                 return try analyser.stringValueWithType(declaration.name, try field_value_type.typeOf(analyser));
             }
         },
-        .field_names => {},
+        .field_names, .tags => {},
     }
     return field_value_type;
 }
@@ -4453,7 +4505,7 @@ fn resolveEnumTagIntValue(
     enum_type: Type,
     tag: []const u8,
 ) Error!?InternPool.Index {
-    const container = switch (enum_type.data) {
+    const container, const is_union_tag = switch (enum_type.data) {
         .ip_index => |payload| {
             const enum_info = switch (analyser.ip.indexToKey(payload.index orelse return null)) {
                 .enum_type => |enum_index| analyser.ip.getEnum(enum_index),
@@ -4463,7 +4515,11 @@ fn resolveEnumTagIntValue(
             const field_index = enum_info.fields.getIndex(name_index) orelse return null;
             return enum_info.values.keys()[field_index];
         },
-        .container => |container| container,
+        .container => |container| .{ container, false },
+        .union_tag => |union_type| switch (union_type.data) {
+            .container => |container| .{ container, true },
+            else => return null,
+        },
         else => return null,
     };
     const handle = container.scope_handle.handle;
@@ -4471,7 +4527,8 @@ fn resolveEnumTagIntValue(
     const node = container.scope_handle.toNode();
     var buffer: [2]Ast.Node.Index = undefined;
     const declaration = tree.fullContainerDecl(&buffer, node) orelse return null;
-    if (tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return null;
+    const expected_container_tag: std.zig.Token.Tag = if (is_union_tag) .keyword_union else .keyword_enum;
+    if (tree.tokenTag(declaration.ast.main_token) != expected_container_tag) return null;
 
     var field_count: u32 = 0;
     for (declaration.ast.members) |member| {
@@ -4479,7 +4536,10 @@ fn resolveEnumTagIntValue(
     }
     if (field_count == 0) return null;
 
-    const tag_type = if (declaration.ast.arg.unwrap()) |arg| blk: {
+    const tag_type = if (is_union_tag) blk: {
+        const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
+        break :blk try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+    } else if (declaration.ast.arg.unwrap()) |arg| blk: {
         const resolved = try analyser.resolveTypeOfNodeInternal(.{
             .node_handle = .of(arg, handle),
             .container_type = enum_type,
@@ -7054,6 +7114,18 @@ fn resolveComparisonValue(
     const lhs_index = lhs.ipIndex();
     const rhs_index = rhs.ipIndex();
     if (tag == .equal_equal or tag == .bang_equal) {
+        if (lhs_index != null and rhs_index != null) {
+            const lhs_key = analyser.ip.indexToKey(lhs_index.?);
+            const rhs_key = analyser.ip.indexToKey(rhs_index.?);
+            if (lhs_key == .error_value and rhs_key == .error_value) {
+                const equal = lhs_key.error_value.error_tag_name == rhs_key.error_value.error_tag_name;
+                return Type.fromIP(
+                    analyser,
+                    .bool_type,
+                    if (equal == (tag == .equal_equal)) .bool_true else .bool_false,
+                );
+            }
+        }
         const lhs_optional_null = analyser.knownOptionalNull(lhs);
         const rhs_optional_null = analyser.knownOptionalNull(rhs);
         if (lhs_optional_null != null and rhs_optional_null != null and
@@ -9380,6 +9452,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return try analyser.resolveMetaFieldNamesValue(arg_type, func_info.return_value.*) orelse .unknown_type;
                 }
 
+                if (std.mem.eql(u8, func_name, "tags")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveMetaTagsValue(arg_type, func_info.return_value.*) orelse .unknown_type;
+                }
+
                 if (std.mem.eql(u8, func_name, "declarations")) {
                     if (call.ast.params.len < 1) return .unknown_type;
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
@@ -11684,6 +11763,7 @@ pub const Type = struct {
         error_set_errors,
         container_decls,
         field_names,
+        tags,
     };
 
     const Pointer = struct {

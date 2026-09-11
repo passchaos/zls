@@ -2671,6 +2671,30 @@ test "generic function with comptime std meta field names" {
     });
 }
 
+test "generic function with comptime std meta tags" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const E = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 4, 9 });
+        \\    const U = union(enum) { low: T, high: bool };
+        \\    const enum_tags = std.meta.tags(E);
+        \\    const union_tags = std.meta.tags(std.meta.Tag(U));
+        \\    const error_tags = std.meta.tags(error{ Oops, Failed });
+        \\    return if (enum_tags.len == 2 and enum_tags[0] == E.low and
+        \\        @intFromEnum(enum_tags[1]) == 9 and @tagName(enum_tags[1])[0] == 'h' and
+        \\        union_tags.len == 2 and @intFromEnum(union_tags[1]) == 1 and
+        \\        error_tags.len == 2 and error_tags[1] == error.Failed)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

@@ -242,3 +242,27 @@ const tuple_field_name_first = std.meta.fieldNames(struct { u8, u16 })[0][0];
 const EscapedFieldStruct = struct { @"quoted-field": u8 };
 const escaped_field_name_len = std.meta.fieldNames(EscapedFieldStruct)[0].len;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (usize)(12)
+
+const TaggedValues = enum(u8) { low = 4, high = 9 };
+const EnumTags = std.meta.tags(TaggedValues);
+const enum_tags_len = EnumTags.len;
+//    ^^^^^^^^^^^^^ (usize)(2)
+const enum_tag_value = @intFromEnum(EnumTags[1]);
+//    ^^^^^^^^^^^^^^ (u8)(9)
+const enum_tag_name = @tagName(EnumTags[0])[0];
+//    ^^^^^^^^^^^^^ (u8)(108)
+const AnonymousUnionTags = std.meta.tags(std.meta.Tag(TaggedUnionB));
+const anonymous_union_tag_value = @intFromEnum(AnonymousUnionTags[1]);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (u1)(1)
+const ErrorTags = std.meta.tags(error{ Alpha, Beta });
+const error_tags_len = ErrorTags.len;
+//    ^^^^^^^^^^^^^^ (usize)(2)
+const error_tag_name = @errorName(ErrorTags[1])[0];
+//    ^^^^^^^^^^^^^^ (u8)(66)
+const error_tag_matches = ErrorTags[1] == error.Beta;
+//    ^^^^^^^^^^^^^^^^^ (bool)(true)
+const error_tag_differs = ErrorTags[0] != error.Beta;
+//    ^^^^^^^^^^^^^^^^^ (bool)(true)
+const GeneratedTags = std.meta.tags(@Enum(u13, .exhaustive, &.{ "first", "second" }, &.{ 3, 21 }));
+const generated_tag_value = @intFromEnum(GeneratedTags[1]);
+//    ^^^^^^^^^^^^^^^^^^^ (u13)(21)
