@@ -42,6 +42,7 @@ generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
+callsite_reference_depth: u8,
 /// avoid unnecessarily parsing number literals
 resolve_number_literal_values: bool,
 /// Evaluate basic comptime expressions instead of preserving only their type.
@@ -84,6 +85,7 @@ pub fn init(
         .store = store,
         .ip = ip,
         .collect_callsite_references = true,
+        .callsite_reference_depth = 0,
         .resolve_number_literal_values = false,
         .evaluate_comptime_values = false,
         .evaluate_comptime_control_flow = false,
@@ -8916,12 +8918,14 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
     const tree = &decl_handle.handle.tree;
     const is_cimport = std.mem.eql(u8, std.Io.Dir.path.basename(decl_handle.handle.uri.raw), "cimport.zig");
 
-    if (is_cimport or !analyser.collect_callsite_references) return null;
+    if (is_cimport or !analyser.collect_callsite_references or analyser.callsite_reference_depth >= 1) return null;
 
     // protection against recursive callsite resolution
     const gop_resolved = try analyser.resolved_callsites.getOrPut(analyser.gpa, pay);
     if (gop_resolved.found_existing) return gop_resolved.value_ptr.*;
     gop_resolved.value_ptr.* = null;
+    analyser.callsite_reference_depth += 1;
+    defer analyser.callsite_reference_depth -= 1;
 
     const func_decl: Declaration = .{ .ast_node = pay.func };
 
@@ -9410,6 +9414,7 @@ fn cachedGeneratedContainerType(analyser: *Analyser, options: ResolveOptions) ?T
         },
         .container_type = options.container_type,
         .bindings = bindings.*,
+        .display_bindings = if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
     });
 }
 
@@ -9426,6 +9431,10 @@ fn cacheGeneratedContainerType(
         },
         .container_type = options.container_type,
         .bindings = try bindings.clone(analyser.arena),
+        .display_bindings = if (analyser.display_bindings) |display_bindings|
+            try display_bindings.clone(analyser.arena)
+        else
+            .empty,
     }, generated_type);
 }
 
@@ -9477,10 +9486,15 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
             .node = node_with_uri,
             .container_type = options.container_type,
             .bindings = bindings.*,
+            .display_bindings = if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
         };
         const cached = try analyser.resolved_specialized_nodes.getOrPut(analyser.gpa, key);
         if (cached.found_existing) return cached.value_ptr.*;
         cached.key_ptr.bindings = try bindings.clone(analyser.arena);
+        cached.key_ptr.display_bindings = if (analyser.display_bindings) |display_bindings|
+            try display_bindings.clone(analyser.arena)
+        else
+            .empty;
         cached.value_ptr.* = null;
         errdefer _ = analyser.resolved_specialized_nodes.remove(key);
 
@@ -14250,6 +14264,7 @@ const GeneratedContainerTypeKey = struct {
     node: NodeWithUri,
     container_type: ?Type,
     bindings: TokenToTypeMap,
+    display_bindings: TokenToNodeMap,
 
     const Context = struct {
         pub fn hash(_: Context, key: GeneratedContainerTypeKey) u64 {
@@ -14271,6 +14286,16 @@ const GeneratedContainerTypeKey = struct {
             }
             std.hash.autoHash(&hasher, key.bindings.count());
             std.hash.autoHash(&hasher, bindings_hash);
+            var display_bindings_hash: u64 = 0;
+            for (key.display_bindings.keys(), key.display_bindings.values()) |token_handle, node_handle| {
+                var binding_hasher: std.hash.Wyhash = .init(0);
+                token_handle.hashWithHasher(&binding_hasher);
+                std.hash.autoHash(&binding_hasher, node_handle.node);
+                binding_hasher.update(node_handle.handle.uri.raw);
+                display_bindings_hash ^= binding_hasher.final();
+            }
+            std.hash.autoHash(&hasher, key.display_bindings.count());
+            std.hash.autoHash(&hasher, display_bindings_hash);
             return hasher.final();
         }
 
@@ -14284,6 +14309,11 @@ const GeneratedContainerTypeKey = struct {
             for (a.bindings.keys(), a.bindings.values()) |token_handle, ty| {
                 const other = b.bindings.get(token_handle) orelse return false;
                 if (!ty.eql(other)) return false;
+            }
+            if (a.display_bindings.count() != b.display_bindings.count()) return false;
+            for (a.display_bindings.keys(), a.display_bindings.values()) |token_handle, node_handle| {
+                const other = b.display_bindings.get(token_handle) orelse return false;
+                if (!node_handle.eql(other)) return false;
             }
             return true;
         }
