@@ -9287,6 +9287,7 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
         if (cached.found_existing) return cached.value_ptr.*;
         cached.key_ptr.bindings = try bindings.clone(analyser.arena);
         cached.value_ptr.* = null;
+        errdefer _ = analyser.resolved_specialized_nodes.remove(key);
 
         const gop = try analyser.resolving_specialized_nodes.getOrPut(analyser.gpa, node_with_uri);
         if (gop.found_existing) {
@@ -13948,15 +13949,16 @@ const GeneratedContainerTypeKey = struct {
             std.hash.autoHash(&hasher, key.node.node);
             hasher.update(key.node.uri.raw);
             if (key.container_type) |container_type| {
-                _ = container_type;
                 hasher.update(&.{1});
+                container_type.hashWithHasher(&hasher);
             } else {
                 hasher.update(&.{0});
             }
             var bindings_hash: u64 = 0;
-            for (key.bindings.keys()) |token_handle| {
+            for (key.bindings.keys(), key.bindings.values()) |token_handle, ty| {
                 var binding_hasher: std.hash.Wyhash = .init(0);
                 token_handle.hashWithHasher(&binding_hasher);
+                ty.hashWithHasher(&binding_hasher);
                 bindings_hash ^= binding_hasher.final();
             }
             std.hash.autoHash(&hasher, key.bindings.count());
