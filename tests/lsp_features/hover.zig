@@ -697,6 +697,59 @@ test "generic type with comptime values" {
         \\
         \\Go to [Select](untitled:///Untitled-0.zig#L2)
     );
+
+    try testHover(
+        \\const SizeExpr = union(enum) {
+        \\    static: usize,
+        \\    fn init(value: usize) SizeExpr {
+        \\        return .{ .static = value };
+        \\    }
+        \\};
+        \\fn Tensor(comptime shape: []const SizeExpr, comptime T: type) type {
+        \\    return struct {
+        \\        pub const S = shape;
+        \\        pub const Element = T;
+        \\    };
+        \\}
+        \\const tensor<cursor>: Tensor(&.{ SizeExpr.init(2), SizeExpr.init(3) }, f32) = undefined;
+    ,
+        \\```zig
+        \\const tensor: Tensor(&.{ SizeExpr.init(2), SizeExpr.init(3) }, f32) = undefined
+        \\```
+        \\```zig
+        \\(Tensor(&.{ SizeExpr.init(2), SizeExpr.init(3) },f32))
+        \\```
+        \\
+        \\Go to [Tensor](untitled:///Untitled-0.zig#L7)
+    );
+
+    try testHover(
+        \\const SizeExpr = union(enum) {
+        \\    static: usize,
+        \\    fn init(value: usize) SizeExpr {
+        \\        return .{ .static = value };
+        \\    }
+        \\};
+        \\fn Tensor(comptime shape: []const SizeExpr, comptime T: type) type {
+        \\    return struct {
+        \\        pub const S = shape;
+        \\        pub const Element = T;
+        \\    };
+        \\}
+        \\fn full(comptime shape: []const SizeExpr, value: anytype) Tensor(shape, @TypeOf(value)) {
+        \\    return undefined;
+        \\}
+        \\const tensor<cursor> = full(&.{ SizeExpr.init(2), SizeExpr.init(3) }, @as(f32, 0));
+    ,
+        \\```zig
+        \\const tensor = full(&.{ SizeExpr.init(2), SizeExpr.init(3) }, @as(f32, 0))
+        \\```
+        \\```zig
+        \\(Tensor(&.{ SizeExpr.init(2), SizeExpr.init(3) },f32))
+        \\```
+        \\
+        \\Go to [Tensor](untitled:///Untitled-0.zig#L7)
+    );
 }
 
 test "block label" {

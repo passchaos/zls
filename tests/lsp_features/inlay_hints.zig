@@ -603,6 +603,34 @@ test "indirect usage of integer literal" {
     , .{ .kind = .Type });
 }
 
+test "generic type with aggregate comptime argument" {
+    try testInlayHints(
+        \\fn Tensor(comptime shape: []const usize, comptime T: type) type {
+        \\    return struct {
+        \\        pub const S<[]const usize> = shape;
+        \\        pub const Element<type> = T;
+        \\    };
+        \\}
+        \\const tensor<Tensor(&.{ 2, 3 },f32)> = @as(
+        \\    Tensor(&.{ 2, 3 }, f32),
+        \\    undefined,
+        \\);
+    , .{ .kind = .Type });
+
+    try testInlayHints(
+        \\fn Tensor(comptime shape: []const usize, comptime T: type) type {
+        \\    return struct {
+        \\        pub const S<[]const usize> = shape;
+        \\        pub const Element<type> = T;
+        \\    };
+        \\}
+        \\fn full(comptime shape: []const usize, value: anytype) Tensor(shape, @TypeOf(value)) {
+        \\    return undefined;
+        \\}
+        \\const tensor<Tensor(&.{ 2, 3 },f32)> = full(&.{ 2, 3 }, @as(f32, 0));
+    , .{ .kind = .Type });
+}
+
 const Options = struct {
     kind: types.InlayHint.Kind,
     show_builtin: bool = true,

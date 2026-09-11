@@ -14,6 +14,9 @@ pub const Value = struct {
         fields: []const Field,
         optional: ?Type,
         reference: *Cell,
+        /// A symbolic comptime value whose source expression is known even
+        /// when the interpreter cannot materialize its aggregate contents.
+        expression: Analyser.NodeWithHandle,
     },
 
     pub const Field = struct { name: []const u8, value: Type };
@@ -33,6 +36,10 @@ pub const Value = struct {
                 if (payload) |value| value.hashWithHasher(hasher);
             },
             .reference => |cell| std.hash.autoHash(hasher, @intFromPtr(cell)),
+            .expression => |node_handle| {
+                std.hash.autoHash(hasher, node_handle.node);
+                hasher.update(node_handle.handle.uri.raw);
+            },
         }
     }
 
@@ -54,6 +61,7 @@ pub const Value = struct {
                 if (payload) |value| if (!value.eql(other.data.optional.?)) return false;
             },
             .reference => |cell| return cell == other.data.reference,
+            .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
     }
@@ -62,6 +70,10 @@ pub const Value = struct {
         const value = try analyser.arena.create(Value);
         value.* = .{ .ty = ty, .data = data };
         return .{ .data = .{ .comptime_value = value }, .is_type_val = false };
+    }
+
+    pub fn createExpression(analyser: *Analyser, ty: Type, node_handle: Analyser.NodeWithHandle) error{OutOfMemory}!Type {
+        return create(analyser, ty, .{ .expression = node_handle });
     }
 
     pub fn deref(value: Type) Type {

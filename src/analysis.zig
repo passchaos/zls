@@ -9121,6 +9121,19 @@ fn resolveFunctionTypeFromCall(
             try value_params.put(analyser.arena, token_handle, argument_type);
             has_callsite_bindings = true;
         }
+
+        if (param.modifier == .comptime_param and value_params.get(parameter_token_handle) == null) {
+            // Preserve aggregate comptime arguments that cannot be interned or
+            // evaluated yet. Generated container identity and type rendering
+            // still need the value expression, rather than only its type.
+            const value = if (argument_type.hasKnownValue(analyser))
+                argument_type
+            else
+                try comptime_eval.Value.createExpression(analyser, param_type, .of(arg, handle));
+            try meta_params.put(analyser.arena, parameter_token_handle, value);
+            try value_params.put(analyser.arena, parameter_token_handle, value);
+            has_callsite_bindings = true;
+        }
     }
 
     var resolved = try analyser.resolveGenericType(func_ty, meta_params);
@@ -13861,7 +13874,10 @@ pub const Type = struct {
             },
             .string_value => |value| try writer.print("\"{s}\"", .{value.bytes}),
             .type_info_value => |value| try writer.print(".{s}", .{@tagName(value.tag)}),
-            .comptime_value => |value| try value.ty.rawStringify(writer, analyser, options),
+            .comptime_value => |value| switch (value.data) {
+                .expression => |node_handle| try writer.writeAll(offsets.nodeToSlice(&node_handle.handle.tree, node_handle.node)),
+                else => try value.ty.rawStringify(writer, analyser, options),
+            },
             .container => |info| {
                 const scope_handle = info.scope_handle;
                 const handle = scope_handle.handle;
