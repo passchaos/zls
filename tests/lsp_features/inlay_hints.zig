@@ -624,10 +624,11 @@ test "generic type with aggregate comptime argument" {
         \\        pub const Element<type> = T;
         \\    };
         \\}
-        \\fn full(comptime shape: []const usize, value: anytype) Tensor(shape, @TypeOf(value)) {
+        \\fn rand(comptime shape: []const usize, low: anytype, high: @TypeOf(low)) Tensor(shape, @TypeOf(low)) {
+        \\    _ = high;
         \\    return undefined;
         \\}
-        \\const tensor<Tensor(&.{ 2, 3 },f32)> = full(&.{ 2, 3 }, @as(f32, 0));
+        \\const tensor<Tensor(&.{ 2, 3 },f32)> = rand(&.{ 2, 3 }, @as(f32, 0), 1);
     , .{ .kind = .Type });
 }
 

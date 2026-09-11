@@ -736,13 +736,14 @@ test "generic type with comptime values" {
         \\        pub const Element = T;
         \\    };
         \\}
-        \\fn full(comptime shape: []const SizeExpr, value: anytype) Tensor(shape, @TypeOf(value)) {
+        \\fn rand(comptime shape: []const SizeExpr, low: anytype, high: @TypeOf(low)) Tensor(shape, @TypeOf(low)) {
+        \\    _ = high;
         \\    return undefined;
         \\}
-        \\const tensor<cursor> = full(&.{ SizeExpr.init(2), SizeExpr.init(3) }, @as(f32, 0));
+        \\const tensor<cursor> = rand(&.{ SizeExpr.init(2), SizeExpr.init(3) }, @as(f32, 0), 1);
     ,
         \\```zig
-        \\const tensor = full(&.{ SizeExpr.init(2), SizeExpr.init(3) }, @as(f32, 0))
+        \\const tensor = rand(&.{ SizeExpr.init(2), SizeExpr.init(3) }, @as(f32, 0), 1)
         \\```
         \\```zig
         \\(Tensor(&.{ SizeExpr.init(2), SizeExpr.init(3) },f32))

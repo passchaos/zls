@@ -50,6 +50,9 @@ evaluate_comptime_values: bool,
 evaluate_comptime_control_flow: bool,
 /// Scoped bindings must survive recursive resolution without an explicit container.
 generic_bindings: ?*const TokenToTypeMap,
+/// Source expressions for comptime arguments that are retained for type
+/// presentation but must not participate in semantic substitution.
+display_bindings: ?*const TokenToNodeMap,
 comptime_interpreter: ?*comptime_eval.Interpreter = null,
 generated_struct_fields: std.AutoHashMapUnmanaged(InternPool.Index, []const GeneratedField) = .empty,
 
@@ -85,6 +88,7 @@ pub fn init(
         .evaluate_comptime_values = false,
         .evaluate_comptime_control_flow = false,
         .generic_bindings = null,
+        .display_bindings = null,
         .root_handle = root_handle,
     };
 }
@@ -8981,6 +8985,42 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
     return maybe_type;
 }
 
+fn isAggregateComptimeArgument(tree: *const Ast, node: Ast.Node.Index) bool {
+    return switch (tree.nodeTag(node)) {
+        .array_init_one,
+        .array_init_one_comma,
+        .array_init_dot_two,
+        .array_init_dot_two_comma,
+        .array_init_dot,
+        .array_init_dot_comma,
+        .array_init,
+        .array_init_comma,
+        .struct_init,
+        .struct_init_comma,
+        .struct_init_one,
+        .struct_init_one_comma,
+        => true,
+        .address_of, .@"comptime" => isAggregateComptimeArgument(tree, tree.nodeData(node).node),
+        .grouped_expression => isAggregateComptimeArgument(tree, tree.nodeData(node).node_and_token[0]),
+        else => false,
+    };
+}
+
+fn displayComptimeArgument(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) error{OutOfMemory}!?NodeWithHandle {
+    if (isAggregateComptimeArgument(&handle.tree, node)) return .of(node, handle);
+    if (handle.tree.nodeTag(node) != .identifier) return null;
+
+    const name_token = ast.identifierTokenFromIdentifierNode(&handle.tree, node) orelse return null;
+    const name = offsets.identifierTokenToNameSlice(&handle.tree, name_token);
+    const decl = try analyser.lookupSymbolGlobal(handle, name, handle.tree.tokenStart(name_token)) orelse return null;
+    const bindings = analyser.display_bindings orelse return null;
+    return bindings.get(.{ .token = decl.nameToken(), .handle = decl.handle });
+}
+
 fn resolveFunctionTypeFromCall(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -9002,6 +9042,11 @@ fn resolveFunctionTypeFromCall(
     errdefer meta_params.deinit(analyser.arena);
     var value_params = try meta_params.clone(analyser.arena);
     errdefer value_params.deinit(analyser.arena);
+    var display_params: TokenToNodeMap = switch (func_info.container_type.data) {
+        .container => |info| try info.display_params.clone(analyser.arena),
+        else => .empty,
+    };
+    errdefer display_params.deinit(analyser.arena);
 
     const has_self_param = call.ast.params.len + 1 == func_info.parameters.len and
         try analyser.isInstanceCall(handle, call, func_ty);
@@ -9065,6 +9110,14 @@ fn resolveFunctionTypeFromCall(
             }
         }
 
+        if (param.modifier == .comptime_param and param_type.data != .anytype_parameter) {
+            if (try analyser.displayComptimeArgument(handle, arg)) |display_arg| {
+                try display_params.put(analyser.arena, parameter_token_handle, display_arg);
+                has_callsite_bindings = true;
+                continue;
+            }
+        }
+
         const argument_type = (if (param.modifier == .comptime_param)
             try analyser.resolveComptimeValue(.of(arg, handle)) orelse try analyser.resolveTypeOfNodeInternal(.of(arg, handle))
         else
@@ -9121,19 +9174,6 @@ fn resolveFunctionTypeFromCall(
             try value_params.put(analyser.arena, token_handle, argument_type);
             has_callsite_bindings = true;
         }
-
-        if (param.modifier == .comptime_param and value_params.get(parameter_token_handle) == null) {
-            // Preserve aggregate comptime arguments that cannot be interned or
-            // evaluated yet. Generated container identity and type rendering
-            // still need the value expression, rather than only its type.
-            const value = if (argument_type.hasKnownValue(analyser))
-                argument_type
-            else
-                try comptime_eval.Value.createExpression(analyser, param_type, .of(arg, handle));
-            try meta_params.put(analyser.arena, parameter_token_handle, value);
-            try value_params.put(analyser.arena, parameter_token_handle, value);
-            has_callsite_bindings = true;
-        }
     }
 
     var resolved = try analyser.resolveGenericType(func_ty, meta_params);
@@ -9144,8 +9184,13 @@ fn resolveFunctionTypeFromCall(
         func_tree.nodeTag(func_info.fn_node) == .fn_decl)
     {
         const old_bindings = analyser.generic_bindings;
+        const old_display_bindings = analyser.display_bindings;
         analyser.generic_bindings = &value_params;
-        defer analyser.generic_bindings = old_bindings;
+        analyser.display_bindings = &display_params;
+        defer {
+            analyser.generic_bindings = old_bindings;
+            analyser.display_bindings = old_display_bindings;
+        }
 
         if (try analyser.resolveReturnValueOfFuncNode(func_info.handle, func_info.fn_node)) |return_value| {
             resolved.data.function.return_value = try analyser.allocType(return_value);
@@ -9536,7 +9581,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var buffer: [1]Ast.Node.Index = undefined;
             const call = tree.fullCall(&buffer, node).?;
 
-            const ty = try analyser.resolveTypeOfNodeInternal(.of(call.ast.fn_expr, handle)) orelse return null;
+            // The current call supplies the concrete arguments. Avoid resolving
+            // `anytype` parameters by recursively scanning every callsite while
+            // constructing the callee prototype; that can recurse back through
+            // this call before specialization is applied.
+            const ty = blk: {
+                const old_collect_callsite_references = analyser.collect_callsite_references;
+                analyser.collect_callsite_references = false;
+                defer analyser.collect_callsite_references = old_collect_callsite_references;
+                break :blk try analyser.resolveTypeOfNodeInternal(.of(call.ast.fn_expr, handle)) orelse return null;
+            };
             if (ty.data == .either) {
                 return try analyser.resolveEitherCallResult(handle, call, ty);
             }
@@ -12139,6 +12193,10 @@ pub const Type = struct {
         pub const Container = struct {
             scope_handle: ScopeWithHandle,
             bound_params: TokenToTypeMap,
+            /// Comptime arguments retained only for type presentation. These
+            /// values are intentionally excluded from semantic substitution
+            /// and container identity.
+            display_params: TokenToNodeMap = .empty,
 
             pub fn root(handle: *DocumentStore.Handle) Container {
                 return .{
@@ -12755,6 +12813,7 @@ pub const Type = struct {
                 .container => |info| return .{
                     .container = .{
                         .scope_handle = info.scope_handle,
+                        .display_params = info.display_params,
                         .bound_params = blk: {
                             var new_params: TokenToTypeMap = .empty;
                             try new_params.ensureTotalCapacity(analyser.arena, info.bound_params.count());
@@ -13874,10 +13933,7 @@ pub const Type = struct {
             },
             .string_value => |value| try writer.print("\"{s}\"", .{value.bytes}),
             .type_info_value => |value| try writer.print(".{s}", .{@tagName(value.tag)}),
-            .comptime_value => |value| switch (value.data) {
-                .expression => |node_handle| try writer.writeAll(offsets.nodeToSlice(&node_handle.handle.tree, node_handle.node)),
-                else => try value.ty.rawStringify(writer, analyser, options),
-            },
+            .comptime_value => |value| try value.ty.rawStringify(writer, analyser, options),
             .container => |info| {
                 const scope_handle = info.scope_handle;
                 const handle = scope_handle.handle;
@@ -13939,19 +13995,20 @@ pub const Type = struct {
                             while (it.next()) |param| {
                                 const param_name_token = param.name_token orelse continue;
                                 const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = handle };
-                                const param_ty = info.bound_params.get(token_handle) orelse continue;
-                                if (!param_ty.is_type_val and !param_ty.hasKnownValue(analyser)) continue;
-                                if (param_ty.ipIndex()) |index| {
-                                    if (analyser.ip.isNull(index)) continue;
-                                }
-                                if (!first) {
-                                    try writer.writeByte(',');
-                                }
-
-                                try param_ty.rawStringify(writer, analyser, .{
-                                    .referenced = referenced,
-                                    .truncate_container_decls = options.truncate_container_decls,
-                                });
+                                if (info.bound_params.get(token_handle)) |param_ty| {
+                                    if (!param_ty.is_type_val and !param_ty.hasKnownValue(analyser)) continue;
+                                    if (param_ty.ipIndex()) |index| {
+                                        if (analyser.ip.isNull(index)) continue;
+                                    }
+                                    if (!first) try writer.writeByte(',');
+                                    try param_ty.rawStringify(writer, analyser, .{
+                                        .referenced = referenced,
+                                        .truncate_container_decls = options.truncate_container_decls,
+                                    });
+                                } else if (info.display_params.get(token_handle)) |node_handle| {
+                                    if (!first) try writer.writeByte(',');
+                                    try writer.writeAll(offsets.nodeToSlice(&node_handle.handle.tree, node_handle.node));
+                                } else continue;
                                 first = false;
                             }
                             try writer.writeByte(')');
@@ -14926,6 +14983,7 @@ pub fn getPositionContext(
 }
 
 pub const TokenToTypeMap = std.array_hash_map.Custom(TokenWithHandle, Type, TokenWithHandle.Context, true);
+pub const TokenToNodeMap = std.array_hash_map.Custom(TokenWithHandle, NodeWithHandle, TokenWithHandle.Context, true);
 
 pub const TokenWithHandle = struct {
     token: Ast.TokenIndex,
@@ -15531,9 +15589,12 @@ pub fn innermostContainer(analyser: *Analyser, handle: *DocumentStore.Handle, so
 
     var pending_meta_params: TokenToTypeMap = .empty;
     defer pending_meta_params.deinit(analyser.gpa);
+    var pending_display_params: TokenToNodeMap = .empty;
+    defer pending_display_params.deinit(analyser.gpa);
 
     var current: DocumentScope.Scope.Index = .root;
     var meta_params: TokenToTypeMap = .empty;
+    var display_params: TokenToNodeMap = .empty;
     var scope_iterator = iterateEnclosingScopes(document_scope, source_index);
     while (scope_iterator.next().unwrap()) |scope_index| {
         switch (document_scope.getScopeTag(scope_index)) {
@@ -15543,6 +15604,10 @@ pub fn innermostContainer(analyser: *Analyser, handle: *DocumentStore.Handle, so
                     try meta_params.put(analyser.arena, token_handle, ty);
                 }
                 pending_meta_params.clearRetainingCapacity();
+                for (pending_display_params.keys(), pending_display_params.values()) |token_handle, ty| {
+                    try display_params.put(analyser.arena, token_handle, ty);
+                }
+                pending_display_params.clearRetainingCapacity();
             },
             .function => {
                 const function_node = document_scope.getScopeAstNode(scope_index).?;
@@ -15552,6 +15617,12 @@ pub fn innermostContainer(analyser: *Analyser, handle: *DocumentStore.Handle, so
                 while (it.next()) |param| {
                     const param_name_token = param.name_token orelse continue;
                     const token_handle: TokenWithHandle = .{ .token = param_name_token, .handle = handle };
+                    if (analyser.display_bindings) |bindings| {
+                        if (bindings.get(token_handle)) |node_handle| {
+                            try pending_display_params.put(analyser.gpa, token_handle, node_handle);
+                            continue;
+                        }
+                    }
                     if (analyser.generic_bindings) |bindings| {
                         if (bindings.get(token_handle)) |bound| {
                             try pending_meta_params.put(analyser.gpa, token_handle, bound);
@@ -15586,6 +15657,7 @@ pub fn innermostContainer(analyser: *Analyser, handle: *DocumentStore.Handle, so
                     .scope = current,
                 },
                 .bound_params = meta_params,
+                .display_params = display_params,
             },
         },
         .is_type_val = true,
