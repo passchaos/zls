@@ -1178,6 +1178,27 @@ pub fn completionAtIndex(
     handle: *DocumentStore.Handle,
     source_index: usize,
 ) Analyser.Error!?types.completion.List {
+    const regular_completion = try completionAtIndexInternal(server, analyser, arena, handle, source_index);
+    if (handle.tree.errors.len == 0) return regular_completion;
+
+    const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, false);
+    if (regular_completion != null and pos_context != .var_access and pos_context != .empty) {
+        return regular_completion;
+    }
+
+    const recovered_completion = try completionWithPrefixSnapshot(server, arena, handle, source_index);
+    if (regular_completion == null) return recovered_completion;
+
+    return try mergeCompletionLists(arena, regular_completion, recovered_completion);
+}
+
+fn completionAtIndexInternal(
+    server: *Server,
+    analyser: *Analyser,
+    arena: std.mem.Allocator,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+) Analyser.Error!?types.completion.List {
     std.debug.assert(source_index <= handle.tree.source.len);
 
     var builder: Builder = .{
@@ -1246,6 +1267,113 @@ pub fn completionAtIndex(
     }
 
     return .{ .isIncomplete = false, .items = completions };
+}
+
+/// The Zig parser can lose the current scope when valid tokens after an
+/// incomplete expression are interpreted as part of that expression. Parse a
+/// cursor-prefix snapshot so those future tokens cannot corrupt completion.
+fn completionWithPrefixSnapshot(
+    server: *Server,
+    arena: std.mem.Allocator,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+) Analyser.Error!?types.completion.List {
+    const source = handle.tree.source;
+    const prefix_source = try createCompletionPrefixSource(arena, source, source_index);
+    var prefix_tree = try Ast.parse(arena, prefix_source, .zig);
+    defer prefix_tree.deinit(arena);
+
+    var prefix_handle = DocumentStore.Handle.initAnalysisSnapshot(handle, prefix_tree);
+    defer prefix_handle.deinitAnalysisSnapshot(server.allocator);
+    var prefix_analyser = server.initAnalyser(arena, &prefix_handle);
+    defer prefix_analyser.deinit();
+
+    return try completionAtIndexInternal(server, &prefix_analyser, arena, &prefix_handle, source_index);
+}
+
+fn mergeCompletionLists(
+    arena: std.mem.Allocator,
+    preferred: ?types.completion.List,
+    fallback: ?types.completion.List,
+) error{OutOfMemory}!?types.completion.List {
+    if (preferred == null) return fallback;
+    if (fallback == null) return preferred;
+
+    var completions: Completions = .empty;
+    try completions.appendSlice(arena, preferred.?.items);
+    for (fallback.?.items) |item| {
+        if (completions.map.contains(item.label)) continue;
+        try completions.append(arena, item);
+    }
+    return .{
+        .isIncomplete = preferred.?.isIncomplete or fallback.?.isIncomplete,
+        .items = completions.items(),
+    };
+}
+
+fn createCompletionPrefixSource(
+    arena: std.mem.Allocator,
+    original_source: []const u8,
+    source_index: usize,
+) error{OutOfMemory}![:0]const u8 {
+    var completion_end = source_index;
+    while (completion_end < original_source.len and offsets.isSymbolChar(original_source[completion_end])) {
+        completion_end += 1;
+    }
+    const prefix = original_source[0..completion_end];
+
+    var source: std.ArrayList(u8) = .empty;
+    try source.appendSlice(arena, prefix);
+    for (original_source[completion_end..]) |char| {
+        try source.append(arena, if (char == '\n') '\n' else ' ');
+    }
+
+    const token_source = try arena.dupeZ(u8, prefix);
+    var tokenizer: std.zig.Tokenizer = .init(token_source);
+    var delimiters: std.ArrayList(std.zig.Token.Tag) = .empty;
+    var last_tag: std.zig.Token.Tag = .eof;
+    while (true) {
+        const token = tokenizer.next();
+        if (token.tag == .eof) break;
+        last_tag = token.tag;
+        switch (token.tag) {
+            .l_paren, .l_bracket, .l_brace => try delimiters.append(arena, token.tag),
+            .r_paren => popMatchingDelimiter(&delimiters, .l_paren),
+            .r_bracket => popMatchingDelimiter(&delimiters, .l_bracket),
+            .r_brace => popMatchingDelimiter(&delimiters, .l_brace),
+            else => {},
+        }
+    }
+
+    switch (last_tag) {
+        .period, .period_asterisk => try source.appendSlice(arena, "__zls_completion"),
+        else => {},
+    }
+
+    var inserted_statement_terminator = false;
+    var delimiter_index = delimiters.items.len;
+    while (delimiter_index > 0) {
+        delimiter_index -= 1;
+        const delimiter = delimiters.items[delimiter_index];
+        switch (delimiter) {
+            .l_paren => try source.append(arena, ')'),
+            .l_bracket => try source.append(arena, ']'),
+            .l_brace => {
+                if (!inserted_statement_terminator) {
+                    try source.append(arena, ';');
+                    inserted_statement_terminator = true;
+                }
+                try source.append(arena, '}');
+            },
+            else => unreachable,
+        }
+    }
+    if (!inserted_statement_terminator) try source.append(arena, ';');
+    return try source.toOwnedSliceSentinel(arena, 0);
+}
+
+fn popMatchingDelimiter(delimiters: *std.ArrayList(std.zig.Token.Tag), expected: std.zig.Token.Tag) void {
+    if (delimiters.getLastOrNull() == expected) _ = delimiters.pop();
 }
 
 // <--------------------------------------------------------------------------->

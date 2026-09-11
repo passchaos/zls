@@ -63,6 +63,143 @@ test "root scope with self referential decl" {
     });
 }
 
+test "completion with incomplete surrounding code" {
+    try testCompletion(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    value.<cursor>
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+
+    try testCompletionWithOptions(
+        \\const known = 5;
+        \\const broken =
+        \\const result = kn<cursor>
+    , &.{
+        .{ .label = "known", .kind = .Constant },
+    }, .{ .allow_additional_completions = true });
+
+    try testCompletion(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    consume(
+        \\    value.<cursor>
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+
+    try testCompletion(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    const broken = ;
+        \\    value.<cursor>
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+
+    try testCompletion(
+        \\const known = 5;
+        \\fn use() void {
+        \\    const broken =
+        \\    const result = kn<cursor>
+        \\}
+    , &.{
+        .{ .label = "known", .kind = .Constant },
+        .{ .label = "use", .kind = .Function, .detail = "fn () void" },
+    });
+
+    try testCompletionWithOptions(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    const broken =
+        \\    const result = val<cursor>
+        \\}
+    , &.{
+        .{ .label = "value", .kind = .Constant, .detail = "S" },
+    }, .{ .allow_additional_completions = true });
+
+    try testCompletionWithOptions(
+        \\const known_before = 1;
+        \\const result = known<cursor>
+        \\const known_after = 2;
+    , &.{
+        .{ .label = "known_before", .kind = .Constant },
+        .{ .label = "known_after", .kind = .Constant },
+    }, .{ .allow_additional_completions = true });
+
+    try testCompletion(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    value.<cursor>
+        \\    {
+        \\        _ = value.field;
+        \\    }
+        \\    _ = value.field;
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+
+    try testCompletionWithOptions(
+        \\const std = @import("std");
+        \\fn use() void {
+        \\    const broken = 1
+        \\    std.<cursor>
+        \\}
+    , &.{
+        .{ .label = "ArrayList", .kind = .Struct },
+    }, .{ .allow_additional_completions = true });
+
+    try testCompletion(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    value.<cursor>
+        \\    const unfinished =
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+
+    try testCompletion(
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    value.<cursor>
+        \\    value.field
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+}
+
+test "completion prefix recovery preserves the original text edit range" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    value.fi<cursor>eld
+        \\    const unfinished =
+        \\}
+        ,
+        .label = "field",
+        .expected_insert_line = "    value.fieldeld",
+        .expected_replace_line = "    value.field",
+    });
+
+    try testCompletionTextEdit(.{
+        .source =
+        \\const S = struct { field: u32 };
+        \\fn use(value: S) void {
+        \\    value.fi<cursor>eld
+        ,
+        .label = "field",
+        .expected_insert_line = "    value.fieldeld",
+        .expected_replace_line = "    value.field",
+    });
+}
+
 test "local scope" {
     if (true) return error.SkipZigTest;
     try testCompletion(
@@ -10693,6 +10830,7 @@ fn testCompletionWithOptions(
         completion_label_details: bool = true,
         check_order: bool = false,
         check_null_fields: bool = false,
+        allow_additional_completions: bool = false,
     },
 ) !void {
     const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
@@ -10745,7 +10883,10 @@ fn testCompletionWithOptions(
     var missing = try set_difference(expected, actual);
     defer missing.deinit(allocator);
 
-    var unexpected = try set_difference(actual, expected);
+    var unexpected = if (options.allow_additional_completions)
+        std.array_hash_map.String(void).empty
+    else
+        try set_difference(actual, expected);
     defer unexpected.deinit(allocator);
 
     var error_builder: ErrorBuilder = .init(allocator);

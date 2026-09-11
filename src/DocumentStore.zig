@@ -184,6 +184,29 @@ pub const Handle = struct {
         associated_compilation_units: GetAssociatedCompilationUnitsResult = .unresolved,
     },
 
+    /// Creates a short-lived handle for analysis that must not mutate document-store state.
+    /// The caller owns `tree` and must deinitialize it after this handle is no longer used.
+    pub fn initAnalysisSnapshot(original: *Handle, tree: Ast) Handle {
+        return .{
+            .uri = original.uri,
+            .tree = tree,
+            .file_imports = original.file_imports,
+            .cimports = .empty,
+            .lsp_synced = original.lsp_synced,
+            .impl = .{
+                .store = original.impl.store,
+                .has_tree_and_source = false,
+            },
+        };
+    }
+
+    pub fn deinitAnalysisSnapshot(snapshot: *Handle, allocator: std.mem.Allocator) void {
+        snapshot.document_scope.deinit(allocator);
+        snapshot.trigram_store.deinit(allocator);
+        snapshot.impl.associated_build_file.deinit(allocator);
+        snapshot.impl.associated_compilation_units.deinit(allocator);
+    }
+
     pub fn getDocumentScope(self: *Handle) error{OutOfMemory}!*const DocumentScope {
         return try self.document_scope.get(self);
     }
