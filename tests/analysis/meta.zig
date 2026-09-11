@@ -221,3 +221,24 @@ const integer_field_info_type = IntegerFieldInfo.type;
 const GeneratedFieldInfo = std.meta.fieldInfo(MetaPacked, .value);
 const generated_field_info_type = GeneratedFieldInfo.type;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+
+const StructFieldNamesList = std.meta.fieldNames(FieldInfoStruct);
+const struct_field_names_len = StructFieldNamesList.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const struct_field_name_first = StructFieldNamesList[0][0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(112)
+const struct_field_name_second_len = StructFieldNamesList[1].len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(7)
+const union_field_name_second = std.meta.fieldNames(FieldUnion)[1][0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(98)
+const enum_field_name_second = std.meta.fieldNames(ConsecutiveTag)[1][0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(98)
+const error_field_name_second = std.meta.fieldNames(error{ Alpha, Beta })[1][0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (u8)(66)
+const generated_field_name_first = std.meta.fieldNames(MetaPacked)[0][0];
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(118)
+const tuple_field_name_first = std.meta.fieldNames(struct { u8, u16 })[0][0];
+//    ^^^^^^^^^^^^^^^^^^^^^^ (u8)(48)
+const EscapedFieldStruct = struct { @"quoted-field": u8 };
+const escaped_field_name_len = std.meta.fieldNames(EscapedFieldStruct)[0].len;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (usize)(12)

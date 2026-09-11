@@ -1453,6 +1453,80 @@ fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const []co
     };
 }
 
+fn metaFieldNameAt(
+    analyser: *Analyser,
+    container_type: Type,
+    wanted_index: u32,
+) error{OutOfMemory}!?[]const u8 {
+    if (!container_type.is_type_val) return null;
+    return switch (container_type.data) {
+        .tuple => |fields| if (wanted_index < fields.len)
+            try std.fmt.allocPrint(analyser.arena, "{d}", .{wanted_index})
+        else
+            null,
+        .container => blk: {
+            const kind = container_type.getContainerKind() orelse return null;
+            if (kind != .keyword_struct and kind != .keyword_union and kind != .keyword_enum) return null;
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
+            const skip_discard = kind == .keyword_enum;
+            var index: u32 = 0;
+            for (info.declaration.ast.members) |member| {
+                const field = info.handle.tree.fullContainerField(member) orelse continue;
+                const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
+                if (skip_discard and std.mem.eql(u8, name, "_")) continue;
+                if (index == wanted_index) break :blk name;
+                index += 1;
+            }
+            break :blk null;
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .struct_type => |struct_index| blk: {
+                const fields = analyser.ip.getStruct(struct_index).fields;
+                if (wanted_index >= fields.count()) break :blk null;
+                break :blk try analyser.ip.string_pool.stringToSliceAlloc(
+                    analyser.store.io,
+                    analyser.arena,
+                    fields.keys()[wanted_index],
+                );
+            },
+            .union_type => |union_index| blk: {
+                const fields = analyser.ip.getUnion(union_index).fields;
+                if (wanted_index >= fields.count()) break :blk null;
+                break :blk try analyser.ip.string_pool.stringToSliceAlloc(
+                    analyser.store.io,
+                    analyser.arena,
+                    fields.keys()[wanted_index],
+                );
+            },
+            .enum_type => |enum_index| blk: {
+                const fields = analyser.ip.getEnum(enum_index).fields;
+                if (wanted_index >= fields.count()) break :blk null;
+                break :blk try analyser.ip.string_pool.stringToSliceAlloc(
+                    analyser.store.io,
+                    analyser.arena,
+                    fields.keys()[wanted_index],
+                );
+            },
+            .error_set_type => |error_set| blk: {
+                if (wanted_index >= error_set.names.len) break :blk null;
+                break :blk try analyser.ip.string_pool.stringToSliceAlloc(
+                    analyser.store.io,
+                    analyser.arena,
+                    error_set.names.at(wanted_index, analyser.ip),
+                );
+            },
+            .tuple_type => |tuple| if (wanted_index < tuple.types.len)
+                try std.fmt.allocPrint(analyser.arena, "{d}", .{wanted_index})
+            else
+                null,
+            else => null,
+        },
+        .union_tag => |union_type| analyser.metaFieldNameAt(union_type.*, wanted_index),
+        else => null,
+    };
+}
+
 fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
     const names = try analyser.metaFieldNames(container_type) orelse return null;
     if (try analyser.resolveUnionTag(container_type)) |tag_value| reuse_tag: {
@@ -1605,6 +1679,26 @@ fn resolveMetaFieldValue(
         .tag = tag,
         .is_payload = true,
         .collection = .{ .kind = kind, .len = names.len, .index = @intCast(field_index) },
+    } }, .is_type_val = false };
+}
+
+fn resolveMetaFieldNamesValue(
+    analyser: *Analyser,
+    container_type: Type,
+    value_type: Type,
+) Error!?Type {
+    const tag = analyser.resolveTypeInfoTag(container_type) orelse return null;
+    switch (tag) {
+        .@"struct", .@"union", .@"enum", .error_set => {},
+        else => return null,
+    }
+    const names = try analyser.metaFieldNames(container_type) orelse return null;
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(value_type),
+        .reflected_type = try analyser.allocType(container_type),
+        .tag = tag,
+        .is_payload = true,
+        .collection = .{ .kind = .field_names, .len = names.len, .index = null },
     } }, .is_type_val = false };
 }
 
@@ -2269,6 +2363,16 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
             .single => |index_optional| if (index_optional) |index| {
                 if (!collection.is_optional and collection.index == null and index < collection.len) {
                     const element_type = try analyser.resolveBracketAccessType(value.value_type.*, rhs) orelse return null;
+                    if (collection.kind == .field_names) {
+                        const name = try analyser.metaFieldNameAt(value.reflected_type.*, @intCast(index)) orelse return null;
+                        return .{
+                            .type = try analyser.stringValueWithType(
+                                name,
+                                try element_type.typeOf(analyser),
+                            ),
+                            .is_const = true,
+                        };
+                    }
                     return .{
                         .type = .{ .data = .{ .type_info_value = .{
                             .value_type = try analyser.allocType(element_type),
@@ -4112,6 +4216,7 @@ fn resolveTypeInfoDescriptorField(
                 return try analyser.stringValueWithType(declaration.name, try field_value_type.typeOf(analyser));
             }
         },
+        .field_names => {},
     }
     return field_value_type;
 }
@@ -9268,6 +9373,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     ) orelse .unknown_type;
                 }
 
+                if (std.mem.eql(u8, func_name, "fieldNames")) {
+                    if (call.ast.params.len < 1) return .unknown_type;
+                    const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
+                        return .unknown_type;
+                    return try analyser.resolveMetaFieldNamesValue(arg_type, func_info.return_value.*) orelse .unknown_type;
+                }
+
                 if (std.mem.eql(u8, func_name, "declarations")) {
                     if (call.ast.params.len < 1) return .unknown_type;
                     const arg_type = try analyser.resolveTypeOfNodeInternal(.of(call.ast.params[0], handle)) orelse
@@ -11564,7 +11676,15 @@ pub const Type = struct {
         };
     };
 
-    const TypeInfoCollectionKind = enum { struct_fields, union_fields, enum_fields, fn_params, error_set_errors, container_decls };
+    const TypeInfoCollectionKind = enum {
+        struct_fields,
+        union_fields,
+        enum_fields,
+        fn_params,
+        error_set_errors,
+        container_decls,
+        field_names,
+    };
 
     const Pointer = struct {
         size: std.builtin.Type.Pointer.Size,

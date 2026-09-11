@@ -2652,6 +2652,25 @@ test "generic function with comptime std meta field info" {
     });
 }
 
+test "generic function with comptime std meta field names" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Select(comptime T: type) type {
+        \\    const S = @Struct(.auto, null, &.{ "payload", "enabled" }, &.{ T, bool }, &.{ .{}, .{} });
+        \\    const names = std.meta.fieldNames(S);
+        \\    return if (names.len == 2 and names[0][0] == 'p' and names[0].len == 7 and
+        \\        names[1][0] == 'e' and names[1].len == 7)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
