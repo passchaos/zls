@@ -4427,6 +4427,38 @@ test "generic function with nested comptime bit permutation mutations" {
     });
 }
 
+test "generic function with nested comptime exact shift mutations" {
+    try testCompletion(
+        \\fn Select(comptime lhs: u8, comptime rhs: u8, comptime shift: u3) type {
+        \\    var left_total: usize = 1;
+        \\    var right_total: usize = 1;
+        \\    const shifted_left = @shlExact(value: {
+        \\        left_total += 1;
+        \\        break :value lhs;
+        \\    }, amount: {
+        \\        left_total *= 2;
+        \\        break :amount shift;
+        \\    });
+        \\    const shifted_right = @shrExact(value: {
+        \\        right_total += 1;
+        \\        break :value rhs;
+        \\    }, amount: {
+        \\        right_total *= 2;
+        \\        break :amount shift;
+        \\    });
+        \\    return if (shifted_left == 12 and shifted_right == 3) struct {
+        \\        left_order: [left_total]u8,
+        \\        right_order: [right_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(3, 12, 2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "left_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "right_order", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with cmpxchg result type" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

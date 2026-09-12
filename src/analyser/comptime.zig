@@ -495,6 +495,18 @@ pub const Interpreter = struct {
                         .byte_swap;
                     return self.analyser.resolveComptimeBitPermutationValue(operand, kind);
                 }
+                if (std.mem.eql(u8, name, "@shlExact") or std.mem.eql(u8, name, "@shrExact")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    const shift_operand = try self.eval(handle, params[1]) orelse return null;
+                    const kind: Analyser.ComptimeExactShiftKind = if (std.mem.eql(u8, name, "@shlExact"))
+                        .shl_exact
+                    else
+                        .shr_exact;
+                    return self.analyser.resolveComptimeExactShiftValue(operand, shift_operand, kind);
+                }
                 if (std.mem.eql(u8, name, "@sizeOf") or
                     std.mem.eql(u8, name, "@bitSizeOf") or
                     std.mem.eql(u8, name, "@alignOf"))

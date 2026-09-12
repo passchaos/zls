@@ -9124,6 +9124,29 @@ fn resolveVectorShiftValue(
     return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
+pub const ComptimeExactShiftKind = enum { shl_exact, shr_exact };
+
+pub fn resolveComptimeExactShiftValue(
+    analyser: *Analyser,
+    operand: Type,
+    shift_operand: Type,
+    kind: ComptimeExactShiftKind,
+) error{OutOfMemory}!?Type {
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .shl_exact => .shl_exact,
+        .shr_exact => .shr_exact,
+    };
+    const index = operand.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+        const operation: VectorShiftOperation = switch (kind) {
+            .shl_exact => .shl_exact,
+            .shr_exact => .shr_exact,
+        };
+        return analyser.resolveVectorShiftValue(operation, operand, shift_operand);
+    }
+    return analyser.resolveExactShiftValue(tag, operand, shift_operand);
+}
+
 const primitives: std.StaticStringMap(InternPool.Index) = .initComptime(.{
     .{ "anyerror", .anyerror_type },
     .{ "anyframe", .anyframe_type },
@@ -11246,14 +11269,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         const shift_operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse
                             return operand.withoutIPIndex(analyser);
                         if (!shift_operand.is_type_val) {
-                            if (operand.ipIndex()) |index| {
-                                if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
-                                    const operation: VectorShiftOperation = if (tag == .shl_exact) .shl_exact else .shr_exact;
-                                    if (try analyser.resolveVectorShiftValue(operation, operand, shift_operand)) |value| return value;
-                                } else if (try analyser.resolveExactShiftValue(tag, operand, shift_operand)) |value| {
-                                    return value;
-                                }
-                            }
+                            const kind: ComptimeExactShiftKind = if (tag == .shl_exact) .shl_exact else .shr_exact;
+                            if (try analyser.resolveComptimeExactShiftValue(operand, shift_operand, kind)) |value| return value;
                         }
                     }
                     return operand.withoutIPIndex(analyser);
