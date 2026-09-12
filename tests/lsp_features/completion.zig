@@ -5649,6 +5649,55 @@ test "generic function with comptime while return statements" {
     });
 }
 
+test "generic function with comptime while mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var index: usize = 0;
+        \\    var capacity: usize = 1;
+        \\    while (index < limit) : (index += 1) {
+        \\        if (index == 1) continue;
+        \\        capacity *= 2;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var index: usize = 0;
+        \\    var capacity: usize = 1;
+        \\    while (index < limit) : (index += 1) {
+        \\        capacity += 2;
+        \\        if (capacity == 5) break;
+        \\    } else {
+        \\        capacity = 100;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var index: usize = 0;
+        \\    var capacity: usize = 1;
+        \\    while (index < limit) : (index += 1) capacity *= 2 else capacity += 1;
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function with runtime if before return" {
     try testCompletion(
         \\var runtime: bool = undefined;

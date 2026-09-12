@@ -327,7 +327,8 @@ pub const Interpreter = struct {
                 };
                 return self.statement(handle, if (known) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse return .next);
             },
-            .for_simple, .@"for" => return self.loop(handle, tree.fullFor(node).?),
+            .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?),
+            .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?),
             .assign => {
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
                 if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) {
@@ -388,7 +389,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn loop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For) Error!Flow {
+    fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For) Error!Flow {
         const analyser = self.analyser;
         const tree = &handle.tree;
         const Input = union(enum) { sequence: Type, range: usize };
@@ -440,6 +441,31 @@ pub const Interpreter = struct {
         }
         if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
         return .next;
+    }
+
+    fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While) Error!Flow {
+        if (loop_node.label_token != null or loop_node.payload_token != null or loop_node.error_token != null) return .unknown;
+        while (true) {
+            const condition = try self.eval(handle, loop_node.ast.cond_expr) orelse return .unknown;
+            switch (condition.ipIndex() orelse return .unknown) {
+                .bool_true => {},
+                .bool_false => {
+                    if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
+                    return .next;
+                },
+                else => return .unknown,
+            }
+
+            switch (try self.statement(handle, loop_node.ast.then_expr)) {
+                .next, .continued => {},
+                .stopped => return .next,
+                .returned => |value| return .{ .returned = value },
+                .unknown => return .unknown,
+            }
+            if (loop_node.ast.cont_expr.unwrap()) |cont_expr| {
+                if (try self.statement(handle, cont_expr) != .next) return .unknown;
+            }
+        }
     }
 
     fn invoke(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
