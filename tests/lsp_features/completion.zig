@@ -4944,6 +4944,27 @@ test "generic function with typed comptime aggregate argument mutations" {
     });
 }
 
+test "generic function with typed comptime scalar argument mutation" {
+    try testCompletion(
+        \\fn width(comptime value: u8) usize {
+        \\    return if (@TypeOf(value) == u8) value else 99;
+        \\}
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = width(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value total;
+        \\    });
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[20]u8" },
+    });
+}
+
 test "generic function with comptime unknown field expressions" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

@@ -1102,10 +1102,18 @@ pub const Interpreter = struct {
             }
         }
         for (info.parameters, call_node.ast.params) |parameter, argument| {
-            const value = if (parameter.modifier == .comptime_param and parameter.type.data != .anytype_parameter)
+            var value = if (parameter.modifier == .comptime_param and parameter.type.data != .anytype_parameter)
                 try analyser.resolveAggregateComptimeArgument(parameter.type, handle, argument) orelse try self.eval(handle, argument) orelse return .unknown
             else
                 try self.eval(handle, argument) orelse return .unknown;
+            if (parameter.modifier == .comptime_param and parameter.type.is_type_val) {
+                if (parameter.type.ipIndex()) |type_index| {
+                    if (type_index != .type_type) if (value.ipIndex()) |value_index| {
+                        const coerced = try analyser.coerceIP(type_index, value_index) orelse return .unknown;
+                        value = Type.fromIP(analyser, type_index, coerced);
+                    };
+                }
+            }
             try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {
                 try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
