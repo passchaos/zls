@@ -332,6 +332,10 @@ pub const Interpreter = struct {
                 return self.analyser.resolveComptimeComparisonValue(tag, lhs_value, rhs_value) orelse
                     self.analyser.resolveTypeOfNode(.of(node, handle));
             },
+            .bool_not, .bit_not, .negation, .negation_wrap => |tag| {
+                const operand = try self.eval(handle, handle.tree.nodeData(node).node) orelse return null;
+                return self.analyser.resolveComptimeUnaryValue(tag, operand);
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },

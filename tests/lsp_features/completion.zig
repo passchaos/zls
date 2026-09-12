@@ -6354,6 +6354,34 @@ test "generic function with nested comptime comparison mutations" {
     });
 }
 
+test "generic function with nested comptime unary mutations" {
+    try testCompletion(
+        \\fn Select(comptime base: i8) type {
+        \\    var total: i8 = base;
+        \\    const negated = -(value: {
+        \\        total += 1;
+        \\        break :value total;
+        \\    });
+        \\    const inverted = ~(value: {
+        \\        total += 1;
+        \\        break :value total;
+        \\    });
+        \\    const toggled = !(value: {
+        \\        total += 1;
+        \\        break :value false;
+        \\    });
+        \\    return if (negated == -3 and inverted == -5 and toggled and total == 5)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {

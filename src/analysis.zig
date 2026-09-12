@@ -8031,6 +8031,35 @@ fn resolveNegationValue(
     return analyser.intValueWithType(payload.type, result);
 }
 
+pub fn resolveComptimeUnaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    operand: Type,
+) error{OutOfMemory}!?Type {
+    return switch (tag) {
+        .bool_not => try analyser.resolveVectorBoolNotValue(operand) orelse switch (operand.ipIndex() orelse return null) {
+            .bool_false => Type.fromIP(analyser, .bool_type, .bool_true),
+            .bool_true => Type.fromIP(analyser, .bool_type, .bool_false),
+            else => null,
+        },
+        .bit_not => if (operand.ipIndex()) |index|
+            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector)
+                analyser.resolveVectorUnaryValue(.bit_not, operand)
+            else
+                analyser.resolveBitNotValue(operand)
+        else
+            null,
+        .negation, .negation_wrap => if (operand.ipIndex()) |index|
+            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector)
+                analyser.resolveVectorUnaryValue(if (tag == .negation_wrap) .negate_wrap else .negate, operand)
+            else
+                analyser.resolveNegationValue(operand, tag == .negation_wrap)
+        else
+            null,
+        else => null,
+    };
+}
+
 fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
