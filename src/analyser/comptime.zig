@@ -240,6 +240,30 @@ pub const Interpreter = struct {
         return pointer.data.comptime_value.data.reference;
     }
 
+    fn mutableElements(self: *Interpreter, value: Type) Error!?[]const Type {
+        if (Value.elements(value)) |items| return items;
+        const payload = switch (value.data) {
+            .ip_index => |payload| payload,
+            else => return null,
+        };
+        const value_index = payload.index orelse return null;
+        const aggregate = switch (self.analyser.ip.indexToKey(value_index)) {
+            .aggregate => |aggregate| aggregate,
+            else => return null,
+        };
+        if (aggregate.ty != payload.type) return null;
+        switch (self.analyser.ip.indexToKey(payload.type)) {
+            .array_type, .vector_type, .tuple_type => {},
+            else => return null,
+        }
+        const items = try self.analyser.arena.alloc(Type, aggregate.values.len);
+        for (items, 0..) |*item, index| {
+            const item_index = aggregate.values.at(@intCast(index), self.analyser.ip);
+            item.* = Type.fromIP(self.analyser, self.analyser.ip.typeOf(item_index), item_index);
+        }
+        return items;
+    }
+
     fn write(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, value: Type) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
@@ -247,7 +271,7 @@ pub const Interpreter = struct {
             const base, const index_node = tree.nodeData(node).node_and_node;
             const storage = try self.mutationStorage(handle, base) orelse return false;
             const current = storage.value;
-            const items = Value.elements(current) orelse return false;
+            const items = try self.mutableElements(current) orelse return false;
             const index = try self.integer(handle, index_node) orelse return false;
             if (index >= items.len) return false;
             const updated = try analyser.arena.dupe(Type, items);

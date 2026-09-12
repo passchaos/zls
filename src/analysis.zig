@@ -2517,9 +2517,10 @@ fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index)
 }
 
 pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: BracketAccess) error{OutOfMemory}!?Binding {
-    const comptime_items: ?[]const Type = comptime_eval.Value.elements(lhs_binding.type) orelse blk: {
+    const lhs_value = comptime_eval.Value.deref(lhs_binding.type);
+    const comptime_items: ?[]const Type = comptime_eval.Value.elements(lhs_value) orelse blk: {
         if (!analyser.evaluate_comptime_values) break :blk null;
-        const payload = switch (lhs_binding.type.data) {
+        const payload = switch (lhs_value.data) {
             .ip_index => |payload| payload,
             else => break :blk null,
         };
@@ -2536,9 +2537,9 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
         break :blk items;
     };
     if (lhs_binding.type.data == .comptime_value or analyser.comptime_interpreter != null) if (comptime_items) |items| {
-        const value_type = switch (lhs_binding.type.data) {
+        const value_type = switch (lhs_value.data) {
             .comptime_value => |value| value.ty,
-            else => try lhs_binding.type.typeOf(analyser),
+            else => try lhs_value.typeOf(analyser),
         };
         switch (rhs) {
             .single => |index_optional| if (index_optional) |index| {
