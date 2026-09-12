@@ -1011,7 +1011,7 @@ fn bodyAlwaysBreaksCurrentLoop(
     };
 }
 
-fn resolveKnownSwitchTarget(
+pub fn resolveKnownSwitchTarget(
     analyser: *Analyser,
     options: ResolveOptions,
 ) Error!?Ast.Node.Index {

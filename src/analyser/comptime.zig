@@ -329,6 +329,16 @@ pub const Interpreter = struct {
             },
             .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?),
             .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?),
+            .@"switch", .switch_comma => {
+                const switch_node = tree.switchFull(node);
+                if (switch_node.label_token != null) return .unknown;
+                const target = try analyser.resolveKnownSwitchTarget(.of(node, handle)) orelse return .unknown;
+                for (switch_node.ast.cases) |case| {
+                    const switch_case = tree.fullSwitchCase(case).?;
+                    if (switch_case.ast.target_expr == target and switch_case.payload_token != null) return .unknown;
+                }
+                return self.statement(handle, target);
+            },
             .assign => {
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
                 if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) {

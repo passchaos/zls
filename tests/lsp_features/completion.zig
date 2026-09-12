@@ -5698,6 +5698,42 @@ test "generic function with comptime while mutation" {
     });
 }
 
+test "generic function with comptime switch mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime mode: u8) type {
+        \\    var capacity: usize = 1;
+        \\    switch (mode) {
+        \\        0 => capacity += 1,
+        \\        1...3 => {
+        \\            capacity *= 2;
+        \\            capacity += 1;
+        \\        },
+        \\        else => capacity = 8,
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime mode: u8) type {
+        \\    var capacity: usize = 1;
+        \\    switch (mode) {
+        \\        0 => capacity += 1,
+        \\        else => capacity = 8,
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(9) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+}
+
 test "generic function with runtime if before return" {
     try testCompletion(
         \\var runtime: bool = undefined;
