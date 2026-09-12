@@ -6289,6 +6289,41 @@ test "generic function with comptime labeled block breaks" {
     });
 
     try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: usize = base;
+        \\    const selected = blk: {
+        \\        defer capacity += 100;
+        \\        capacity += 1;
+        \\        break :blk capacity * 2;
+        \\    };
+        \\    return struct { items: [selected + capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[109]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: usize = 1;
+        \\    const selected = outer: {
+        \\        defer capacity *= 2;
+        \\        inner: {
+        \\            defer capacity += 1;
+        \\            capacity += base;
+        \\            break :outer capacity;
+        \\        }
+        \\    };
+        \\    return struct { items: [selected * capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[24]u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime enabled: bool) type {
         \\    const value = blk: {
         \\        if (enabled) break :blk;

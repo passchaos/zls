@@ -146,7 +146,14 @@ pub const Interpreter = struct {
     budget: *Budget,
 
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
-    const Flow = union(enum) { next, returned: Type, continued: ?Ast.TokenIndex, stopped: ?Ast.TokenIndex, unknown };
+    const Flow = union(enum) {
+        next,
+        value: Type,
+        returned: Type,
+        continued: ?Ast.TokenIndex,
+        stopped: struct { target: ?Ast.TokenIndex, value: ?Type },
+        unknown,
+    };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -232,6 +239,14 @@ pub const Interpreter = struct {
 
     fn eval(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         if (!self.tick()) return null;
+        var block_buffer: [2]Ast.Node.Index = undefined;
+        if (handle.tree.blockStatements(&block_buffer, node) != null) {
+            return switch (try self.block(handle, node)) {
+                .next => Type.fromIP(self.analyser, .void_type, .void_value),
+                .value => |value| value,
+                else => null,
+            };
+        }
         switch (handle.tree.nodeTag(node)) {
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
@@ -600,47 +615,58 @@ pub const Interpreter = struct {
         return true;
     }
 
+    fn block(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+        const tree = &handle.tree;
+        var buffer: [2]Ast.Node.Index = undefined;
+        const statements = tree.blockStatements(&buffer, node) orelse return .unknown;
+        var executed_count: usize = 0;
+        var block_flow: Flow = .next;
+        for (statements) |child| {
+            executed_count += 1;
+            if (tree.nodeTag(child) == .@"defer") continue;
+            const flow = try self.statement(handle, child);
+            switch (flow) {
+                .next => {},
+                .stopped => |stopped| {
+                    const label_token = ast.blockLabel(tree, node) orelse {
+                        block_flow = flow;
+                        break;
+                    };
+                    const target_token = stopped.target orelse {
+                        block_flow = flow;
+                        break;
+                    };
+                    block_flow = if (std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_token)))
+                        if (stopped.value) |value| .{ .value = value } else .next
+                    else
+                        flow;
+                    break;
+                },
+                else => {
+                    block_flow = flow;
+                    break;
+                },
+            }
+        }
+        while (executed_count > 0) {
+            executed_count -= 1;
+            const child = statements[executed_count];
+            if (tree.nodeTag(child) != .@"defer") continue;
+            if (try self.statement(handle, tree.nodeData(child).node) != .next) return .unknown;
+        }
+        return block_flow;
+    }
+
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         if (!self.tick()) return .unknown;
         const analyser = self.analyser;
         const tree = &handle.tree;
         var buffer: [2]Ast.Node.Index = undefined;
-        if (tree.blockStatements(&buffer, node)) |statements| {
-            var executed_count: usize = 0;
-            var block_flow: Flow = .next;
-            for (statements) |child| {
-                executed_count += 1;
-                if (tree.nodeTag(child) == .@"defer") {
-                    continue;
-                }
-                const flow = try self.statement(handle, child);
-                switch (flow) {
-                    .next => {},
-                    .stopped => |target| {
-                        const label_token = ast.blockLabel(tree, node) orelse {
-                            block_flow = flow;
-                            break;
-                        };
-                        const target_token = target orelse {
-                            block_flow = flow;
-                            break;
-                        };
-                        block_flow = if (std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_token))) .next else flow;
-                        break;
-                    },
-                    else => {
-                        block_flow = flow;
-                        break;
-                    },
-                }
-            }
-            while (executed_count > 0) {
-                executed_count -= 1;
-                const child = statements[executed_count];
-                if (tree.nodeTag(child) != .@"defer") continue;
-                if (try self.statement(handle, tree.nodeData(child).node) != .next) return .unknown;
-            }
-            return block_flow;
+        if (tree.blockStatements(&buffer, node) != null) {
+            return switch (try self.block(handle, node)) {
+                .value => .next,
+                else => |flow| flow,
+            };
         }
         if (tree.fullVarDecl(node)) |decl| {
             const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
@@ -661,8 +687,11 @@ pub const Interpreter = struct {
             },
             .@"break" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
-                if (operand != .none) return .unknown;
-                return .{ .stopped = label.unwrap() };
+                const value = if (operand.unwrap()) |expression|
+                    try self.captureBindings(try self.eval(handle, expression) orelse return .unknown)
+                else
+                    null;
+                return .{ .stopped = .{ .target = label.unwrap(), .value = value } };
             },
             .if_simple, .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
@@ -837,8 +866,12 @@ pub const Interpreter = struct {
             switch (flow) {
                 .next => {},
                 .continued => |target| if (!targetsLoop(tree, loop_node.label_token, target)) return flow,
-                .stopped => |target| return if (targetsLoop(tree, loop_node.label_token, target)) .next else flow,
-                .returned, .unknown => return flow,
+                .stopped => |stopped| {
+                    if (!targetsLoop(tree, loop_node.label_token, stopped.target)) return flow;
+                    if (stopped.value != null) return .unknown;
+                    return .next;
+                },
+                .value, .returned, .unknown => return flow,
             }
         }
         if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
@@ -861,7 +894,12 @@ pub const Interpreter = struct {
             switch (flow) {
                 .next => {},
                 .continued => |target| if (!targetsLoop(&handle.tree, loop_node.label_token, target)) return flow,
-                .stopped => |target| return if (targetsLoop(&handle.tree, loop_node.label_token, target)) .next else flow,
+                .stopped => |stopped| {
+                    if (!targetsLoop(&handle.tree, loop_node.label_token, stopped.target)) return flow;
+                    if (stopped.value != null) return .unknown;
+                    return .next;
+                },
+                .value => return .unknown,
                 .returned => |value| return .{ .returned = value },
                 .unknown => return .unknown,
             }
