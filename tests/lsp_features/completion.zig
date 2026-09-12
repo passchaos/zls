@@ -3315,6 +3315,70 @@ test "comptime interpreter validates function return types" {
     , &.{
         .{ .label = "result", .kind = .Field, .detail = "u16" },
     });
+
+    try testCompletion(
+        \\fn text() []const u8 { return "accepted"; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = text();
+        \\    return if (value.len == 8)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn invalid() u16 { return "rejected"; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = invalid();
+        \\    return struct { result: @TypeOf(value) };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "result", .kind = .Field, .detail = "u16" },
+    });
+}
+
+test "comptime interpreter validates non-IP function parameter types" {
+    try testCompletion(
+        \\fn identity(comptime value: []const u8) []const u8 { return value; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = identity("accepted");
+        \\    return if (value.len == 8)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn identity(comptime value: u16) u16 { return value; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = identity("rejected");
+        \\    return struct { result: @TypeOf(value) };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "result", .kind = .Field, .detail = "u16" },
+    });
 }
 
 test "source union typed comptime arguments validate runtime unknown payloads" {

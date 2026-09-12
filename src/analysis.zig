@@ -9290,7 +9290,7 @@ fn staticStringType(analyser: *Analyser, len: u64) error{OutOfMemory}!Type {
     return Type.fromIP(analyser, pointer_type, null);
 }
 
-fn stringValueWithType(analyser: *Analyser, bytes: []const u8, string_type: Type) error{OutOfMemory}!Type {
+pub fn stringValueWithType(analyser: *Analyser, bytes: []const u8, string_type: Type) error{OutOfMemory}!Type {
     std.debug.assert(string_type.is_type_val);
     return .{
         .data = .{ .string_value = .{
