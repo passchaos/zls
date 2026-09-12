@@ -4887,6 +4887,15 @@ pub fn resolveComptimeIntFromEnumValue(analyser: *Analyser, operand: Type) Error
     return Type.fromIP(analyser, tag_type, null);
 }
 
+pub fn resolveComptimeTagNameValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const tag_name = switch (operand.data) {
+        .type_info_value => |value| @tagName(value.tag),
+        .enum_value => |value| value.tag,
+        else => return null,
+    };
+    return try analyser.stringValue(tag_name);
+}
+
 fn resolveEnumTagIntValue(
     analyser: *Analyser,
     enum_type: Type,
@@ -10936,17 +10945,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .tag_name => {
                     if (params.len != 1) return null;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    if (operand.data == .type_info_value) {
-                        const tag_name = @tagName(operand.data.type_info_value.tag);
-                        if (analyser.evaluate_comptime_values) return try analyser.stringValue(tag_name);
-                        return try analyser.staticStringType(tag_name.len);
-                    }
-                    if (operand.data == .enum_value) {
-                        if (analyser.evaluate_comptime_values) {
-                            return try analyser.stringValue(operand.data.enum_value.tag);
-                        }
+                    if (analyser.evaluate_comptime_values)
+                        if (try analyser.resolveComptimeTagNameValue(operand)) |value| return value;
+                    if (operand.data == .type_info_value)
+                        return try analyser.staticStringType(@tagName(operand.data.type_info_value.tag).len);
+                    if (operand.data == .enum_value)
                         return try analyser.staticStringType(operand.data.enum_value.tag.len);
-                    }
                     return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
                 },
                 .error_name => {

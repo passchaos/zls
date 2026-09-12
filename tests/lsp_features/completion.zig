@@ -7144,6 +7144,25 @@ test "generic function with comptime enum tagName length" {
     });
 }
 
+test "generic function with nested comptime tagName mutation" {
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    var total: usize = 1;
+        \\    const name = @tagName(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value mode;
+        \\    });
+        \\    return struct { items: [name.len * total]u8 };
+        \\}
+        \\const buffer: Buffer(.safe) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "generic function with comptime errorName" {
     try testCompletion(
         \\const Fields = struct { Missing: u8 };
