@@ -267,33 +267,41 @@ pub const Interpreter = struct {
         return items;
     }
 
+    fn writeAggregate(self: *Interpreter, handle: *Handle, base: Ast.Node.Index, current: Type, updated: Type) Error!bool {
+        if (current.data == .comptime_value and current.data.comptime_value.data == .reference) {
+            current.data.comptime_value.data.reference.value = updated;
+            return true;
+        }
+        return self.write(handle, base, updated);
+    }
+
     fn write(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, value: Type) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
         if (tree.nodeTag(node) == .array_access) {
             const base, const index_node = tree.nodeData(node).node_and_node;
-            const storage = try self.mutationStorage(handle, base) orelse return false;
-            const current = storage.value;
+            const base_value = try self.eval(handle, base) orelse return false;
+            const current = Value.deref(base_value);
             const items = try self.mutableElements(current) orelse return false;
             const index = try self.integer(handle, index_node) orelse return false;
             if (index >= items.len) return false;
             const updated = try analyser.arena.dupe(Type, items);
             updated[index] = value;
-            storage.value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
-            return true;
+            const updated_value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
+            return self.writeAggregate(handle, base, base_value, updated_value);
         }
         if (tree.nodeTag(node) == .field_access) {
             const base, const field_token = tree.nodeData(node).node_and_token;
-            const storage = try self.mutationStorage(handle, base) orelse return false;
-            const current = storage.value;
+            const base_value = try self.eval(handle, base) orelse return false;
+            const current = Value.deref(base_value);
             const fields = Value.fieldEntries(current) orelse return false;
             const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
             const updated = try analyser.arena.dupe(Value.Field, fields);
             for (updated) |*field| {
                 if (!std.mem.eql(u8, field.name, field_name)) continue;
                 field.value = value;
-                storage.value = try Value.create(analyser, try current.typeOf(analyser), .{ .fields = updated });
-                return true;
+                const updated_value = try Value.create(analyser, try current.typeOf(analyser), .{ .fields = updated });
+                return self.writeAggregate(handle, base, base_value, updated_value);
             }
             const aggregate_type = try current.typeOf(analyser);
             if (!aggregate_type.isStructType(analyser)) return false;
@@ -301,8 +309,8 @@ pub const Interpreter = struct {
             const extended = try analyser.arena.alloc(Value.Field, fields.len + 1);
             @memcpy(extended[0..fields.len], fields);
             extended[fields.len] = .{ .name = field_name, .value = value };
-            storage.value = try Value.create(analyser, aggregate_type, .{ .fields = extended });
-            return true;
+            const updated_value = try Value.create(analyser, aggregate_type, .{ .fields = extended });
+            return self.writeAggregate(handle, base, base_value, updated_value);
         }
         if (tree.nodeTag(node) == .deref) {
             const storage = try self.mutationStorage(handle, tree.nodeData(node).node) orelse return false;

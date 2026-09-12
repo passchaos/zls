@@ -5887,6 +5887,24 @@ test "generic function with comptime struct field mutation" {
     });
 }
 
+test "generic function with nested comptime aggregate mutation" {
+    try testCompletion(
+        \\const Inner = struct { capacity: usize = 1 };
+        \\const State = struct { inner: Inner = .{}, dimensions: [2]usize = .{ 1, 2 } };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var state = State{ .inner = Inner{}, .dimensions = [2]usize{ 1, 2 } };
+        \\    state.inner.capacity += base;
+        \\    state.dimensions[0] += base;
+        \\    state.dimensions[1] *= 3;
+        \\    return struct { items: [state.inner.capacity * state.dimensions[0] * state.dimensions[1]]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[54]u8" },
+    });
+}
+
 test "generic function with comptime pointer deref mutation" {
     try testCompletion(
         \\fn Buffer(comptime base: usize) type {
