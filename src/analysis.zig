@@ -6093,6 +6093,27 @@ fn resolveVectorDivisionValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+pub const ComptimeDivisionKind = enum { div_trunc, div_floor, div_exact, mod, rem };
+
+pub fn resolveComptimeDivisionValue(
+    analyser: *Analyser,
+    lhs: Type,
+    rhs: Type,
+    kind: ComptimeDivisionKind,
+) error{OutOfMemory}!?Type {
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .div_trunc => .div_trunc,
+        .div_floor => .div_floor,
+        .div_exact => .div_exact,
+        .mod => .mod,
+        .rem => .rem,
+    };
+    return try analyser.resolveIntegerDivisionValue(tag, lhs, rhs) orelse
+        try analyser.resolveFloatDivisionValue(tag, lhs, rhs) orelse
+        try analyser.resolveFloatRemainderValue(tag, lhs, rhs) orelse
+        try analyser.resolveVectorDivisionValue(tag, lhs, rhs);
+}
+
 fn resolveFixedWidthIntegerBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -11252,10 +11273,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     var rhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     if (lhs.is_type_val or rhs.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveIntegerDivisionValue(tag, lhs, rhs) orelse
-                            try analyser.resolveFloatDivisionValue(tag, lhs, rhs) orelse
-                            try analyser.resolveFloatRemainderValue(tag, lhs, rhs) orelse
-                            try analyser.resolveVectorDivisionValue(tag, lhs, rhs)) |value| return value;
+                        const kind: ComptimeDivisionKind = switch (tag) {
+                            .div_trunc => .div_trunc,
+                            .div_floor => .div_floor,
+                            .div_exact => .div_exact,
+                            .mod => .mod,
+                            .rem => .rem,
+                            else => unreachable,
+                        };
+                        if (try analyser.resolveComptimeDivisionValue(lhs, rhs, kind)) |value| return value;
                     }
                     lhs = lhs.withoutIPIndex(analyser);
                     rhs = rhs.withoutIPIndex(analyser);

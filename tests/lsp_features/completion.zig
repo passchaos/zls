@@ -4657,6 +4657,38 @@ test "generic function with comptime division builtins" {
     });
 }
 
+test "generic function with nested comptime division mutations" {
+    try testCompletion(
+        \\fn Select(comptime lhs: u8, comptime rhs: u8) type {
+        \\    var trunc_total: usize = 1;
+        \\    var floor_total: usize = 1;
+        \\    var exact_total: usize = 1;
+        \\    var mod_total: usize = 1;
+        \\    var rem_total: usize = 1;
+        \\    const truncated = @divTrunc(value: { trunc_total += 1; break :value lhs; }, divisor: { trunc_total *= 2; break :divisor rhs; });
+        \\    const floored = @divFloor(value: { floor_total += 1; break :value lhs; }, divisor: { floor_total *= 2; break :divisor rhs; });
+        \\    const exact = @divExact(value: { exact_total += 1; break :value lhs; }, divisor: { exact_total *= 2; break :divisor rhs; });
+        \\    const modulo = @mod(value: { mod_total += 1; break :value lhs; }, divisor: { mod_total *= 2; break :divisor rhs; });
+        \\    const remainder = @rem(value: { rem_total += 1; break :value lhs; }, divisor: { rem_total *= 2; break :divisor rhs; });
+        \\    return if (truncated == 4 and floored == 4 and exact == 4 and modulo == 0 and remainder == 0) struct {
+        \\        trunc_order: [trunc_total]u8,
+        \\        floor_order: [floor_total]u8,
+        \\        exact_order: [exact_total]u8,
+        \\        mod_order: [mod_total]u8,
+        \\        rem_order: [rem_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(8, 2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "trunc_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "floor_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "exact_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "mod_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "rem_order", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime member reflection" {
     try testCompletion(
         \\const S = struct { @"hello\nworld": u8 };

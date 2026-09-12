@@ -507,6 +507,29 @@ pub const Interpreter = struct {
                         .shr_exact;
                     return self.analyser.resolveComptimeExactShiftValue(operand, shift_operand, kind);
                 }
+                if (std.mem.eql(u8, name, "@divTrunc") or
+                    std.mem.eql(u8, name, "@divFloor") or
+                    std.mem.eql(u8, name, "@divExact") or
+                    std.mem.eql(u8, name, "@mod") or
+                    std.mem.eql(u8, name, "@rem"))
+                {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const lhs = try self.eval(handle, params[0]) orelse return null;
+                    const rhs = try self.eval(handle, params[1]) orelse return null;
+                    const kind: Analyser.ComptimeDivisionKind = if (std.mem.eql(u8, name, "@divTrunc"))
+                        .div_trunc
+                    else if (std.mem.eql(u8, name, "@divFloor"))
+                        .div_floor
+                    else if (std.mem.eql(u8, name, "@divExact"))
+                        .div_exact
+                    else if (std.mem.eql(u8, name, "@mod"))
+                        .mod
+                    else
+                        .rem;
+                    if (try self.analyser.resolveComptimeDivisionValue(lhs, rhs, kind)) |value| return value;
+                }
                 if (std.mem.eql(u8, name, "@sizeOf") or
                     std.mem.eql(u8, name, "@bitSizeOf") or
                     std.mem.eql(u8, name, "@alignOf"))
