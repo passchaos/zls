@@ -248,6 +248,16 @@ pub const Interpreter = struct {
             };
         }
         switch (handle.tree.nodeTag(node)) {
+            .for_simple, .@"for" => return switch (try self.forLoop(handle, handle.tree.fullFor(node).?, true)) {
+                .next => Type.fromIP(self.analyser, .void_type, .void_value),
+                .value => |value| value,
+                else => null,
+            },
+            .while_simple, .while_cont, .@"while" => return switch (try self.whileLoop(handle, ast.fullWhile(&handle.tree, node).?, true)) {
+                .next => Type.fromIP(self.analyser, .void_type, .void_value),
+                .value => |value| value,
+                else => null,
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },
@@ -702,8 +712,8 @@ pub const Interpreter = struct {
                 };
                 return self.statement(handle, if (known) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse return .next);
             },
-            .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?),
-            .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?),
+            .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?, false),
+            .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?, false),
             .@"switch", .switch_comma => {
                 const switch_node = tree.switchFull(node);
                 if (switch_node.label_token != null) return .unknown;
@@ -803,7 +813,7 @@ pub const Interpreter = struct {
         return std.mem.eql(u8, tree.tokenSlice(loop_label_token), tree.tokenSlice(target_token));
     }
 
-    fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For) Error!Flow {
+    fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For, expression: bool) Error!Flow {
         const analyser = self.analyser;
         const tree = &handle.tree;
         const Input = union(enum) {
@@ -868,22 +878,28 @@ pub const Interpreter = struct {
                 .continued => |target| if (!targetsLoop(tree, loop_node.label_token, target)) return flow,
                 .stopped => |stopped| {
                     if (!targetsLoop(tree, loop_node.label_token, stopped.target)) return flow;
-                    if (stopped.value != null) return .unknown;
+                    if (stopped.value) |value| return if (expression) .{ .value = value } else .unknown;
                     return .next;
                 },
                 .value, .returned, .unknown => return flow,
             }
         }
-        if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
+        if (loop_node.ast.else_expr.unwrap()) |else_node| {
+            if (expression) return .{ .value = try self.eval(handle, else_node) orelse return .unknown };
+            return self.statement(handle, else_node);
+        }
         return .next;
     }
 
-    fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While) Error!Flow {
+    fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While, expression: bool) Error!Flow {
         if (loop_node.error_token != null) return .unknown;
         while (true) {
             const condition = try self.analyser.resolveIfConditionValue(.of(loop_node.ast.cond_expr, handle)) orelse return .unknown;
             if (!condition) {
-                if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
+                if (loop_node.ast.else_expr.unwrap()) |else_node| {
+                    if (expression) return .{ .value = try self.eval(handle, else_node) orelse return .unknown };
+                    return self.statement(handle, else_node);
+                }
                 return .next;
             }
             if (loop_node.payload_token) |payload_token| {
@@ -896,7 +912,7 @@ pub const Interpreter = struct {
                 .continued => |target| if (!targetsLoop(&handle.tree, loop_node.label_token, target)) return flow,
                 .stopped => |stopped| {
                     if (!targetsLoop(&handle.tree, loop_node.label_token, stopped.target)) return flow;
-                    if (stopped.value != null) return .unknown;
+                    if (stopped.value) |value| return if (expression) .{ .value = value } else .unknown;
                     return .next;
                 },
                 .value => return .unknown,

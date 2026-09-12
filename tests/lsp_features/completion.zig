@@ -6503,6 +6503,55 @@ test "generic function with comptime labeled loop breaks" {
     });
 }
 
+test "generic function with comptime loop expression values" {
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var total: usize = 0;
+        \\    const selected = outer: for (0..limit) |index| {
+        \\        defer total += 1;
+        \\        total += index;
+        \\        if (index == 1) break :outer total * 2;
+        \\    } else 99;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var total: usize = 0;
+        \\    const selected = for (0..limit) |index| {
+        \\        total += index;
+        \\    } else total + 1;
+        \\    return struct { items: [selected]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var index: usize = 0;
+        \\    var total: usize = 1;
+        \\    const selected = outer: while (index < limit) : (index += 1) {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        if (index == 1) break :outer total;
+        \\    } else 99;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[42]u8" },
+    });
+}
+
 test "generic function with comptime labeled continues" {
     try testCompletion(
         \\fn Buffer(comptime limit: usize) type {
