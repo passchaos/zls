@@ -88,10 +88,14 @@ pub const Value = struct {
         return resolved.data.comptime_value.data.array;
     }
 
-    pub fn field(value: Type, name: []const u8) ?Type {
+    pub fn fieldEntries(value: Type) ?[]const Field {
         const resolved = deref(value);
         if (resolved.data != .comptime_value or resolved.data.comptime_value.data != .fields) return null;
-        for (resolved.data.comptime_value.data.fields) |entry| {
+        return resolved.data.comptime_value.data.fields;
+    }
+
+    pub fn field(value: Type, name: []const u8) ?Type {
+        for (fieldEntries(value) orelse return null) |entry| {
             if (std.mem.eql(u8, entry.name, name)) return entry.value;
         }
         return null;
@@ -224,25 +228,47 @@ pub const Interpreter = struct {
         return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = storage });
     }
 
+    fn mutationStorage(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Cell {
+        if (try self.cell(handle, node)) |storage| {
+            if (storage.value.data == .comptime_value and storage.value.data.comptime_value.data == .reference) {
+                return storage.value.data.comptime_value.data.reference;
+            }
+            return storage;
+        }
+        const pointer = try self.eval(handle, node) orelse return null;
+        if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return null;
+        return pointer.data.comptime_value.data.reference;
+    }
+
     fn write(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, value: Type) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
         if (tree.nodeTag(node) == .array_access) {
             const base, const index_node = tree.nodeData(node).node_and_node;
-            var storage = try self.cell(handle, base);
-            if (storage == null or Value.elements(storage.?.value) == null) {
-                const pointer = try self.eval(handle, base) orelse return false;
-                if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return false;
-                storage = pointer.data.comptime_value.data.reference;
-            }
-            const current = storage.?.value;
+            const storage = try self.mutationStorage(handle, base) orelse return false;
+            const current = storage.value;
             const items = Value.elements(current) orelse return false;
             const index = try self.integer(handle, index_node) orelse return false;
             if (index >= items.len) return false;
             const updated = try analyser.arena.dupe(Type, items);
             updated[index] = value;
-            storage.?.value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
+            storage.value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
             return true;
+        }
+        if (tree.nodeTag(node) == .field_access) {
+            const base, const field_token = tree.nodeData(node).node_and_token;
+            const storage = try self.mutationStorage(handle, base) orelse return false;
+            const current = storage.value;
+            const fields = Value.fieldEntries(current) orelse return false;
+            const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
+            const updated = try analyser.arena.dupe(Value.Field, fields);
+            for (updated) |*field| {
+                if (!std.mem.eql(u8, field.name, field_name)) continue;
+                field.value = value;
+                storage.value = try Value.create(analyser, try current.typeOf(analyser), .{ .fields = updated });
+                return true;
+            }
+            return false;
         }
         const storage = try self.cell(handle, node) orelse return false;
         storage.value = value;
