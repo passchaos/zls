@@ -335,7 +335,11 @@ pub const Interpreter = struct {
                 const target = try analyser.resolveKnownSwitchTarget(.of(node, handle)) orelse return .unknown;
                 for (switch_node.ast.cases) |case| {
                     const switch_case = tree.fullSwitchCase(case).?;
-                    if (switch_case.ast.target_expr == target and switch_case.payload_token != null) return .unknown;
+                    if (switch_case.ast.target_expr != target) continue;
+                    if (switch_case.payload_token) |payload_token| {
+                        if (tree.tokenTag(payload_token) == .asterisk or
+                            tree.tokenTag(payload_token + 1) == .comma) return .unknown;
+                    }
                 }
                 return self.statement(handle, target);
             },

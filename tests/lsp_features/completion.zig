@@ -5732,6 +5732,21 @@ test "generic function with comptime switch mutation" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
     });
+
+    try testCompletion(
+        \\fn Buffer(comptime mode: u8) type {
+        \\    var capacity: u8 = 1;
+        \\    switch (mode) {
+        \\        1...3 => |value| capacity += value,
+        \\        else => capacity = 8,
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "generic function with runtime if before return" {
