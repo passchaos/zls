@@ -8870,6 +8870,25 @@ fn resolveVectorBitCountValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+pub const ComptimeBitCountKind = enum { clz, ctz, pop_count };
+
+pub fn resolveComptimeBitCountValue(
+    analyser: *Analyser,
+    operand: Type,
+    kind: ComptimeBitCountKind,
+) error{OutOfMemory}!?Type {
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .clz => .clz,
+        .ctz => .ctz,
+        .pop_count => .pop_count,
+    };
+    const index = operand.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+        return analyser.resolveVectorBitCountValue(tag, operand);
+    }
+    return analyser.resolveBitCountValue(tag, operand);
+}
+
 fn resolveBitPermutationValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -11145,13 +11164,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     if (operand.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (operand.ipIndex()) |index| {
-                            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
-                                if (try analyser.resolveVectorBitCountValue(tag, operand)) |value| return value;
-                            } else if (try analyser.resolveBitCountValue(tag, operand)) |value| {
-                                return value;
-                            }
-                        }
+                        const kind: ComptimeBitCountKind = switch (tag) {
+                            .clz => .clz,
+                            .ctz => .ctz,
+                            .pop_count => .pop_count,
+                            else => unreachable,
+                        };
+                        if (try analyser.resolveComptimeBitCountValue(operand, kind)) |value| return value;
                     }
                     const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
                     const scalar_type = analyser.ip.scalarType(operand_type);

@@ -4363,6 +4363,42 @@ test "generic function with comptime value builtins" {
     });
 }
 
+test "generic function with nested comptime bit count mutations" {
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    var clz_total: usize = 1;
+        \\    var ctz_total: usize = 1;
+        \\    var pop_total: usize = 1;
+        \\    const leading = @clz(operand: {
+        \\        defer clz_total += 1;
+        \\        clz_total *= 2;
+        \\        break :operand value;
+        \\    });
+        \\    const trailing = @ctz(operand: {
+        \\        defer ctz_total += 1;
+        \\        ctz_total *= 2;
+        \\        break :operand value;
+        \\    });
+        \\    const population = @popCount(operand: {
+        \\        defer pop_total += 1;
+        \\        pop_total *= 2;
+        \\        break :operand value;
+        \\    });
+        \\    return if (leading == 2 and trailing == 4 and population == 2) struct {
+        \\        clz_order: [clz_total]u8,
+        \\        ctz_order: [ctz_total]u8,
+        \\        pop_order: [pop_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(0b0011_0000) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "clz_order", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "ctz_order", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "pop_order", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with cmpxchg result type" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

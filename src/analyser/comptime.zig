@@ -468,6 +468,22 @@ pub const Interpreter = struct {
                         kind,
                     );
                 }
+                if (std.mem.eql(u8, name, "@clz") or
+                    std.mem.eql(u8, name, "@ctz") or
+                    std.mem.eql(u8, name, "@popCount"))
+                {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    const kind: Analyser.ComptimeBitCountKind = if (std.mem.eql(u8, name, "@clz"))
+                        .clz
+                    else if (std.mem.eql(u8, name, "@ctz"))
+                        .ctz
+                    else
+                        .pop_count;
+                    return self.analyser.resolveComptimeBitCountValue(operand, kind);
+                }
                 if (std.mem.eql(u8, name, "@sizeOf") or
                     std.mem.eql(u8, name, "@bitSizeOf") or
                     std.mem.eql(u8, name, "@alignOf"))
