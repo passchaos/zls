@@ -871,6 +871,28 @@ pub const Interpreter = struct {
                     .node => |target_node| self.evalSource(handle, target_node),
                 };
             },
+            .for_simple, .@"for" => blk: {
+                if (!self.tick()) return null;
+                break :blk switch (try self.forLoop(handle, tree.fullFor(node).?, true)) {
+                    .next => .{
+                        .value = Type.fromIP(self.analyser, .void_type, .void_value),
+                        .source_node = null,
+                    },
+                    .value => |result| result,
+                    else => null,
+                };
+            },
+            .while_simple, .while_cont, .@"while" => blk: {
+                if (!self.tick()) return null;
+                break :blk switch (try self.whileLoop(handle, ast.fullWhile(tree, node).?, true)) {
+                    .next => .{
+                        .value = Type.fromIP(self.analyser, .void_type, .void_value),
+                        .source_node = null,
+                    },
+                    .value => |result| result,
+                    else => null,
+                };
+            },
             .@"switch", .switch_comma => blk: {
                 if (!self.tick()) return null;
                 const target = try self.switchTarget(handle, node) orelse break :blk .{
