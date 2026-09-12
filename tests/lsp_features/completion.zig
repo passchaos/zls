@@ -5924,6 +5924,43 @@ test "generic function with nested contextual cast mutations" {
     });
 }
 
+test "generic function preserves runtime unknown contextual cast types" {
+    try testCompletion(
+        \\var runtime_u16: u16 = undefined;
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_f32: f32 = undefined;
+        \\var runtime_f64: f64 = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const int_casted = @as(u8, @intCast(value: { total += 1; break :value runtime_u16; }));
+        \\    const truncated = @as(u8, @truncate(value: { total += 1; break :value runtime_u16; }));
+        \\    const bit_casted = @as(i8, @bitCast(value: { total += 1; break :value runtime_u8; }));
+        \\    const int_from_float = @as(u8, @intFromFloat(value: { total += 1; break :value runtime_f32; }));
+        \\    const float_from_int = @as(f32, @floatFromInt(value: { total += 1; break :value runtime_u16; }));
+        \\    const float_casted = @as(f32, @floatCast(value: { total += 1; break :value runtime_f64; }));
+        \\    return struct {
+        \\        int_casted: @TypeOf(int_casted),
+        \\        truncated: @TypeOf(truncated),
+        \\        bit_casted: @TypeOf(bit_casted),
+        \\        int_from_float: @TypeOf(int_from_float),
+        \\        float_from_int: @TypeOf(float_from_int),
+        \\        float_casted: @TypeOf(float_casted),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "bit_casted", .kind = .Field, .detail = "i8" },
+        .{ .label = "float_casted", .kind = .Field, .detail = "f32" },
+        .{ .label = "float_from_int", .kind = .Field, .detail = "f32" },
+        .{ .label = "int_casted", .kind = .Field, .detail = "u8" },
+        .{ .label = "int_from_float", .kind = .Field, .detail = "u8" },
+        .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "truncated", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime unknown field expressions" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

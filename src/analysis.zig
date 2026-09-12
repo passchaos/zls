@@ -3471,6 +3471,34 @@ fn resolveCoercedIPValueFromIndex(
 
 pub const ComptimeCastKind = enum { int_cast, truncate, bit_cast, int_from_float, float_from_int, float_cast };
 
+fn isValidRuntimeScalarCast(
+    analyser: *Analyser,
+    destination_type: InternPool.Index,
+    source_type: InternPool.Index,
+    kind: ComptimeCastKind,
+) bool {
+    const destination_tag = analyser.ip.zigTypeTag(destination_type) orelse return false;
+    const source_tag = analyser.ip.zigTypeTag(source_type) orelse return false;
+    return switch (kind) {
+        .int_cast => destination_tag == .int and (source_tag == .int or source_tag == .comptime_int),
+        .truncate => truncate: {
+            if (destination_tag != .int or source_tag != .int) break :truncate false;
+            const destination = analyser.ip.intInfo(destination_type, builtin.target);
+            const source = analyser.ip.intInfo(source_type, builtin.target);
+            break :truncate destination.signedness == source.signedness and destination.bits <= source.bits;
+        },
+        .bit_cast => destination_tag == .int and source_tag == .int and
+            analyser.ip.intInfo(destination_type, builtin.target).bits ==
+                analyser.ip.intInfo(source_type, builtin.target).bits,
+        .int_from_float => destination_tag == .int and
+            (source_tag == .float or source_tag == .comptime_float),
+        .float_from_int => destination_tag == .float and
+            (source_tag == .int or source_tag == .comptime_int),
+        .float_cast => destination_tag == .float and
+            (source_tag == .float or source_tag == .comptime_float),
+    };
+}
+
 pub fn resolveComptimeCastValue(
     analyser: *Analyser,
     destination: Type,
@@ -3479,7 +3507,10 @@ pub fn resolveComptimeCastValue(
 ) error{OutOfMemory}!?Type {
     if (!destination.is_type_val) return null;
     const destination_type = destination.ipIndex() orelse return null;
-    const source_index = source.ipIndex() orelse return null;
+    const source_payload = switch (source.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
     const tag: std.zig.BuiltinFn.Tag = switch (kind) {
         .int_cast => .int_cast,
         .truncate => .truncate,
@@ -3488,6 +3519,15 @@ pub fn resolveComptimeCastValue(
         .float_from_int => .float_from_int,
         .float_cast => .float_cast,
     };
+    const source_index = source_payload.index orelse {
+        if (!analyser.isValidRuntimeScalarCast(destination_type, source_payload.type, kind)) return null;
+        return Type.fromIP(analyser, destination_type, null);
+    };
+    if (analyser.ip.isUndefined(source_index)) return null;
+    if (analyser.ip.isUnknown(source_index)) {
+        if (!analyser.isValidRuntimeScalarCast(destination_type, source_payload.type, kind)) return null;
+        return Type.fromIP(analyser, destination_type, null);
+    }
     const value = try analyser.resolveCoercedIPValueFromIndex(destination_type, source_index, tag) orelse return null;
     return Type.fromIP(analyser, destination_type, value);
 }
