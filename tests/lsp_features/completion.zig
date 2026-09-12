@@ -3207,6 +3207,39 @@ test "comptime interpreter validates non-IP source union literal payloads" {
     });
 }
 
+test "source union typed comptime arguments validate runtime unknown payloads" {
+    try testCompletion(
+        \\const U = union(enum) { count: u16, empty };
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select(comptime value: U) type {
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(U{ .count = runtime_u8 }) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const U = union(enum) { count: u16, empty };
+        \\var runtime_bool: bool = undefined;
+        \\fn Select(comptime value: U) type {
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(U{ .count = runtime_bool }) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function reflecting comptime container constructors" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

@@ -10443,6 +10443,11 @@ fn resolveAggregateComptimeElement(
         if (try analyser.resolveCoercedIPValue(expected_index, .of(node, handle))) |value_index| {
             return Type.fromIP(analyser, expected_index, value_index);
         }
+        if (try analyser.resolveTypeOfNodeInternal(.of(node, handle))) |source_value| {
+            if (try analyser.coerceComptimeIPValue(expected_index, source_value)) |value_index| {
+                return Type.fromIP(analyser, expected_index, value_index);
+            }
+        }
     }
     return switch (handle.tree.nodeTag(node)) {
         .call, .call_comma, .call_one, .call_one_comma => try comptime_eval.Interpreter.evaluateCall(analyser, handle, node) orelse
