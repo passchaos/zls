@@ -1612,7 +1612,20 @@ pub const Interpreter = struct {
                 try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
             }
         }
-        return child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+        const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+        return switch (flow) {
+            .returned => |value| blk: {
+                const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
+                const return_type = try return_value.typeOf(analyser);
+                const type_index = return_type.ipIndex() orelse break :blk .{ .returned = value };
+                if (value.data == .ip_index) {
+                    const coerced = try analyser.coerceComptimeIPValue(type_index, value) orelse return .unknown;
+                    break :blk .{ .returned = Type.fromIP(analyser, type_index, coerced) };
+                }
+                break :blk .{ .returned = try child.coerce(return_type, value) orelse return .unknown };
+            },
+            else => flow,
+        };
     }
 
     fn callValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {

@@ -2503,7 +2503,7 @@ fn comptimeUnionInitValue(
     return Type.fromIP(analyser, field.union_type, union_value);
 }
 
-fn coerceComptimeIPValue(
+pub fn coerceComptimeIPValue(
     analyser: *Analyser,
     destination_type: InternPool.Index,
     value: Type,
@@ -2517,6 +2517,14 @@ fn coerceComptimeIPValue(
         try analyser.ip.getUnknown(value_payload.type)
     else
         value_index;
+    const source_tag = analyser.ip.zigTypeTag(value_payload.type);
+    if (!analyser.ip.isUnknown(typed_value_index) and
+        analyser.ip.zigTypeTag(destination_type) == .int and
+        (source_tag == .int or source_tag == .comptime_int))
+    {
+        const int = analyser.ip.toInt(typed_value_index, i256) orelse return null;
+        return (try analyser.intValueWithType(destination_type, int) orelse return null).ipIndex();
+    }
     const coerced = try analyser.coerceIP(destination_type, typed_value_index) orelse return null;
     return if (analyser.ip.isUnknown(coerced))
         try analyser.ip.getUnknown(destination_type)

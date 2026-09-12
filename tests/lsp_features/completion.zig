@@ -3285,6 +3285,38 @@ test "nested comptime calls validate source union literal payloads" {
     });
 }
 
+test "comptime interpreter validates function return types" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn widened() u16 { return runtime_u8; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = widened();
+        \\    return struct { result: @TypeOf(value) };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "result", .kind = .Field, .detail = "u16" },
+    });
+
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn widened(comptime T: type) T { return runtime_u8; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = widened(u16);
+        \\    return struct { result: @TypeOf(value) };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "result", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "source union typed comptime arguments validate runtime unknown payloads" {
     try testCompletion(
         \\const U = union(enum) { count: u16, empty };
