@@ -5960,6 +5960,50 @@ test "generic function with comptime labeled block breaks" {
     });
 }
 
+test "generic function with comptime labeled loop breaks" {
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var outer_index: usize = 0;
+        \\    var capacity: usize = 1;
+        \\    outer: while (outer_index < limit) : (outer_index += 1) {
+        \\        var inner_index: usize = 0;
+        \\        while (inner_index < 2) : (inner_index += 1) {
+        \\            capacity += 1;
+        \\            if (capacity == 3) break :outer;
+        \\        }
+        \\        capacity = 9;
+        \\    } else {
+        \\        capacity = 100;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var capacity: usize = 1;
+        \\    outer: for (0..limit) |_| {
+        \\        for (0..2) |_| {
+        \\            capacity += 1;
+        \\            if (capacity == 3) break :outer;
+        \\        }
+        \\        capacity = 9;
+        \\    } else {
+        \\        capacity = 100;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with comptime intFromEnum" {
     try testCompletion(
         \\const Mode = enum(u128) { low = 1, high = 170141183460469231731687303715884105728 };

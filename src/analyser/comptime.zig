@@ -415,6 +415,12 @@ pub const Interpreter = struct {
         }
     }
 
+    fn stopsLoop(tree: *const Ast, label_token: ?Ast.TokenIndex, target: ?Ast.TokenIndex) bool {
+        const target_token = target orelse return true;
+        const loop_label_token = label_token orelse return false;
+        return std.mem.eql(u8, tree.tokenSlice(loop_label_token), tree.tokenSlice(target_token));
+    }
+
     fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For) Error!Flow {
         const analyser = self.analyser;
         const tree = &handle.tree;
@@ -461,7 +467,7 @@ pub const Interpreter = struct {
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
                 .next, .continued => {},
-                .stopped => |target| return if (target == null) .next else flow,
+                .stopped => |target| return if (stopsLoop(tree, loop_node.label_token, target)) .next else flow,
                 .returned, .unknown => return flow,
             }
         }
@@ -470,7 +476,7 @@ pub const Interpreter = struct {
     }
 
     fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While) Error!Flow {
-        if (loop_node.label_token != null or loop_node.error_token != null) return .unknown;
+        if (loop_node.error_token != null) return .unknown;
         if (loop_node.payload_token) |payload_token| {
             if (handle.tree.tokenTag(payload_token) == .asterisk) return .unknown;
         }
@@ -484,7 +490,7 @@ pub const Interpreter = struct {
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
                 .next, .continued => {},
-                .stopped => |target| return if (target == null) .next else flow,
+                .stopped => |target| return if (stopsLoop(&handle.tree, loop_node.label_token, target)) .next else flow,
                 .returned => |value| return .{ .returned = value },
                 .unknown => return .unknown,
             }
