@@ -347,6 +347,19 @@ pub const Interpreter = struct {
                 const operand = try self.eval(handle, handle.tree.nodeData(node).node) orelse return null;
                 return self.analyser.resolveComptimeUnaryValue(tag, operand);
             },
+            .array_mult => {
+                const operand_node, const multiplier_node = handle.tree.nodeData(node).node_and_node;
+                const operand = try self.eval(handle, operand_node) orelse return null;
+                const multiplier_value = try self.eval(handle, multiplier_node) orelse return null;
+                const multiplier = self.analyser.ip.toInt(multiplier_value.ipIndex() orelse return null, u64) orelse return null;
+                return self.analyser.resolveComptimeArrayMultValue(operand, multiplier);
+            },
+            .array_cat => {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const lhs_value = try self.eval(handle, lhs) orelse return null;
+                const rhs_value = try self.eval(handle, rhs) orelse return null;
+                return self.analyser.resolveComptimeArrayCatValue(lhs_value, rhs_value);
+            },
             .field_access => {
                 const base, const field_token = handle.tree.nodeData(node).node_and_token;
                 const value = try self.eval(handle, base) orelse return null;

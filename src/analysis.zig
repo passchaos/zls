@@ -3036,6 +3036,74 @@ fn resolveArrayMultExpression(analyser: *Analyser, operand: Type, mult: ?u64) Er
     return try analyser.resolveArrayMult(elem_ty, mult);
 }
 
+fn comptimeArrayElements(analyser: *Analyser, value: Type) Error!?[]const Type {
+    if (comptime_eval.Value.elements(value)) |items| return items;
+    const source = analyser.aggregateValues(value) orelse return null;
+    const items = try analyser.arena.alloc(Type, source.len);
+    for (items, 0..) |*item, index| {
+        const item_index = source.at(@intCast(index), analyser.ip);
+        item.* = Type.fromIP(analyser, analyser.ip.typeOf(item_index), item_index);
+    }
+    return items;
+}
+
+fn coerceComptimeArrayElements(
+    analyser: *Analyser,
+    destination: []Type,
+    source: []const Type,
+    child_type: InternPool.Index,
+) Error!void {
+    std.debug.assert(destination.len == source.len);
+    const unknown = try analyser.ip.getUnknown(child_type);
+    for (destination, source) |*result, item| {
+        const item_index = item.ipIndex() orelse {
+            result.* = item;
+            continue;
+        };
+        const coerced = try analyser.coerceArrayElementValue(child_type, item_index) orelse unknown;
+        result.* = Type.fromIP(analyser, child_type, coerced);
+    }
+}
+
+pub fn resolveComptimeArrayMultValue(analyser: *Analyser, operand: Type, mult: ?u64) Error!?Type {
+    const result = try analyser.resolveArrayMultExpression(operand, mult) orelse return null;
+    if (operand.data == .string_value and mult != null) {
+        const source = operand.data.string_value.bytes;
+        const multiplier = std.math.cast(usize, mult.?) orelse return null;
+        const len = std.math.mul(usize, source.len, multiplier) catch return null;
+        const bytes = try analyser.arena.alloc(u8, len);
+        for (0..multiplier) |index| {
+            const offset = index * source.len;
+            @memcpy(bytes[offset..][0..source.len], source);
+        }
+        return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+    }
+    if (mult) |count| {
+        if (analyser.aggregateValues(operand)) |source_values| {
+            const source = try source_values.dupe(analyser.gpa, analyser.ip);
+            defer analyser.gpa.free(source);
+            const multiplier = std.math.cast(usize, count) orelse return result;
+            const len = std.math.mul(usize, source.len, multiplier) catch return result;
+            const values = try analyser.gpa.alloc(InternPool.Index, len);
+            defer analyser.gpa.free(values);
+            for (0..multiplier) |index| {
+                @memcpy(values[index * source.len ..][0..source.len], source);
+            }
+            return try analyser.aggregateValue(result, values) orelse result;
+        }
+        if (try analyser.comptimeArrayElements(operand)) |source| {
+            const multiplier = std.math.cast(usize, count) orelse return result;
+            const len = std.math.mul(usize, source.len, multiplier) catch return result;
+            const values = try analyser.arena.alloc(Type, len);
+            for (0..multiplier) |index| {
+                @memcpy(values[index * source.len ..][0..source.len], source);
+            }
+            return try comptime_eval.Value.create(analyser, try result.typeOf(analyser), .{ .array = values });
+        }
+    }
+    return result;
+}
+
 fn resolveArrayCat(analyser: *Analyser, l_ty: Type, r_ty: Type) Error!?Type {
     if (l_ty.is_type_val) return null;
     if (r_ty.is_type_val) return null;
@@ -3083,6 +3151,72 @@ fn resolveArrayCatExpression(analyser: *Analyser, lhs: Type, rhs: Type) Error!?T
         return try pointer_ty.instanceUnchecked(analyser);
     }
     return try analyser.resolveArrayCat(l_elem_ty, r_elem_ty);
+}
+
+pub fn resolveComptimeArrayCatValue(analyser: *Analyser, lhs: Type, rhs: Type) Error!?Type {
+    const result = try analyser.resolveArrayCatExpression(lhs, rhs) orelse return null;
+    if (lhs.data == .string_value and rhs.data == .string_value) {
+        const bytes = try std.mem.concat(analyser.arena, u8, &.{
+            lhs.data.string_value.bytes,
+            rhs.data.string_value.bytes,
+        });
+        return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+    }
+    if (comptime_eval.Value.elements(lhs) != null or comptime_eval.Value.elements(rhs) != null) {
+        const lhs_items = try analyser.comptimeArrayElements(lhs) orelse return result;
+        const rhs_items = try analyser.comptimeArrayElements(rhs) orelse return result;
+        const result_type = (try result.typeOf(analyser)).ipIndex() orelse return result;
+        const child_type = switch (analyser.ip.indexToKey(result_type)) {
+            .array_type => |array| array.child,
+            else => return result,
+        };
+        const values = try analyser.arena.alloc(Type, lhs_items.len + rhs_items.len);
+        try analyser.coerceComptimeArrayElements(values[0..lhs_items.len], lhs_items, child_type);
+        try analyser.coerceComptimeArrayElements(values[lhs_items.len..], rhs_items, child_type);
+        return try comptime_eval.Value.create(analyser, Type.fromIP(analyser, .type_type, result_type), .{ .array = values });
+    }
+
+    const lhs_values = analyser.aggregateValues(lhs);
+    const rhs_values = analyser.aggregateValues(rhs);
+    const result_payload = switch (result.data) {
+        .ip_index => |payload| payload,
+        else => return result,
+    };
+    const result_array = switch (analyser.ip.indexToKey(result_payload.type)) {
+        .array_type => |array| array,
+        else => return result,
+    };
+    const lhs_len = std.math.cast(usize, (lhs.arrayInfo(analyser) orelse return result)[0] orelse return result) orelse return result;
+    const rhs_len = std.math.cast(usize, (rhs.arrayInfo(analyser) orelse return result)[0] orelse return result) orelse return result;
+    const value_len = std.math.add(usize, lhs_len, rhs_len) catch return result;
+    if (value_len != result_array.len or
+        (lhs_values != null and lhs_values.?.len != lhs_len) or
+        (rhs_values != null and rhs_values.?.len != rhs_len)) return result;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, result_array.len);
+    defer analyser.gpa.free(values);
+    const unknown = try analyser.ip.getUnknown(result_array.child);
+    if (lhs_values) |source| {
+        for (values[0..lhs_len], 0..) |*value, index| {
+            value.* = try analyser.coerceArrayElementValue(
+                result_array.child,
+                source.at(@intCast(index), analyser.ip),
+            ) orelse unknown;
+        }
+    } else {
+        @memset(values[0..lhs_len], unknown);
+    }
+    if (rhs_values) |source| {
+        for (values[lhs_len..], 0..) |*value, index| {
+            value.* = try analyser.coerceArrayElementValue(
+                result_array.child,
+                source.at(@intCast(index), analyser.ip),
+            ) orelse unknown;
+        }
+    } else {
+        @memset(values[lhs_len..], unknown);
+    }
+    return try analyser.aggregateValue(result, values) orelse result;
 }
 
 fn coerceArrayElementValue(
@@ -12128,36 +12262,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (elem_ty.is_type_val) return null;
 
             const mult_lit = try analyser.resolveIntegerLiteral(u64, .of(mult_idx, handle));
-            const result = try analyser.resolveArrayMultExpression(elem_ty, mult_lit) orelse return null;
-            if (analyser.evaluate_comptime_values and
-                elem_ty.data == .string_value and
-                mult_lit != null)
-            {
-                const source = elem_ty.data.string_value.bytes;
-                const multiplier = std.math.cast(usize, mult_lit.?) orelse return null;
-                const len = std.math.mul(usize, source.len, multiplier) catch return null;
-                const bytes = try analyser.arena.alloc(u8, len);
-                for (0..multiplier) |i| {
-                    const offset = i * source.len;
-                    @memcpy(bytes[offset..][0..source.len], source);
-                }
-                return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
-            }
-            if (analyser.evaluate_comptime_values and mult_lit != null) {
-                if (analyser.aggregateValues(elem_ty)) |source_values| {
-                    const source = try source_values.dupe(analyser.gpa, analyser.ip);
-                    defer analyser.gpa.free(source);
-                    const multiplier = std.math.cast(usize, mult_lit.?) orelse return result;
-                    const len = std.math.mul(usize, source.len, multiplier) catch return result;
-                    const values = try analyser.gpa.alloc(InternPool.Index, len);
-                    defer analyser.gpa.free(values);
-                    for (0..multiplier) |i| {
-                        @memcpy(values[i * source.len ..][0..source.len], source);
-                    }
-                    return try analyser.aggregateValue(result, values) orelse result;
-                }
-            }
-            return result;
+            if (analyser.evaluate_comptime_values)
+                return analyser.resolveComptimeArrayMultValue(elem_ty, mult_lit);
+            return analyser.resolveArrayMultExpression(elem_ty, mult_lit);
         },
         .array_cat => {
             const l_elem_idx, const r_elem_idx = tree.nodeData(node).node_and_node;
@@ -12168,61 +12275,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const r_elem_ty = try analyser.resolveTypeOfNodeInternal(.of(r_elem_idx, handle)) orelse return null;
             if (r_elem_ty.is_type_val) return null;
 
-            const result = try analyser.resolveArrayCatExpression(l_elem_ty, r_elem_ty) orelse return null;
-            if (analyser.evaluate_comptime_values and
-                l_elem_ty.data == .string_value and
-                r_elem_ty.data == .string_value)
-            {
-                const bytes = try std.mem.concat(analyser.arena, u8, &.{
-                    l_elem_ty.data.string_value.bytes,
-                    r_elem_ty.data.string_value.bytes,
-                });
-                return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
-            }
-            if (analyser.evaluate_comptime_values) {
-                const lhs_values = analyser.aggregateValues(l_elem_ty);
-                const rhs_values = analyser.aggregateValues(r_elem_ty);
-                const result_payload = switch (result.data) {
-                    .ip_index => |payload| payload,
-                    else => return result,
-                };
-                const result_array = switch (analyser.ip.indexToKey(result_payload.type)) {
-                    .array_type => |array| array,
-                    else => return result,
-                };
-                const lhs_len = std.math.cast(usize, (l_elem_ty.arrayInfo(analyser) orelse return result)[0] orelse return result) orelse return result;
-                const rhs_len = std.math.cast(usize, (r_elem_ty.arrayInfo(analyser) orelse return result)[0] orelse return result) orelse return result;
-                const value_len = std.math.add(usize, lhs_len, rhs_len) catch return result;
-                if (value_len != result_array.len or
-                    (lhs_values != null and lhs_values.?.len != lhs_len) or
-                    (rhs_values != null and rhs_values.?.len != rhs_len)) return result;
-
-                const values = try analyser.gpa.alloc(InternPool.Index, result_array.len);
-                defer analyser.gpa.free(values);
-                const unknown = try analyser.ip.getUnknown(result_array.child);
-                if (lhs_values) |source| {
-                    for (values[0..lhs_len], 0..) |*value, i| {
-                        value.* = try analyser.coerceArrayElementValue(
-                            result_array.child,
-                            source.at(@intCast(i), analyser.ip),
-                        ) orelse unknown;
-                    }
-                } else {
-                    @memset(values[0..lhs_len], unknown);
-                }
-                if (rhs_values) |source| {
-                    for (values[lhs_len..], 0..) |*value, i| {
-                        value.* = try analyser.coerceArrayElementValue(
-                            result_array.child,
-                            source.at(@intCast(i), analyser.ip),
-                        ) orelse unknown;
-                    }
-                } else {
-                    @memset(values[lhs_len..], unknown);
-                }
-                return try analyser.aggregateValue(result, values) orelse result;
-            }
-            return result;
+            if (analyser.evaluate_comptime_values)
+                return analyser.resolveComptimeArrayCatValue(l_elem_ty, r_elem_ty);
+            return analyser.resolveArrayCatExpression(l_elem_ty, r_elem_ty);
         },
 
         .assign_mul,

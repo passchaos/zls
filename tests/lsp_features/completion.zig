@@ -7587,6 +7587,35 @@ test "generic function with nested comptime aggregate access mutations" {
     });
 }
 
+test "generic function with nested comptime array operator mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const repeated = (source: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :source [_]usize{ total, total + 1 };
+        \\    }) ** (count: {
+        \\        total += 1;
+        \\        break :count 2;
+        \\    });
+        \\    const combined = (left: {
+        \\        total += repeated[3];
+        \\        break :left [_]usize{total};
+        \\    }) ++ (right: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :right [_]usize{ total, total + 1 };
+        \\    });
+        \\    return struct { items: [combined[0] + combined[2] + total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[57]u8" },
+    });
+}
+
 test "generic function with comptime boolean short circuit mutations" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {
