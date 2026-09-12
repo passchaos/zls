@@ -4009,6 +4009,44 @@ test "comptime interpreter coerces orelse aggregate result locations" {
     });
 }
 
+test "comptime interpreter promotes typed values to optionals" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const optional_scalar: ?usize = small;
+        \\    const optional_values: ?[1]usize = .{small};
+        \\    const optional_config: ?Config = .{ .capacity = small };
+        \\    const copied_scalar: ?usize = optional_scalar;
+        \\    const absent_scalar: ?usize = null;
+        \\    const scalar = optional_scalar orelse 99;
+        \\    const values = optional_values orelse .{9};
+        \\    const config = optional_config orelse .{ .capacity = 9 };
+        \\    const copied = copied_scalar orelse 99;
+        \\    const absent = absent_scalar orelse 5;
+        \\    return struct {
+        \\        promoted_items: [scalar + values[0] + config.capacity]u8,
+        \\        copied_items: [copied]u8,
+        \\        absent_items: [absent]u8,
+        \\        typed_items: [if (@TypeOf(scalar) == usize and @TypeOf(values[0]) == usize and
+        \\            @TypeOf(config.capacity) == usize and @TypeOf(copied) == usize)
+        \\            1
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "promoted_items", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "copied_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "absent_items", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "typed_items", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {

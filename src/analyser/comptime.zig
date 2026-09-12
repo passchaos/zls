@@ -1045,6 +1045,31 @@ pub const Interpreter = struct {
         return @as(?Type, try child.typeOf(self.analyser));
     }
 
+    fn isOptionalOrNullValue(self: *Interpreter, value: Type) Error!bool {
+        const source_type = try value.typeOf(self.analyser);
+        return switch (source_type.data) {
+            .optional => true,
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
+                .optional_type => true,
+                .simple_type => |simple| simple == .null_type,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn optionalPayloadType(self: *Interpreter, destination: Type) ?Type {
+        if (!destination.is_type_val) return null;
+        return switch (destination.data) {
+            .optional => |payload| payload.*,
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
+                .optional_type => |optional| Type.fromIP(self.analyser, .type_type, optional.payload_type),
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     fn coerceArrayLiteral(
         self: *Interpreter,
         handle: *Handle,
@@ -1143,6 +1168,18 @@ pub const Interpreter = struct {
     ) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
+        if (self.optionalPayloadType(destination)) |payload_type| {
+            if (!try self.isOptionalOrNullValue(value)) {
+                const payload = try self.coerceAssignmentFromSource(
+                    handle,
+                    payload_type,
+                    value,
+                    source_node,
+                    declared_array_len,
+                ) orelse return null;
+                return @as(?Type, try Value.create(analyser, destination, .{ .optional = payload }));
+            }
+        }
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
