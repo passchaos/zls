@@ -156,6 +156,11 @@ pub const Interpreter = struct {
             if (tree.fullVarDecl(node)) |decl| {
                 if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) return true;
             }
+            if (tree.nodeTag(node) == .assign_destructure) {
+                for (tree.assignDestructure(node).ast.variables) |lhs| {
+                    if (tree.fullVarDecl(lhs) != null) return true;
+                }
+            }
             if (tree.nodeTag(node) == .@"comptime") return true;
         }
         return false;
@@ -545,18 +550,54 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn captureCells(self: *Interpreter, value: Type) Error!Type {
+    fn captureBindings(self: *Interpreter, value: Type) Error!Type {
         var result = value;
-        if (result.data != .container or self.cells.count() == 0) return result;
+        if (result.data != .container or (self.bindings.count() == 0 and self.cells.count() == 0)) return result;
 
         var info = result.data.container;
         var bindings = try info.bound_params.clone(self.analyser.arena);
+        for (self.bindings.keys(), self.bindings.values()) |token_handle, bound| {
+            try bindings.put(self.analyser.arena, token_handle, bound);
+        }
         for (self.cells.keys(), self.cells.values()) |token_handle, storage| {
             try bindings.put(self.analyser.arena, token_handle, storage.value);
         }
         info.bound_params = bindings;
         result.data = .{ .container = info };
         return result;
+    }
+
+    fn declare(self: *Interpreter, handle: *Handle, decl: Ast.full.VarDecl, initial_value: Type) Error!bool {
+        const analyser = self.analyser;
+        const tree = &handle.tree;
+        var value = initial_value;
+        if (decl.ast.type_node.unwrap()) |type_node| {
+            const ty = try self.eval(handle, type_node) orelse return false;
+            if (tree.fullArrayType(type_node)) |array| {
+                const len = try self.integer(handle, array.ast.elem_count) orelse return false;
+                if (len > self.budget.steps) return false;
+                if (Value.elements(value) == null) {
+                    const items = try analyser.arena.alloc(Type, len);
+                    @memset(items, Type.fromIP(analyser, .undefined_type, .undefined_value));
+                    value = try Value.create(analyser, ty, .{ .array = items });
+                }
+            } else if (!ty.isMetaType() and value.data != .comptime_value and !value.is_type_val) {
+                if (ty.ipIndex()) |type_index| {
+                    if (value.ipIndex()) |index| {
+                        const coerced = try analyser.coerceIP(type_index, index) orelse return false;
+                        value = Type.fromIP(analyser, type_index, coerced);
+                    } else value = try ty.instanceTypeVal(analyser) orelse value;
+                }
+            }
+        }
+        const token = decl.ast.mut_token + 1;
+        if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) {
+            const storage = try analyser.arena.create(Value.Cell);
+            storage.* = .{ .value = value };
+            try self.cells.put(analyser.arena, .{ .handle = handle, .token = token }, storage);
+        }
+        try self.bind(handle, token, value);
+        return true;
     }
 
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
@@ -603,39 +644,14 @@ pub const Interpreter = struct {
         }
         if (tree.fullVarDecl(node)) |decl| {
             const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
-            var value = try self.eval(handle, init_node) orelse Type.unknown_type;
-            if (decl.ast.type_node.unwrap()) |type_node| {
-                const ty = try self.eval(handle, type_node) orelse return .unknown;
-                if (tree.fullArrayType(type_node)) |array| {
-                    const len = try self.integer(handle, array.ast.elem_count) orelse return .unknown;
-                    if (len > self.budget.steps) return .unknown;
-                    if (Value.elements(value) == null) {
-                        const items = try analyser.arena.alloc(Type, len);
-                        @memset(items, Type.fromIP(analyser, .undefined_type, .undefined_value));
-                        value = try Value.create(analyser, ty, .{ .array = items });
-                    }
-                } else if (!ty.isMetaType() and value.data != .comptime_value and !value.is_type_val) {
-                    if (ty.ipIndex()) |type_index| {
-                        if (value.ipIndex()) |index| {
-                            const coerced = try analyser.coerceIP(type_index, index) orelse return .unknown;
-                            value = Type.fromIP(analyser, type_index, coerced);
-                        } else value = try ty.instanceTypeVal(analyser) orelse value;
-                    }
-                }
-            }
-            const token = decl.ast.mut_token + 1;
-            if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) {
-                const storage = try analyser.arena.create(Value.Cell);
-                storage.* = .{ .value = value };
-                try self.cells.put(analyser.arena, .{ .handle = handle, .token = token }, storage);
-            }
-            try self.bind(handle, token, value);
+            const value = try self.eval(handle, init_node) orelse Type.unknown_type;
+            if (!try self.declare(handle, decl, value)) return .unknown;
             return .next;
         }
         switch (tree.nodeTag(node)) {
             .@"comptime" => return self.statement(handle, tree.nodeData(node).node),
             .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression|
-                try self.captureCells(try self.eval(handle, expression) orelse return .unknown)
+                try self.captureBindings(try self.eval(handle, expression) orelse return .unknown)
             else
                 Type.fromIP(analyser, .void_type, .void_value) },
             .@"continue" => {
@@ -693,7 +709,10 @@ pub const Interpreter = struct {
                 const items = try self.mutableElements(value) orelse return .unknown;
                 if (items.len != assignment.ast.variables.len) return .unknown;
                 for (assignment.ast.variables, items) |lhs, item| {
-                    if (tree.fullVarDecl(lhs) != null) return .unknown;
+                    if (tree.fullVarDecl(lhs)) |decl| {
+                        if (!try self.declare(handle, decl, item)) return .unknown;
+                        continue;
+                    }
                     if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) continue;
                     if (!try self.write(handle, lhs, item)) return .unknown;
                 }

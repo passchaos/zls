@@ -5557,6 +5557,43 @@ test "generic function with comptime destructuring assignment" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
     });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    const width, var height: usize = .{ base + 1, 2 };
+        \\    height += width;
+        \\    return struct { items: [width * height]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[15]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    const width: usize, const height: usize = .{ base + 1, 2 };
+        \\    return struct { items: [width * height]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var depth: usize = 1;
+        \\    const width: usize, depth, var height = [_]usize{ base + 1, 4, 2 };
+        \\    height *= width;
+        \\    depth += height;
+        \\    return struct { items: [width * depth]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[30]u8" },
+    });
 }
 
 test "generic function with comptime tuple field mutation" {
