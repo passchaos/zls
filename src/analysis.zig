@@ -9539,6 +9539,17 @@ pub fn resolveComptimeBitPermutationValue(
     return analyser.resolveBitPermutationValue(tag, operand);
 }
 
+fn isValidRuntimeShiftType(
+    analyser: *Analyser,
+    shift_type: InternPool.Index,
+    operand_bits: u16,
+) bool {
+    if (analyser.ip.zigTypeTag(shift_type) != .int) return false;
+    const shift_info = analyser.ip.intInfo(shift_type, builtin.target);
+    return shift_info.signedness == .unsigned and
+        shift_info.bits <= std.math.log2_int_ceil(u16, operand_bits);
+}
+
 fn resolveExactShiftValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -9549,16 +9560,38 @@ fn resolveExactShiftValue(
         .ip_index => |payload| payload,
         else => return null,
     };
+    const shift_payload = switch (shift_operand.data) {
+        .ip_index => |shift_value| shift_value,
+        else => return null,
+    };
     if (try analyser.resolveZeroShiftValue(operand, shift_operand)) |value| return value;
-    const index = payload.index orelse return null;
-    const shift_index = shift_operand.ipIndex() orelse return null;
-    const shift = analyser.ip.toInt(shift_index, u16) orelse return null;
+    if (payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
 
     const type_tag = analyser.ip.zigTypeTag(payload.type) orelse return null;
     if (type_tag != .int and type_tag != .comptime_int) return null;
+    const operand_bits = if (type_tag == .int) bits: {
+        const bits = analyser.ip.intInfo(payload.type, builtin.target).bits;
+        if (bits == 0) return null;
+        break :bits bits;
+    } else null;
+    const shift_index = shift_payload.index orelse {
+        const bits = operand_bits orelse return null;
+        if (!analyser.isValidRuntimeShiftType(shift_payload.type, bits)) return null;
+        return Type.fromIP(analyser, payload.type, null);
+    };
+    if (analyser.ip.isUndefined(shift_index)) return null;
+    if (analyser.ip.isUnknown(shift_index)) {
+        const bits = operand_bits orelse return null;
+        if (!analyser.isValidRuntimeShiftType(shift_payload.type, bits)) return null;
+        return Type.fromIP(analyser, payload.type, null);
+    }
+    const shift = analyser.ip.toInt(shift_index, u16) orelse return null;
+    if (operand_bits) |bits| if (shift >= bits) return null;
+
+    const index = payload.index orelse return Type.fromIP(analyser, payload.type, null);
+    if (analyser.ip.isUnknown(index)) return Type.fromIP(analyser, payload.type, null);
     if (type_tag == .int) {
         const info = analyser.ip.intInfo(payload.type, builtin.target);
-        if (info.bits == 0 or shift >= info.bits) return null;
         if (info.bits > 128) {
             var source = try analyser.managedIntegerValue(index) orelse return null;
             defer source.deinit();
@@ -9625,6 +9658,20 @@ fn resolveVectorShiftValue(
         else => return null,
     };
     if (vector.len != shift_vector.len) return null;
+    if (operation == .shl_exact or operation == .shr_exact) {
+        if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
+        const operand_bits = analyser.ip.intInfo(vector.child, builtin.target).bits;
+        if (operand_bits == 0 or analyser.ip.zigTypeTag(shift_vector.child) != .int) return null;
+        if (payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+        if (shift_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+        if (!analyser.isValidRuntimeShiftType(shift_vector.child, operand_bits)) {
+            const shift_values = analyser.aggregateValues(shift_operand) orelse return null;
+            for (0..shift_vector.len) |i| {
+                const shift_index = shift_values.at(@intCast(i), analyser.ip);
+                if (analyser.ip.isUnknown(shift_index)) return null;
+            }
+        }
+    }
     const source_values = analyser.aggregateValues(operand);
     const shift_values = analyser.aggregateValues(shift_operand);
     if ((source_values != null and source_values.?.len != vector.len) or
@@ -9652,10 +9699,12 @@ fn resolveVectorShiftValue(
             .shl_exact => try analyser.resolveExactShiftValue(.shl_exact, element, shift_element),
             .shr_exact => try analyser.resolveExactShiftValue(.shr_exact, element, shift_element),
         };
-        if ((operation == .shl_exact or operation == .shr_exact) and resolved == null) {
-            return Type.fromIP(analyser, payload.type, null);
-        }
-        value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
+        value.* = if (resolved) |result|
+            result.ipIndex() orelse try analyser.ip.getUnknown(vector.child)
+        else switch (operation) {
+            .shl, .shr => try analyser.ip.getUnknown(vector.child),
+            .shl_exact, .shr_exact => return null,
+        };
     }
     return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
@@ -9672,8 +9721,11 @@ pub fn resolveComptimeExactShiftValue(
         .shl_exact => .shl_exact,
         .shr_exact => .shr_exact,
     };
-    const index = operand.ipIndex() orelse return null;
-    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
         const operation: VectorShiftOperation = switch (kind) {
             .shl_exact => .shl_exact,
             .shr_exact => .shr_exact,

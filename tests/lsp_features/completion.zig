@@ -5003,6 +5003,62 @@ test "generic function with nested comptime division mutations" {
     });
 }
 
+test "generic function with comptime unknown exact shift types" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_u3: u3 = undefined;
+        \\var runtime_vector: @Vector(2, u8) = undefined;
+        \\var runtime_shifts: @Vector(2, u3) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 0;
+        \\    const left = @shlExact(value: {
+        \\        total += 1;
+        \\        break :value runtime_u8;
+        \\    }, amount: {
+        \\        total += 1;
+        \\        break :amount @as(u3, 2);
+        \\    });
+        \\    const right = @shrExact(value: {
+        \\        total += 1;
+        \\        break :value @as(u8, 12);
+        \\    }, amount: {
+        \\        total += 1;
+        \\        break :amount runtime_u3;
+        \\    });
+        \\    const vector_left = @shlExact(value: {
+        \\        total += 1;
+        \\        break :value runtime_vector;
+        \\    }, amount: {
+        \\        total += 1;
+        \\        break :amount @as(@Vector(2, u3), @splat(2));
+        \\    });
+        \\    const vector_right = @shrExact(value: {
+        \\        total += 1;
+        \\        break :value runtime_vector;
+        \\    }, amount: {
+        \\        total += 1;
+        \\        break :amount runtime_shifts;
+        \\    });
+        \\    total += 1;
+        \\    return struct {
+        \\        left: @TypeOf(left),
+        \\        right: @TypeOf(right),
+        \\        vector_left: @TypeOf(vector_left),
+        \\        vector_right: @TypeOf(vector_right),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "left", .kind = .Field, .detail = "u8" },
+        .{ .label = "right", .kind = .Field, .detail = "u8" },
+        .{ .label = "vector_left", .kind = .Field, .detail = "@Vector(2,u8)" },
+        .{ .label = "vector_right", .kind = .Field, .detail = "@Vector(2,u8)" },
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function with comptime member reflection" {
     try testCompletion(
         \\const S = struct { @"hello\nworld": u8 };
