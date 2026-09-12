@@ -2090,30 +2090,23 @@ pub const Interpreter = struct {
             }
         }
         for (info.parameters, call_node.ast.params) |parameter, argument| {
-            var evaluated: EvaluatedSource = if (parameter.modifier == .comptime_param and parameter.type.data != .anytype_parameter) blk: {
-                if (try analyser.resolveAggregateComptimeArgument(parameter.type, handle, argument)) |value| {
-                    break :blk .{ .value = value, .source_node = argument };
-                }
-                break :blk try self.evalSource(handle, argument) orelse return .unknown;
-            } else .{
-                .value = try self.eval(handle, argument) orelse return .unknown,
-                .source_node = argument,
+            const parameter_type = try analyser.resolveGenericType(parameter.type, child.bindings);
+            const value = if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val)
+                try self.eval(handle, argument) orelse return .unknown
+            else value: {
+                const evaluated = try self.evalTypedSource(handle, argument, parameter_type) orelse return .unknown;
+                break :value try self.coerceFromSource(
+                    handle,
+                    parameter_type,
+                    evaluated.value,
+                    evaluated.source_node,
+                    null,
+                    self.optionalPayloadType(parameter_type) != null,
+                ) orelse return .unknown;
             };
-            if (parameter.modifier == .comptime_param and parameter.type.is_type_val) {
-                evaluated.value = if (self.optionalPayloadType(parameter.type) != null)
-                    try self.coerceAssignmentFromSource(
-                        handle,
-                        parameter.type,
-                        evaluated.value,
-                        evaluated.source_node,
-                        null,
-                    ) orelse return .unknown
-                else
-                    try self.coerce(parameter.type, evaluated.value) orelse return .unknown;
-            }
-            try child.bind(info.handle, parameter.name_token orelse return .unknown, evaluated.value);
+            try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {
-                try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try evaluated.value.typeOf(analyser));
+                try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
             }
         }
         const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
@@ -2126,19 +2119,17 @@ pub const Interpreter = struct {
                     const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
                     break :return_type try return_value.typeOf(analyser);
                 };
-                const coerced = if (child.optionalPayloadType(return_type) != null)
-                    try child.coerceAssignmentFromSource(
-                        info.handle,
-                        return_type,
-                        result.value,
-                        result.source_node,
-                        null,
-                    ) orelse return .unknown
+                const coerced = try child.coerceFromSource(
+                    info.handle,
+                    return_type,
+                    result.value,
+                    result.source_node,
+                    null,
+                    child.optionalPayloadType(return_type) != null,
+                ) orelse if (is_type_function)
+                    try return_type.instanceUnchecked(analyser)
                 else
-                    try child.coerce(return_type, result.value) orelse if (is_type_function)
-                        try return_type.instanceUnchecked(analyser)
-                    else
-                        return .unknown;
+                    return .unknown;
                 break :blk .{ .returned = .{ .value = coerced, .source_node = null } };
             },
             else => flow,

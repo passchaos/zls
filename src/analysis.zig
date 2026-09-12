@@ -2224,8 +2224,7 @@ pub fn resolveComptimeSplatValue(
         else => return null,
     };
     if (scalar_payload.type == .unknown_type) return null;
-    const scalar_index = scalar_payload.index orelse try analyser.ip.getUnknown(scalar_payload.type);
-    const coerced = try analyser.coerceIP(vector.child, scalar_index) orelse return null;
+    const coerced = try analyser.coerceComptimeIPValue(vector.child, scalar) orelse return null;
     if (analyser.ip.isUndefined(coerced)) return null;
     if (analyser.ip.isUnknown(coerced)) return Type.fromIP(analyser, vector_type, null);
     const value = try analyser.resolveSplatValueFromIndex(vector_type, coerced) orelse return null;
@@ -11468,7 +11467,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             const elem_ty_slice = try analyser.arena.alloc(Type, array_init_info.ast.elements.len);
             for (elem_ty_slice, array_init_info.ast.elements) |*elem_ty, element| {
-                elem_ty.* = try analyser.resolveTypeOfNodeInternal(.of(element, handle)) orelse return null;
+                elem_ty.* = if (analyser.comptime_interpreter) |interpreter|
+                    try interpreter.evaluateExpression(handle, element) orelse return null
+                else
+                    try analyser.resolveTypeOfNodeInternal(.of(element, handle)) orelse return null;
             }
             if (analyser.evaluate_comptime_values) {
                 const can_intern = for (elem_ty_slice) |value| {
@@ -13049,7 +13051,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             for (literal.ast.fields, fields) |field_node, *field| {
                 field.* = .{
                     .name = try analyser.identifierTokenName(tree, tree.firstToken(field_node) - 2) orelse return null,
-                    .value = try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type,
+                    .value = if (analyser.comptime_interpreter) |interpreter|
+                        try interpreter.evaluateExpression(handle, field_node) orelse .unknown_type
+                    else
+                        try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type,
                 };
                 has_type_value = has_type_value or field.value.is_type_val;
             }
@@ -16953,6 +16958,8 @@ pub fn innermostContainer(analyser: *Analyser, handle: *DocumentStore.Handle, so
                     }
 
                     const param_type_expr = param.type_expr orelse continue;
+                    const param_type_loc = offsets.nodeToLoc(tree, param_type_expr);
+                    if (param_type_loc.start <= source_index and source_index < param_type_loc.end) break;
                     const ty: Type = if (Analyser.isMetaType(tree, param_type_expr))
                         .{ .data = .{ .type_parameter = token_handle }, .is_type_val = true }
                     else blk: {

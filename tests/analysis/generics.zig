@@ -425,6 +425,30 @@ const first_as_aggregate: AsAggregateArray(4) = undefined;
 const second_as_aggregate: AsAggregateArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^ ([7]u8)()
 
+fn CallBoundaryArray(comptime base: u8) type {
+    const Config = struct { capacity: usize };
+    const Helpers = struct {
+        fn produce(small: u8) Config {
+            return .{ .capacity = small };
+        }
+        fn count(value: Config) usize {
+            return value.capacity;
+        }
+    };
+    var executions: usize = 0;
+    const value = Helpers.count(argument: {
+        executions += 1;
+        break :argument .{ .capacity = base };
+    });
+    const returned = Helpers.produce(base);
+    return [value + returned.capacity + executions]u8;
+}
+
+const first_call_boundary: CallBoundaryArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([9]u8)()
+const second_call_boundary: CallBoundaryArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

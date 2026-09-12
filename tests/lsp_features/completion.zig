@@ -7855,6 +7855,174 @@ test "generic function with comptime nested calls" {
     });
 }
 
+test "comptime interpreter coerces aggregate call arguments" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, count: []const u8 }{
+        .{ .type = "usize", .initializer = "small", .count = "value" },
+        .{ .type = "Config", .initializer = ".{}", .count = "value.capacity" },
+        .{ .type = "Config", .initializer = ".{ .capacity = small }", .count = "value.capacity" },
+        .{ .type = "[1]usize", .initializer = ".{small}", .count = "value[0]" },
+        .{ .type = "[1]Config", .initializer = ".{.{ .capacity = small }}", .count = "value[0].capacity" },
+        .{ .type = "struct { Config, ?usize }", .initializer = ".{ .{}, small }", .count = "value.@\"0\".capacity + value.@\"1\".? - 4" },
+        .{ .type = "union(enum) { count: usize, empty }", .initializer = ".{ .count = small }", .count = "value.count" },
+    };
+    for (cases) |case| {
+        for ([_][]const u8{ "comptime ", "" }) |modifier| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Config = struct {{ capacity: usize = @as(u8, 4) }};
+                \\fn count({s}value: {s}) usize {{
+                \\    return if (@TypeOf({s}) == usize) {s} else 99;
+                \\}}
+                \\fn Select() type {{
+                \\    const small: u8 = 4;
+                \\    var executions: usize = 0;
+                \\    const result = count(argument: {{
+                \\        executions += 1;
+                \\        break :argument {s};
+                \\    }});
+                \\    return struct {{ items: [result]u8, executions: [executions]u8 }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{ modifier, case.type, case.count, case.count, case.initializer });
+            defer allocator.free(source);
+            errdefer std.debug.print("aggregate call argument source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter coerces aggregate call returns" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, count: []const u8 }{
+        .{ .type = "Config", .initializer = ".{}", .count = "value.capacity" },
+        .{ .type = "Config", .initializer = ".{ .capacity = small }", .count = "value.capacity" },
+        .{ .type = "[1]usize", .initializer = ".{small}", .count = "value[0]" },
+        .{ .type = "[1]Config", .initializer = ".{.{ .capacity = small }}", .count = "value[0].capacity" },
+        .{ .type = "struct { Config, ?usize }", .initializer = ".{ .{}, small }", .count = "value.@\"0\".capacity + value.@\"1\".? - 4" },
+        .{ .type = "union(enum) { count: usize, empty }", .initializer = ".{ .count = small }", .count = "value.count" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const Config = struct {{ capacity: usize = @as(u8, 4) }};
+            \\fn produce(comptime small: u8, executions: *usize) {s} {{
+            \\    return result: {{
+            \\        executions.* += 1;
+            \\        break :result {s};
+            \\    }};
+            \\}}
+            \\fn Select() type {{
+            \\    var executions: usize = 0;
+            \\    const value = produce(4, &executions);
+            \\    return struct {{
+            \\        items: [if (@TypeOf({s}) == usize) {s} else 99]u8,
+            \\        executions: [executions]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.type, case.initializer, case.count, case.count });
+        defer allocator.free(source);
+        errdefer std.debug.print("aggregate call return source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+            .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter preserves dependent call parameter types" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn identity(comptime T: type, value: T) T { return value; }
+        \\fn inferred(value: anytype) type { return @TypeOf(value); }
+        \\fn Select() type {
+        \\    const small: u8 = 4;
+        \\    var executions: usize = 0;
+        \\    const value = identity(Config, argument: {
+        \\        executions += 1;
+        \\        break :argument .{ .capacity = small };
+        \\    });
+        \\    const scalar = identity(usize, small);
+        \\    const vector = identity(@Vector(2, usize), @splat(@as(u8, 4)));
+        \\    return struct {
+        \\        aggregate: [value.capacity]u8,
+        \\        scalar: [scalar]u8,
+        \\        vector: [vector[0]]u8,
+        \\        typed: [if (@TypeOf(value.capacity) == usize and @TypeOf(scalar) == usize and inferred(small) == u8) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "aggregate", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "scalar", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "vector", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "typed", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter preserves unknown call boundary elements" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn identity(value: [2]usize) [2]usize { return value; }
+        \\fn produce() [2]usize { return .{ runtime_u8, @as(u8, 4) }; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const argument = identity(.{ runtime_u8, @as(u8, 4) });
+        \\    const returned = produce();
+        \\    return struct {
+        \\        unknown: [argument[0] + returned[0]]u8,
+        \\        known: [argument[1] + returned[1]]u8,
+        \\        typed: [if (@TypeOf(argument[0]) == usize and @TypeOf(returned[0]) == usize) 1 else 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "known", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "typed", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter rejects invalid call boundary union payloads" {
+    for ([_][]const u8{ "true", "256", "\"invalid\"" }) |initializer| {
+        for ([_]bool{ false, true }) |returned| {
+            const call = try std.fmt.allocPrint(allocator, "identity(.{{ .count = {s} }})", .{initializer});
+            defer allocator.free(call);
+            const source = try std.fmt.allocPrint(allocator,
+                \\const U = union(enum) {{ count: u8, empty }};
+                \\fn identity(value: U) U {{ return value; }}
+                \\fn produce() U {{ return .{{ .count = {s} }}; }}
+                \\fn Select() type {{
+                \\    var marker: usize = 0;
+                \\    marker += 1;
+                \\    const value = {s};
+                \\    return switch (value) {{
+                \\        .count => struct {{ accepted: u8 }},
+                \\        .empty => struct {{ fallback: u8 }},
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                initializer,
+                if (returned) "produce()" else call,
+            });
+            defer allocator.free(source);
+            try testCompletion(source, &.{
+                .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+                .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+            });
+        }
+    }
+}
+
 test "generic function with typed comptime aggregate argument mutations" {
     try testCompletion(
         \\const Config = struct { width: usize };
