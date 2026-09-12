@@ -850,6 +850,14 @@ pub const Interpreter = struct {
                     .node => |target_node| self.evalSource(handle, target_node),
                 };
             },
+            .@"switch", .switch_comma => blk: {
+                if (!self.tick()) return null;
+                const target = try self.switchTarget(handle, node) orelse break :blk .{
+                    .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
+                    .source_node = null,
+                };
+                break :blk self.evalSource(handle, target);
+            },
             else => .{
                 .value = try self.eval(handle, node) orelse return null,
                 .source_node = node,

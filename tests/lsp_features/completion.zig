@@ -3931,6 +3931,60 @@ test "comptime interpreter coerces conditional aggregate result locations" {
     });
 }
 
+test "comptime interpreter coerces switched aggregate result locations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const declared: [1]usize = switch (marker) {
+        \\        1 => .{small},
+        \\        else => .{9},
+        \\    };
+        \\    var assigned: [1]usize = undefined;
+        \\    assigned = switch (marker) {
+        \\        0 => .{9},
+        \\        else => .{small},
+        \\    };
+        \\    return struct {
+        \\        items: [if (@TypeOf(declared[0]) == usize and @TypeOf(assigned[0]) == usize)
+        \\            declared[0] + assigned[0]
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var values: [1]usize = undefined;
+        \\    var config = Config{ .capacity = 0 };
+        \\    values, config = switch (marker) {
+        \\        1 => .{ .{small}, .{ .capacity = small } },
+        \\        else => .{ .{9}, .{ .capacity = 9 } },
+        \\    };
+        \\    return struct {
+        \\        items: [if (@TypeOf(values[0]) == usize and @TypeOf(config.capacity) == usize)
+        \\            values[0] + config.capacity
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {
