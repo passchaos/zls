@@ -717,6 +717,80 @@ test "generic function with comptime array values" {
     });
 }
 
+test "generic function with comptime compound assignments" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity = base;
+        \\    capacity += 2;
+        \\    capacity *= 3;
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[18]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var dimensions: [2]usize = undefined;
+        \\    dimensions[0] = base;
+        \\    dimensions[1] = 2;
+        \\    dimensions[0] += 1;
+        \\    dimensions[1] *= 3;
+        \\    return struct { items: [dimensions[0] * dimensions[1]]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[30]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity = base;
+        \\    for ([_]usize{ 2, 3 }) |factor| capacity *= factor;
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[24]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var value: u8 = 10;
+        \\    value -= 2;
+        \\    value *= 3;
+        \\    value /= 4;
+        \\    value %= 4;
+        \\    value <<= 2;
+        \\    value >>= 1;
+        \\    value |= 8;
+        \\    value ^= 4;
+        \\    value &= 10;
+        \\    var wrapping: u8 = 255;
+        \\    wrapping +%= 2;
+        \\    wrapping -%= 2;
+        \\    wrapping *%= 2;
+        \\    var saturating: u8 = 250;
+        \\    saturating +|= 10;
+        \\    saturating -|= 250;
+        \\    saturating *|= 100;
+        \\    saturating <<|= 1;
+        \\    return if (value == 8 and wrapping == 254 and saturating == 255)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with partially known array concatenation" {
     try testCompletion(
         \\var runtime: [2]u8 = undefined;

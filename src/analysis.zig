@@ -2490,7 +2490,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
         }
         break :blk items;
     };
-    if (analyser.comptime_interpreter != null) if (comptime_items) |items| {
+    if (lhs_binding.type.data == .comptime_value or analyser.comptime_interpreter != null) if (comptime_items) |items| {
         const value_type = switch (lhs_binding.type.data) {
             .comptime_value => |value| value.ty,
             else => try lhs_binding.type.typeOf(analyser),
@@ -5279,6 +5279,55 @@ fn resolveIntegerBinaryValue(
     };
 
     return analyser.intValueWithType(result_type, value);
+}
+
+/// Resolve the value of a binary operation whose operands have already been
+/// analyzed. Keeping this separate from AST traversal lets the comptime
+/// interpreter apply the exact same arithmetic semantics to compound
+/// assignments.
+pub fn resolveComptimeBinaryValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    return switch (tag) {
+        .mul_wrap,
+        .mul_sat,
+        .add_wrap,
+        .sub_wrap,
+        .add_sat,
+        .sub_sat,
+        => try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs, rhs, null) orelse
+            try analyser.resolveVectorFixedWidthIntegerBinaryValue(tag, lhs, rhs, null),
+
+        .mul,
+        .div,
+        .mod,
+        .bit_and,
+        .bit_xor,
+        .bit_or,
+        => try analyser.resolveIntegerBinaryValue(tag, lhs, rhs) orelse
+            try analyser.resolveFloatBinaryValue(tag, lhs, rhs) orelse
+            analyser.resolveBoolBinaryValue(tag, lhs, rhs) orelse
+            try analyser.resolveVectorBoolBinaryValue(tag, lhs, rhs) orelse
+            try analyser.resolveVectorBinaryValue(tag, lhs, rhs),
+
+        .add,
+        .sub,
+        => try analyser.resolveIntegerBinaryValue(tag, lhs, rhs) orelse
+            try analyser.resolveFloatBinaryValue(tag, lhs, rhs) orelse
+            try analyser.resolveVectorBinaryValue(tag, lhs, rhs),
+
+        .shl_sat => blk: {
+            const result_type = (try lhs.typeOf(analyser)).ipIndex() orelse break :blk null;
+            break :blk try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs, rhs, result_type) orelse
+                try analyser.resolveVectorFixedWidthIntegerBinaryValue(tag, lhs, rhs, result_type);
+        },
+        .shl, .shr => try analyser.resolveIntegerBinaryValue(tag, lhs, rhs) orelse
+            try analyser.resolveVectorShiftValue(if (tag == .shl) .shl else .shr, lhs, rhs),
+        else => null,
+    };
 }
 
 fn floatBinaryValue(comptime T: type, tag: Ast.Node.Tag, lhs: f128, rhs: f128) ?f128 {
@@ -11818,15 +11867,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 {
                     if (try analyser.resolveSelfBinaryValue(tag, lhs_ty)) |value| return value;
                 }
-                const value = switch (tree.nodeTag(node)) {
-                    .mul_wrap, .mul_sat, .add_wrap, .sub_wrap, .add_sat, .sub_sat => try analyser.resolveFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null) orelse
-                        try analyser.resolveVectorFixedWidthIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty, null),
-                    else => try analyser.resolveIntegerBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
-                        try analyser.resolveFloatBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
-                        analyser.resolveBoolBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
-                        try analyser.resolveVectorBoolBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty) orelse
-                        try analyser.resolveVectorBinaryValue(tree.nodeTag(node), lhs_ty, rhs_ty),
-                };
+                const value = try analyser.resolveComptimeBinaryValue(tag, lhs_ty, rhs_ty);
                 if (value) |resolved| return resolved;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
@@ -11845,9 +11886,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse return null;
                     if (try analyser.resolveComplementaryBinaryValue(.add, operand_type)) |value| return value;
                 }
-                if (try analyser.resolveIntegerBinaryValue(.add, lhs_ty, rhs_ty) orelse
-                    try analyser.resolveFloatBinaryValue(.add, lhs_ty, rhs_ty) orelse
-                    try analyser.resolveVectorBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;
+                if (try analyser.resolveComptimeBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
@@ -11870,9 +11909,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 if (try analyser.areSameIdentifierExpression(tree, lhs, rhs)) {
                     if (try analyser.resolveSelfBinaryValue(.sub, lhs_ty)) |value| return value;
                 }
-                if (try analyser.resolveIntegerBinaryValue(.sub, lhs_ty, rhs_ty) orelse
-                    try analyser.resolveFloatBinaryValue(.sub, lhs_ty, rhs_ty) orelse
-                    try analyser.resolveVectorBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
+                if (try analyser.resolveComptimeBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
@@ -11901,12 +11938,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 const rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (!rhs_ty.is_type_val) {
-                    const value = if (tag == .shl_sat)
-                        try analyser.resolveFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex()) orelse
-                            try analyser.resolveVectorFixedWidthIntegerBinaryValue(tag, lhs_ty, rhs_ty, (try lhs_ty.typeOf(analyser)).ipIndex())
-                    else
-                        try analyser.resolveIntegerBinaryValue(tag, lhs_ty, rhs_ty) orelse
-                            try analyser.resolveVectorShiftValue(if (tag == .shl) .shl else .shr, lhs_ty, rhs_ty);
+                    const value = try analyser.resolveComptimeBinaryValue(tag, lhs_ty, rhs_ty);
                     if (value) |resolved| return resolved;
                 }
             }

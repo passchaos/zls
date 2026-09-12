@@ -224,6 +224,45 @@ pub const Interpreter = struct {
         return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = storage });
     }
 
+    fn write(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, value: Type) Error!bool {
+        const analyser = self.analyser;
+        const tree = &handle.tree;
+        if (tree.nodeTag(node) == .array_access) {
+            const base, const index_node = tree.nodeData(node).node_and_node;
+            var storage = try self.cell(handle, base);
+            if (storage == null or Value.elements(storage.?.value) == null) {
+                const pointer = try self.eval(handle, base) orelse return false;
+                if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return false;
+                storage = pointer.data.comptime_value.data.reference;
+            }
+            const current = storage.?.value;
+            const items = Value.elements(current) orelse return false;
+            const index = try self.integer(handle, index_node) orelse return false;
+            if (index >= items.len) return false;
+            const updated = try analyser.arena.dupe(Type, items);
+            updated[index] = value;
+            storage.?.value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
+            return true;
+        }
+        const storage = try self.cell(handle, node) orelse return false;
+        storage.value = value;
+        return true;
+    }
+
+    fn captureCells(self: *Interpreter, value: Type) Error!Type {
+        var result = value;
+        if (result.data != .container or self.cells.count() == 0) return result;
+
+        var info = result.data.container;
+        var bindings = try info.bound_params.clone(self.analyser.arena);
+        for (self.cells.keys(), self.cells.values()) |token_handle, storage| {
+            try bindings.put(self.analyser.arena, token_handle, storage.value);
+        }
+        info.bound_params = bindings;
+        result.data = .{ .container = info };
+        return result;
+    }
+
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         if (!self.tick()) return .unknown;
         const analyser = self.analyser;
@@ -270,7 +309,7 @@ pub const Interpreter = struct {
         switch (tree.nodeTag(node)) {
             .@"comptime" => return self.statement(handle, tree.nodeData(node).node),
             .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression|
-                try self.eval(handle, expression) orelse return .unknown
+                try self.captureCells(try self.eval(handle, expression) orelse return .unknown)
             else
                 Type.fromIP(analyser, .void_type, .void_value) },
             .@"continue" => return if (tree.nodeData(node).opt_token_and_opt_node[0] != .none) .unknown else .continued,
@@ -296,25 +335,52 @@ pub const Interpreter = struct {
                     return .next;
                 }
                 const value = try self.eval(handle, rhs) orelse return .unknown;
-                if (tree.nodeTag(lhs) == .array_access) {
-                    const base, const index_node = tree.nodeData(lhs).node_and_node;
-                    var storage = try self.cell(handle, base);
-                    if (storage == null or Value.elements(storage.?.value) == null) {
-                        const pointer = try self.eval(handle, base) orelse return .unknown;
-                        if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return .unknown;
-                        storage = pointer.data.comptime_value.data.reference;
-                    }
-                    const current = storage.?.value;
-                    const items = Value.elements(current) orelse return .unknown;
-                    const index = try self.integer(handle, index_node) orelse return .unknown;
-                    if (index >= items.len) return .unknown;
-                    const updated = try analyser.arena.dupe(Type, items);
-                    updated[index] = value;
-                    storage.?.value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
-                } else {
-                    const storage = try self.cell(handle, lhs) orelse return .unknown;
-                    storage.value = value;
-                }
+                if (!try self.write(handle, lhs, value)) return .unknown;
+                return .next;
+            },
+            .assign_mul,
+            .assign_div,
+            .assign_mod,
+            .assign_add,
+            .assign_sub,
+            .assign_shl,
+            .assign_shl_sat,
+            .assign_shr,
+            .assign_bit_and,
+            .assign_bit_xor,
+            .assign_bit_or,
+            .assign_mul_wrap,
+            .assign_add_wrap,
+            .assign_sub_wrap,
+            .assign_mul_sat,
+            .assign_add_sat,
+            .assign_sub_sat,
+            => |assignment_tag| {
+                const lhs, const rhs = tree.nodeData(node).node_and_node;
+                const operation_tag: Ast.Node.Tag = switch (assignment_tag) {
+                    .assign_mul => .mul,
+                    .assign_div => .div,
+                    .assign_mod => .mod,
+                    .assign_add => .add,
+                    .assign_sub => .sub,
+                    .assign_shl => .shl,
+                    .assign_shl_sat => .shl_sat,
+                    .assign_shr => .shr,
+                    .assign_bit_and => .bit_and,
+                    .assign_bit_xor => .bit_xor,
+                    .assign_bit_or => .bit_or,
+                    .assign_mul_wrap => .mul_wrap,
+                    .assign_add_wrap => .add_wrap,
+                    .assign_sub_wrap => .sub_wrap,
+                    .assign_mul_sat => .mul_sat,
+                    .assign_add_sat => .add_sat,
+                    .assign_sub_sat => .sub_sat,
+                    else => unreachable,
+                };
+                const lhs_value = try self.eval(handle, lhs) orelse return .unknown;
+                const rhs_value = try self.eval(handle, rhs) orelse return .unknown;
+                const value = try analyser.resolveComptimeBinaryValue(operation_tag, lhs_value, rhs_value) orelse return .unknown;
+                if (!try self.write(handle, lhs, value)) return .unknown;
                 return .next;
             },
             .call, .call_comma, .call_one, .call_one_comma => return self.call(handle, node),
