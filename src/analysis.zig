@@ -11619,14 +11619,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
                     const string_literal = tree.tokenSlice(tree.nodeMainToken(import_param));
                     const import_string = string_literal[1 .. string_literal.len - 1];
-                    if (std.mem.endsWith(u8, import_string, ".zon")) {
-                        // TODO
-                        return null;
-                    }
-
-                    if (try analyser.resolveImportString(handle, import_string)) |ty| return ty;
-                    if (try analyser.resolveImportString(analyser.root_handle orelse return null, import_string)) |ty| return ty;
-                    return null;
+                    return analyser.resolveComptimeImportValue(handle, import_string);
                 },
                 .c_import => {
                     if (!DocumentStore.supports_build_system) return null;
@@ -15010,6 +15003,21 @@ pub fn resolveImportString(analyser: *Analyser, handle: *DocumentStore.Handle, i
             };
         },
     }
+}
+
+pub fn resolveComptimeImportValue(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    import_string: []const u8,
+) Error!?Type {
+    if (std.mem.endsWith(u8, import_string, ".zon")) {
+        // TODO
+        return null;
+    }
+
+    if (try analyser.resolveImportString(handle, import_string)) |ty| return ty;
+    if (try analyser.resolveImportString(analyser.root_handle orelse return null, import_string)) |ty| return ty;
+    return null;
 }
 
 fn resolveLangrefType(analyser: *Analyser, type_str: []const u8) Error!?Type {

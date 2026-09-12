@@ -509,6 +509,17 @@ pub const Interpreter = struct {
                     const fields = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeTupleTypeValue(fields);
                 }
+                if (std.mem.eql(u8, name, "@import")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const import_path = try self.eval(handle, params[0]) orelse return null;
+                    if (import_path.data != .string_value) return null;
+                    return self.analyser.resolveComptimeImportValue(
+                        handle,
+                        import_path.data.string_value.bytes,
+                    );
+                }
                 if (std.mem.eql(u8, name, "@select")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

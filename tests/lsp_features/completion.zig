@@ -5182,6 +5182,26 @@ test "generic function with nested comptime field reflection mutations" {
     });
 }
 
+test "generic function with nested comptime import mutation" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const builtin_module = @import(path: {
+        \\        total *= 2;
+        \\        break :path "builtin";
+        \\    });
+        \\    return if (@hasDecl(builtin_module, "zig_version"))
+        \\        struct { order: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with nested comptime min max mutations" {
     try testCompletion(
         \\fn Select(comptime a: usize, comptime b: usize, comptime c: usize) type {
