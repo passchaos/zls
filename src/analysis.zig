@@ -2223,8 +2223,15 @@ pub fn resolveComptimeSplatValue(
         .vector_type => |vector| vector,
         else => return null,
     };
-    const scalar_index = scalar.ipIndex() orelse return null;
+    const scalar_payload = switch (scalar.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (scalar_payload.type == .unknown_type) return null;
+    const scalar_index = scalar_payload.index orelse try analyser.ip.getUnknown(scalar_payload.type);
     const coerced = try analyser.coerceIP(vector.child, scalar_index) orelse return null;
+    if (analyser.ip.isUndefined(coerced)) return null;
+    if (analyser.ip.isUnknown(coerced)) return Type.fromIP(analyser, vector_type, null);
     const value = try analyser.resolveSplatValueFromIndex(vector_type, coerced) orelse return null;
     return Type.fromIP(analyser, vector_type, value);
 }

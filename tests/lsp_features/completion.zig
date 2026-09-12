@@ -904,6 +904,28 @@ test "generic function with nested comptime splat mutation" {
     });
 }
 
+test "generic function preserves runtime unknown comptime splat type" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const values = @as(@Vector(4, u8), @splat(scalar: {
+        \\        total += 1;
+        \\        break :scalar runtime_u8;
+        \\    }));
+        \\    return struct {
+        \\        value: @TypeOf(values),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "value", .kind = .Field, .detail = "@Vector(4,u8)" },
+    });
+}
+
 test "generic function with comptime integer and boolean reductions" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {
