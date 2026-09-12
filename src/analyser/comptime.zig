@@ -1001,6 +1001,24 @@ pub const Interpreter = struct {
         return @as(?Type, try child.typeOf(self.analyser));
     }
 
+    fn coerceArrayLiteral(self: *Interpreter, destination: Type, items: []const Type) Error!?Type {
+        const coerced = try self.analyser.arena.alloc(Type, items.len);
+        for (items, coerced, 0..) |item, *result, index| {
+            const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
+            result.* = try self.coerceAssignmentTo(element_type, item) orelse return null;
+        }
+        return @as(?Type, try Value.create(self.analyser, destination, .{ .array = coerced }));
+    }
+
+    fn unknownArray(self: *Interpreter, destination: Type, len: usize) Error!?Type {
+        const items = try self.analyser.arena.alloc(Type, len);
+        for (items, 0..) |*item, index| {
+            const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
+            item.* = try element_type.instanceTypeVal(self.analyser) orelse return null;
+        }
+        return @as(?Type, try Value.create(self.analyser, destination, .{ .array = items }));
+    }
+
     fn writeReference(self: *Interpreter, target: *Value.Reference, value: Type) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
         target.storage.value = try self.replaceReferenceValue(target.storage.value, destination, target.path, value) orelse return false;
@@ -1262,11 +1280,19 @@ pub const Interpreter = struct {
             if (tree.fullArrayType(type_node)) |array| {
                 const len = try self.integer(handle, array.ast.elem_count) orelse return false;
                 if (len > self.budget.steps) return false;
-                if (Value.elements(value) == null) {
-                    const items = try analyser.arena.alloc(Type, len);
-                    @memset(items, Type.fromIP(analyser, .undefined_type, .undefined_value));
-                    value = try Value.create(analyser, ty, .{ .array = items });
-                }
+                const items = try self.mutableElements(value);
+                const init_node = decl.ast.init_node.unwrap() orelse return false;
+                var buffer: [2]Ast.Node.Index = undefined;
+                const is_result_location_literal = if (tree.fullArrayInit(&buffer, init_node)) |literal|
+                    literal.ast.type_expr == .none
+                else
+                    false;
+                value = if (is_result_location_literal and items != null and items.?.len == len)
+                    try self.coerceArrayLiteral(ty, items.?) orelse try self.unknownArray(ty, len) orelse return false
+                else if (!is_result_location_literal and items != null)
+                    try self.coerce(ty, value) orelse try self.unknownArray(ty, len) orelse return false
+                else
+                    try self.unknownArray(ty, len) orelse return false;
             } else value = try self.coerce(ty, value) orelse
                 try ty.instanceTypeVal(analyser) orelse return false;
         }

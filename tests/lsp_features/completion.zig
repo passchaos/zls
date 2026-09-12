@@ -3448,6 +3448,54 @@ test "comptime interpreter coerces explicitly typed local declarations" {
     });
 }
 
+test "comptime interpreter validates explicitly typed array declarations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const values: [1]usize = .{small};
+        \\    return struct { items: [if (@TypeOf(values[0]) == usize) values[0] else 99]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const values: [1]u16 = .{"rejected"};
+        \\    return if (@TypeOf(values[0]) == u16)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { leaked: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const values: [2]u16 = .{1};
+        \\    return if (@TypeOf(values) == [2]u16)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { leaked: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {
