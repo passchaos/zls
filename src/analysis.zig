@@ -6730,32 +6730,10 @@ fn resolveTupleTypeConstructor(
     options: ResolveOptions,
 ) Error!?Type {
     if (try analyser.resolveComptimeValue(options)) |value| {
-        if (comptime_eval.Value.elements(value)) |items| {
-            for (items) |item| if (!item.is_type_val) return null;
-            return try Type.createTupleType(analyser, try analyser.arena.dupe(Type, items));
-        }
+        if (try analyser.resolveComptimeTupleTypeValue(value)) |tuple_type| return tuple_type;
     }
     if (try analyser.resolveTypeOfNodeInternal(options)) |fields| {
-        if (fields.data == .ip_index) {
-            const pointer = switch (analyser.ip.indexToKey(fields.data.ip_index.type)) {
-                .pointer_type => |pointer| pointer,
-                else => null,
-            };
-            if (pointer) |info| if (info.flags.size == .one) {
-                const field_values = switch (analyser.ip.indexToKey(info.elem_type)) {
-                    .tuple_type => |tuple| tuple.values,
-                    else => null,
-                };
-                if (field_values) |values| {
-                    const element_types = try analyser.arena.alloc(Type, values.len);
-                    for (element_types, 0..) |*element_type, i| {
-                        const value = values.at(@intCast(i), analyser.ip);
-                        if (value == .none or analyser.ip.typeOf(value) != .type_type) break;
-                        element_type.* = Type.fromIP(analyser, .type_type, value);
-                    } else return try Type.createTupleType(analyser, element_types);
-                }
-            };
-        }
+        if (try analyser.resolveComptimeTupleTypeValue(fields)) |tuple_type| return tuple_type;
     }
 
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
@@ -6774,6 +6752,30 @@ fn resolveTupleTypeConstructor(
             .container_type = literal_options.container_type,
         }) orelse return null;
         if (!element_type.is_type_val) return null;
+    }
+    return try Type.createTupleType(analyser, element_types);
+}
+
+pub fn resolveComptimeTupleTypeValue(analyser: *Analyser, fields: Type) error{OutOfMemory}!?Type {
+    if (comptime_eval.Value.elements(fields)) |items| {
+        for (items) |item| if (!item.is_type_val) return null;
+        return try Type.createTupleType(analyser, try analyser.arena.dupe(Type, items));
+    }
+    if (fields.data != .ip_index) return null;
+    const pointer = switch (analyser.ip.indexToKey(fields.data.ip_index.type)) {
+        .pointer_type => |pointer| pointer,
+        else => return null,
+    };
+    if (pointer.flags.size != .one) return null;
+    const values = switch (analyser.ip.indexToKey(pointer.elem_type)) {
+        .tuple_type => |tuple| tuple.values,
+        else => return null,
+    };
+    const element_types = try analyser.arena.alloc(Type, values.len);
+    for (element_types, 0..) |*element_type, i| {
+        const value = values.at(@intCast(i), analyser.ip);
+        if (value == .none or analyser.ip.typeOf(value) != .type_type) return null;
+        element_type.* = Type.fromIP(analyser, .type_type, value);
     }
     return try Type.createTupleType(analyser, element_types);
 }

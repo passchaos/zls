@@ -2244,6 +2244,26 @@ test "generic function with comptime Tuple type constructor" {
     });
 }
 
+test "generic function with nested comptime Tuple mutation" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var total: usize = 1;
+        \\    const Pair = @Tuple(fields: {
+        \\        total *= 2;
+        \\        break :fields &.{ T, bool };
+        \\    });
+        \\    return if (Pair == @Tuple(&.{ u8, bool }))
+        \\        struct { order: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with comptime Pointer type constructor" {
     try testCompletion(
         \\const std = @import("std");

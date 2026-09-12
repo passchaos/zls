@@ -502,6 +502,13 @@ pub const Interpreter = struct {
                     const child_type = try self.eval(handle, params[1]) orelse return null;
                     return self.analyser.resolveComptimeVectorType(len, child_type);
                 }
+                if (std.mem.eql(u8, name, "@Tuple")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const fields = try self.eval(handle, params[0]) orelse return null;
+                    return self.analyser.resolveComptimeTupleTypeValue(fields);
+                }
                 if (std.mem.eql(u8, name, "@select")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
