@@ -601,6 +601,26 @@ pub const Interpreter = struct {
                         .shr_exact;
                     return self.analyser.resolveComptimeExactShiftValue(operand, shift_operand, kind);
                 }
+                if (std.mem.eql(u8, name, "@addWithOverflow") or
+                    std.mem.eql(u8, name, "@subWithOverflow") or
+                    std.mem.eql(u8, name, "@mulWithOverflow") or
+                    std.mem.eql(u8, name, "@shlWithOverflow"))
+                {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const lhs = try self.eval(handle, params[0]) orelse return null;
+                    const rhs = try self.eval(handle, params[1]) orelse return null;
+                    const kind: Analyser.ComptimeOverflowKind = if (std.mem.eql(u8, name, "@addWithOverflow"))
+                        .add
+                    else if (std.mem.eql(u8, name, "@subWithOverflow"))
+                        .sub
+                    else if (std.mem.eql(u8, name, "@mulWithOverflow"))
+                        .mul
+                    else
+                        .shl;
+                    return self.analyser.resolveComptimeOverflowValue(lhs, rhs, kind, .{});
+                }
                 if (std.mem.eql(u8, name, "@divTrunc") or
                     std.mem.eql(u8, name, "@divFloor") or
                     std.mem.eql(u8, name, "@divExact") or

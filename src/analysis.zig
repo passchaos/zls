@@ -6479,6 +6479,46 @@ fn resolveOverflowValue(
     return try analyser.overflowTupleValue(result_type, result_value, overflowed);
 }
 
+pub const ComptimeOverflowKind = enum { add, sub, mul, shl };
+
+pub const ComptimeOverflowOptions = struct {
+    evaluate_values: bool = true,
+    same_operand: bool = false,
+    complementary_operands: bool = false,
+};
+
+pub fn resolveComptimeOverflowValue(
+    analyser: *Analyser,
+    lhs: Type,
+    rhs: Type,
+    kind: ComptimeOverflowKind,
+    options: ComptimeOverflowOptions,
+) error{OutOfMemory}!?Type {
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .add => .add_with_overflow,
+        .sub => .sub_with_overflow,
+        .mul => .mul_with_overflow,
+        .shl => .shl_with_overflow,
+    };
+    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
+    const result_type = if (kind == .shl)
+        lhs_type
+    else
+        try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
+    if (analyser.ip.zigTypeTag(result_type) != .int) return null;
+    if (options.evaluate_values) {
+        if (try analyser.resolveOverflowValue(
+            tag,
+            lhs,
+            rhs,
+            options.same_operand,
+            options.complementary_operands,
+        )) |value| return value;
+    }
+    return try analyser.overflowTupleValue(result_type, null, null);
+}
+
 fn resolveReduceOperation(
     analyser: *Analyser,
     node_handle: NodeWithHandle,
@@ -11400,26 +11440,23 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     if (lhs.is_type_val or rhs.is_type_val) return null;
-                    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
-                    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
-                    const result_type = if (tag == .shl_with_overflow)
-                        lhs_type
-                    else
-                        try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
-                    if (analyser.ip.zigTypeTag(result_type) != .int) return null;
-                    if (analyser.evaluate_comptime_values) {
-                        const same_operand = tag == .sub_with_overflow and
-                            try analyser.areSameIdentifierExpression(tree, params[0], params[1]);
-                        const complementary_operands = tag == .add_with_overflow and
-                            (try analyser.complementaryIdentifierOperand(tree, params[0], params[1], .bit_not)) != null;
-                        if (try analyser.resolveOverflowValue(tag, lhs, rhs, same_operand, complementary_operands)) |value| return value;
-                    }
-                    var element_types = [_]Type{
-                        Type.fromIP(analyser, .type_type, result_type),
-                        Type.fromIP(analyser, .type_type, .u1_type),
+                    const kind: ComptimeOverflowKind = switch (tag) {
+                        .add_with_overflow => .add,
+                        .sub_with_overflow => .sub,
+                        .mul_with_overflow => .mul,
+                        .shl_with_overflow => .shl,
+                        else => unreachable,
                     };
-                    const tuple_type = try Type.createTupleType(analyser, &element_types);
-                    return try tuple_type.instanceUnchecked(analyser);
+                    const overflow_options: ComptimeOverflowOptions = .{
+                        .evaluate_values = analyser.evaluate_comptime_values,
+                        .same_operand = tag == .sub_with_overflow and
+                            analyser.evaluate_comptime_values and
+                            try analyser.areSameIdentifierExpression(tree, params[0], params[1]),
+                        .complementary_operands = tag == .add_with_overflow and
+                            analyser.evaluate_comptime_values and
+                            (try analyser.complementaryIdentifierOperand(tree, params[0], params[1], .bit_not)) != null,
+                    };
+                    return analyser.resolveComptimeOverflowValue(lhs, rhs, kind, overflow_options);
                 },
                 .reduce => {
                     if (params.len != 2) return null;

@@ -1819,6 +1819,38 @@ test "generic function with comptime overflow builtins" {
     });
 }
 
+test "generic function with nested comptime overflow mutations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var add_total: usize = 1;
+        \\    var sub_total: usize = 1;
+        \\    var mul_total: usize = 1;
+        \\    var shl_total: usize = 1;
+        \\    const add = @addWithOverflow(lhs: { add_total += 1; break :lhs @as(u8, 250); }, rhs: { add_total *= 2; break :rhs 10; });
+        \\    const sub = @subWithOverflow(lhs: { sub_total += 1; break :lhs @as(u8, 2); }, rhs: { sub_total *= 2; break :rhs 3; });
+        \\    const mul = @mulWithOverflow(lhs: { mul_total += 1; break :lhs @as(i8, 40); }, rhs: { mul_total *= 2; break :rhs 4; });
+        \\    const shl = @shlWithOverflow(lhs: { shl_total += 1; break :lhs @as(u8, 0x40); }, rhs: { shl_total *= 2; break :rhs 2; });
+        \\    return if (add[0] == 4 and add[1] == 1 and sub[0] == 255 and sub[1] == 1 and
+        \\        mul[0] == -96 and mul[1] == 1 and shl[0] == 0 and shl[1] == 1)
+        \\        struct {
+        \\            add_order: [add_total]u8,
+        \\            sub_order: [sub_total]u8,
+        \\            mul_order: [mul_total]u8,
+        \\            shl_order: [shl_total]u8,
+        \\        }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "add_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "sub_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "mul_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "shl_order", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with partially known overflow builtins" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;
