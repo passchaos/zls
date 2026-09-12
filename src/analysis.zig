@@ -3499,6 +3499,25 @@ fn isValidRuntimeScalarCast(
     };
 }
 
+fn isValidRuntimeCast(
+    analyser: *Analyser,
+    destination_type: InternPool.Index,
+    source_type: InternPool.Index,
+    kind: ComptimeCastKind,
+) bool {
+    const destination_tag = analyser.ip.zigTypeTag(destination_type) orelse return false;
+    const source_tag = analyser.ip.zigTypeTag(source_type) orelse return false;
+    if (destination_tag != .vector or source_tag != .vector) {
+        return analyser.isValidRuntimeScalarCast(destination_type, source_type, kind);
+    }
+    if (kind == .bit_cast) return false;
+
+    const destination = analyser.ip.indexToKey(destination_type).vector_type;
+    const source = analyser.ip.indexToKey(source_type).vector_type;
+    return destination.len == source.len and
+        analyser.isValidRuntimeScalarCast(destination.child, source.child, kind);
+}
+
 pub fn resolveComptimeCastValue(
     analyser: *Analyser,
     destination: Type,
@@ -3520,12 +3539,12 @@ pub fn resolveComptimeCastValue(
         .float_cast => .float_cast,
     };
     const source_index = source_payload.index orelse {
-        if (!analyser.isValidRuntimeScalarCast(destination_type, source_payload.type, kind)) return null;
+        if (!analyser.isValidRuntimeCast(destination_type, source_payload.type, kind)) return null;
         return Type.fromIP(analyser, destination_type, null);
     };
     if (analyser.ip.isUndefined(source_index)) return null;
     if (analyser.ip.isUnknown(source_index)) {
-        if (!analyser.isValidRuntimeScalarCast(destination_type, source_payload.type, kind)) return null;
+        if (!analyser.isValidRuntimeCast(destination_type, source_payload.type, kind)) return null;
         return Type.fromIP(analyser, destination_type, null);
     }
     const value = try analyser.resolveCoercedIPValueFromIndex(destination_type, source_index, tag) orelse return null;

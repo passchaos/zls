@@ -5983,6 +5983,39 @@ test "generic function preserves runtime unknown contextual cast types" {
     });
 }
 
+test "generic function preserves runtime unknown contextual vector cast types" {
+    try testCompletion(
+        \\var runtime_u16: @Vector(2, u16) = undefined;
+        \\var runtime_f32: @Vector(2, f32) = undefined;
+        \\var runtime_f64: @Vector(2, f64) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const int_casted = @as(@Vector(2, u8), @intCast(value: { total += 1; break :value runtime_u16; }));
+        \\    const truncated = @as(@Vector(2, u8), @truncate(value: { total += 1; break :value runtime_u16; }));
+        \\    const int_from_float = @as(@Vector(2, u8), @intFromFloat(value: { total += 1; break :value runtime_f32; }));
+        \\    const float_from_int = @as(@Vector(2, f32), @floatFromInt(value: { total += 1; break :value runtime_u16; }));
+        \\    const float_casted = @as(@Vector(2, f32), @floatCast(value: { total += 1; break :value runtime_f64; }));
+        \\    return struct {
+        \\        int_casted: @TypeOf(int_casted),
+        \\        truncated: @TypeOf(truncated),
+        \\        int_from_float: @TypeOf(int_from_float),
+        \\        float_from_int: @TypeOf(float_from_int),
+        \\        float_casted: @TypeOf(float_casted),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "float_casted", .kind = .Field, .detail = "@Vector(2,f32)" },
+        .{ .label = "float_from_int", .kind = .Field, .detail = "@Vector(2,f32)" },
+        .{ .label = "int_casted", .kind = .Field, .detail = "@Vector(2,u8)" },
+        .{ .label = "int_from_float", .kind = .Field, .detail = "@Vector(2,u8)" },
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "truncated", .kind = .Field, .detail = "@Vector(2,u8)" },
+    });
+}
+
 test "generic function with comptime unknown field expressions" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {
