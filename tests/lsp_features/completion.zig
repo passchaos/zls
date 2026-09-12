@@ -2778,6 +2778,60 @@ test "generic function with comptime generated Union values" {
     });
 }
 
+test "generic function with nested comptime unionInit mutations" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const U = @Union(.auto, null, &.{ "count", "payload" }, &.{ u16, T }, &.{ .{}, .{} });
+        \\    var total: usize = 1;
+        \\    const initialized = @unionInit(union_type: {
+        \\        total += 1;
+        \\        break :union_type U;
+        \\    }, field_name: {
+        \\        total *= 2;
+        \\        break :field_name "count";
+        \\    }, value: {
+        \\        total += 3;
+        \\        break :value 7;
+        \\    });
+        \\    return if (@field(initialized, "count") == 7)
+        \\        struct { order: [total]T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[7]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: u16 = undefined;
+        \\fn Select() type {
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "count", "other" }, &.{ 0, 1 });
+        \\    const U = @Union(.auto, Tag, &.{ "count", "other" }, &.{ u16, void }, &.{ .{}, .{} });
+        \\    var total: usize = 1;
+        \\    const initialized = @unionInit(union_type: {
+        \\        total += 1;
+        \\        break :union_type U;
+        \\    }, field_name: {
+        \\        total *= 2;
+        \\        break :field_name "count";
+        \\    }, value: {
+        \\        total += 3;
+        \\        break :value runtime;
+        \\    });
+        \\    return switch (initialized) {
+        \\        .count => struct { active: [total]u8 },
+        \\        .other => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "active", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
 test "generic function reflecting comptime container constructors" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

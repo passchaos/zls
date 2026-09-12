@@ -2430,6 +2430,63 @@ fn resolveUnionLiteralValue(
     } });
 }
 
+const ComptimeUnionInitField = struct {
+    union_type: InternPool.Index,
+    field_index: u32,
+    field_type: InternPool.Index,
+};
+
+fn resolveComptimeUnionInitField(
+    analyser: *Analyser,
+    union_type: Type,
+    field_name: []const u8,
+) ?ComptimeUnionInitField {
+    if (!union_type.is_type_val) return null;
+    const type_index = union_type.ipIndex() orelse return null;
+    const union_index = switch (analyser.ip.indexToKey(type_index)) {
+        .union_type => |union_index| union_index,
+        else => return null,
+    };
+    const union_info = analyser.ip.getUnion(union_index);
+    const name_index = analyser.ip.string_pool.getString(analyser.store.io, field_name) orelse return null;
+    const field_index = union_info.fields.getIndex(name_index) orelse return null;
+    return .{
+        .union_type = type_index,
+        .field_index = @intCast(field_index),
+        .field_type = union_info.fields.values()[field_index].ty,
+    };
+}
+
+fn comptimeUnionInitValue(
+    analyser: *Analyser,
+    field: ComptimeUnionInitField,
+    value: InternPool.Index,
+) error{OutOfMemory}!Type {
+    const union_value = try analyser.ip.get(.{ .union_value = .{
+        .ty = field.union_type,
+        .field_index = field.field_index,
+        .val = value,
+    } });
+    return Type.fromIP(analyser, field.union_type, union_value);
+}
+
+pub fn resolveComptimeUnionInitValue(
+    analyser: *Analyser,
+    union_type: Type,
+    field_name: []const u8,
+    value: Type,
+) Error!?Type {
+    const fallback = try union_type.instanceTypeVal(analyser);
+    const field = analyser.resolveComptimeUnionInitField(union_type, field_name) orelse return fallback;
+    const value_index = value.ipIndex() orelse return try analyser.comptimeUnionInitValue(
+        field,
+        try analyser.ip.getUnknown(field.field_type),
+    );
+    const coerced = try analyser.coerceIP(field.field_type, value_index) orelse
+        try analyser.ip.getUnknown(field.field_type);
+    return try analyser.comptimeUnionInitValue(field, coerced);
+}
+
 fn aggregateValues(analyser: *Analyser, value: Type) ?InternPool.Index.Slice {
     const payload = switch (value.data) {
         .ip_index => |payload| payload,
@@ -11159,29 +11216,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const union_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     const fallback = try union_type.instanceTypeVal(analyser);
                     if (!analyser.evaluate_comptime_values) return fallback;
-                    const type_index = union_type.ipIndex() orelse return fallback;
-                    const union_index = switch (analyser.ip.indexToKey(type_index)) {
-                        .union_type => |union_index| union_index,
-                        else => return fallback,
-                    };
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse
                         return fallback;
-                    const union_info = analyser.ip.getUnion(union_index);
-                    const name_index = analyser.ip.string_pool.getString(analyser.store.io, field_name) orelse
+                    const field = analyser.resolveComptimeUnionInitField(union_type, field_name) orelse
                         return fallback;
-                    const field_index = union_info.fields.getIndex(name_index) orelse
-                        return fallback;
-                    const field_type = union_info.fields.values()[field_index].ty;
-                    const value = try analyser.resolveCoercedIPValue(field_type, .{
+                    const value = try analyser.resolveCoercedIPValue(field.field_type, .{
                         .node_handle = .of(params[2], handle),
                         .container_type = options.container_type,
-                    }) orelse try analyser.ip.getUnknown(field_type);
-                    const union_value = try analyser.ip.get(.{ .union_value = .{
-                        .ty = type_index,
-                        .field_index = @intCast(field_index),
-                        .val = value,
-                    } });
-                    return Type.fromIP(analyser, type_index, union_value);
+                    }) orelse try analyser.ip.getUnknown(field.field_type);
+                    return try analyser.comptimeUnionInitValue(field, value);
                 },
                 .cmpxchg_strong, .cmpxchg_weak => {
                     if (params.len != 6) return null;

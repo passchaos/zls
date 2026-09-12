@@ -479,6 +479,20 @@ pub const Interpreter = struct {
                     const c = try self.eval(handle, params[3]) orelse return null;
                     return self.analyser.resolveComptimeMulAddValue(result_type, a, b, c);
                 }
+                if (std.mem.eql(u8, name, "@unionInit")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 3) return null;
+                    const union_type = try self.eval(handle, params[0]) orelse return null;
+                    const field_name = try self.eval(handle, params[1]) orelse return null;
+                    const value = try self.eval(handle, params[2]) orelse return null;
+                    if (field_name.data != .string_value) return null;
+                    return self.analyser.resolveComptimeUnionInitValue(
+                        union_type,
+                        field_name.data.string_value.bytes,
+                        value,
+                    );
+                }
                 if (std.mem.eql(u8, name, "@select")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
