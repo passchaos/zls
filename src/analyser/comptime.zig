@@ -406,6 +406,15 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
                     const destination = try self.eval(handle, params[0]) orelse return null;
+                    if (ast.isBuiltinCall(&handle.tree, params[1]) and
+                        std.mem.eql(u8, handle.tree.tokenSlice(handle.tree.nodeMainToken(params[1])), "@splat"))
+                    {
+                        var splat_buffer: [2]Ast.Node.Index = undefined;
+                        const splat_params = handle.tree.builtinCallParams(&splat_buffer, params[1]).?;
+                        if (splat_params.len != 1) return null;
+                        const scalar = try self.eval(handle, splat_params[0]) orelse return null;
+                        return self.analyser.resolveComptimeSplatValue(destination, scalar);
+                    }
                     const value = try self.eval(handle, params[1]) orelse return null;
                     return self.coerce(destination, value);
                 }

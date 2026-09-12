@@ -2203,6 +2203,18 @@ fn resolveSplatValue(
         else => return null,
     };
     const scalar = try analyser.resolveCoercedIPValue(vector.child, options) orelse return null;
+    return analyser.resolveSplatValueFromIndex(vector_type, scalar);
+}
+
+fn resolveSplatValueFromIndex(
+    analyser: *Analyser,
+    vector_type: InternPool.Index,
+    scalar: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const vector = switch (analyser.ip.indexToKey(vector_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
     if (analyser.ip.isUndefined(scalar) or analyser.ip.isUnknown(scalar)) return null;
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
@@ -2211,6 +2223,23 @@ fn resolveSplatValue(
         .ty = vector_type,
         .values = try analyser.ip.getIndexSlice(values),
     } });
+}
+
+pub fn resolveComptimeSplatValue(
+    analyser: *Analyser,
+    vector_type_value: Type,
+    scalar: Type,
+) error{OutOfMemory}!?Type {
+    if (!vector_type_value.is_type_val) return null;
+    const vector_type = vector_type_value.ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(vector_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    const scalar_index = scalar.ipIndex() orelse return null;
+    const coerced = try analyser.coerceIP(vector.child, scalar_index) orelse return null;
+    const value = try analyser.resolveSplatValueFromIndex(vector_type, coerced) orelse return null;
+    return Type.fromIP(analyser, vector_type, value);
 }
 
 fn resolveVectorIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {

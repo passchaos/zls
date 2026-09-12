@@ -884,6 +884,26 @@ test "generic function with comptime splat value" {
     });
 }
 
+test "generic function with nested comptime splat mutation" {
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    var total: usize = 1;
+        \\    const values = @as(@Vector(4, u8), @splat(scalar: {
+        \\        total *= 2;
+        \\        break :scalar value;
+        \\    }));
+        \\    return if (values[3] == 7)
+        \\        struct { order: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with comptime integer and boolean reductions" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {
