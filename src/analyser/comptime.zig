@@ -393,6 +393,12 @@ pub const Interpreter = struct {
                     .{ .open = .{ .start = start, .sentinel = sentinel } };
                 return self.analyser.resolveBracketAccessType(value, access);
             },
+            .deref => {
+                const pointer = try self.eval(handle, handle.tree.nodeData(node).node) orelse return null;
+                if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .reference)
+                    return self.readReference(pointer.data.comptime_value.data.reference);
+                return self.analyser.resolveDerefType(pointer);
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },

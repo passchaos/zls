@@ -6194,6 +6194,25 @@ test "generic function with comptime pointer deref mutation" {
     });
 }
 
+test "generic function with nested comptime pointer deref mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    var capacity: usize = 3;
+        \\    const selected = (pointer: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :pointer &capacity;
+        \\    }).*;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[15]u8" },
+    });
+}
+
 test "generic function with comptime for pointer capture mutation" {
     try testCompletion(
         \\fn Buffer(comptime base: usize) type {
