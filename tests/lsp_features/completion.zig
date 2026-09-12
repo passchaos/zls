@@ -3496,6 +3496,57 @@ test "comptime interpreter validates explicitly typed array declarations" {
     });
 }
 
+test "comptime interpreter validates explicitly typed struct declarations" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const config: Config = .{ .capacity = small };
+        \\    return struct { items: [if (@TypeOf(config.capacity) == usize) config.capacity else 99]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { text: []const u8 };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const config: Config = .{ .text = "accepted" };
+        \\    return if (@TypeOf(config.text) == []const u8 and config.text.len == 8)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: u16, enabled: bool };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const config: Config = .{ .capacity = "rejected", .enabled = true };
+        \\    return if (@TypeOf(config.capacity) == u16 and config.enabled)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { leaked: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {

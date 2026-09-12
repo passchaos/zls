@@ -1019,6 +1019,18 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(self.analyser, destination, .{ .array = items }));
     }
 
+    fn coerceStructLiteral(self: *Interpreter, destination: Type, fields: []const Value.Field) Error!?Type {
+        const coerced = try self.analyser.arena.alloc(Value.Field, fields.len);
+        for (fields, coerced) |field, *result| {
+            const field_type = try self.assignmentChildType(destination, .{ .field = field.name }) orelse return null;
+            result.* = .{
+                .name = field.name,
+                .value = try self.coerceAssignmentTo(field_type, field.value) orelse return null,
+            };
+        }
+        return @as(?Type, try Value.create(self.analyser, destination, .{ .fields = coerced }));
+    }
+
     fn writeReference(self: *Interpreter, target: *Value.Reference, value: Type) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
         target.storage.value = try self.replaceReferenceValue(target.storage.value, destination, target.path, value) orelse return false;
@@ -1293,6 +1305,17 @@ pub const Interpreter = struct {
                     try self.coerce(ty, value) orelse try self.unknownArray(ty, len) orelse return false
                 else
                     try self.unknownArray(ty, len) orelse return false;
+            } else if (ty.isStructType(analyser)) {
+                const init_node = decl.ast.init_node.unwrap() orelse return false;
+                var buffer: [2]Ast.Node.Index = undefined;
+                value = if (tree.fullStructInit(&buffer, init_node)) |literal|
+                    if (literal.ast.type_expr == .none and Value.fieldEntries(value) != null)
+                        try self.coerceStructLiteral(ty, Value.fieldEntries(value).?) orelse
+                            try ty.instanceTypeVal(analyser) orelse return false
+                    else
+                        try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false
+                else
+                    try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false;
             } else value = try self.coerce(ty, value) orelse
                 try ty.instanceTypeVal(analyser) orelse return false;
         }
