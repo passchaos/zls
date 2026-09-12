@@ -853,6 +853,10 @@ pub const Interpreter = struct {
             };
         }
         return switch (tree.nodeTag(node)) {
+            .@"comptime", .@"nosuspend" => blk: {
+                if (!self.tick()) return null;
+                break :blk self.evalSource(handle, tree.nodeData(node).node);
+            },
             .grouped_expression => blk: {
                 if (!self.tick()) return null;
                 break :blk self.evalSource(handle, tree.nodeData(node).node_and_token[0]);

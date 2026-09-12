@@ -4185,6 +4185,36 @@ test "comptime interpreter promotes loop results to optionals" {
     });
 }
 
+test "comptime interpreter promotes comptime expression results to optionals" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const small: u8 = 4;
+        \\    const optional_values: ?[1]usize = comptime values: {
+        \\        executions += 1;
+        \\        break :values if (small == 4) .{small} else .{9};
+        \\    };
+        \\    const optional_config: ?Config = comptime config: {
+        \\        executions += 1;
+        \\        break :config if (small == 4) .{ .capacity = small } else .{ .capacity = 9 };
+        \\    };
+        \\    const values = optional_values orelse .{9};
+        \\    const config = optional_config orelse .{ .capacity = 9 };
+        \\    return struct {
+        \\        items: [if (@TypeOf(values[0]) == usize and @TypeOf(config.capacity) == usize)
+        \\            values[0] + config.capacity + executions
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[10]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {
