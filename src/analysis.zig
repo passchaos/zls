@@ -7603,6 +7603,18 @@ fn resolveShuffleValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+pub fn resolveComptimeShuffleValue(
+    analyser: *Analyser,
+    element_type_value: Type,
+    lhs: Type,
+    rhs: Type,
+    mask: Type,
+) error{OutOfMemory}!?Type {
+    if (!element_type_value.is_type_val) return null;
+    const element_type = element_type_value.ipIndex() orelse return null;
+    return analyser.resolveShuffleValue(element_type, lhs, rhs, mask);
+}
+
 fn resolveIntegerDivisionValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -11450,16 +11462,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .shuffle => {
                     if (params.len != 4) return null;
                     const element = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    if (!element.is_type_val) return null;
-                    const element_type = element.ipIndex() orelse return null;
                     const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[2], handle)) orelse return null;
                     const mask = try analyser.resolveTypeOfNodeInternal(.of(params[3], handle)) orelse return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveShuffleValue(element_type, lhs, rhs, mask)) |value| return value;
+                        if (try analyser.resolveComptimeShuffleValue(element, lhs, rhs, mask)) |value| return value;
                     }
-                    return try analyser.resolveShuffleValue(
-                        element_type,
+                    return analyser.resolveComptimeShuffleValue(
+                        element,
                         lhs.withoutIPIndex(analyser),
                         rhs.withoutIPIndex(analyser),
                         mask.withoutIPIndex(analyser),

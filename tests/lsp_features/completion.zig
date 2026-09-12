@@ -5130,6 +5130,21 @@ test "generic function with nested comptime vector select mutations" {
     });
 }
 
+test "generic function with nested comptime vector shuffle mutations" {
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    var total: usize = 1;
+        \\    const shuffled = @shuffle(element: { total += 1; break :element u8; }, lhs: { total *= 2; break :lhs @as(@Vector(2, u8), .{ 1, value }); }, rhs: { total += 3; break :rhs @as(@Vector(2, u8), .{ 3, 4 }); }, mask: { total *= 2; break :mask @Vector(3, i32){ 1, -1, -2 }; });
+        \\    _ = shuffled;
+        \\    return struct { items: [total]u8 };
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[14]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {
