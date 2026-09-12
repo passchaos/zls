@@ -6900,6 +6900,36 @@ test "generic function with comptime optional pointer capture mutation" {
     });
 }
 
+test "generic function with comptime optional unwrap mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: ?usize = 1;
+        \\    capacity.? += base;
+        \\    return struct { items: [capacity.?]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const State = struct { capacity: ?usize };
+        \\fn Buffer(comptime scale: usize) type {
+        \\    var state = State{ .capacity = 2 };
+        \\    state.capacity.? += 1;
+        \\    const capacity_ptr = &state.capacity.?;
+        \\    state.capacity.? += 1;
+        \\    capacity_ptr.* *= scale;
+        \\    return struct { items: [state.capacity.?]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "generic function with runtime optional orelse null type" {
     try testCompletion(
         \\var runtime_optional: ?u8 = null;

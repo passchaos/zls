@@ -302,6 +302,13 @@ pub const Interpreter = struct {
                 if (try self.analyser.resolveFieldAccess(current, field_name) == null) return null;
                 return self.extendReference(parent, .{ .field = field_name });
             },
+            .unwrap_optional => {
+                const base = tree.nodeData(node).node_and_token[0];
+                const parent = try self.aggregateReference(handle, base) orelse return null;
+                const current = try self.readReference(parent) orelse return null;
+                if (try self.analyser.resolveOptionalUnwrap(current) == null) return null;
+                return self.extendReference(parent, .optional_payload);
+            },
             .deref => {
                 const pointer = try self.eval(handle, tree.nodeData(node).node) orelse return null;
                 if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return null;
@@ -517,6 +524,15 @@ pub const Interpreter = struct {
             @memcpy(extended[0..fields.len], fields);
             extended[fields.len] = .{ .name = field_name, .value = value };
             const updated_value = try Value.create(analyser, aggregate_type, .{ .fields = extended });
+            return self.writeAggregate(handle, base, base_value, updated_value);
+        }
+        if (tree.nodeTag(node) == .unwrap_optional) {
+            const base = tree.nodeData(node).node_and_token[0];
+            const base_value = try self.eval(handle, base) orelse return false;
+            const current = try self.deref(base_value) orelse return false;
+            const aggregate_type = try current.typeOf(analyser);
+            if (try analyser.resolveOptionalUnwrap(current) == null) return false;
+            const updated_value = try Value.create(analyser, aggregate_type, .{ .optional = value });
             return self.writeAggregate(handle, base, base_value, updated_value);
         }
         if (tree.nodeTag(node) == .deref) {
