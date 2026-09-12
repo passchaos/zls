@@ -5082,6 +5082,24 @@ test "generic function with nested comptime float unary mutations" {
     });
 }
 
+test "generic function with nested comptime float rounding mutations" {
+    try testCompletion(
+        \\fn Select(comptime initial: usize) type {
+        \\    var total: usize = initial;
+        \\    const floored = @floor(value: { total += 1; break :value @as(f64, -2.75); });
+        \\    const ceiled = @ceil(value: { total += 1; break :value @as(f64, -2.75); });
+        \\    const truncated = @trunc(value: { total += 1; break :value @as(f64, -2.75); });
+        \\    const rounded = @round(value: { total += 1; break :value @as(f64, -2.75); });
+        \\    _ = .{ floored, ceiled, truncated, rounded };
+        \\    return struct { items: [total]u8 };
+        \\}
+        \\const selected: Select(0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {

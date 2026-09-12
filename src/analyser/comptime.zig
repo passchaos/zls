@@ -477,7 +477,11 @@ pub const Interpreter = struct {
                     std.mem.eql(u8, name, "@log") or
                     std.mem.eql(u8, name, "@log2") or
                     std.mem.eql(u8, name, "@log10") or
-                    std.mem.eql(u8, name, "@sqrt"))
+                    std.mem.eql(u8, name, "@sqrt") or
+                    std.mem.eql(u8, name, "@floor") or
+                    std.mem.eql(u8, name, "@ceil") or
+                    std.mem.eql(u8, name, "@trunc") or
+                    std.mem.eql(u8, name, "@round"))
                 {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
@@ -499,8 +503,16 @@ pub const Interpreter = struct {
                         .log2
                     else if (std.mem.eql(u8, name, "@log10"))
                         .log10
+                    else if (std.mem.eql(u8, name, "@sqrt"))
+                        .sqrt
+                    else if (std.mem.eql(u8, name, "@floor"))
+                        .floor
+                    else if (std.mem.eql(u8, name, "@ceil"))
+                        .ceil
+                    else if (std.mem.eql(u8, name, "@trunc"))
+                        .trunc
                     else
-                        .sqrt;
+                        .round;
                     return self.analyser.resolveComptimeFloatUnaryValue(operand, kind);
                 }
                 if (std.mem.eql(u8, name, "@hasField") or std.mem.eql(u8, name, "@hasDecl")) {
