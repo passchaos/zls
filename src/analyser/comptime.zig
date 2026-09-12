@@ -319,12 +319,11 @@ pub const Interpreter = struct {
             },
             .if_simple, .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
-                const condition = try self.eval(handle, branch.ast.cond_expr) orelse return .unknown;
-                const known = switch (condition.ipIndex() orelse return .unknown) {
-                    .bool_true => true,
-                    .bool_false => false,
-                    else => return .unknown,
-                };
+                if (branch.error_token != null) return .unknown;
+                if (branch.payload_token) |payload_token| {
+                    if (tree.tokenTag(payload_token) == .asterisk) return .unknown;
+                }
+                const known = try analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return .unknown;
                 return self.statement(handle, if (known) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse return .next);
             },
             .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?),

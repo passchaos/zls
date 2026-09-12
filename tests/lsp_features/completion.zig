@@ -6368,6 +6368,40 @@ test "generic function with comptime optional condition" {
     });
 }
 
+test "generic function with comptime optional payload mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime value: ?u8) type {
+        \\    var capacity: u8 = 1;
+        \\    if (value) |payload| {
+        \\        capacity += payload;
+        \\    } else {
+        \\        capacity = 8;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime value: ?u8) type {
+        \\    var capacity: u8 = 1;
+        \\    if (value) |payload| {
+        \\        capacity += payload;
+        \\    } else {
+        \\        capacity = 8;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(null) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+}
+
 test "generic function with runtime optional orelse null type" {
     try testCompletion(
         \\var runtime_optional: ?u8 = null;

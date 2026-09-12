@@ -4873,7 +4873,7 @@ fn resolveBoolValue(analyser: *Analyser, options: ResolveOptions) Error!?bool {
     };
 }
 
-fn resolveIfConditionValue(analyser: *Analyser, options: ResolveOptions) Error!?bool {
+pub fn resolveIfConditionValue(analyser: *Analyser, options: ResolveOptions) Error!?bool {
     const value = try analyser.resolveComptimeValue(options) orelse return null;
     if (value.data == .comptime_value) {
         return switch (value.data.comptime_value.data) {
