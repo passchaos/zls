@@ -3400,6 +3400,54 @@ test "comptime interpreter validates declared type function returns" {
     });
 }
 
+test "comptime interpreter coerces explicitly typed local declarations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const widened: usize = small;
+        \\    return struct { items: [widened]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const text: []const u8 = "accepted";
+        \\    return if (text.len == 8)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const T: type = 4;
+        \\    return if (@TypeOf(T) == type)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { leaked: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "source union typed comptime arguments validate runtime unknown payloads" {
     try testCompletion(
         \\const U = union(enum) { count: u16, empty };

@@ -1234,14 +1234,8 @@ pub const Interpreter = struct {
                     @memset(items, Type.fromIP(analyser, .undefined_type, .undefined_value));
                     value = try Value.create(analyser, ty, .{ .array = items });
                 }
-            } else if (!ty.isMetaType() and value.data != .comptime_value and !value.is_type_val) {
-                if (ty.ipIndex()) |type_index| {
-                    if (value.ipIndex()) |index| {
-                        const coerced = try analyser.coerceIP(type_index, index) orelse return false;
-                        value = Type.fromIP(analyser, type_index, coerced);
-                    } else value = try ty.instanceTypeVal(analyser) orelse value;
-                }
-            }
+            } else value = try self.coerce(ty, value) orelse
+                try ty.instanceTypeVal(analyser) orelse return false;
         }
         const token = decl.ast.mut_token + 1;
         if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) {
