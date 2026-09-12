@@ -7616,6 +7616,73 @@ test "generic function with nested comptime array operator mutations" {
     });
 }
 
+test "generic function with nested comptime slice mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (source: {
+        \\        total += 1;
+        \\        break :source [_]usize{ 10, 20, 30, 40 };
+        \\    })[(start: {
+        \\        total *= 2;
+        \\        break :start 1;
+        \\    })..(end: {
+        \\        defer total += 1;
+        \\        break :end 3;
+        \\    })];
+        \\    return struct { items: [selected[0] + selected[1] + total]u8 };
+        \\}
+        \\const buffer: Buffer(1) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[55]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (source: {
+        \\        total += 1;
+        \\        break :source [_]usize{ 10, 20, 30 };
+        \\    })[(start: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :start 1;
+        \\    })..];
+        \\    return struct { items: [selected[0] + selected[1] + total]u8 };
+        \\}
+        \\const buffer: Buffer(1) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[55]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (source: {
+        \\        total += 1;
+        \\        break :source [_:0]usize{ 10, 20, 30 };
+        \\    })[(start: {
+        \\        total *= 2;
+        \\        break :start 1;
+        \\    })..(end: {
+        \\        total += 1;
+        \\        break :end 3;
+        \\    }) :(sentinel: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :sentinel 0;
+        \\    })];
+        \\    return struct { items: [selected[0] + selected[1] + total]u8 };
+        \\}
+        \\const buffer: Buffer(1) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[61]u8" },
+    });
+}
+
 test "generic function with comptime boolean short circuit mutations" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {

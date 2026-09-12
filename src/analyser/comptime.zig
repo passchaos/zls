@@ -372,6 +372,27 @@ pub const Interpreter = struct {
                 const index = try self.integer(handle, index_node) orelse return null;
                 return self.analyser.resolveBracketAccessType(value, .{ .single = index });
             },
+            .slice, .slice_open, .slice_sentinel => {
+                const slice = handle.tree.fullSlice(node).?;
+                const value = try self.eval(handle, slice.ast.sliced) orelse return null;
+                const start = try self.integer(handle, slice.ast.start) orelse return null;
+                const end = if (slice.ast.end.unwrap()) |end_node|
+                    try self.integer(handle, end_node) orelse return null
+                else
+                    null;
+                const sentinel = if (slice.ast.sentinel.unwrap()) |sentinel_node|
+                    (try self.eval(handle, sentinel_node) orelse return null).ipIndex() orelse return null
+                else
+                    .none;
+                const access: Analyser.BracketAccess = if (end) |end_index|
+                    .{ .range = .{
+                        .bounds = .{ start, end_index },
+                        .sentinel = sentinel,
+                    } }
+                else
+                    .{ .open = .{ .start = start, .sentinel = sentinel } };
+                return self.analyser.resolveBracketAccessType(value, access);
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },

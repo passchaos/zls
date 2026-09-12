@@ -2576,20 +2576,28 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                 if (index < items.len) return .{ .type = items[@intCast(index)], .is_const = true };
                 return null;
             },
-            .open => |access| if (access.start != null and access.sentinel == .none) {
+            .open => |access| if (access.start != null) {
                 const start = std.math.cast(usize, access.start.?) orelse return null;
                 if (start > items.len) return null;
+                const sliced = try analyser.resolveBracketAccess(.{
+                    .type = try value_type.instanceUnchecked(analyser),
+                    .is_const = lhs_binding.is_const,
+                }, rhs) orelse return null;
                 return .{
-                    .type = try comptime_eval.Value.create(analyser, value_type, .{ .array = items[start..] }),
+                    .type = try comptime_eval.Value.create(analyser, try sliced.type.typeOf(analyser), .{ .array = items[start..] }),
                     .is_const = true,
                 };
             },
-            .range => |access| if (access.bounds != null and access.sentinel == .none) {
+            .range => |access| if (access.bounds != null) {
                 const start = std.math.cast(usize, access.bounds.?[0]) orelse return null;
                 const end = std.math.cast(usize, access.bounds.?[1]) orelse return null;
                 if (start > end or end > items.len) return null;
+                const sliced = try analyser.resolveBracketAccess(.{
+                    .type = try value_type.instanceUnchecked(analyser),
+                    .is_const = lhs_binding.is_const,
+                }, rhs) orelse return null;
                 return .{
-                    .type = try comptime_eval.Value.create(analyser, value_type, .{ .array = items[start..end] }),
+                    .type = try comptime_eval.Value.create(analyser, try sliced.type.typeOf(analyser), .{ .array = items[start..end] }),
                     .is_const = true,
                 };
             },
