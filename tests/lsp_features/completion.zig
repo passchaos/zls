@@ -1895,6 +1895,36 @@ test "generic function with comptime overflow identities" {
     });
 }
 
+test "generic function with comptime runtime binary identities" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_vector: @Vector(2, u8) = undefined;
+        \\var runtime_bool: bool = undefined;
+        \\var runtime_bools: @Vector(2, bool) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    total += 1;
+        \\    const vector_zero = runtime_vector ^ runtime_vector;
+        \\    const vector_ones = runtime_vector | ~runtime_vector;
+        \\    const vector_truth = runtime_bools | !runtime_bools;
+        \\    return if (runtime_u8 - runtime_u8 == 0 and
+        \\        runtime_u8 ^ runtime_u8 == 0 and runtime_u8 & ~runtime_u8 == 0 and
+        \\        runtime_u8 | ~runtime_u8 == 255 and runtime_u8 + ~runtime_u8 == 255 and
+        \\        runtime_i8 + ~runtime_i8 == -1 and runtime_u8 -% runtime_u8 == 0 and
+        \\        runtime_u8 -| runtime_u8 == 0 and vector_zero[0] == 0 and
+        \\        vector_ones[1] == 255 and runtime_bool ^ !runtime_bool and vector_truth[0])
+        \\        struct { identities: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identities", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with partially known overflow builtins" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

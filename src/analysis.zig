@@ -5855,12 +5855,62 @@ fn resolveIntegerBinaryValue(
 /// analyzed. Keeping this separate from AST traversal lets the comptime
 /// interpreter apply the exact same arithmetic semantics to compound
 /// assignments.
+pub const ComptimeBinaryOperand = enum { lhs, rhs };
+
+pub const ComptimeBinaryOptions = struct {
+    same_operand: bool = false,
+    complementary_operand: ?ComptimeBinaryOperand = null,
+};
+
+pub fn resolveComptimeBinaryOptions(
+    analyser: *Analyser,
+    tree: *const Ast,
+    lhs: Ast.Node.Index,
+    rhs: Ast.Node.Index,
+    tag: Ast.Node.Tag,
+    evaluate_values: bool,
+) error{OutOfMemory}!ComptimeBinaryOptions {
+    if (!evaluate_values) return .{};
+
+    const same_operand = switch (tag) {
+        .sub, .sub_wrap, .sub_sat, .bit_xor => try analyser.areSameIdentifierExpression(tree, lhs, rhs),
+        else => false,
+    };
+    const complementary_bit_not = switch (tag) {
+        .add, .add_wrap, .add_sat, .bit_and, .bit_or, .bit_xor => (try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not)) != null,
+        else => null,
+    };
+    const complementary_bool_not = if (complementary_bit_not == false)
+        (try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bool_not)) != null
+    else
+        false;
+    return .{
+        .same_operand = same_operand,
+        .complementary_operand = if (complementary_bit_not == true)
+            if (tree.nodeTag(lhs) == .bit_not) .rhs else .lhs
+        else if (complementary_bool_not)
+            if (tree.nodeTag(lhs) == .bool_not) .rhs else .lhs
+        else
+            null,
+    };
+}
+
 pub fn resolveComptimeBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
     lhs: Type,
     rhs: Type,
+    options: ComptimeBinaryOptions,
 ) error{OutOfMemory}!?Type {
+    if (options.complementary_operand) |operand| {
+        if (try analyser.resolveComplementaryBinaryValue(
+            tag,
+            if (operand == .lhs) lhs else rhs,
+        )) |value| return value;
+    }
+    if (options.same_operand) {
+        if (try analyser.resolveSelfBinaryValue(tag, lhs)) |value| return value;
+    }
     return switch (tag) {
         .mul_wrap,
         .mul_sat,
@@ -8730,9 +8780,14 @@ pub fn resolveComptimeUnaryValue(
     operand: Type,
 ) error{OutOfMemory}!?Type {
     return switch (tag) {
-        .bool_not => try analyser.resolveVectorBoolNotValue(operand) orelse switch (operand.ipIndex() orelse return null) {
-            .bool_false => Type.fromIP(analyser, .bool_type, .bool_true),
-            .bool_true => Type.fromIP(analyser, .bool_type, .bool_false),
+        .bool_not => try analyser.resolveVectorBoolNotValue(operand) orelse switch (operand.data) {
+            .ip_index => |payload| if (payload.type != .bool_type)
+                null
+            else switch (payload.index orelse return Type.fromIP(analyser, .bool_type, null)) {
+                .bool_false => Type.fromIP(analyser, .bool_type, .bool_true),
+                .bool_true => Type.fromIP(analyser, .bool_type, .bool_false),
+                else => Type.fromIP(analyser, .bool_type, null),
+            },
             else => null,
         },
         .bit_not => switch (operand.data) {
@@ -12594,18 +12649,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
                 const tag = tree.nodeTag(node);
-                const complementary_operand = try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not) orelse
-                    try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bool_not);
-                if (complementary_operand) |operand| {
-                    const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse return null;
-                    if (try analyser.resolveComplementaryBinaryValue(tag, operand_type)) |value| return value;
-                }
-                if ((tag == .bit_xor or tag == .sub_wrap or tag == .sub_sat) and
-                    try analyser.areSameIdentifierExpression(tree, lhs, rhs))
-                {
-                    if (try analyser.resolveSelfBinaryValue(tag, lhs_ty)) |value| return value;
-                }
-                const value = try analyser.resolveComptimeBinaryValue(tag, lhs_ty, rhs_ty);
+                const binary_options = try analyser.resolveComptimeBinaryOptions(tree, lhs, rhs, tag, true);
+                const value = try analyser.resolveComptimeBinaryValue(tag, lhs_ty, rhs_ty, binary_options);
                 if (value) |resolved| return resolved;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
@@ -12620,11 +12665,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not)) |operand| {
-                    const operand_type = try analyser.resolveTypeOfNodeInternal(.of(operand, handle)) orelse return null;
-                    if (try analyser.resolveComplementaryBinaryValue(.add, operand_type)) |value| return value;
-                }
-                if (try analyser.resolveComptimeBinaryValue(.add, lhs_ty, rhs_ty)) |value| return value;
+                const binary_options = try analyser.resolveComptimeBinaryOptions(tree, lhs, rhs, .add, true);
+                if (try analyser.resolveComptimeBinaryValue(.add, lhs_ty, rhs_ty, binary_options)) |value| return value;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
@@ -12644,10 +12686,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
             if (rhs_ty.is_type_val) return null;
             if (analyser.evaluate_comptime_values) {
-                if (try analyser.areSameIdentifierExpression(tree, lhs, rhs)) {
-                    if (try analyser.resolveSelfBinaryValue(.sub, lhs_ty)) |value| return value;
-                }
-                if (try analyser.resolveComptimeBinaryValue(.sub, lhs_ty, rhs_ty)) |value| return value;
+                const binary_options = try analyser.resolveComptimeBinaryOptions(tree, lhs, rhs, .sub, true);
+                if (try analyser.resolveComptimeBinaryValue(.sub, lhs_ty, rhs_ty, binary_options)) |value| return value;
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);
@@ -12676,7 +12716,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 const rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
                 if (!rhs_ty.is_type_val) {
-                    const value = try analyser.resolveComptimeBinaryValue(tag, lhs_ty, rhs_ty);
+                    const value = try analyser.resolveComptimeBinaryValue(tag, lhs_ty, rhs_ty, .{});
                     if (value) |resolved| return resolved;
                 }
             }

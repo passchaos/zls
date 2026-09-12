@@ -328,7 +328,14 @@ pub const Interpreter = struct {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
                 const lhs_value = try self.eval(handle, lhs) orelse return null;
                 const rhs_value = try self.eval(handle, rhs) orelse return null;
-                return self.analyser.resolveComptimeBinaryValue(tag, lhs_value, rhs_value);
+                const options = try self.analyser.resolveComptimeBinaryOptions(
+                    &handle.tree,
+                    lhs,
+                    rhs,
+                    tag,
+                    true,
+                );
+                return self.analyser.resolveComptimeBinaryValue(tag, lhs_value, rhs_value, options);
             },
             .equal_equal,
             .bang_equal,
@@ -1393,7 +1400,7 @@ pub const Interpreter = struct {
                 };
                 const lhs_value = try self.eval(handle, lhs) orelse return .unknown;
                 const rhs_value = try self.eval(handle, rhs) orelse return .unknown;
-                const value = try analyser.resolveComptimeBinaryValue(operation_tag, lhs_value, rhs_value) orelse return .unknown;
+                const value = try analyser.resolveComptimeBinaryValue(operation_tag, lhs_value, rhs_value, .{}) orelse return .unknown;
                 if (!try self.write(handle, lhs, value)) return .unknown;
                 return .next;
             },
