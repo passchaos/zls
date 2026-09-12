@@ -3746,6 +3746,14 @@ fn resolveVectorUnaryValue(
         .vector_type => |vector| vector,
         else => return null,
     };
+    const child_tag = analyser.ip.zigTypeTag(vector.child) orelse return null;
+    switch (operation) {
+        .bit_not => if (child_tag != .int) return null,
+        .negate => if (child_tag != .float and
+            !(child_tag == .int and analyser.ip.isSignedInt(vector.child, builtin.target))) return null,
+        .negate_wrap => if (child_tag != .int) return null,
+        .abs => if (child_tag != .int and child_tag != .float) return null,
+    }
     const result_type = if (operation == .abs and analyser.ip.zigTypeTag(vector.child) == .int and
         analyser.ip.isSignedInt(vector.child, builtin.target))
         try analyser.ip.toUnsigned(payload.type, builtin.target)
@@ -8799,13 +8807,28 @@ pub fn resolveComptimeUnaryValue(
             },
             else => null,
         },
-        .negation, .negation_wrap => if (operand.ipIndex()) |index|
-            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector)
-                analyser.resolveVectorUnaryValue(if (tag == .negation_wrap) .negate_wrap else .negate, operand)
-            else
-                analyser.resolveNegationValue(operand, tag == .negation_wrap)
-        else
-            null,
+        .negation, .negation_wrap => switch (operand.data) {
+            .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.type) orelse return null) {
+                .vector => analyser.resolveVectorUnaryValue(
+                    if (tag == .negation_wrap) .negate_wrap else .negate,
+                    operand,
+                ),
+                .float, .comptime_float => if (tag == .negation_wrap)
+                    null
+                else
+                    try analyser.resolveNegationValue(operand, false) orelse
+                        Type.fromIP(analyser, payload.type, null),
+                .comptime_int => try analyser.resolveNegationValue(operand, tag == .negation_wrap) orelse
+                    Type.fromIP(analyser, payload.type, null),
+                .int => try analyser.resolveNegationValue(operand, tag == .negation_wrap) orelse
+                    if (tag == .negation_wrap or analyser.ip.isSignedInt(payload.type, builtin.target))
+                        Type.fromIP(analyser, payload.type, null)
+                    else
+                        null,
+                else => null,
+            },
+            else => null,
+        },
         else => null,
     };
 }

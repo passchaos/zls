@@ -1925,6 +1925,47 @@ test "generic function with comptime runtime binary identities" {
     });
 }
 
+test "generic function with comptime unknown negation types" {
+    try testCompletion(
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_f32: f32 = undefined;
+        \\var runtime_i8_vector: @Vector(2, i8) = undefined;
+        \\var runtime_u8_vector: @Vector(2, u8) = undefined;
+        \\var runtime_f32_vector: @Vector(2, f32) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    total += 1;
+        \\    const negated = -runtime_i8;
+        \\    const wrapped = -%runtime_u8;
+        \\    const negated_float = -runtime_f32;
+        \\    const negated_vector = -runtime_i8_vector;
+        \\    const wrapped_vector = -%runtime_u8_vector;
+        \\    const negated_float_vector = -runtime_f32_vector;
+        \\    total += 1;
+        \\    return struct {
+        \\        signed: @TypeOf(negated),
+        \\        unsigned: @TypeOf(wrapped),
+        \\        float: @TypeOf(negated_float),
+        \\        signed_vector: @TypeOf(negated_vector),
+        \\        unsigned_vector: @TypeOf(wrapped_vector),
+        \\        float_vector: @TypeOf(negated_float_vector),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "signed", .kind = .Field, .detail = "i8" },
+        .{ .label = "unsigned", .kind = .Field, .detail = "u8" },
+        .{ .label = "float", .kind = .Field, .detail = "f32" },
+        .{ .label = "signed_vector", .kind = .Field, .detail = "@Vector(2,i8)" },
+        .{ .label = "unsigned_vector", .kind = .Field, .detail = "@Vector(2,u8)" },
+        .{ .label = "float_vector", .kind = .Field, .detail = "@Vector(2,f32)" },
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with partially known overflow builtins" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;
