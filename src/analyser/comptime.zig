@@ -258,6 +258,10 @@ pub const Interpreter = struct {
 
     pub fn address(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         const target = try self.referenceForNode(handle, node) orelse return null;
+        return self.referenceValue(target);
+    }
+
+    fn referenceValue(self: *Interpreter, target: *Value.Reference) Error!?Type {
         const current = try self.readReference(target) orelse return null;
         const ty = try self.analyser.resolveAddressOf(false, current);
         return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = target });
@@ -669,7 +673,13 @@ pub const Interpreter = struct {
     fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For) Error!Flow {
         const analyser = self.analyser;
         const tree = &handle.tree;
-        const Input = union(enum) { sequence: Type, range: usize };
+        const Input = union(enum) {
+            sequence: struct {
+                value: Type,
+                reference: ?*Value.Reference,
+            },
+            range: usize,
+        };
         const inputs = try analyser.arena.alloc(Input, loop_node.ast.inputs.len);
         var len: ?usize = null;
         for (loop_node.ast.inputs, inputs) |input, *resolved| {
@@ -683,8 +693,13 @@ pub const Interpreter = struct {
                     count = std.math.sub(usize, end_value, start) catch return .unknown;
                 }
             } else {
-                const sequence = try self.eval(handle, input) orelse return .unknown;
-                resolved.* = .{ .sequence = sequence };
+                const evaluated = try self.eval(handle, input) orelse return .unknown;
+                const reference = if (evaluated.data == .comptime_value and evaluated.data.comptime_value.data == .reference)
+                    evaluated.data.comptime_value.data.reference
+                else
+                    null;
+                const sequence = if (reference) |target| try self.readReference(target) orelse return .unknown else evaluated;
+                resolved.* = .{ .sequence = .{ .value = sequence, .reference = reference } };
                 const length = try analyser.resolveFieldAccess(sequence, "len") orelse return .unknown;
                 count = analyser.ip.toInt(length.ipIndex() orelse return .unknown, usize) orelse return .unknown;
             }
@@ -698,16 +713,21 @@ pub const Interpreter = struct {
         for (0..count) |index| {
             var token = loop_node.payload_token;
             for (inputs) |input| {
-                if (tree.tokenTag(token) == .asterisk) return .unknown;
+                const capture_by_ref = tree.tokenTag(token) == .asterisk;
+                const name_token = token + @intFromBool(capture_by_ref);
                 const value = switch (input) {
-                    .sequence => |sequence| try analyser.resolveBracketAccessType(sequence, .{ .single = index }) orelse return .unknown,
-                    .range => |start| Type.fromIP(analyser, .comptime_int_type, try analyser.ip.get(.{ .int_u64_value = .{
+                    .sequence => |sequence| if (capture_by_ref) blk: {
+                        const reference = sequence.reference orelse return .unknown;
+                        const element = try self.extendReference(reference, .{ .index = index });
+                        break :blk try self.referenceValue(element) orelse return .unknown;
+                    } else try analyser.resolveBracketAccessType(sequence.value, .{ .single = index }) orelse return .unknown,
+                    .range => |start| if (capture_by_ref) return .unknown else Type.fromIP(analyser, .comptime_int_type, try analyser.ip.get(.{ .int_u64_value = .{
                         .ty = .comptime_int_type,
                         .int = std.math.add(usize, start, index) catch return .unknown,
                     } })),
                 };
-                try self.bind(handle, token, value);
-                token += 2;
+                try self.bind(handle, name_token, value);
+                token = name_token + 2;
             }
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {

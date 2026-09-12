@@ -6055,6 +6055,37 @@ test "generic function with comptime pointer deref mutation" {
     });
 }
 
+test "generic function with comptime for pointer capture mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var dimensions = [_]usize{ 1, 2, 3 };
+        \\    for (&dimensions, 0..) |*dimension, index| {
+        \\        dimension.* += base + index;
+        \\    }
+        \\    return struct { items: [dimensions[0] * dimensions[1] * dimensions[2]]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[105]u8" },
+    });
+
+    try testCompletion(
+        \\const State = struct { dimensions: [2]usize };
+        \\fn Buffer(comptime scale: usize) type {
+        \\    var state = State{ .dimensions = .{ 2, 3 } };
+        \\    for (&state.dimensions) |*dimension| {
+        \\        dimension.* *= scale;
+        \\    }
+        \\    return struct { items: [state.dimensions[0] * state.dimensions[1]]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[24]u8" },
+    });
+}
+
 test "generic function with runtime if before return" {
     try testCompletion(
         \\var runtime: bool = undefined;
