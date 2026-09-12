@@ -469,6 +469,40 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeAbsValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@sin") or
+                    std.mem.eql(u8, name, "@cos") or
+                    std.mem.eql(u8, name, "@tan") or
+                    std.mem.eql(u8, name, "@exp") or
+                    std.mem.eql(u8, name, "@exp2") or
+                    std.mem.eql(u8, name, "@log") or
+                    std.mem.eql(u8, name, "@log2") or
+                    std.mem.eql(u8, name, "@log10") or
+                    std.mem.eql(u8, name, "@sqrt"))
+                {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    const kind: Analyser.ComptimeFloatUnaryKind = if (std.mem.eql(u8, name, "@sin"))
+                        .sin
+                    else if (std.mem.eql(u8, name, "@cos"))
+                        .cos
+                    else if (std.mem.eql(u8, name, "@tan"))
+                        .tan
+                    else if (std.mem.eql(u8, name, "@exp"))
+                        .exp
+                    else if (std.mem.eql(u8, name, "@exp2"))
+                        .exp2
+                    else if (std.mem.eql(u8, name, "@log"))
+                        .log
+                    else if (std.mem.eql(u8, name, "@log2"))
+                        .log2
+                    else if (std.mem.eql(u8, name, "@log10"))
+                        .log10
+                    else
+                        .sqrt;
+                    return self.analyser.resolveComptimeFloatUnaryValue(operand, kind);
+                }
                 if (std.mem.eql(u8, name, "@hasField") or std.mem.eql(u8, name, "@hasDecl")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

@@ -5059,6 +5059,29 @@ test "generic function with nested comptime abs mutation" {
     });
 }
 
+test "generic function with nested comptime float unary mutations" {
+    try testCompletion(
+        \\fn Select(comptime initial: usize) type {
+        \\    var total: usize = initial;
+        \\    const sine = @sin(value: { total += 1; break :value @as(f64, 0.0); });
+        \\    const cosine = @cos(value: { total += 1; break :value @as(f64, 0.0); });
+        \\    const tangent = @tan(value: { total += 1; break :value @as(f64, 0.0); });
+        \\    const exponential = @exp(value: { total += 1; break :value @as(f64, 0.0); });
+        \\    const exponential2 = @exp2(value: { total += 1; break :value @as(f64, 3.0); });
+        \\    const logarithm = @log(value: { total += 1; break :value @as(f64, 1.0); });
+        \\    const logarithm2 = @log2(value: { total += 1; break :value @as(f64, 8.0); });
+        \\    const logarithm10 = @log10(value: { total += 1; break :value @as(f64, 100.0); });
+        \\    const square_root = @sqrt(value: { total += 1; break :value @as(f64, 81.0); });
+        \\    _ = .{ sine, cosine, tangent, exponential, exponential2, logarithm, logarithm2, logarithm10, square_root };
+        \\    return struct { items: [total]u8 };
+        \\}
+        \\const selected: Select(0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {

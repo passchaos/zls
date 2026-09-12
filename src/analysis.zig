@@ -3512,6 +3512,36 @@ fn resolveFloatVectorUnaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
+pub const ComptimeFloatUnaryKind = enum { sin, cos, tan, exp, exp2, log, log2, log10, sqrt };
+
+pub fn resolveComptimeFloatUnaryValue(
+    analyser: *Analyser,
+    operand: Type,
+    kind: ComptimeFloatUnaryKind,
+) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .sin => .sin,
+        .cos => .cos,
+        .tan => .tan,
+        .exp => .exp,
+        .exp2 => .exp2,
+        .log => .log,
+        .log2 => .log2,
+        .log10 => .log10,
+        .sqrt => .sqrt,
+    };
+    const fallback = Type.fromIP(analyser, payload.type, null);
+    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+        return try analyser.resolveFloatVectorUnaryValue(tag, operand) orelse fallback;
+    }
+    return try analyser.resolveFloatUnaryBuiltinValue(tag, operand) orelse fallback;
+}
+
 fn resolveAbsValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
     const payload = switch (operand.data) {
         .ip_index => |payload| payload,
@@ -11067,19 +11097,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 => |tag| {
                     if (params.len != 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
-                    const payload = switch (ty.data) {
-                        .ip_index => |payload| payload,
-                        else => return null,
+                    const kind: ComptimeFloatUnaryKind = switch (tag) {
+                        .sin => .sin,
+                        .cos => .cos,
+                        .tan => .tan,
+                        .exp => .exp,
+                        .exp2 => .exp2,
+                        .log => .log,
+                        .log2 => .log2,
+                        .log10 => .log10,
+                        .sqrt => .sqrt,
+                        else => unreachable,
                     };
-                    if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
-                    if (analyser.evaluate_comptime_values) {
-                        if (analyser.ip.zigTypeTag(payload.type) == .vector) {
-                            if (try analyser.resolveFloatVectorUnaryValue(tag, ty)) |value| return value;
-                        } else if (try analyser.resolveFloatUnaryBuiltinValue(tag, ty)) |value| {
-                            return value;
-                        }
-                    }
-                    return Type.fromIP(analyser, payload.type, null);
+                    const result = try analyser.resolveComptimeFloatUnaryValue(ty, kind) orelse return null;
+                    return if (analyser.evaluate_comptime_values) result else result.withoutIPIndex(analyser);
                 },
                 .floor,
                 .ceil,
