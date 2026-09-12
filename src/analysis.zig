@@ -2506,13 +2506,21 @@ pub fn resolveComptimeUnionInitValue(
 ) Error!?Type {
     const fallback = try union_type.instanceTypeVal(analyser);
     const field = analyser.resolveComptimeUnionInitField(union_type, field_name) orelse return fallback;
-    const value_index = value.ipIndex() orelse return try analyser.comptimeUnionInitValue(
-        field,
-        try analyser.ip.getUnknown(field.field_type),
-    );
-    const coerced = try analyser.coerceIP(field.field_type, value_index) orelse
-        try analyser.ip.getUnknown(field.field_type);
-    return try analyser.comptimeUnionInitValue(field, coerced);
+    const value_payload = switch (value.data) {
+        .ip_index => |payload| payload,
+        else => return fallback,
+    };
+    const value_index = value_payload.index orelse try analyser.ip.getUnknown(value_payload.type);
+    const typed_value_index = if (analyser.ip.isUnknown(value_index))
+        try analyser.ip.getUnknown(value_payload.type)
+    else
+        value_index;
+    const coerced = try analyser.coerceIP(field.field_type, typed_value_index) orelse return fallback;
+    const payload = if (analyser.ip.isUnknown(coerced))
+        try analyser.ip.getUnknown(field.field_type)
+    else
+        coerced;
+    return try analyser.comptimeUnionInitValue(field, payload);
 }
 
 pub fn resolveComptimeVectorType(
@@ -11605,11 +11613,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         return fallback;
                     const field = analyser.resolveComptimeUnionInitField(union_type, field_name) orelse
                         return fallback;
-                    const value = try analyser.resolveCoercedIPValue(field.field_type, .{
+                    const value_options: ResolveOptions = .{
                         .node_handle = .of(params[2], handle),
                         .container_type = options.container_type,
-                    }) orelse try analyser.ip.getUnknown(field.field_type);
-                    return try analyser.comptimeUnionInitValue(field, value);
+                    };
+                    if (try analyser.resolveCoercedIPValue(field.field_type, value_options)) |value| {
+                        return try analyser.comptimeUnionInitValue(field, value);
+                    }
+                    const source_value = try analyser.resolveTypeOfNodeInternal(value_options) orelse
+                        return fallback;
+                    return analyser.resolveComptimeUnionInitValue(union_type, field_name, source_value);
                 },
                 .cmpxchg_strong, .cmpxchg_weak => {
                     if (params.len != 6) return null;
