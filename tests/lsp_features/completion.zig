@@ -1871,6 +1871,30 @@ test "generic function with nested comptime overflow mutations" {
     });
 }
 
+test "generic function with comptime overflow identities" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: i8 = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    total += 1;
+        \\    const self_sub = @subWithOverflow(runtime_u8, runtime_u8);
+        \\    const unsigned_complement = @addWithOverflow(runtime_u8, ~runtime_u8);
+        \\    const signed_complement = @addWithOverflow(runtime_i8, ~runtime_i8);
+        \\    return if (self_sub[0] == 0 and self_sub[1] == 0 and
+        \\        unsigned_complement[0] == 255 and unsigned_complement[1] == 0 and
+        \\        signed_complement[0] == -1 and signed_complement[1] == 0)
+        \\        struct { identities: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identities", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with partially known overflow builtins" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

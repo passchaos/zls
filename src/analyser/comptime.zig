@@ -743,7 +743,14 @@ pub const Interpreter = struct {
                         .mul
                     else
                         .shl;
-                    return self.analyser.resolveComptimeOverflowValue(lhs, rhs, kind, .{});
+                    const options = try self.analyser.resolveComptimeOverflowOptions(
+                        &handle.tree,
+                        params[0],
+                        params[1],
+                        kind,
+                        true,
+                    );
+                    return self.analyser.resolveComptimeOverflowValue(lhs, rhs, kind, options);
                 }
                 if (std.mem.eql(u8, name, "@divTrunc") or
                     std.mem.eql(u8, name, "@divFloor") or

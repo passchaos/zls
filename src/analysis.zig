@@ -6646,6 +6646,23 @@ pub const ComptimeOverflowOptions = struct {
     complementary_operands: bool = false,
 };
 
+pub fn resolveComptimeOverflowOptions(
+    analyser: *Analyser,
+    tree: *const Ast,
+    lhs: Ast.Node.Index,
+    rhs: Ast.Node.Index,
+    kind: ComptimeOverflowKind,
+    evaluate_values: bool,
+) error{OutOfMemory}!ComptimeOverflowOptions {
+    return .{
+        .evaluate_values = evaluate_values,
+        .same_operand = kind == .sub and evaluate_values and
+            try analyser.areSameIdentifierExpression(tree, lhs, rhs),
+        .complementary_operands = kind == .add and evaluate_values and
+            (try analyser.complementaryIdentifierOperand(tree, lhs, rhs, .bit_not)) != null,
+    };
+}
+
 pub fn resolveComptimeOverflowValue(
     analyser: *Analyser,
     lhs: Type,
@@ -8718,13 +8735,15 @@ pub fn resolveComptimeUnaryValue(
             .bool_true => Type.fromIP(analyser, .bool_type, .bool_false),
             else => null,
         },
-        .bit_not => if (operand.ipIndex()) |index|
-            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector)
-                analyser.resolveVectorUnaryValue(.bit_not, operand)
-            else
-                analyser.resolveBitNotValue(operand)
-        else
-            null,
+        .bit_not => switch (operand.data) {
+            .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.type) orelse return null) {
+                .vector => analyser.resolveVectorUnaryValue(.bit_not, operand),
+                .int, .comptime_int => try analyser.resolveBitNotValue(operand) orelse
+                    Type.fromIP(analyser, payload.type, null),
+                else => null,
+            },
+            else => null,
+        },
         .negation, .negation_wrap => if (operand.ipIndex()) |index|
             if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector)
                 analyser.resolveVectorUnaryValue(if (tag == .negation_wrap) .negate_wrap else .negate, operand)
@@ -11594,15 +11613,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .shl_with_overflow => .shl,
                         else => unreachable,
                     };
-                    const overflow_options: ComptimeOverflowOptions = .{
-                        .evaluate_values = analyser.evaluate_comptime_values,
-                        .same_operand = tag == .sub_with_overflow and
-                            analyser.evaluate_comptime_values and
-                            try analyser.areSameIdentifierExpression(tree, params[0], params[1]),
-                        .complementary_operands = tag == .add_with_overflow and
-                            analyser.evaluate_comptime_values and
-                            (try analyser.complementaryIdentifierOperand(tree, params[0], params[1], .bit_not)) != null,
-                    };
+                    const overflow_options = try analyser.resolveComptimeOverflowOptions(
+                        tree,
+                        params[0],
+                        params[1],
+                        kind,
+                        analyser.evaluate_comptime_values,
+                    );
                     return analyser.resolveComptimeOverflowValue(lhs, rhs, kind, overflow_options);
                 },
                 .reduce => {
