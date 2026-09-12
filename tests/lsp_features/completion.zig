@@ -4671,6 +4671,76 @@ test "generic function with nested comptime bit permutation mutations" {
     });
 }
 
+test "generic function with comptime unknown bit builtin types" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_u16: u16 = undefined;
+        \\var runtime_u8_vector: @Vector(2, u8) = undefined;
+        \\var runtime_i8_vector: @Vector(2, i8) = undefined;
+        \\var runtime_u16_vector: @Vector(2, u16) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 0;
+        \\    const leading = @clz(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_u8;
+        \\    });
+        \\    const trailing = @ctz(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_u8;
+        \\    });
+        \\    const population = @popCount(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_i8;
+        \\    });
+        \\    const reversed = @bitReverse(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_u8;
+        \\    });
+        \\    const swapped = @byteSwap(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_u16;
+        \\    });
+        \\    const vector_population = @popCount(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_i8_vector;
+        \\    });
+        \\    const vector_reversed = @bitReverse(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_u8_vector;
+        \\    });
+        \\    const vector_swapped = @byteSwap(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_u16_vector;
+        \\    });
+        \\    total += 1;
+        \\    return struct {
+        \\        leading: @TypeOf(leading),
+        \\        trailing: @TypeOf(trailing),
+        \\        population: @TypeOf(population),
+        \\        reversed: @TypeOf(reversed),
+        \\        swapped: @TypeOf(swapped),
+        \\        vector_population: @TypeOf(vector_population),
+        \\        vector_reversed: @TypeOf(vector_reversed),
+        \\        vector_swapped: @TypeOf(vector_swapped),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "leading", .kind = .Field, .detail = "u4" },
+        .{ .label = "trailing", .kind = .Field, .detail = "u4" },
+        .{ .label = "population", .kind = .Field, .detail = "u4" },
+        .{ .label = "reversed", .kind = .Field, .detail = "u8" },
+        .{ .label = "swapped", .kind = .Field, .detail = "u16" },
+        .{ .label = "vector_population", .kind = .Field, .detail = "@Vector(2,u4)" },
+        .{ .label = "vector_reversed", .kind = .Field, .detail = "@Vector(2,u8)" },
+        .{ .label = "vector_swapped", .kind = .Field, .detail = "@Vector(2,u16)" },
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function with nested comptime exact shift mutations" {
     try testCompletion(
         \\fn Select(comptime lhs: u8, comptime rhs: u8, comptime shift: u3) type {

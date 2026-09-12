@@ -9298,10 +9298,16 @@ fn resolveBitCountValue(
         .ip_index => |payload| payload,
         else => return null,
     };
-    const index = payload.index orelse return null;
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
     if (int_info.bits == 0) return null;
+    const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, int_info.bits) + 1));
+    const result_type = try analyser.ip.get(.{ .int_type = .{
+        .signedness = .unsigned,
+        .bits = result_bits,
+    } });
+    const index = payload.index orelse return Type.fromIP(analyser, result_type, null);
+    if (analyser.ip.isUnknown(index)) return Type.fromIP(analyser, result_type, null);
 
     const value: u64 = if (int_info.bits > 128) value: {
         const bit_count: std.math.big.Limb = int_info.bits;
@@ -9346,11 +9352,6 @@ fn resolveBitCountValue(
         };
     };
 
-    const result_bits: u16 = @intCast(std.math.log2_int_ceil(u32, @as(u32, int_info.bits) + 1));
-    const result_type = try analyser.ip.get(.{ .int_type = .{
-        .signedness = .unsigned,
-        .bits = result_bits,
-    } });
     const result_index = try analyser.ip.get(.{ .int_u64_value = .{
         .ty = result_type,
         .int = value,
@@ -9408,8 +9409,11 @@ pub fn resolveComptimeBitCountValue(
         .ctz => .ctz,
         .pop_count => .pop_count,
     };
-    const index = operand.ipIndex() orelse return null;
-    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
         return analyser.resolveVectorBitCountValue(tag, operand);
     }
     return analyser.resolveBitCountValue(tag, operand);
@@ -9424,10 +9428,11 @@ fn resolveBitPermutationValue(
         .ip_index => |payload| payload,
         else => return null,
     };
-    const index = payload.index orelse return null;
     if (analyser.ip.zigTypeTag(payload.type) != .int) return null;
     const int_info = analyser.ip.intInfo(payload.type, builtin.target);
     if (tag == .byte_swap and int_info.bits % 8 != 0) return null;
+    const index = payload.index orelse return Type.fromIP(analyser, payload.type, null);
+    if (analyser.ip.isUnknown(index)) return Type.fromIP(analyser, payload.type, null);
     if (int_info.bits > 128) {
         var source = try analyser.managedIntegerValue(index) orelse return null;
         defer source.deinit();
@@ -9498,6 +9503,8 @@ fn resolveVectorBitPermutationValue(
         else => return null,
     };
     if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
+    const int_info = analyser.ip.intInfo(vector.child, builtin.target);
+    if (tag == .byte_swap and int_info.bits % 8 != 0) return null;
     const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
     if (source_values.len != vector.len) return null;
 
@@ -9522,8 +9529,11 @@ pub fn resolveComptimeBitPermutationValue(
         .bit_reverse => .bit_reverse,
         .byte_swap => .byte_swap,
     };
-    const index = operand.ipIndex() orelse return null;
-    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
         return analyser.resolveVectorBitPermutationValue(tag, operand);
     }
     return analyser.resolveBitPermutationValue(tag, operand);
