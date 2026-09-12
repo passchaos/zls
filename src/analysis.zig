@@ -8689,6 +8689,11 @@ fn resolveTypeNameValue(analyser: *Analyser, ty: Type) error{OutOfMemory}![]cons
     return bytes;
 }
 
+pub fn resolveComptimeTypeNameValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    if (!try analyser.canResolveTypeName(operand)) return null;
+    return try analyser.stringValue(try analyser.resolveTypeNameValue(operand));
+}
+
 fn canonicalErrorSetTypeName(analyser: *Analyser, type_index: InternPool.Index) error{OutOfMemory}![]const u8 {
     const error_set = analyser.ip.indexToKey(type_index).error_set_type;
     const names = try error_set.names.dupe(analyser.arena, analyser.ip);
@@ -10989,9 +10994,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (!analyser.evaluate_comptime_values) return fallback;
 
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return fallback;
-                    if (!try analyser.canResolveTypeName(operand)) return fallback;
-                    const bytes = try analyser.resolveTypeNameValue(operand);
-                    return try analyser.stringValue(bytes);
+                    return try analyser.resolveComptimeTypeNameValue(operand) orelse fallback;
                 },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;

@@ -7217,6 +7217,24 @@ test "generic function with comptime catch" {
     });
 }
 
+test "generic function with nested comptime typeName mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    var total: usize = 1;
+        \\    const name = @typeName(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value T;
+        \\    });
+        \\    return struct { items: [name.len * total]u8 };
+        \\}
+        \\const buffer: Buffer(u16) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function with comptime typeName" {
     try testCompletion(
         \\const Fields = struct { @"[]const u8": u8 };
