@@ -5089,6 +5089,29 @@ fn internPoolHasField(analyser: *Analyser, container_type: Type, name: []const u
     };
 }
 
+pub const ComptimeMemberKind = enum { field, declaration };
+
+pub fn resolveComptimeMemberPresenceValue(
+    analyser: *Analyser,
+    container_type: Type,
+    name: []const u8,
+    kind: ComptimeMemberKind,
+) Error!?Type {
+    if (!container_type.is_type_val) return null;
+    const found = switch (kind) {
+        .field => analyser.internPoolHasField(container_type, name) orelse
+            if (analyser.tupleFieldCount(container_type)) |field_count| blk: {
+                const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
+                break :blk index < field_count;
+            } else try analyser.lookupSymbolContainer(container_type, name, .field) != null,
+        .declaration => if (analyser.tupleFieldCount(container_type) != null)
+            false
+        else
+            try analyser.lookupSymbolContainer(container_type, name, .other) != null,
+    };
+    return Type.fromIP(analyser, .bool_type, if (found) .bool_true else .bool_false);
+}
+
 fn internPoolFieldType(analyser: *Analyser, container_type: Type, name: []const u8) ?Type {
     if (!container_type.is_type_val) return null;
     const type_index = container_type.ipIndex() orelse return null;
@@ -11292,29 +11315,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (!container_type.is_type_val) return Type.fromIP(analyser, .bool_type, null);
                     const name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse
                         return Type.fromIP(analyser, .bool_type, null);
-                    const kind: DocumentScope.DeclarationLookup.Kind = switch (tag) {
+                    const kind: ComptimeMemberKind = switch (tag) {
                         .has_field => .field,
-                        .has_decl => .other,
+                        .has_decl => .declaration,
                         else => unreachable,
                     };
-                    const found = if (tag == .has_field)
-                        analyser.internPoolHasField(container_type, name) orelse if (analyser.tupleFieldCount(container_type)) |field_count| switch (tag) {
-                            .has_field => blk: {
-                                const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
-                                break :blk index < field_count;
-                            },
-                            .has_decl => false,
-                            else => unreachable,
-                        } else try analyser.lookupSymbolContainer(container_type, name, kind) != null
-                    else if (analyser.tupleFieldCount(container_type)) |field_count| switch (tag) {
-                        .has_field => blk: {
-                            const index = std.fmt.parseUnsigned(usize, name, 10) catch break :blk false;
-                            break :blk index < field_count;
-                        },
-                        .has_decl => false,
-                        else => unreachable,
-                    } else try analyser.lookupSymbolContainer(container_type, name, kind) != null;
-                    return Type.fromIP(analyser, .bool_type, if (found) .bool_true else .bool_false);
+                    return try analyser.resolveComptimeMemberPresenceValue(container_type, name, kind) orelse
+                        Type.fromIP(analyser, .bool_type, null);
                 },
                 .import => {
                     if (params.len == 0) return null;

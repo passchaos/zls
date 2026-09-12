@@ -451,6 +451,23 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeTypeInfoValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@hasField") or std.mem.eql(u8, name, "@hasDecl")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const container_type = try self.eval(handle, params[0]) orelse return null;
+                    const name_value = try self.eval(handle, params[1]) orelse return null;
+                    if (name_value.data != .string_value) return null;
+                    const kind: Analyser.ComptimeMemberKind = if (std.mem.eql(u8, name, "@hasField"))
+                        .field
+                    else
+                        .declaration;
+                    return self.analyser.resolveComptimeMemberPresenceValue(
+                        container_type,
+                        name_value.data.string_value.bytes,
+                        kind,
+                    );
+                }
                 if (std.mem.eql(u8, name, "@sizeOf") or
                     std.mem.eql(u8, name, "@bitSizeOf") or
                     std.mem.eql(u8, name, "@alignOf"))

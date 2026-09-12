@@ -4858,6 +4858,39 @@ test "generic function with comptime member reflection" {
     });
 }
 
+test "generic function with nested comptime member reflection mutations" {
+    try testCompletion(
+        \\const S = struct { field: u8, const decl = 1; };
+        \\fn Select(comptime T: type) type {
+        \\    var field_total: usize = 1;
+        \\    var decl_total: usize = 1;
+        \\    const has_field = @hasField(type_value: {
+        \\        field_total += 1;
+        \\        break :type_value T;
+        \\    }, name_value: {
+        \\        field_total *= 2;
+        \\        break :name_value "field";
+        \\    });
+        \\    const has_decl = @hasDecl(type_value: {
+        \\        decl_total += 1;
+        \\        break :type_value T;
+        \\    }, name_value: {
+        \\        decl_total *= 2;
+        \\        break :name_value "decl";
+        \\    });
+        \\    return if (has_field and has_decl) struct {
+        \\        field_order: [field_total]u8,
+        \\        decl_order: [decl_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(S) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "field_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "decl_order", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {
