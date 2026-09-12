@@ -5866,6 +5866,28 @@ test "generic function with nested comptime as coercion mutation" {
     });
 }
 
+test "generic function preserves runtime unknown comptime as type" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const widened = @as(u16, value: {
+        \\        total += 1;
+        \\        break :value runtime_u8;
+        \\    });
+        \\    return struct {
+        \\        value: @TypeOf(widened),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "value", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with nested contextual cast mutations" {
     try testCompletion(
         \\fn Select(comptime small: u16, comptime wide: u16, comptime bits: u8, comptime float32: f32, comptime float64: f64) type {

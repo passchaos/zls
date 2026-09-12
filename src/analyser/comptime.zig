@@ -850,7 +850,20 @@ pub const Interpreter = struct {
         if (!destination.is_type_val) return null;
         const type_index = destination.ipIndex() orelse return value;
         if (type_index == .type_type) return value;
-        const value_index = value.ipIndex() orelse return value;
+        const value_payload = switch (value.data) {
+            .ip_index => |payload| payload,
+            else => return value,
+        };
+        const value_index = value_payload.index orelse {
+            if (value_payload.type == .unknown_type) return value;
+            const unknown = try self.analyser.ip.getUnknown(value_payload.type);
+            _ = try self.analyser.coerceIP(type_index, unknown) orelse return null;
+            return Type.fromIP(self.analyser, type_index, null);
+        };
+        if (self.analyser.ip.isUnknown(value_index)) {
+            _ = try self.analyser.coerceIP(type_index, value_index) orelse return null;
+            return Type.fromIP(self.analyser, type_index, null);
+        }
         const coerced = try self.analyser.coerceIP(type_index, value_index) orelse return null;
         return Type.fromIP(self.analyser, type_index, coerced);
     }
