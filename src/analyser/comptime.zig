@@ -415,6 +415,30 @@ pub const Interpreter = struct {
                         const scalar = try self.eval(handle, splat_params[0]) orelse return null;
                         return self.analyser.resolveComptimeSplatValue(destination, scalar);
                     }
+                    if (ast.isBuiltinCall(&handle.tree, params[1])) {
+                        const cast_name = handle.tree.tokenSlice(handle.tree.nodeMainToken(params[1]));
+                        const cast_kind: ?Analyser.ComptimeCastKind = if (std.mem.eql(u8, cast_name, "@intCast"))
+                            .int_cast
+                        else if (std.mem.eql(u8, cast_name, "@truncate"))
+                            .truncate
+                        else if (std.mem.eql(u8, cast_name, "@bitCast"))
+                            .bit_cast
+                        else if (std.mem.eql(u8, cast_name, "@intFromFloat"))
+                            .int_from_float
+                        else if (std.mem.eql(u8, cast_name, "@floatFromInt"))
+                            .float_from_int
+                        else if (std.mem.eql(u8, cast_name, "@floatCast"))
+                            .float_cast
+                        else
+                            null;
+                        if (cast_kind) |kind| {
+                            var cast_buffer: [2]Ast.Node.Index = undefined;
+                            const cast_params = handle.tree.builtinCallParams(&cast_buffer, params[1]).?;
+                            if (cast_params.len != 1) return null;
+                            const source = try self.eval(handle, cast_params[0]) orelse return null;
+                            return self.analyser.resolveComptimeCastValue(destination, source, kind);
+                        }
+                    }
                     const value = try self.eval(handle, params[1]) orelse return null;
                     return self.coerce(destination, value);
                 }

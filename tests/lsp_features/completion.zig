@@ -5573,6 +5573,64 @@ test "generic function with nested comptime as coercion mutation" {
     });
 }
 
+test "generic function with nested contextual cast mutations" {
+    try testCompletion(
+        \\fn Select(comptime small: u16, comptime wide: u16, comptime bits: u8, comptime float32: f32, comptime float64: f64) type {
+        \\    var int_cast_total: usize = 1;
+        \\    var truncate_total: usize = 1;
+        \\    var bit_cast_total: usize = 1;
+        \\    var int_from_float_total: usize = 1;
+        \\    var float_from_int_total: usize = 1;
+        \\    var float_cast_total: usize = 1;
+        \\    const int_casted = @as(u8, @intCast(value: { int_cast_total *= 2; break :value small; }));
+        \\    const truncated = @as(u8, @truncate(value: { truncate_total *= 2; break :value wide; }));
+        \\    const bit_casted = @as(i8, @bitCast(value: { bit_cast_total *= 2; break :value bits; }));
+        \\    const int_from_float = @as(u8, @intFromFloat(value: { int_from_float_total *= 2; break :value float32; }));
+        \\    const float_from_int = @as(f32, @floatFromInt(value: { float_from_int_total *= 2; break :value small; }));
+        \\    const float_casted = @as(f32, @floatCast(value: { float_cast_total *= 2; break :value float64; }));
+        \\    return if (int_casted == 4 and truncated == 4 and bit_casted == -1 and
+        \\        int_from_float == 4 and float_from_int == 4.0 and float_casted == 4.5)
+        \\        struct {
+        \\            int_cast_order: [int_cast_total]u8,
+        \\            truncate_order: [truncate_total]u8,
+        \\            bit_cast_order: [bit_cast_total]u8,
+        \\            int_from_float_order: [int_from_float_total]u8,
+        \\            float_from_int_order: [float_from_int_total]u8,
+        \\            float_cast_order: [float_cast_total]u8,
+        \\        }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(4, 0x104, 255, 4.75, 4.5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "int_cast_order", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "truncate_order", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "bit_cast_order", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "int_from_float_order", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "float_from_int_order", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "float_cast_order", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime source: @Vector(2, u16)) type {
+        \\    var total: usize = 1;
+        \\    const values = @as(@Vector(2, u8), @intCast(operand: {
+        \\        total *= 2;
+        \\        break :operand source;
+        \\    }));
+        \\    return if (values[0] == 4 and values[1] == 7)
+        \\        struct { vector_order: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(.{ 4, 7 }) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "vector_order", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with comptime unknown field expressions" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {

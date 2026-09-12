@@ -2193,19 +2193,6 @@ fn resolveArrayValue(
     return Type.fromIP(analyser, type_index, aggregate);
 }
 
-fn resolveSplatValue(
-    analyser: *Analyser,
-    vector_type: InternPool.Index,
-    options: ResolveOptions,
-) Error!?InternPool.Index {
-    const vector = switch (analyser.ip.indexToKey(vector_type)) {
-        .vector_type => |vector| vector,
-        else => return null,
-    };
-    const scalar = try analyser.resolveCoercedIPValue(vector.child, options) orelse return null;
-    return analyser.resolveSplatValueFromIndex(vector_type, scalar);
-}
-
 fn resolveSplatValueFromIndex(
     analyser: *Analyser,
     vector_type: InternPool.Index,
@@ -3409,12 +3396,26 @@ fn resolveCoercedIPValue(
     }
 
     const ip_index = try analyser.resolveInternPoolValue(value_options) orelse return null;
+    if (integer_cast == .splat) {
+        const vector = switch (analyser.ip.indexToKey(ip_ty)) {
+            .vector_type => |vector| vector,
+            else => return null,
+        };
+        const scalar = try analyser.resolveCoercedIPValueFromIndex(vector.child, ip_index, null) orelse return null;
+        return analyser.resolveSplatValueFromIndex(ip_ty, scalar);
+    }
+    return analyser.resolveCoercedIPValueFromIndex(ip_ty, ip_index, integer_cast);
+}
+
+fn resolveCoercedIPValueFromIndex(
+    analyser: *Analyser,
+    ip_ty: InternPool.Index,
+    ip_index: InternPool.Index,
+    cast: ?std.zig.BuiltinFn.Tag,
+) error{OutOfMemory}!?InternPool.Index {
     if (analyser.ip.isUndefined(ip_index)) return null;
     const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
-    if (integer_cast) |tag| {
-        if (tag == .splat) {
-            return try analyser.resolveSplatValue(ip_ty, value_options);
-        }
+    if (cast) |tag| {
         if (analyser.ip.zigTypeTag(ip_ty) == .vector and source_tag == .vector) {
             return try analyser.resolveVectorCastValue(tag, ip_ty, ip_index);
         }
@@ -3454,6 +3455,29 @@ fn resolveCoercedIPValue(
     if (new_index == .none) return null;
     if (analyser.ip.isUnknown(new_index)) return null;
     return new_index;
+}
+
+pub const ComptimeCastKind = enum { int_cast, truncate, bit_cast, int_from_float, float_from_int, float_cast };
+
+pub fn resolveComptimeCastValue(
+    analyser: *Analyser,
+    destination: Type,
+    source: Type,
+    kind: ComptimeCastKind,
+) error{OutOfMemory}!?Type {
+    if (!destination.is_type_val) return null;
+    const destination_type = destination.ipIndex() orelse return null;
+    const source_index = source.ipIndex() orelse return null;
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .int_cast => .int_cast,
+        .truncate => .truncate,
+        .bit_cast => .bit_cast,
+        .int_from_float => .int_from_float,
+        .float_from_int => .float_from_int,
+        .float_cast => .float_cast,
+    };
+    const value = try analyser.resolveCoercedIPValueFromIndex(destination_type, source_index, tag) orelse return null;
+    return Type.fromIP(analyser, destination_type, value);
 }
 
 fn coerceFloatValue(
