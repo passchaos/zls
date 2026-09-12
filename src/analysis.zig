@@ -8121,6 +8121,101 @@ fn resolveVectorMinMaxValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), result_values);
 }
 
+pub const ComptimeMinMaxKind = enum { min, max };
+
+pub fn resolveComptimeMinMaxValue(
+    analyser: *Analyser,
+    operands: []const Type,
+    kind: ComptimeMinMaxKind,
+) error{OutOfMemory}!?Type {
+    if (operands.len < 2) return null;
+
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .min => .min,
+        .max => .max,
+    };
+    const types = try analyser.arena.alloc(InternPool.Index, operands.len);
+    for (operands, types) |operand, *ty| {
+        if (operand.is_type_val) return null;
+        ty.* = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    }
+
+    const result_type = try analyser.ip.resolvePeerTypes(types, builtin.target);
+    if (result_type == .none) return null;
+    const fallback = Type.fromIP(analyser, result_type, null);
+    if (analyser.ip.zigTypeTag(result_type) == .vector) {
+        return try analyser.resolveVectorMinMaxValue(tag, operands, result_type) orelse fallback;
+    }
+    if (analyser.fixedWidthIntegerBounds(result_type)) |bounds| {
+        const boundary = switch (kind) {
+            .min => bounds.min,
+            .max => bounds.max,
+        };
+        var has_boundary = false;
+        var has_undefined = false;
+        for (operands) |operand| {
+            const index = operand.ipIndex() orelse continue;
+            if (analyser.ip.isUndefined(index)) {
+                has_undefined = true;
+                continue;
+            }
+            if (analyser.ip.toInt(index, i256) == boundary) has_boundary = true;
+        }
+        if (has_boundary and !has_undefined) {
+            return try analyser.intValueWithType(result_type, boundary) orelse fallback;
+        }
+    }
+
+    var selected = operands[0];
+    switch (analyser.ip.zigTypeTag(result_type) orelse return fallback) {
+        .int, .comptime_int => {
+            var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return fallback, i256) orelse return fallback;
+            for (operands[1..]) |candidate| {
+                const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return fallback, i256) orelse return fallback;
+                const prefer_candidate = switch (kind) {
+                    .min => candidate_value < selected_value,
+                    .max => candidate_value > selected_value,
+                };
+                if (prefer_candidate) {
+                    selected = candidate;
+                    selected_value = candidate_value;
+                }
+            }
+        },
+        .float, .comptime_float => {
+            var selected_value = analyser.numericFloatValue(selected.ipIndex() orelse return fallback) orelse return fallback;
+            if (!std.math.isFinite(selected_value)) return fallback;
+            for (operands[1..]) |candidate| {
+                const candidate_value = analyser.numericFloatValue(candidate.ipIndex() orelse return fallback) orelse return fallback;
+                if (!std.math.isFinite(candidate_value)) return fallback;
+                const prefer_candidate = switch (kind) {
+                    .min => candidate_value < selected_value or
+                        (candidate_value == 0 and selected_value == 0 and
+                            std.math.signbit(candidate_value) and !std.math.signbit(selected_value)),
+                    .max => candidate_value > selected_value or
+                        (candidate_value == 0 and selected_value == 0 and
+                            !std.math.signbit(candidate_value) and std.math.signbit(selected_value)),
+                };
+                if (prefer_candidate) {
+                    selected = candidate;
+                    selected_value = candidate_value;
+                }
+            }
+        },
+        else => return fallback,
+    }
+    const selected_index = selected.ipIndex().?;
+    if (analyser.ip.typeOf(selected_index) == result_type) return selected;
+    if (analyser.ip.zigTypeTag(result_type) == .float) {
+        const coerced = try analyser.coerceNumericToFloatValue(result_type, selected_index) orelse return fallback;
+        return Type.fromIP(analyser, result_type, coerced);
+    }
+    var err_msg: ErrorMsg = undefined;
+    const coerced = try analyser.ip.coerce(analyser.arena, result_type, selected_index, builtin.target, &err_msg);
+    if (coerced == .none or analyser.ip.isUnknown(coerced)) return fallback;
+    return Type.fromIP(analyser, result_type, coerced);
+}
+
 fn resolveComparisonBool(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -11125,101 +11220,16 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
                     const resolved = try analyser.arena.alloc(Type, params.len);
-                    const types = try analyser.arena.alloc(InternPool.Index, params.len);
-                    for (params, resolved, types) |param, *value, *ty| {
+                    for (params, resolved) |param, *value| {
                         value.* = try analyser.resolveTypeOfNodeInternal(.of(param, handle)) orelse return null;
-                        if (value.is_type_val) return null;
-                        ty.* = (try value.typeOf(analyser)).ipIndex() orelse return null;
                     }
-
-                    const result_type = try analyser.ip.resolvePeerTypes(types, builtin.target);
-                    if (result_type == .none) return null;
-                    if (!analyser.evaluate_comptime_values) {
-                        return Type.fromIP(analyser, result_type, null);
-                    }
-                    if (analyser.ip.zigTypeTag(result_type) == .vector) {
-                        return try analyser.resolveVectorMinMaxValue(tag, resolved, result_type) orelse
-                            Type.fromIP(analyser, result_type, null);
-                    }
-                    if (analyser.fixedWidthIntegerBounds(result_type)) |bounds| {
-                        const boundary = switch (tag) {
-                            .min => bounds.min,
-                            .max => bounds.max,
-                            else => unreachable,
-                        };
-                        var has_boundary = false;
-                        var has_undefined = false;
-                        for (resolved) |value| {
-                            const index = value.ipIndex() orelse continue;
-                            if (analyser.ip.isUndefined(index)) {
-                                has_undefined = true;
-                                continue;
-                            }
-                            if (analyser.ip.toInt(index, i256) == boundary) has_boundary = true;
-                        }
-                        if (has_boundary and !has_undefined) {
-                            return try analyser.intValueWithType(result_type, boundary) orelse
-                                Type.fromIP(analyser, result_type, null);
-                        }
-                    }
-
-                    var selected = resolved[0];
-                    switch (analyser.ip.zigTypeTag(result_type) orelse return Type.fromIP(analyser, result_type, null)) {
-                        .int, .comptime_int => {
-                            var selected_value = analyser.ip.toInt(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
-                                return Type.fromIP(analyser, result_type, null);
-                            for (resolved[1..]) |candidate| {
-                                const candidate_value = analyser.ip.toInt(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null), i256) orelse
-                                    return Type.fromIP(analyser, result_type, null);
-                                const prefer_candidate = switch (tag) {
-                                    .min => candidate_value < selected_value,
-                                    .max => candidate_value > selected_value,
-                                    else => unreachable,
-                                };
-                                if (prefer_candidate) {
-                                    selected = candidate;
-                                    selected_value = candidate_value;
-                                }
-                            }
-                        },
-                        .float, .comptime_float => {
-                            var selected_value = analyser.numericFloatValue(selected.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
-                                return Type.fromIP(analyser, result_type, null);
-                            if (!std.math.isFinite(selected_value)) return Type.fromIP(analyser, result_type, null);
-                            for (resolved[1..]) |candidate| {
-                                const candidate_value = analyser.numericFloatValue(candidate.ipIndex() orelse return Type.fromIP(analyser, result_type, null)) orelse
-                                    return Type.fromIP(analyser, result_type, null);
-                                if (!std.math.isFinite(candidate_value)) return Type.fromIP(analyser, result_type, null);
-                                const prefer_candidate = switch (tag) {
-                                    .min => candidate_value < selected_value or
-                                        (candidate_value == 0 and selected_value == 0 and
-                                            std.math.signbit(candidate_value) and !std.math.signbit(selected_value)),
-                                    .max => candidate_value > selected_value or
-                                        (candidate_value == 0 and selected_value == 0 and
-                                            !std.math.signbit(candidate_value) and std.math.signbit(selected_value)),
-                                    else => unreachable,
-                                };
-                                if (prefer_candidate) {
-                                    selected = candidate;
-                                    selected_value = candidate_value;
-                                }
-                            }
-                        },
-                        else => return Type.fromIP(analyser, result_type, null),
-                    }
-                    const selected_index = selected.ipIndex().?;
-                    if (analyser.ip.typeOf(selected_index) == result_type) return selected;
-                    if (analyser.ip.zigTypeTag(result_type) == .float) {
-                        const coerced = try analyser.coerceNumericToFloatValue(result_type, selected_index) orelse
-                            return Type.fromIP(analyser, result_type, null);
-                        return Type.fromIP(analyser, result_type, coerced);
-                    }
-                    var err_msg: ErrorMsg = undefined;
-                    const coerced = try analyser.ip.coerce(analyser.arena, result_type, selected_index, builtin.target, &err_msg);
-                    if (coerced == .none or analyser.ip.isUnknown(coerced)) {
-                        return Type.fromIP(analyser, result_type, null);
-                    }
-                    return Type.fromIP(analyser, result_type, coerced);
+                    const kind: ComptimeMinMaxKind = switch (tag) {
+                        .min => .min,
+                        .max => .max,
+                        else => unreachable,
+                    };
+                    const result = try analyser.resolveComptimeMinMaxValue(resolved, kind) orelse return null;
+                    return if (analyser.evaluate_comptime_values) result else result.withoutIPIndex(analyser);
                 },
                 .clz, .ctz, .pop_count => |tag| {
                     if (params.len != 1) return null;

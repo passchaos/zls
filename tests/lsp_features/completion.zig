@@ -5019,6 +5019,26 @@ test "generic function with nested comptime member reflection mutations" {
     });
 }
 
+test "generic function with nested comptime min max mutations" {
+    try testCompletion(
+        \\fn Select(comptime a: usize, comptime b: usize, comptime c: usize) type {
+        \\    var min_total: usize = 1;
+        \\    var max_total: usize = 1;
+        \\    const minimum = @min(first: { min_total += 1; break :first a; }, second: { min_total *= 2; break :second b; }, third: { min_total += 3; break :third c; });
+        \\    const maximum = @max(first: { max_total += 1; break :first b; }, second: { max_total *= 2; break :second a; }, third: { max_total += 3; break :third c; });
+        \\    return if (minimum == 4 and maximum == 9) struct {
+        \\        min_order: [min_total]u8,
+        \\        max_order: [max_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(9, 4, 7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "min_order", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "max_order", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {

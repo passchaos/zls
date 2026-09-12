@@ -451,6 +451,17 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeTypeInfoValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@min") or std.mem.eql(u8, name, "@max")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len < 2) return null;
+                    const operands = try self.analyser.arena.alloc(Type, params.len);
+                    for (params, operands) |param, *operand| {
+                        operand.* = try self.eval(handle, param) orelse return null;
+                    }
+                    const kind: Analyser.ComptimeMinMaxKind = if (std.mem.eql(u8, name, "@min")) .min else .max;
+                    return self.analyser.resolveComptimeMinMaxValue(operands, kind);
+                }
                 if (std.mem.eql(u8, name, "@hasField") or std.mem.eql(u8, name, "@hasDecl")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
