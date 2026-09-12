@@ -7686,6 +7686,46 @@ test "generic function with comptime intFromEnum" {
     });
 }
 
+test "generic function with nested contextual enumFromInt mutations" {
+    try testCompletion(
+        \\const Mode = enum(u8) { fast = 3, safe = 7 };
+        \\fn Select(comptime raw: u8) type {
+        \\    var total: usize = 1;
+        \\    const mode = @as(Mode, @enumFromInt(value: {
+        \\        total *= 2;
+        \\        break :value raw;
+        \\    }));
+        \\    return if (mode == .safe and @intFromEnum(mode) == raw)
+        \\        struct { order: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime raw: u8) type {
+        \\    const Mode = @Enum(u8, .exhaustive, &.{ "fast", "safe" }, &.{ 3, 7 });
+        \\    var total: usize = 1;
+        \\    const mode = @as(Mode, @enumFromInt(value: {
+        \\        total += 2;
+        \\        break :value raw;
+        \\    }));
+        \\    return if (mode == Mode.safe and @intFromEnum(mode) == raw)
+        \\        struct { generated_order: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(7) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "generated_order", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with nested comptime intFromEnum mutation" {
     try testCompletion(
         \\const Mode = enum(u8) { fast = 3, safe = 7 };

@@ -417,6 +417,13 @@ pub const Interpreter = struct {
                     }
                     if (ast.isBuiltinCall(&handle.tree, params[1])) {
                         const cast_name = handle.tree.tokenSlice(handle.tree.nodeMainToken(params[1]));
+                        if (std.mem.eql(u8, cast_name, "@enumFromInt")) {
+                            var enum_buffer: [2]Ast.Node.Index = undefined;
+                            const enum_params = handle.tree.builtinCallParams(&enum_buffer, params[1]).?;
+                            if (enum_params.len != 1) return null;
+                            const integer_value = try self.eval(handle, enum_params[0]) orelse return null;
+                            return self.analyser.resolveComptimeEnumFromIntValue(destination, integer_value);
+                        }
                         const cast_kind: ?Analyser.ComptimeCastKind = if (std.mem.eql(u8, cast_name, "@intCast"))
                             .int_cast
                         else if (std.mem.eql(u8, cast_name, "@truncate"))

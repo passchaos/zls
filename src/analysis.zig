@@ -5079,6 +5079,18 @@ fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) Error!Type {
     };
 }
 
+pub fn resolveComptimeEnumFromIntValue(
+    analyser: *Analyser,
+    enum_type: Type,
+    integer: Type,
+) Error!?Type {
+    if (!enum_type.is_type_val or !enum_type.isEnumType(analyser)) return null;
+    const int_value = analyser.ip.toInt(integer.ipIndex() orelse return null, i256) orelse return null;
+    const tag = try analyser.resolveEnumTagFromIntValue(enum_type, int_value) orelse return null;
+    const value = try analyser.enumValue(enum_type, tag);
+    return value;
+}
+
 pub fn resolveComptimeIntFromEnumValue(analyser: *Analyser, operand: Type) Error!?Type {
     if (operand.data == .enum_value) {
         const int_value = operand.data.enum_value.int_value orelse return .unknown_type;
