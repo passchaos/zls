@@ -335,6 +335,70 @@ const embedded_file = @embedFile("generics.zig");
 const embedded_file_first = embedded_file[0];
 //    ^^^^^^^^^^^^^^^^^^^ (u8)(102)
 
+fn SubobjectArray(comptime small: u8) type {
+    const Config = struct { capacity: usize };
+    var state: struct { values: [1]usize, config: ?Config } = .{ .values = .{0}, .config = null };
+    const pointer = &state.config;
+    state.values, pointer.* = .{ .{small}, .{ .capacity = small } };
+    return [
+        if (@TypeOf(state.values[0]) == usize and @TypeOf(state.config.?.capacity) == usize)
+            state.values[0] + state.config.?.capacity
+        else
+            99
+    ]u8;
+}
+
+const first_subobject_array: SubobjectArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^ ([8]u8)()
+const second_subobject_array: SubobjectArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^ ([6]u8)()
+
+fn ExplicitAggregateArray(comptime small: u8) type {
+    const Config = struct { capacity: usize };
+    var marker: usize = 0;
+    marker += 1;
+    const values = [_]Config{.{ .capacity = small }};
+    const state = struct { optional: ?Config }{ .optional = .{ .capacity = small } };
+    return [values[0].capacity + state.optional.?.capacity]u8;
+}
+
+const explicit_aggregate_first: ExplicitAggregateArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ ([8]u8)()
+const explicit_aggregate_second: ExplicitAggregateArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ ([6]u8)()
+
+fn UnionInitializerArray(comptime small: u8) type {
+    const Config = struct { capacity: usize };
+    const U = union(enum) { payload: ?Config, empty };
+    var executions: usize = 0;
+    const value = U{ .payload = result: {
+        executions += 1;
+        break :result .{ .capacity = small };
+    } };
+    return [value.payload.?.capacity + executions]u8;
+}
+
+const first_union_initializer: UnionInitializerArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([5]u8)()
+const second_union_initializer: UnionInitializerArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ ([4]u8)()
+
+fn BuiltinUnionInitializerArray(comptime small: u8) type {
+    const Config = struct { capacity: usize };
+    const U = union(enum) { payload: ?Config, empty };
+    var executions: usize = 0;
+    const value = @unionInit(U, "payload", result: {
+        executions += 1;
+        break :result .{ .capacity = small };
+    });
+    return [value.payload.?.capacity + executions]u8;
+}
+
+const first_builtin_union: BuiltinUnionInitializerArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([5]u8)()
+const second_builtin_union: BuiltinUnionInitializerArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([4]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

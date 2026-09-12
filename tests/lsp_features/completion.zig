@@ -3019,6 +3019,136 @@ test "generic function with nested comptime unionInit mutations" {
     });
 }
 
+test "comptime interpreter preserves unionInit result locations" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, count: []const u8, generated: bool = true }{
+        .{ .type = "usize", .initializer = "small", .count = "payload" },
+        .{ .type = "?usize", .initializer = "small", .count = "payload.?" },
+        .{ .type = "[1]usize", .initializer = ".{small}", .count = "payload[0]" },
+        .{ .type = "?[1]usize", .initializer = ".{small}", .count = "payload.?[0]" },
+        .{ .type = "Config", .initializer = ".{ .capacity = small }", .count = "payload.capacity", .generated = false },
+        .{ .type = "?Config", .initializer = ".{ .capacity = small }", .count = "payload.?.capacity", .generated = false },
+        .{ .type = "[]const u8", .initializer = "\"text\"", .count = "payload.len" },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |generated| {
+            if (generated and !case.generated) continue;
+            const declaration = if (generated)
+                try std.fmt.allocPrint(allocator, "@Union(.auto, @Enum(u8, .exhaustive, &.{{ \"payload\", \"empty\" }}, &.{{ 0, 1 }}), &.{{ \"payload\", \"empty\" }}, &.{{ {s}, void }}, &.{{ .{{}}, .{{}} }})", .{case.type})
+            else
+                try std.fmt.allocPrint(allocator, "union(enum) {{ payload: {s}, empty }}", .{case.type});
+            defer allocator.free(declaration);
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Config = struct {{ capacity: usize }};
+                \\fn Select() type {{
+                \\    const U = {s};
+                \\    const small: u8 = 4;
+                \\    var executions: usize = 0;
+                \\    const value = @unionInit(union_type: {{
+                \\        executions += 1;
+                \\        break :union_type U;
+                \\    }}, field_name: {{
+                \\        executions = executions * 10 + 2;
+                \\        break :field_name "payload";
+                \\    }}, result: {{
+                \\        executions = executions * 10 + 3;
+                \\        break :result {s};
+                \\    }});
+                \\    return switch (value) {{
+                \\        .payload => |payload| struct {{
+                \\            items: [if (@TypeOf({s}) == usize) {s} else 99]u8,
+                \\            executions: [executions]u8,
+                \\        }},
+                \\        .empty => struct {{ fallback: u8 }},
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{ declaration, case.initializer, case.count, case.count });
+            defer allocator.free(source);
+            errdefer std.debug.print("unionInit source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter preserves nested unionInit casts and mutations" {
+    try testCompletion(
+        \\const U = union(enum) { payload: usize, empty };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const values = .{ @unionInit(U, "payload", @intCast(result: {
+        \\        executions += 1;
+        \\        break :result @as(u16, 4);
+        \\    })), @unionInit(U, "empty", {}) };
+        \\    var value = values[0];
+        \\    switch (value) {
+        \\        .payload => |*payload| payload.* += 2,
+        \\        .empty => {},
+        \\    }
+        \\    return struct {
+        \\        original: [values[0].payload]u8,
+        \\        changed: [value.payload]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "original", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter validates unionInit optional payloads" {
+    const cases = [_]struct { initializer: []const u8, valid: bool }{
+        .{ .initializer = "runtime_u8", .valid = true },
+        .{ .initializer = "null", .valid = true },
+        .{ .initializer = "runtime_bool", .valid = false },
+        .{ .initializer = "\"invalid\"", .valid = false },
+        .{ .initializer = ".{1, 2}", .valid = false },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |generated| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\var runtime_u8: u8 = undefined;
+                \\var runtime_bool: bool = undefined;
+                \\fn Select() type {{
+                \\    const U = {s};
+                \\    var executions: usize = 0;
+                \\    const value = @unionInit(U, "payload", result: {{
+                \\        executions += 1;
+                \\        break :result {s};
+                \\    }});
+                \\    return switch (value) {{
+                \\        .payload => struct {{ accepted: [executions]u8 }},
+                \\        .empty => struct {{ fallback: u8 }},
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                if (generated)
+                    "@Union(.auto, @Enum(u8, .exhaustive, &.{ \"payload\", \"empty\" }, &.{ 0, 1 }), &.{ \"payload\", \"empty\" }, &.{ ?usize, void }, &.{ .{}, .{} })"
+                else
+                    "union(enum) { payload: ?usize, empty }",
+                case.initializer,
+            });
+            defer allocator.free(source);
+            errdefer std.debug.print("unionInit validation source:\n{s}\n", .{source});
+            try testCompletion(source, if (case.valid) &.{
+                .{ .label = "accepted", .kind = .Field, .detail = "[1]u8" },
+            } else &.{
+                .{ .label = "accepted", .kind = .Field },
+                .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+            });
+        }
+    }
+}
+
 test "generic function coerces runtime unknown comptime unionInit payload" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;
@@ -3095,6 +3225,299 @@ test "generic function rejects invalid runtime unknown comptime union literal pa
         .{ .label = "accepted", .kind = .Field, .detail = "u8" },
         .{ .label = "fallback", .kind = .Field, .detail = "u8" },
     });
+}
+
+test "comptime interpreter preserves union initializer result locations" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, value: []const u8 }{
+        .{ .type = "usize", .initializer = "small", .value = "value.payload" },
+        .{ .type = "?usize", .initializer = "small", .value = "value.payload.?" },
+        .{ .type = "[1]usize", .initializer = ".{small}", .value = "value.payload[0]" },
+        .{ .type = "?[1]usize", .initializer = ".{small}", .value = "value.payload.?[0]" },
+        .{ .type = "Config", .initializer = ".{ .capacity = small }", .value = "value.payload.capacity" },
+        .{ .type = "?Config", .initializer = ".{ .capacity = small }", .value = "value.payload.?.capacity" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const Config = struct {{ capacity: usize }};
+            \\const U = union(enum) {{ payload: {s}, empty }};
+            \\fn Select() type {{
+            \\    const small: u8 = 4;
+            \\    var executions: usize = 0;
+            \\    const value = U{{ .payload = result: {{
+            \\        executions += 1;
+            \\        break :result if (small == 4) {s} else {s};
+            \\    }} }};
+            \\    const count = {s};
+            \\    return switch (value) {{
+            \\        .payload => struct {{
+            \\            items: [if (@TypeOf(count) == usize) count else 99]u8,
+            \\            executions: [executions]u8,
+            \\        }},
+            \\        .empty => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.type, case.initializer, case.initializer, case.value });
+        defer allocator.free(source);
+        errdefer std.debug.print("union initializer source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+            .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter preserves generated struct initializer values" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    const S = @Struct(.auto, null, &.{ "count", "config", "sibling" }, &.{ ?usize, Config, usize }, &.{ .{}, .{}, .{} });
+        \\    const small: u8 = 4;
+        \\    var executions: usize = 0;
+        \\    const value = S{
+        \\        .config = config: {
+        \\            executions += 1;
+        \\            break :config .{ .capacity = small };
+        \\        },
+        \\        .sibling = @intCast(@as(u16, 7)),
+        \\        .count = count: {
+        \\            executions = executions * 10 + 2;
+        \\            break :count small;
+        \\        },
+        \\    };
+        \\    const count = value.count.?;
+        \\    return struct {
+        \\        items: [if (@TypeOf(count) == usize and @TypeOf(value.config.capacity) == usize)
+        \\            count + value.config.capacity
+        \\        else
+        \\            99]u8,
+        \\        executions: [executions]u8,
+        \\        sibling: [value.sibling]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter preserves generated union initializer values" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "payload", "empty" }, &.{ 0, 1 });
+        \\    const U = @Union(.auto, Tag, &.{ "payload", "empty" }, &.{ ?[1]usize, void }, &.{ .{}, .{} });
+        \\    const small: u8 = 4;
+        \\    var executions: usize = 0;
+        \\    const value = U{ .payload = result: {
+        \\        executions += 1;
+        \\        break :result .{small};
+        \\    } };
+        \\    return switch (value) {
+        \\        .payload => |payload| struct {
+        \\            items: [if (@TypeOf(payload.?[0]) == usize) payload.?[0] else 99]u8,
+        \\            executions: [executions]u8,
+        \\        },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter preserves contextual initializer casts" {
+    for ([_]bool{ false, true }) |generated| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    const S = {s};
+            \\    var executions: usize = 0;
+            \\    const value = S{{
+            \\        .count = @intCast(result: {{
+            \\            executions += 1;
+            \\            break :result @as(u16, 4);
+            \\        }}),
+            \\        .lanes = @splat(result: {{
+            \\            executions = executions * 10 + 2;
+            \\            break :result @as(u8, 3);
+            \\        }}),
+            \\    }};
+            \\    return struct {{
+            \\        items: [value.count + value.lanes[0] + value.lanes[1]]u8,
+            \\        executions: [executions]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{if (generated)
+            "@Struct(.auto, null, &.{ \"count\", \"lanes\" }, &.{ u8, @Vector(2, u8) }, &.{ .{}, .{} })"
+        else
+            "struct { count: u8, lanes: @Vector(2, u8) }"});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[10]u8" },
+            .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+        });
+    }
+}
+
+test "comptime interpreter preserves union contextual initializer casts" {
+    for ([_]bool{ false, true }) |generated| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    const U = {s};
+            \\    var executions: usize = 0;
+            \\    const value = U{{ .payload = @intCast(result: {{
+            \\        executions += 1;
+            \\        break :result @as(u16, 4);
+            \\    }}) }};
+            \\    return switch (value) {{
+            \\        .payload => |payload| struct {{ items: [payload]u8, executions: [executions]u8 }},
+            \\        .empty => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{if (generated)
+            "@Union(.auto, @Enum(u8, .exhaustive, &.{ \"payload\", \"empty\" }, &.{ 0, 1 }), &.{ \"payload\", \"empty\" }, &.{ u8, void }, &.{ .{}, .{} })"
+        else
+            "union(enum) { payload: u8, empty }"});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+            .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter rejects out of range contextual integer casts" {
+    for ([_][]const u8{ "@as(i16, -1)", "@as(u16, 256)" }) |operand| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const U = union(enum) {{ payload: u8, empty }};
+            \\fn Select() type {{
+            \\    var executions: usize = 0;
+            \\    const value = U{{ .payload = @intCast(result: {{
+            \\        executions += 1;
+            \\        break :result {s};
+            \\    }}) }};
+            \\    return switch (value) {{
+            \\        .payload => struct {{ accepted: u8 }},
+            \\        .empty => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{operand});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+            .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+        });
+    }
+}
+
+test "comptime interpreter mutates generated initializer values" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    const S = @Struct(.auto, null, &.{ "config", "sibling" }, &.{ ?Config, usize }, &.{ .{}, .{} });
+        \\    var state = S{ .config = .{ .capacity = 4 }, .sibling = 7 };
+        \\    const original = state;
+        \\    const pointer = &state.config;
+        \\    pointer.* = .{ .capacity = @as(u8, 6) };
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "payload", "empty" }, &.{ 0, 1 });
+        \\    const U = @Union(.auto, Tag, &.{ "payload", "empty" }, &.{ ?[1]usize, void }, &.{ .{}, .{} });
+        \\    var value = U{ .payload = .{@as(u8, 4)} };
+        \\    switch (value) {
+        \\        .payload => |*payload| payload.* = .{@as(u8, 6)},
+        \\        .empty => {},
+        \\    }
+        \\    return struct {
+        \\        original: [original.config.?.capacity]u8,
+        \\        changed: [state.config.?.capacity + value.payload.?[0]]u8,
+        \\        sibling: [state.sibling]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "original", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter rejects invalid nested union initializer payloads" {
+    for ([_][]const u8{ ".{true}", ".{1, 2}", ".{}" }) |initializer| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const U = union(enum) {{ payload: ?[1]usize, empty }};
+            \\fn Select() type {{
+            \\    var executions: usize = 0;
+            \\    const value = U{{ .payload = result: {{
+            \\        executions += 1;
+            \\        break :result {s};
+            \\    }} }};
+            \\    return switch (value) {{
+            \\        .payload => struct {{ accepted: u8 }},
+            \\        .empty => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{initializer});
+        defer allocator.free(source);
+        errdefer std.debug.print("invalid nested initializer: {s}\n", .{initializer});
+        try testCompletion(source, &.{
+            .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+            .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+        });
+    }
+}
+
+test "comptime interpreter rejects invalid union initializer payloads" {
+    for ([_]bool{ false, true }) |generated| {
+        for ([_][]const u8{ "runtime_u8", "runtime_bool", "true", "\"invalid\"", ".{}", ".{ 1, 2 }" }) |initializer| {
+            const valid = std.mem.eql(u8, initializer, "runtime_u8");
+            const source = try std.fmt.allocPrint(allocator,
+                \\var runtime_u8: u8 = undefined;
+                \\var runtime_bool: bool = undefined;
+                \\fn Select() type {{
+                \\    const U = {s};
+                \\    var executions: usize = 0;
+                \\    const value = U{{ .payload = result: {{
+                \\        executions += 1;
+                \\        break :result {s};
+                \\    }} }};
+                \\    return switch (value) {{
+                \\        .payload => struct {{ accepted: [executions]u8 }},
+                \\        .empty => struct {{ fallback: [executions]u8 }},
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                if (generated)
+                    "@Union(.auto, @Enum(u8, .exhaustive, &.{ \"payload\", \"empty\" }, &.{ 0, 1 }), &.{ \"payload\", \"empty\" }, &.{ ?usize, void }, &.{ .{}, .{} })"
+                else
+                    "union(enum) { payload: ?usize, empty }",
+                initializer,
+            });
+            defer allocator.free(source);
+            errdefer std.debug.print("union validation source:\n{s}\n", .{source});
+            try testCompletion(source, if (valid) &.{
+                .{ .label = "accepted", .kind = .Field, .detail = "[1]u8" },
+            } else &.{
+                .{ .label = "accepted", .kind = .Field },
+                .{ .label = "fallback", .kind = .Field },
+            });
+        }
+    }
 }
 
 test "comptime interpreter validates source union literal payloads" {
@@ -3397,6 +3820,148 @@ test "comptime interpreter validates declared type function returns" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "comptime interpreter preserves explicit array and tuple initializers" {
+    const cases = [_]struct { type: []const u8, element: []const u8, first: []const u8, second: []const u8 }{
+        .{ .type = "[2]Config", .element = ".{ .capacity = small }", .first = "value[0].capacity", .second = "value[1].capacity" },
+        .{ .type = "[_]Config", .element = ".{ .capacity = small }", .first = "value[0].capacity", .second = "value[1].capacity" },
+        .{ .type = "[2]?Config", .element = ".{ .capacity = small }", .first = "value[0].?.capacity", .second = "value[1].?.capacity" },
+        .{ .type = "Pair", .element = ".{ .capacity = small }", .first = "value.@\"0\".capacity", .second = "value.@\"1\".?.capacity" },
+        .{ .type = "[2:0]usize", .element = "small", .first = "value[0]", .second = "value[1]" },
+        .{ .type = "[_:0]usize", .element = "small", .first = "value[0]", .second = "value[1]" },
+        .{ .type = "[2]usize", .element = "small", .first = "value[0]", .second = "value[1]" },
+        .{ .type = "[_]usize", .element = "small", .first = "value[0]", .second = "value[1]" },
+        .{ .type = "@Vector(2, usize)", .element = "small", .first = "value[0]", .second = "value[1]" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const Config = struct {{ capacity: usize }};
+            \\const Pair = struct {{ Config, ?Config }};
+            \\fn Select() type {{
+            \\    const small: u8 = 4;
+            \\    var executions: usize = 0;
+            \\    const value = {s}{{
+            \\        first: {{
+            \\            executions += 1;
+            \\            break :first {s};
+            \\        }},
+            \\        second: {{
+            \\            executions = executions * 10 + 2;
+            \\            break :second {s};
+            \\        }},
+            \\    }};
+            \\    const first = {s};
+            \\    const second = {s};
+            \\    return struct {{
+            \\        items: [if (@TypeOf(first) == usize and @TypeOf(second) == usize) first + second else 99]u8,
+            \\        executions: [executions]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.type, case.element, case.element, case.first, case.second });
+        defer allocator.free(source);
+        errdefer std.debug.print("explicit aggregate source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+            .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+        });
+    }
+}
+
+test "comptime interpreter preserves typed explicit initializer elements" {
+    const cases = [_]struct { setup: []const u8, first_type: []const u8, first: []const u8, second: []const u8 }{
+        .{ .setup = "const values = [2]u16{ runtime_u8, 4 };", .first_type = "u16", .first = "values[0]", .second = "values[1]" },
+        .{ .setup = "const values = [2]u16{ true, 4 };", .first_type = "u16", .first = "values[0]", .second = "values[1]" },
+        .{ .setup = "const values = [2]u16{ 65536, 4 };", .first_type = "u16", .first = "values[0]", .second = "values[1]" },
+        .{ .setup = "const values = [2]Config{ .{ .capacity = runtime_u8 }, .{ .capacity = 4 } };", .first_type = "Config", .first = "values[0].capacity", .second = "values[1].capacity" },
+        .{ .setup = "const values = [2]Config{ .{ .capacity = true }, .{ .capacity = 4 } };", .first_type = "Config", .first = "values[0].capacity", .second = "values[1].capacity" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const Config = struct {{ capacity: usize }};
+            \\var runtime_u8: u8 = undefined;
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    {s}
+            \\    return struct {{
+            \\        typed: [if (@TypeOf(values[0]) == {s}) 1 else 99]u8,
+            \\        unknown: [{s}]u8,
+            \\        known: [{s}]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.setup, case.first_type, case.first, case.second });
+        defer allocator.free(source);
+        errdefer std.debug.print("typed explicit aggregate source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "typed", .kind = .Field, .detail = "[1]u8" },
+            .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "known", .kind = .Field, .detail = "[4]u8" },
+        });
+    }
+}
+
+test "comptime interpreter mutates explicit aggregate initializer values" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var configs = [_]Config{ .{ .capacity = 1 }, .{ .capacity = 2 } };
+        \\    const original = configs;
+        \\    inline for (&configs) |*config| config.capacity += 4;
+        \\    const Pair = struct { Config, ?Config };
+        \\    var pair = Pair{ configs[0], null };
+        \\    pair.@"1" = .{ .capacity = 7 };
+        \\    return struct {
+        \\        original: [original[0].capacity + original[1].capacity]u8,
+        \\        changed: [configs[0].capacity + configs[1].capacity]u8,
+        \\        tuple: [pair.@"0".capacity + pair.@"1".?.capacity]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "original", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[11]u8" },
+        .{ .label = "tuple", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
+test "comptime interpreter preserves explicit struct initializer result locations" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\const State = struct { values: ?[1]usize, config: ?Config, sibling: usize = 7 };
+        \\fn Select() type {
+        \\    const small: u8 = 4;
+        \\    var executions: usize = 0;
+        \\    const state = State{
+        \\        .values = values: {
+        \\            executions += 1;
+        \\            break :values .{small};
+        \\        },
+        \\        .config = config: {
+        \\            executions = executions * 10 + 2;
+        \\            break :config .{ .capacity = small };
+        \\        },
+        \\    };
+        \\    const first = state.values.?[0];
+        \\    const second = state.config.?.capacity;
+        \\    return struct {
+        \\        items: [if (@TypeOf(first) == usize and @TypeOf(second) == usize) first + second else 99]u8,
+        \\        executions: [executions]u8,
+        \\        sibling: [state.sibling]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
     });
 }
 
@@ -4347,6 +4912,150 @@ test "comptime interpreter coerces assignments to typed aggregate elements" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "comptime interpreter coerces subobject aggregate assignments" {
+    const cases = [_]struct { setup: []const u8, target: []const u8, initializer: []const u8, value: []const u8, sibling: []const u8 }{
+        .{
+            .setup = "var state = struct { values: [1]usize, sibling: usize }{ .values = .{0}, .sibling = 7 };",
+            .target = "state.values",
+            .initializer = ".{small}",
+            .value = "state.values[0]",
+            .sibling = "state.sibling",
+        },
+        .{
+            .setup = "var state: [2]Config = .{ .{ .capacity = 0 }, .{ .capacity = 7 } };",
+            .target = "state[0]",
+            .initializer = ".{ .capacity = small }",
+            .value = "state[0].capacity",
+            .sibling = "state[1].capacity",
+        },
+        .{
+            .setup = "var state: struct { ?Config, usize } = .{ null, 7 };",
+            .target = "state.@\"0\"",
+            .initializer = ".{ .capacity = small }",
+            .value = "state.@\"0\".?.capacity",
+            .sibling = "state.@\"1\"",
+        },
+        .{
+            .setup = "var state: struct { values: ?[1]usize, sibling: usize } = .{ .values = .{0}, .sibling = 7 };",
+            .target = "state.values.?",
+            .initializer = ".{small}",
+            .value = "state.values.?[0]",
+            .sibling = "state.sibling",
+        },
+        .{
+            .setup = "var state = struct { value: ?usize, sibling: usize }{ .value = null, .sibling = 7 };",
+            .target = "state.value",
+            .initializer = "small",
+            .value = "state.value.?",
+            .sibling = "state.sibling",
+        },
+        .{
+            .setup = "var state = struct { value: union(enum) { count: usize, empty }, sibling: usize }{ .value = .{ .empty = {} }, .sibling = 7 };",
+            .target = "state.value",
+            .initializer = ".{ .count = small }",
+            .value = "state.value.count",
+            .sibling = "state.sibling",
+        },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |through_pointer| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Config = struct {{ capacity: usize }};
+                \\fn Select() type {{
+                \\    const small: u8 = 4;
+                \\    var executions: usize = 0;
+                \\    {s}
+                \\    {s}{s}{s}
+                \\    {s} = result: {{
+                \\        executions += 1;
+                \\        break :result if (small == 4) {s} else {s};
+                \\    }};
+                \\    const value = {s};
+                \\    return struct {{
+                \\        items: [if (@TypeOf(value) == usize) value else 99]u8,
+                \\        executions: [executions]u8,
+                \\        sibling: [{s}]u8,
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                case.setup,
+                if (through_pointer) "const pointer = &" else "",
+                if (through_pointer) case.target else "",
+                if (through_pointer) ";" else "",
+                if (through_pointer) "pointer.*" else case.target,
+                case.initializer,
+                case.initializer,
+                case.value,
+                case.sibling,
+            });
+            defer allocator.free(source);
+            errdefer std.debug.print("subobject assignment source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+                .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter preserves types after invalid subobject assignments" {
+    for ([_][]const u8{ ".{\"invalid\"}", ".{1, 2}", "[_]u8{4}" }) |initializer| {
+        for ([_]bool{ false, true }) |through_pointer| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\fn Select() type {{
+                \\    var state: struct {{ values: [1]usize, sibling: usize }} = .{{ .values = .{{0}}, .sibling = 7 }};
+                \\    {s}
+                \\    {s} = {s};
+                \\    return struct {{
+                \\        typed: [if (@TypeOf(state.values[0]) == usize) 1 else 99]u8,
+                \\        items: [state.values[0]]u8,
+                \\        sibling: [state.sibling]u8,
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                if (through_pointer) "const pointer = &state.values;" else "",
+                if (through_pointer) "pointer.*" else "state.values",
+                initializer,
+            });
+            defer allocator.free(source);
+            errdefer std.debug.print("invalid subobject assignment source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "typed", .kind = .Field, .detail = "[1]u8" },
+                .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+                .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter coerces subobject destructuring assignments" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    const small: u8 = 4;
+        \\    var state = struct { values: [1]usize, config: ?Config }{ .values = .{0}, .config = null };
+        \\    const pointer = &state.config;
+        \\    state.values, pointer.* = .{ .{small}, .{ .capacity = small } };
+        \\    const capacity = state.config.?.capacity;
+        \\    return struct {
+        \\        items: [if (@TypeOf(state.values[0]) == usize and @TypeOf(capacity) == usize)
+        \\            state.values[0] + capacity
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
     });
 }
 

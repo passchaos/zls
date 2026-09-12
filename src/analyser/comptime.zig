@@ -6,6 +6,7 @@ const Ast = std.zig.Ast;
 const Type = Analyser.Type;
 const Handle = @import("../DocumentStore.zig").Handle;
 const Error = Analyser.Error;
+const InternPool = @import("InternPool.zig");
 
 pub const Value = struct {
     ty: Type,
@@ -226,6 +227,99 @@ pub const Interpreter = struct {
         return self.eval(handle, node);
     }
 
+    pub fn evaluateTypedExpression(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?Type {
+        const evaluated = try self.evalTypedSource(handle, node, destination) orelse return null;
+        return self.coerceAssignmentFromSource(handle, destination, evaluated.value, evaluated.source_node, null);
+    }
+
+    pub fn evaluateArrayInit(self: *Interpreter, handle: *Handle, destination: Type, elements: []const Ast.Node.Index) Error!?Type {
+        const len = self.assignmentAggregateLength(destination) orelse return null;
+        if (len != elements.len or len > self.budget.steps) return destination.instanceTypeVal(self.analyser);
+        const values = try self.analyser.arena.alloc(Type, len);
+        for (elements, values, 0..) |element, *value, index| {
+            const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
+            value.* = try self.evaluateTypedExpression(handle, element, element_type) orelse
+                try element_type.instanceTypeVal(self.analyser) orelse return null;
+        }
+        if (destination.ipIndex()) |type_index| intern: {
+            const indices = try self.analyser.arena.alloc(InternPool.Index, len);
+            for (values, indices) |value, *index| {
+                if (value.data != .ip_index) break :intern;
+                index.* = value.ipIndex() orelse try self.analyser.ip.getUnknown(value.data.ip_index.type);
+            }
+            const aggregate = try self.analyser.ip.get(.{ .aggregate = .{
+                .ty = type_index,
+                .values = try self.analyser.ip.getIndexSlice(indices),
+            } });
+            return Type.fromIP(self.analyser, type_index, aggregate);
+        }
+        return @as(?Type, try Value.create(self.analyser, destination, .{ .array = values }));
+    }
+
+    fn isUnionType(self: *Interpreter, ty: Type) bool {
+        if (ty.isUnionType()) return true;
+        const index = ty.ipIndex() orelse return false;
+        return self.analyser.ip.zigTypeTag(index) == .@"union";
+    }
+
+    pub fn evaluateStructInit(self: *Interpreter, handle: *Handle, destination: Type, field_nodes: []const Ast.Node.Index) Error!?Type {
+        const analyser = self.analyser;
+        const tree = &handle.tree;
+        const is_union = self.isUnionType(destination);
+        if (is_union and field_nodes.len != 1) return destination.instanceTypeVal(analyser);
+        if (!is_union and !destination.isStructType(analyser)) return destination.instanceTypeVal(analyser);
+        const ip_struct = if (destination.ipIndex()) |index| switch (analyser.ip.indexToKey(index)) {
+            .struct_type => |struct_index| analyser.ip.getStruct(struct_index),
+            else => null,
+        } else null;
+        const len = if (ip_struct) |info| info.fields.count() else field_nodes.len;
+        if (field_nodes.len > len or len > self.budget.steps) return destination.instanceTypeVal(analyser);
+        const fields = try analyser.arena.alloc(Value.Field, len);
+        var initialized: std.StringHashMapUnmanaged(void) = .empty;
+        defer initialized.deinit(analyser.gpa);
+        for (field_nodes, fields[0..field_nodes.len]) |field_node, *field| {
+            const name_token = tree.firstToken(field_node) - 2;
+            const name = try analyser.identifierTokenName(tree, name_token) orelse return null;
+            const entry = try initialized.getOrPut(analyser.gpa, name);
+            if (entry.found_existing) return destination.instanceTypeVal(analyser);
+            const field_type = try self.assignmentChildType(destination, .{ .field = name }) orelse
+                return destination.instanceTypeVal(analyser);
+            const evaluated = try self.evalTypedSource(handle, field_node, field_type) orelse return destination.instanceTypeVal(analyser);
+            field.* = .{
+                .name = name,
+                .value = try self.coerceFromSource(handle, field_type, evaluated.value, evaluated.source_node, null, !is_union) orelse
+                    return destination.instanceTypeVal(analyser),
+            };
+        }
+        if (ip_struct) |info| {
+            var next = field_nodes.len;
+            for (info.fields.keys(), info.fields.values()) |name_index, field| {
+                const name = try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, name_index);
+                if (initialized.contains(name)) continue;
+                if (field.default_value == .none) return destination.instanceTypeVal(analyser);
+                fields[next] = .{ .name = name, .value = Type.fromIP(analyser, field.ty, field.default_value) };
+                next += 1;
+            }
+        }
+        return @as(?Type, try Value.create(analyser, destination, .{ .fields = fields }));
+    }
+
+    pub fn evaluateUnionInit(self: *Interpreter, handle: *Handle, params: []const Ast.Node.Index) Error!?Type {
+        if (params.len != 3) return null;
+        const union_type = try self.eval(handle, params[0]) orelse return null;
+        const field_name = try self.eval(handle, params[1]) orelse return null;
+        const fallback = try union_type.instanceTypeVal(self.analyser);
+        if (!union_type.is_type_val or !self.isUnionType(union_type)) return fallback;
+        if (field_name.data != .string_value) return fallback;
+        const name = field_name.data.string_value.bytes;
+        const field_type = try self.assignmentChildType(union_type, .{ .field = name }) orelse return fallback;
+        const evaluated = try self.evalTypedSource(handle, params[2], field_type) orelse return fallback;
+        const value = try self.coerceFromSource(handle, field_type, evaluated.value, evaluated.source_node, null, false) orelse return fallback;
+        const fields = try self.analyser.arena.alloc(Value.Field, 1);
+        fields[0] = .{ .name = name, .value = value };
+        return @as(?Type, try Value.create(self.analyser, union_type, .{ .fields = fields }));
+    }
+
     fn tick(self: *Interpreter) bool {
         if (self.budget.steps == 0) return false;
         self.budget.steps -= 1;
@@ -435,47 +529,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
                     const destination = try self.eval(handle, params[0]) orelse return null;
-                    if (ast.isBuiltinCall(&handle.tree, params[1]) and
-                        std.mem.eql(u8, handle.tree.tokenSlice(handle.tree.nodeMainToken(params[1])), "@splat"))
-                    {
-                        var splat_buffer: [2]Ast.Node.Index = undefined;
-                        const splat_params = handle.tree.builtinCallParams(&splat_buffer, params[1]).?;
-                        if (splat_params.len != 1) return null;
-                        const scalar = try self.eval(handle, splat_params[0]) orelse return null;
-                        return self.analyser.resolveComptimeSplatValue(destination, scalar);
-                    }
-                    if (ast.isBuiltinCall(&handle.tree, params[1])) {
-                        const cast_name = handle.tree.tokenSlice(handle.tree.nodeMainToken(params[1]));
-                        if (std.mem.eql(u8, cast_name, "@enumFromInt")) {
-                            var enum_buffer: [2]Ast.Node.Index = undefined;
-                            const enum_params = handle.tree.builtinCallParams(&enum_buffer, params[1]).?;
-                            if (enum_params.len != 1) return null;
-                            const integer_value = try self.eval(handle, enum_params[0]) orelse return null;
-                            return self.analyser.resolveComptimeEnumFromIntValue(destination, integer_value);
-                        }
-                        const cast_kind: ?Analyser.ComptimeCastKind = if (std.mem.eql(u8, cast_name, "@intCast"))
-                            .int_cast
-                        else if (std.mem.eql(u8, cast_name, "@truncate"))
-                            .truncate
-                        else if (std.mem.eql(u8, cast_name, "@bitCast"))
-                            .bit_cast
-                        else if (std.mem.eql(u8, cast_name, "@intFromFloat"))
-                            .int_from_float
-                        else if (std.mem.eql(u8, cast_name, "@floatFromInt"))
-                            .float_from_int
-                        else if (std.mem.eql(u8, cast_name, "@floatCast"))
-                            .float_cast
-                        else
-                            null;
-                        if (cast_kind) |kind| {
-                            var cast_buffer: [2]Ast.Node.Index = undefined;
-                            const cast_params = handle.tree.builtinCallParams(&cast_buffer, params[1]).?;
-                            if (cast_params.len != 1) return null;
-                            const source = try self.eval(handle, cast_params[0]) orelse return null;
-                            return self.analyser.resolveComptimeCastValue(destination, source, kind);
-                        }
-                    }
-                    const evaluated = try self.evalSource(handle, params[1]) orelse return null;
+                    const evaluated = try self.evalTypedSource(handle, params[1], destination) orelse return null;
                     return if (self.optionalPayloadType(destination) != null)
                         self.coerceAssignmentFromSource(
                             handle,
@@ -560,16 +614,7 @@ pub const Interpreter = struct {
                 if (std.mem.eql(u8, name, "@unionInit")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
-                    if (params.len != 3) return null;
-                    const union_type = try self.eval(handle, params[0]) orelse return null;
-                    const field_name = try self.eval(handle, params[1]) orelse return null;
-                    const value = try self.eval(handle, params[2]) orelse return null;
-                    if (field_name.data != .string_value) return null;
-                    return self.analyser.resolveComptimeUnionInitValue(
-                        union_type,
-                        field_name.data.string_value.bytes,
-                        value,
-                    );
+                    return self.evaluateUnionInit(handle, params);
                 }
                 if (std.mem.eql(u8, name, "@Vector")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -836,6 +881,44 @@ pub const Interpreter = struct {
             else => {},
         }
         return self.analyser.resolveTypeOfNode(.of(node, handle));
+    }
+
+    fn evalTypedSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?EvaluatedSource {
+        const tree = &handle.tree;
+        if (ast.isBuiltinCall(tree, node)) {
+            const name = tree.tokenSlice(tree.nodeMainToken(node));
+            const kind: ?Analyser.ComptimeCastKind = if (std.mem.eql(u8, name, "@intCast"))
+                .int_cast
+            else if (std.mem.eql(u8, name, "@truncate"))
+                .truncate
+            else if (std.mem.eql(u8, name, "@bitCast"))
+                .bit_cast
+            else if (std.mem.eql(u8, name, "@intFromFloat"))
+                .int_from_float
+            else if (std.mem.eql(u8, name, "@floatFromInt"))
+                .float_from_int
+            else if (std.mem.eql(u8, name, "@floatCast"))
+                .float_cast
+            else
+                null;
+            const is_splat = std.mem.eql(u8, name, "@splat");
+            const is_enum = std.mem.eql(u8, name, "@enumFromInt");
+            if (kind != null or is_splat or is_enum) {
+                if (!self.tick()) return null;
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 1) return null;
+                const operand = try self.eval(handle, params[0]) orelse return null;
+                const value = if (kind) |cast_kind|
+                    try self.analyser.resolveComptimeCastValue(destination, operand, cast_kind)
+                else if (is_splat)
+                    try self.analyser.resolveComptimeSplatValue(destination, operand)
+                else
+                    try self.analyser.resolveComptimeEnumFromIntValue(destination, operand);
+                return .{ .value = value orelse return null, .source_node = null };
+            }
+        }
+        return self.evalSource(handle, node);
     }
 
     fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
@@ -1123,17 +1206,19 @@ pub const Interpreter = struct {
         destination: Type,
         items: []const Type,
         item_nodes: []const Ast.Node.Index,
+        allow_invalid: bool,
     ) Error!?Type {
         if (items.len != item_nodes.len) return null;
         const coerced = try self.analyser.arena.alloc(Type, items.len);
         for (items, item_nodes, coerced, 0..) |item, item_node, *result, index| {
             const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
-            result.* = try self.coerceAssignmentFromSource(
+            result.* = try self.coerceFromSource(
                 handle,
                 element_type,
                 item,
                 item_node,
                 null,
+                allow_invalid,
             ) orelse return null;
         }
         return @as(?Type, try Value.create(self.analyser, destination, .{ .array = coerced }));
@@ -1154,6 +1239,7 @@ pub const Interpreter = struct {
         destination: Type,
         fields: []const Value.Field,
         field_nodes: []const Ast.Node.Index,
+        allow_invalid: bool,
     ) Error!?Type {
         if (fields.len != field_nodes.len) return null;
         const tree = &handle.tree;
@@ -1168,12 +1254,13 @@ pub const Interpreter = struct {
             } else return null;
             result.* = .{
                 .name = field.name,
-                .value = try self.coerceAssignmentFromSource(
+                .value = try self.coerceFromSource(
                     handle,
                     field_type,
                     field.value,
                     field_node,
                     null,
+                    allow_invalid,
                 ) orelse return null,
             };
         }
@@ -1213,16 +1300,29 @@ pub const Interpreter = struct {
         source_node: ?Ast.Node.Index,
         declared_array_len: ?usize,
     ) Error!?Type {
+        return self.coerceFromSource(handle, destination, value, source_node, declared_array_len, true);
+    }
+
+    fn coerceFromSource(
+        self: *Interpreter,
+        handle: *Handle,
+        destination: Type,
+        value: Type,
+        source_node: ?Ast.Node.Index,
+        declared_array_len: ?usize,
+        allow_invalid: bool,
+    ) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
         if (self.optionalPayloadType(destination)) |payload_type| {
             if (!try self.isOptionalOrNullValue(value)) {
-                const payload = try self.coerceAssignmentFromSource(
+                const payload = try self.coerceFromSource(
                     handle,
                     payload_type,
                     value,
                     source_node,
                     declared_array_len,
+                    allow_invalid,
                 ) orelse return null;
                 return @as(?Type, try Value.create(analyser, destination, .{ .optional = payload }));
             }
@@ -1232,35 +1332,31 @@ pub const Interpreter = struct {
             const literal_node = unwrapGroupedSource(tree, node);
             if (tree.fullArrayInit(&buffer, literal_node)) |literal| {
                 if (literal.ast.type_expr == .none) {
-                    const len = declared_array_len orelse self.assignmentAggregateLength(destination) orelse
-                        return self.coerceAssignmentTo(destination, value);
-                    if (len > self.budget.steps) return destination.instanceTypeVal(analyser);
-                    const items = try self.mutableElements(value);
-                    return if (items != null and items.?.len == len)
-                        try self.coerceArrayLiteral(
-                            handle,
-                            destination,
-                            items.?,
-                            literal.ast.elements,
-                        ) orelse try self.unknownArray(destination, len)
-                    else
-                        try self.unknownArray(destination, len);
+                    if (declared_array_len orelse self.assignmentAggregateLength(destination)) |len| {
+                        if (len > self.budget.steps) return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                        const items = try self.mutableElements(value);
+                        if (items != null and items.?.len == len) {
+                            if (try self.coerceArrayLiteral(handle, destination, items.?, literal.ast.elements, allow_invalid)) |result| return result;
+                        }
+                        return if (allow_invalid) self.unknownArray(destination, len) else null;
+                    }
                 }
             }
             if (tree.fullStructInit(&buffer, literal_node)) |literal| {
+                if (literal.ast.type_expr == .none and literal.ast.fields.len == 0) {
+                    if (self.assignmentAggregateLength(destination)) |len| {
+                        if (len == 0) return @as(?Type, try Value.create(analyser, destination, .{ .array = &.{} }));
+                        return if (allow_invalid and len <= self.budget.steps) self.unknownArray(destination, len) else null;
+                    }
+                }
                 if (literal.ast.type_expr == .none and
-                    (destination.isStructType(analyser) or destination.isUnionType()))
+                    (destination.isStructType(analyser) or self.isUnionType(destination)))
                 {
                     const fields = Value.fieldEntries(value);
-                    return if (fields != null and (!destination.isUnionType() or literal.ast.fields.len == 1))
-                        try self.coerceFieldLiteral(
-                            handle,
-                            destination,
-                            fields.?,
-                            literal.ast.fields,
-                        ) orelse try destination.instanceTypeVal(analyser)
-                    else
-                        try destination.instanceTypeVal(analyser);
+                    if (fields != null and (!self.isUnionType(destination) or literal.ast.fields.len == 1)) {
+                        if (try self.coerceFieldLiteral(handle, destination, fields.?, literal.ast.fields, allow_invalid)) |result| return result;
+                    }
+                    return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                 }
             }
         }
@@ -1271,7 +1367,7 @@ pub const Interpreter = struct {
             else
                 try self.unknownArray(destination, len);
         }
-        return self.coerceAssignmentTo(destination, value);
+        return if (allow_invalid) self.coerceAssignmentTo(destination, value) else self.coerce(destination, value);
     }
 
     fn writeReference(
@@ -1282,28 +1378,20 @@ pub const Interpreter = struct {
         source_node: ?Ast.Node.Index,
     ) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
-        if (target.path.len == 0) {
-            target.storage.value = try self.coerceAssignmentFromSource(
-                handle,
-                destination,
-                value,
-                source_node,
-                null,
-            ) orelse return false;
-            return true;
-        }
-        target.storage.value = try self.replaceReferenceValue(target.storage.value, destination, target.path, value) orelse return false;
+        target.storage.value = try self.replaceReferenceValue(handle, target.storage.value, destination, target.path, value, source_node) orelse return false;
         return true;
     }
 
     fn replaceReferenceValue(
         self: *Interpreter,
+        handle: *Handle,
         current: Type,
         destination: Type,
         path: []const Value.Reference.Access,
         value: Type,
+        source_node: ?Ast.Node.Index,
     ) Error!?Type {
-        if (path.len == 0) return self.coerceAssignmentTo(destination, value);
+        if (path.len == 0) return self.coerceAssignmentFromSource(handle, destination, value, source_node, null);
         const analyser = self.analyser;
         const child_destination = try self.assignmentChildType(destination, path[0]) orelse return null;
         switch (path[0]) {
@@ -1311,12 +1399,12 @@ pub const Interpreter = struct {
                 const items = try self.mutableElements(current) orelse return null;
                 if (index >= items.len) return null;
                 const updated = try analyser.arena.dupe(Type, items);
-                updated[index] = try self.replaceReferenceValue(items[index], child_destination, path[1..], value) orelse return null;
+                updated[index] = try self.replaceReferenceValue(handle, items[index], child_destination, path[1..], value, source_node) orelse return null;
                 return try Value.create(analyser, destination, .{ .array = updated });
             },
             .field => |field_name| {
                 const old_value = try analyser.resolveFieldAccess(current, field_name) orelse return null;
-                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
+                const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
                 const fields = Value.fieldEntries(current) orelse return null;
                 const updated = try analyser.arena.dupe(Value.Field, fields);
                 for (updated) |*field| {
@@ -1333,7 +1421,7 @@ pub const Interpreter = struct {
             },
             .optional_payload => {
                 const old_value = try analyser.resolveOptionalUnwrap(current) orelse return null;
-                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
+                const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
                 return try Value.create(analyser, destination, .{ .optional = new_value });
             },
         }
@@ -1472,7 +1560,7 @@ pub const Interpreter = struct {
             const updated = try analyser.arena.dupe(Type, items);
             const aggregate_type = try current.typeOf(analyser);
             const destination = try self.assignmentChildType(aggregate_type, .{ .index = index }) orelse return false;
-            updated[index] = try self.coerceAssignmentTo(destination, value) orelse return false;
+            updated[index] = try self.coerceAssignmentFromSource(handle, destination, value, source_node, null) orelse return false;
             const updated_value = try Value.create(analyser, aggregate_type, .{ .array = updated });
             return self.writeAggregate(handle, base, base_value, updated_value);
         }
@@ -1488,12 +1576,12 @@ pub const Interpreter = struct {
                 if (index >= items.len) return false;
                 const updated = try analyser.arena.dupe(Type, items);
                 const destination = try self.assignmentChildType(aggregate_type, .{ .index = index }) orelse return false;
-                updated[index] = try self.coerceAssignmentTo(destination, value) orelse return false;
+                updated[index] = try self.coerceAssignmentFromSource(handle, destination, value, source_node, null) orelse return false;
                 const updated_value = try Value.create(analyser, aggregate_type, .{ .array = updated });
                 return self.writeAggregate(handle, base, base_value, updated_value);
             }
             const destination = try self.assignmentChildType(aggregate_type, .{ .field = field_name }) orelse return false;
-            const coerced = try self.coerceAssignmentTo(destination, value) orelse return false;
+            const coerced = try self.coerceAssignmentFromSource(handle, destination, value, source_node, null) orelse return false;
             const fields = Value.fieldEntries(current) orelse return false;
             const updated = try analyser.arena.dupe(Value.Field, fields);
             for (updated) |*field| {
@@ -1517,7 +1605,7 @@ pub const Interpreter = struct {
             const aggregate_type = try current.typeOf(analyser);
             if (try analyser.resolveOptionalUnwrap(current) == null) return false;
             const destination = try self.assignmentChildType(aggregate_type, .optional_payload) orelse return false;
-            const coerced = try self.coerceAssignmentTo(destination, value) orelse return false;
+            const coerced = try self.coerceAssignmentFromSource(handle, destination, value, source_node, null) orelse return false;
             const updated_value = try Value.create(analyser, aggregate_type, .{ .optional = coerced });
             return self.writeAggregate(handle, base, base_value, updated_value);
         }

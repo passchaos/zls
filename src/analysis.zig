@@ -1034,7 +1034,9 @@ fn bodyAlwaysBreaksCurrentLoop(
 pub fn resolveKnownUnionFieldName(analyser: *Analyser, value: Type) Error!?[]const u8 {
     if (value.data == .comptime_value and value.data.comptime_value.data == .fields) {
         const fields = value.data.comptime_value.data.fields;
-        if (value.data.comptime_value.ty.isUnionType() and fields.len == 1) return fields[0].name;
+        const ty = value.data.comptime_value.ty;
+        const is_union = ty.isUnionType() or if (ty.ipIndex()) |index| analyser.ip.zigTypeTag(index) == .@"union" else false;
+        if (is_union and fields.len == 1) return fields[0].name;
         return null;
     }
     const payload = switch (value.data) {
@@ -3479,6 +3481,10 @@ fn resolveCoercedIPValueFromIndex(
         if (source_tag != .int and source_tag != .comptime_int) return null;
         if (tag == .truncate) return try analyser.truncateIntValue(ip_ty, ip_index);
         if (tag == .bit_cast) return try analyser.bitCastIntValue(ip_ty, ip_index);
+        if (tag == .int_cast) {
+            const int = analyser.ip.toInt(ip_index, i256) orelse return null;
+            return (try analyser.intValueWithType(ip_ty, int) orelse return null).ipIndex();
+        }
     }
     if (analyser.ip.zigTypeTag(ip_ty) == .float and
         (source_tag == .float or source_tag == .comptime_float))
@@ -11316,48 +11322,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 return try ty.instanceTypeVal(analyser);
             }
             if (analyser.evaluate_comptime_values) {
+                if (analyser.comptime_interpreter) |interpreter| {
+                    return interpreter.evaluateStructInit(handle, lhs, struct_init.ast.fields);
+                }
                 if (lhs.ipIndex()) |type_index| {
                     if (try analyser.resolveCoercedIPValue(type_index, options)) |value| {
                         return Type.fromIP(analyser, type_index, value);
                     }
-                }
-                if (lhs.data == .container and analyser.comptime_interpreter != null) {
-                    const fields = try analyser.arena.alloc(comptime_eval.Value.Field, struct_init.ast.fields.len);
-                    for (struct_init.ast.fields, fields) |field_node, *field| {
-                        const field_name = try analyser.identifierTokenName(tree, tree.firstToken(field_node) - 2) orelse return null;
-                        const field_decl = try analyser.lookupSymbolContainer(try lhs.instanceUnchecked(analyser), field_name, .field) orelse return null;
-                        const field_type = try field_decl.resolveType(analyser) orelse return null;
-                        const expected_type = try field_type.typeOf(analyser);
-                        var field_value = try analyser.resolveAggregateComptimeArgument(expected_type, handle, field_node) orelse
-                            if (expected_type.ipIndex()) |field_type_index|
-                                if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
-                                    Type.fromIP(analyser, field_type_index, value_index)
-                                else
-                                    try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse Type.unknown_type
-                            else
-                                try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse Type.unknown_type;
-                        if (lhs.isUnionType()) {
-                            if (expected_type.ipIndex()) |field_type_index| {
-                                if (field_value.data == .ip_index) {
-                                    const value_index = try analyser.coerceComptimeIPValue(field_type_index, field_value) orelse
-                                        return try lhs.instanceTypeVal(analyser);
-                                    field_value = Type.fromIP(analyser, field_type_index, value_index);
-                                } else {
-                                    const source_type = try field_value.typeOf(analyser);
-                                    if (source_type.ipIndex()) |source_type_index| {
-                                        const source_value = Type.fromIP(analyser, source_type_index, null);
-                                        _ = try analyser.coerceComptimeIPValue(field_type_index, source_value) orelse
-                                            return try lhs.instanceTypeVal(analyser);
-                                    }
-                                }
-                            }
-                        }
-                        field.* = .{
-                            .name = field_name,
-                            .value = field_value,
-                        };
-                    }
-                    return try comptime_eval.Value.create(analyser, lhs, .{ .fields = fields });
                 }
             }
             return try lhs.instanceTypeVal(analyser);
@@ -11491,6 +11462,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     );
                 }
                 if (analyser.evaluate_comptime_values) {
+                    if (analyser.comptime_interpreter) |interpreter| {
+                        return interpreter.evaluateArrayInit(handle, array_ty, array_init_info.ast.elements);
+                    }
                     if (try analyser.resolveArrayValue(array_ty, array_init_info.ast.elements, handle)) |value| {
                         return value;
                     }
@@ -11654,6 +11628,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .union_init => {
                     if (params.len != 3) return null;
+                    if (analyser.comptime_interpreter) |interpreter| {
+                        return interpreter.evaluateUnionInit(handle, params);
+                    }
                     const union_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     const fallback = try union_type.instanceTypeVal(analyser);
                     if (!analyser.evaluate_comptime_values) return fallback;
@@ -16703,7 +16680,11 @@ pub const DeclWithHandle = struct {
                 }
 
                 if (switch_expr_type.isEnumType(analyser)) break :blk switch_expr_type;
-                if (!switch_expr_type_type.isUnionType()) return switch_expr_type;
+                if (!switch_expr_type_type.isUnionType() and
+                    if (switch_expr_type_type.ipIndex()) |index| analyser.ip.zigTypeTag(index) != .@"union" else true)
+                {
+                    return switch_expr_type;
+                }
 
                 if (case.ast.values.len == 0) {
                     if (case.inline_token == null) {
@@ -17083,7 +17064,7 @@ fn identifierTokenMatches(
     return std.mem.eql(u8, name, expected);
 }
 
-fn identifierTokenName(
+pub fn identifierTokenName(
     analyser: *Analyser,
     tree: *const Ast,
     token: Ast.TokenIndex,
