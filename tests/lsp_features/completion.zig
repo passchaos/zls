@@ -3207,6 +3207,84 @@ test "comptime interpreter validates non-IP source union literal payloads" {
     });
 }
 
+test "nested comptime calls validate source union literal payloads" {
+    try testCompletion(
+        \\const U = union(enum) { count: u16, empty };
+        \\var runtime_u8: u8 = undefined;
+        \\fn identity(comptime value: U) U { return value; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = identity(.{ .count = runtime_u8 });
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const U = union(enum) { count: u16, empty };
+        \\var runtime_bool: bool = undefined;
+        \\fn identity(comptime value: U) U { return value; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = identity(.{ .count = runtime_bool });
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const U = union(enum) { text: []const u8, empty };
+        \\fn identity(comptime value: U) U { return value; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = identity(.{ .text = "accepted" });
+        \\    return switch (value) {
+        \\        .text => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const U = union(enum) { count: u16, empty };
+        \\fn identity(comptime value: U) U { return value; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value = identity(.{ .count = "rejected" });
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "source union typed comptime arguments validate runtime unknown payloads" {
     try testCompletion(
         \\const U = union(enum) { count: u16, empty };

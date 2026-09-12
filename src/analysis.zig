@@ -10431,9 +10431,14 @@ fn resolveAggregateComptimeElement(
     if (analyser.comptime_interpreter) |interpreter| {
         const evaluated = try interpreter.evaluateExpression(handle, node) orelse return null;
         if (expected_type.ipIndex()) |expected_index| {
-            if (evaluated.ipIndex()) |value_index| {
-                const coerced = try analyser.coerceIP(expected_index, value_index) orelse return null;
+            if (evaluated.data == .ip_index) {
+                const coerced = try analyser.coerceComptimeIPValue(expected_index, evaluated) orelse return null;
                 return Type.fromIP(analyser, expected_index, coerced);
+            }
+            const source_type = try evaluated.typeOf(analyser);
+            if (source_type.ipIndex()) |source_type_index| {
+                const source_value = Type.fromIP(analyser, source_type_index, null);
+                _ = try analyser.coerceComptimeIPValue(expected_index, source_value) orelse return null;
             }
         }
         return evaluated;
