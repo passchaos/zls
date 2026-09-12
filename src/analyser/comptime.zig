@@ -977,7 +977,17 @@ pub const Interpreter = struct {
         return current;
     }
 
+    fn coerceAssignment(self: *Interpreter, current: Type, value: Type) Error!?Type {
+        const destination = try current.typeOf(self.analyser);
+        return try self.coerce(destination, value) orelse
+            try destination.instanceTypeVal(self.analyser);
+    }
+
     fn writeReference(self: *Interpreter, target: *Value.Reference, value: Type) Error!bool {
+        if (target.path.len == 0) {
+            target.storage.value = try self.coerceAssignment(target.storage.value, value) orelse return false;
+            return true;
+        }
         target.storage.value = try self.replaceReferenceValue(target.storage.value, target.path, value) orelse return false;
         return true;
     }
@@ -1199,7 +1209,7 @@ pub const Interpreter = struct {
             return self.writeReference(pointer.data.comptime_value.data.reference, value);
         }
         const storage = try self.cell(handle, node) orelse return false;
-        storage.value = value;
+        storage.value = try self.coerceAssignment(storage.value, value) orelse return false;
         return true;
     }
 
