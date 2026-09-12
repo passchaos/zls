@@ -1076,6 +1076,14 @@ pub const Interpreter = struct {
         return std.math.cast(usize, len);
     }
 
+    fn unwrapGroupedSource(tree: *const Ast, node: Ast.Node.Index) Ast.Node.Index {
+        var result = node;
+        while (tree.nodeTag(result) == .grouped_expression) {
+            result = tree.nodeData(result).node_and_token[0];
+        }
+        return result;
+    }
+
     fn coerceAssignmentFromSource(
         self: *Interpreter,
         handle: *Handle,
@@ -1088,7 +1096,8 @@ pub const Interpreter = struct {
         const tree = &handle.tree;
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
-            if (tree.fullArrayInit(&buffer, node)) |literal| {
+            const literal_node = unwrapGroupedSource(tree, node);
+            if (tree.fullArrayInit(&buffer, literal_node)) |literal| {
                 if (literal.ast.type_expr == .none) {
                     const len = declared_array_len orelse self.assignmentAggregateLength(destination) orelse
                         return self.coerceAssignmentTo(destination, value);
@@ -1105,7 +1114,7 @@ pub const Interpreter = struct {
                         try self.unknownArray(destination, len);
                 }
             }
-            if (tree.fullStructInit(&buffer, node)) |literal| {
+            if (tree.fullStructInit(&buffer, literal_node)) |literal| {
                 if (literal.ast.type_expr == .none and
                     (destination.isStructType(analyser) or destination.isUnionType()))
                 {
@@ -1584,7 +1593,8 @@ pub const Interpreter = struct {
                 const items = try self.mutableElements(value) orelse return .unknown;
                 if (items.len != assignment.ast.variables.len) return .unknown;
                 var literal_buffer: [2]Ast.Node.Index = undefined;
-                const literal_elements = if (tree.fullArrayInit(&literal_buffer, assignment.ast.value_expr)) |literal|
+                const literal_node = unwrapGroupedSource(tree, assignment.ast.value_expr);
+                const literal_elements = if (tree.fullArrayInit(&literal_buffer, literal_node)) |literal|
                     if (literal.ast.elements.len == items.len) literal.ast.elements else null
                 else
                     null;

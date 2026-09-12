@@ -3833,6 +3833,56 @@ test "comptime interpreter coerces nested aggregate result locations" {
     });
 }
 
+test "comptime interpreter coerces grouped aggregate result locations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const declared: [1]usize = (.{small});
+        \\    var assigned: [1]usize = undefined;
+        \\    assigned = (.{small});
+        \\    return struct {
+        \\        items: [if (@TypeOf(declared[0]) == usize and @TypeOf(assigned[0]) == usize)
+        \\            declared[0] + assigned[0]
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const declared: [1]usize, const declared_config: Config =
+        \\        (.{ .{small}, .{ .capacity = small } });
+        \\    var assigned: [1]usize = undefined;
+        \\    var assigned_config = Config{ .capacity = 0 };
+        \\    assigned, assigned_config = (.{ .{small}, .{ .capacity = small } });
+        \\    return struct {
+        \\        items: [if (@TypeOf(declared[0]) == usize and
+        \\            @TypeOf(declared_config.capacity) == usize and
+        \\            @TypeOf(assigned[0]) == usize and
+        \\            @TypeOf(assigned_config.capacity) == usize)
+        \\            declared[0] + declared_config.capacity + assigned[0] + assigned_config.capacity
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[16]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {
