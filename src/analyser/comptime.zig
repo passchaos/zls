@@ -977,11 +977,6 @@ pub const Interpreter = struct {
         return current;
     }
 
-    fn coerceAssignment(self: *Interpreter, current: Type, value: Type) Error!?Type {
-        const destination = try current.typeOf(self.analyser);
-        return self.coerceAssignmentTo(destination, value);
-    }
-
     fn coerceAssignmentTo(self: *Interpreter, destination: Type, value: Type) Error!?Type {
         return try self.coerce(destination, value) orelse
             try destination.instanceTypeVal(self.analyser);
@@ -1031,8 +1026,87 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(self.analyser, destination, .{ .fields = coerced }));
     }
 
-    fn writeReference(self: *Interpreter, target: *Value.Reference, value: Type) Error!bool {
+    fn assignmentAggregateLength(self: *Interpreter, destination: Type) ?usize {
+        if (!destination.is_type_val) return null;
+        const len: u64 = switch (destination.data) {
+            .array => |array| array.elem_count orelse return null,
+            .vector => |vector| vector.len,
+            .tuple => |items| items.len,
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
+                .array_type => |array| array.len,
+                .vector_type => |vector| vector.len,
+                .tuple_type => |tuple| tuple.types.len,
+                else => return null,
+            },
+            else => return null,
+        };
+        return std.math.cast(usize, len);
+    }
+
+    fn coerceAssignmentFromSource(
+        self: *Interpreter,
+        handle: *Handle,
+        destination: Type,
+        value: Type,
+        source_node: ?Ast.Node.Index,
+        declared_array_len: ?usize,
+    ) Error!?Type {
+        const analyser = self.analyser;
+        const tree = &handle.tree;
+        var buffer: [2]Ast.Node.Index = undefined;
+        if (source_node) |node| {
+            if (tree.fullArrayInit(&buffer, node)) |literal| {
+                if (literal.ast.type_expr == .none) {
+                    const len = declared_array_len orelse self.assignmentAggregateLength(destination) orelse
+                        return self.coerceAssignmentTo(destination, value);
+                    if (len > self.budget.steps) return destination.instanceTypeVal(analyser);
+                    const items = try self.mutableElements(value);
+                    return if (items != null and items.?.len == len)
+                        try self.coerceArrayLiteral(destination, items.?) orelse try self.unknownArray(destination, len)
+                    else
+                        try self.unknownArray(destination, len);
+                }
+            }
+            if (tree.fullStructInit(&buffer, node)) |literal| {
+                if (literal.ast.type_expr == .none and
+                    (destination.isStructType(analyser) or destination.isUnionType()))
+                {
+                    const fields = Value.fieldEntries(value);
+                    return if (fields != null and (!destination.isUnionType() or literal.ast.fields.len == 1))
+                        try self.coerceFieldLiteral(destination, fields.?) orelse try destination.instanceTypeVal(analyser)
+                    else
+                        try destination.instanceTypeVal(analyser);
+                }
+            }
+        }
+        if (declared_array_len) |len| {
+            const items = try self.mutableElements(value);
+            return if (items != null)
+                try self.coerce(destination, value) orelse try self.unknownArray(destination, len)
+            else
+                try self.unknownArray(destination, len);
+        }
+        return self.coerceAssignmentTo(destination, value);
+    }
+
+    fn writeReference(
+        self: *Interpreter,
+        handle: *Handle,
+        target: *Value.Reference,
+        value: Type,
+        source_node: ?Ast.Node.Index,
+    ) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
+        if (target.path.len == 0) {
+            target.storage.value = try self.coerceAssignmentFromSource(
+                handle,
+                destination,
+                value,
+                source_node,
+                null,
+            ) orelse return false;
+            return true;
+        }
         target.storage.value = try self.replaceReferenceValue(target.storage.value, destination, target.path, value) orelse return false;
         return true;
     }
@@ -1189,12 +1263,18 @@ pub const Interpreter = struct {
 
     fn writeAggregate(self: *Interpreter, handle: *Handle, base: Ast.Node.Index, current: Type, updated: Type) Error!bool {
         if (current.data == .comptime_value and current.data.comptime_value.data == .reference) {
-            return self.writeReference(current.data.comptime_value.data.reference, updated);
+            return self.writeReference(handle, current.data.comptime_value.data.reference, updated, null);
         }
-        return self.write(handle, base, updated);
+        return self.write(handle, base, updated, null);
     }
 
-    fn write(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, value: Type) Error!bool {
+    fn write(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        value: Type,
+        source_node: ?Ast.Node.Index,
+    ) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
         if (tree.nodeTag(node) == .array_access) {
@@ -1259,10 +1339,17 @@ pub const Interpreter = struct {
         if (tree.nodeTag(node) == .deref) {
             const pointer = try self.eval(handle, tree.nodeData(node).node) orelse return false;
             if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return false;
-            return self.writeReference(pointer.data.comptime_value.data.reference, value);
+            return self.writeReference(handle, pointer.data.comptime_value.data.reference, value, source_node);
         }
         const storage = try self.cell(handle, node) orelse return false;
-        storage.value = try self.coerceAssignment(storage.value, value) orelse return false;
+        const destination = try storage.value.typeOf(analyser);
+        storage.value = try self.coerceAssignmentFromSource(
+            handle,
+            destination,
+            value,
+            source_node,
+            null,
+        ) orelse return false;
         return true;
     }
 
@@ -1298,38 +1385,8 @@ pub const Interpreter = struct {
             if (tree.fullArrayType(type_node)) |array| {
                 const len = try self.integer(handle, array.ast.elem_count) orelse return false;
                 if (len > self.budget.steps) return false;
-                const items = try self.mutableElements(value);
-                var buffer: [2]Ast.Node.Index = undefined;
-                const is_result_location_literal = if (initial_node) |node|
-                    if (tree.fullArrayInit(&buffer, node)) |literal|
-                        literal.ast.type_expr == .none
-                    else
-                        false
-                else
-                    false;
-                value = if (is_result_location_literal and items != null and items.?.len == len)
-                    try self.coerceArrayLiteral(ty, items.?) orelse try self.unknownArray(ty, len) orelse return false
-                else if (!is_result_location_literal and items != null)
-                    try self.coerce(ty, value) orelse try self.unknownArray(ty, len) orelse return false
-                else
-                    try self.unknownArray(ty, len) orelse return false;
-            } else if (ty.isStructType(analyser) or ty.isUnionType()) {
-                var buffer: [2]Ast.Node.Index = undefined;
-                value = if (initial_node) |node|
-                    if (tree.fullStructInit(&buffer, node)) |literal|
-                        if (literal.ast.type_expr == .none and
-                            Value.fieldEntries(value) != null and
-                            (!ty.isUnionType() or literal.ast.fields.len == 1))
-                            try self.coerceFieldLiteral(ty, Value.fieldEntries(value).?) orelse
-                                try ty.instanceTypeVal(analyser) orelse return false
-                        else
-                            try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false
-                    else
-                        try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false
-                else
-                    try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false;
-            } else value = try self.coerce(ty, value) orelse
-                try ty.instanceTypeVal(analyser) orelse return false;
+                value = try self.coerceAssignmentFromSource(handle, ty, value, initial_node, len) orelse return false;
+            } else value = try self.coerceAssignmentFromSource(handle, ty, value, initial_node, null) orelse return false;
         }
         const token = decl.ast.mut_token + 1;
         if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) {
@@ -1475,7 +1532,7 @@ pub const Interpreter = struct {
                     return .next;
                 }
                 const value = try self.eval(handle, rhs) orelse return .unknown;
-                if (!try self.write(handle, lhs, value)) return .unknown;
+                if (!try self.write(handle, lhs, value, rhs)) return .unknown;
                 return .next;
             },
             .assign_destructure => {
@@ -1495,7 +1552,7 @@ pub const Interpreter = struct {
                         continue;
                     }
                     if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) continue;
-                    if (!try self.write(handle, lhs, item)) return .unknown;
+                    if (!try self.write(handle, lhs, item, null)) return .unknown;
                 }
                 return .next;
             },
@@ -1541,7 +1598,7 @@ pub const Interpreter = struct {
                 const lhs_value = try self.eval(handle, lhs) orelse return .unknown;
                 const rhs_value = try self.eval(handle, rhs) orelse return .unknown;
                 const value = try analyser.resolveComptimeBinaryValue(operation_tag, lhs_value, rhs_value, .{}) orelse return .unknown;
-                if (!try self.write(handle, lhs, value)) return .unknown;
+                if (!try self.write(handle, lhs, value, null)) return .unknown;
                 return .next;
             },
             .call, .call_comma, .call_one, .call_one_comma => return self.call(handle, node),
