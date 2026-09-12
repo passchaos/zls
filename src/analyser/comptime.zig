@@ -166,6 +166,10 @@ pub const Interpreter = struct {
         known: u64,
         unknown,
     };
+    const EvaluatedSource = struct {
+        value: Type,
+        source_node: ?Ast.Node.Index,
+    };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -823,6 +827,34 @@ pub const Interpreter = struct {
             else => {},
         }
         return self.analyser.resolveTypeOfNode(.of(node, handle));
+    }
+
+    fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
+        const tree = &handle.tree;
+        return switch (tree.nodeTag(node)) {
+            .grouped_expression => blk: {
+                if (!self.tick()) return null;
+                break :blk self.evalSource(handle, tree.nodeData(node).node_and_token[0]);
+            },
+            .if_simple, .@"if" => blk: {
+                if (!self.tick()) return null;
+                const target = try self.ifTarget(handle, node) orelse break :blk .{
+                    .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
+                    .source_node = null,
+                };
+                break :blk switch (target) {
+                    .none => .{
+                        .value = Type.fromIP(self.analyser, .void_type, .void_value),
+                        .source_node = null,
+                    },
+                    .node => |target_node| self.evalSource(handle, target_node),
+                };
+            },
+            else => .{
+                .value = try self.eval(handle, node) orelse return null,
+                .source_node = node,
+            },
+        };
     }
 
     fn integer(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?usize {
@@ -1541,8 +1573,10 @@ pub const Interpreter = struct {
         }
         if (tree.fullVarDecl(node)) |decl| {
             const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
-            const value = try self.eval(handle, init_node) orelse Type.unknown_type;
-            if (!try self.declare(handle, decl, value, init_node)) return .unknown;
+            const evaluated = try self.evalSource(handle, init_node);
+            const value = if (evaluated) |result| result.value else Type.unknown_type;
+            const source_node = if (evaluated) |result| result.source_node else init_node;
+            if (!try self.declare(handle, decl, value, source_node)) return .unknown;
             return .next;
         }
         switch (tree.nodeTag(node)) {
@@ -1583,19 +1617,22 @@ pub const Interpreter = struct {
                     _ = try self.eval(handle, rhs);
                     return .next;
                 }
-                const value = try self.eval(handle, rhs) orelse return .unknown;
-                if (!try self.write(handle, lhs, value, rhs)) return .unknown;
+                const evaluated = try self.evalSource(handle, rhs) orelse return .unknown;
+                if (!try self.write(handle, lhs, evaluated.value, evaluated.source_node)) return .unknown;
                 return .next;
             },
             .assign_destructure => {
                 const assignment = tree.assignDestructure(node);
-                const value = try self.eval(handle, assignment.ast.value_expr) orelse return .unknown;
+                const evaluated = try self.evalSource(handle, assignment.ast.value_expr) orelse return .unknown;
+                const value = evaluated.value;
                 const items = try self.mutableElements(value) orelse return .unknown;
                 if (items.len != assignment.ast.variables.len) return .unknown;
                 var literal_buffer: [2]Ast.Node.Index = undefined;
-                const literal_node = unwrapGroupedSource(tree, assignment.ast.value_expr);
-                const literal_elements = if (tree.fullArrayInit(&literal_buffer, literal_node)) |literal|
-                    if (literal.ast.elements.len == items.len) literal.ast.elements else null
+                const literal_elements = if (evaluated.source_node) |source_node|
+                    if (tree.fullArrayInit(&literal_buffer, unwrapGroupedSource(tree, source_node))) |literal|
+                        if (literal.ast.elements.len == items.len) literal.ast.elements else null
+                    else
+                        null
                 else
                     null;
                 for (assignment.ast.variables, items, 0..) |lhs, item, index| {
