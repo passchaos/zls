@@ -1990,6 +1990,10 @@ pub fn resolveDerefType(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?
 }
 
 pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?Binding {
+    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .reference) return .{
+        .type = pointer.data.comptime_value.data.reference.value,
+        .is_const = false,
+    };
     const runtime_pointer = pointer.runtimeType(analyser);
     if (runtime_pointer.is_type_val) return null;
 

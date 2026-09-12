@@ -5844,6 +5844,23 @@ test "generic function with comptime struct field mutation" {
     });
 }
 
+test "generic function with comptime pointer deref mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: usize = 0;
+        \\    var capacity_ptr = &capacity;
+        \\    capacity_ptr.* = 1;
+        \\    capacity_ptr.* += base;
+        \\    capacity_ptr.* *= 2;
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+    });
+}
+
 test "generic function with runtime if before return" {
     try testCompletion(
         \\var runtime: bool = undefined;

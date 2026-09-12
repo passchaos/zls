@@ -294,6 +294,11 @@ pub const Interpreter = struct {
             }
             return false;
         }
+        if (tree.nodeTag(node) == .deref) {
+            const storage = try self.mutationStorage(handle, tree.nodeData(node).node) orelse return false;
+            storage.value = value;
+            return true;
+        }
         const storage = try self.cell(handle, node) orelse return false;
         storage.value = value;
         return true;
