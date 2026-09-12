@@ -5924,6 +5924,44 @@ test "generic function with comptime switch mutation" {
     });
 }
 
+test "generic function with comptime switch pointer capture mutation" {
+    try testCompletion(
+        \\const Config = union(enum) { fixed: usize, fallback };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var config = Config{ .fixed = 1 };
+        \\    switch (config) {
+        \\        .fixed => |*value| value.* += base,
+        \\        .fallback => {},
+        \\    }
+        \\    return struct { items: [config.fixed]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = union(enum) { fixed: usize, fallback };
+        \\const State = struct { config: Config };
+        \\fn Buffer(comptime scale: usize) type {
+        \\    var state = State{ .config = Config{ .fixed = 2 } };
+        \\    switch (state.config) {
+        \\        .fixed => |*value| {
+        \\            state.config.fixed += 1;
+        \\            value.* *= scale;
+        \\        },
+        \\        .fallback => {},
+        \\    }
+        \\    return struct { items: [state.config.fixed]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function with comptime struct field mutation" {
     try testCompletion(
         \\const Config = struct { capacity: usize };

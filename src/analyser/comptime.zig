@@ -405,6 +405,30 @@ pub const Interpreter = struct {
         return true;
     }
 
+    fn bindSwitchPointerPayload(
+        self: *Interpreter,
+        handle: *Handle,
+        switch_node: Ast.full.Switch,
+        selected_case: Ast.full.SwitchCase,
+        payload_token: Ast.TokenIndex,
+    ) Error!bool {
+        const tree = &handle.tree;
+        if (tree.tokenTag(payload_token) != .asterisk) return true;
+        const union_reference = try self.referenceForNode(handle, switch_node.ast.condition) orelse return false;
+        const union_value = try self.readReference(union_reference) orelse return false;
+        const active_field = try self.analyser.resolveKnownUnionFieldName(union_value) orelse return false;
+        for (selected_case.ast.values) |case_value| {
+            if (tree.nodeTag(case_value) != .enum_literal) continue;
+            const case_name = offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(case_value));
+            if (!std.mem.eql(u8, active_field, case_name)) continue;
+            const payload_reference = try self.extendReference(union_reference, .{ .field = active_field });
+            const value = try self.referenceValue(payload_reference) orelse return false;
+            try self.bind(handle, payload_token + 1, value);
+            return true;
+        }
+        return false;
+    }
+
     fn deref(self: *Interpreter, value: Type) Error!?Type {
         if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
             return self.readReference(value.data.comptime_value.data.reference);
@@ -606,8 +630,9 @@ pub const Interpreter = struct {
                     const switch_case = tree.fullSwitchCase(case).?;
                     if (switch_case.ast.target_expr != target) continue;
                     if (switch_case.payload_token) |payload_token| {
-                        if (tree.tokenTag(payload_token) == .asterisk) return .unknown;
-                        if (tree.tokenTag(payload_token + 1) == .comma) {
+                        if (!try self.bindSwitchPointerPayload(handle, switch_node, switch_case, payload_token)) return .unknown;
+                        const name_token = payload_token + @intFromBool(tree.tokenTag(payload_token) == .asterisk);
+                        if (tree.tokenTag(name_token + 1) == .comma) {
                             const condition = try self.eval(handle, switch_node.ast.condition) orelse return .unknown;
                             if (try analyser.resolveKnownUnionFieldName(condition) == null) return .unknown;
                         }
