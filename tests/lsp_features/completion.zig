@@ -6284,6 +6284,75 @@ test "generic function with comptime labeled block breaks" {
     });
 }
 
+test "generic function with comptime defer mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: usize = base;
+        \\    {
+        \\        defer capacity += 2;
+        \\        defer capacity *= 3;
+        \\        capacity += 4;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(1) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[17]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: usize = base;
+        \\    outer: {
+        \\        defer capacity *= 3;
+        \\        {
+        \\            defer capacity += 2;
+        \\            break :outer;
+        \\        }
+        \\        capacity = 100;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(1) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var capacity: usize = 1;
+        \\    var index: usize = 0;
+        \\    while (index < limit) : (index += 1) {
+        \\        defer capacity += 1;
+        \\        capacity *= 2;
+        \\        continue;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var value: usize = base;
+        \\    defer value *= 10;
+        \\    return if (value == 2)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime labeled loop breaks" {
     try testCompletion(
         \\fn Buffer(comptime limit: usize) type {

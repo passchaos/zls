@@ -565,20 +565,41 @@ pub const Interpreter = struct {
         const tree = &handle.tree;
         var buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&buffer, node)) |statements| {
+            var executed_count: usize = 0;
+            var block_flow: Flow = .next;
             for (statements) |child| {
+                executed_count += 1;
+                if (tree.nodeTag(child) == .@"defer") {
+                    continue;
+                }
                 const flow = try self.statement(handle, child);
                 switch (flow) {
                     .next => {},
                     .stopped => |target| {
-                        const label_token = ast.blockLabel(tree, node) orelse return flow;
-                        const target_token = target orelse return flow;
-                        if (!std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_token))) return flow;
-                        return .next;
+                        const label_token = ast.blockLabel(tree, node) orelse {
+                            block_flow = flow;
+                            break;
+                        };
+                        const target_token = target orelse {
+                            block_flow = flow;
+                            break;
+                        };
+                        block_flow = if (std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_token))) .next else flow;
+                        break;
                     },
-                    else => return flow,
+                    else => {
+                        block_flow = flow;
+                        break;
+                    },
                 }
             }
-            return .next;
+            while (executed_count > 0) {
+                executed_count -= 1;
+                const child = statements[executed_count];
+                if (tree.nodeTag(child) != .@"defer") continue;
+                if (try self.statement(handle, tree.nodeData(child).node) != .next) return .unknown;
+            }
+            return block_flow;
         }
         if (tree.fullVarDecl(node)) |decl| {
             const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
