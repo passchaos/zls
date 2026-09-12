@@ -7311,6 +7311,39 @@ test "generic function with comptime optional payload" {
     });
 }
 
+test "generic function with comptime orelse expression mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime value: ?usize) type {
+        \\    var total: usize = 1;
+        \\    const selected = value orelse fallback: {
+        \\        defer total += 1;
+        \\        total *= 3;
+        \\        break :fallback total;
+        \\    };
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(null) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime value: ?usize) type {
+        \\    var total: usize = 1;
+        \\    const selected = value orelse fallback: {
+        \\        total = 99;
+        \\        break :fallback total;
+        \\    };
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
         \\fn Select() type {

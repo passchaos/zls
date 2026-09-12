@@ -158,6 +158,10 @@ pub const Interpreter = struct {
         none,
         node: Ast.Node.Index,
     };
+    const OptionalValue = union(enum) {
+        absent,
+        payload: Type,
+    };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -272,6 +276,14 @@ pub const Interpreter = struct {
             .@"switch", .switch_comma => {
                 const target = try self.switchTarget(handle, node) orelse return null;
                 return self.eval(handle, target);
+            },
+            .@"orelse" => {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const optional = try self.eval(handle, lhs) orelse return null;
+                return switch (try self.optionalValue(optional) orelse return null) {
+                    .absent => self.eval(handle, rhs),
+                    .payload => |payload| payload,
+                };
             },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
@@ -485,6 +497,28 @@ pub const Interpreter = struct {
         if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
             return self.readReference(value.data.comptime_value.data.reference);
         return value;
+    }
+
+    fn optionalValue(self: *Interpreter, value: Type) Error!?OptionalValue {
+        const resolved = try self.deref(value) orelse return null;
+        if (resolved.data == .comptime_value) {
+            return switch (resolved.data.comptime_value.data) {
+                .optional => |payload| if (payload) |item| .{ .payload = item } else .absent,
+                else => null,
+            };
+        }
+        const payload = switch (resolved.data) {
+            .ip_index => |payload| payload,
+            else => return null,
+        };
+        const index = payload.index orelse return null;
+        return switch (self.analyser.ip.indexToKey(index)) {
+            .null_value => .absent,
+            .optional_value => |optional| .{
+                .payload = Type.fromIP(self.analyser, self.analyser.ip.typeOf(optional.val), optional.val),
+            },
+            else => null,
+        };
     }
 
     fn mutableElements(self: *Interpreter, value: Type) Error!?[]const Type {
