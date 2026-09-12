@@ -3471,6 +3471,41 @@ fn resolveCoercedIPValueFromIndex(
 
 pub const ComptimeCastKind = enum { int_cast, truncate, bit_cast, int_from_float, float_from_int, float_cast };
 
+fn hasWellDefinedRuntimeLayout(analyser: *Analyser, type_index: InternPool.Index) bool {
+    const type_tag = analyser.ip.zigTypeTag(type_index) orelse return false;
+    return switch (type_tag) {
+        .bool, .float, .int, .void, .vector => true,
+        .pointer => analyser.ip.indexToKey(type_index).pointer_type.flags.size != .slice,
+        .array => analyser.hasWellDefinedRuntimeLayout(
+            analyser.ip.indexToKey(type_index).array_type.child,
+        ),
+        .@"struct" => analyser.ip.getStruct(
+            analyser.ip.indexToKey(type_index).struct_type,
+        ).layout != .auto,
+        .@"union" => analyser.ip.getUnion(
+            analyser.ip.indexToKey(type_index).union_type,
+        ).layout != .auto,
+        else => false,
+    };
+}
+
+fn isValidRuntimeBitCastType(analyser: *Analyser, type_index: InternPool.Index) bool {
+    const type_tag = analyser.ip.zigTypeTag(type_index) orelse return false;
+    return switch (type_tag) {
+        .bool, .float, .int, .vector => true,
+        .array => analyser.hasWellDefinedRuntimeLayout(
+            analyser.ip.indexToKey(type_index).array_type.child,
+        ),
+        .@"struct" => analyser.ip.getStruct(
+            analyser.ip.indexToKey(type_index).struct_type,
+        ).layout != .auto,
+        .@"union" => analyser.ip.getUnion(
+            analyser.ip.indexToKey(type_index).union_type,
+        ).layout != .auto,
+        else => false,
+    };
+}
+
 fn isValidRuntimeScalarCast(
     analyser: *Analyser,
     destination_type: InternPool.Index,
@@ -3507,10 +3542,9 @@ fn isValidRuntimeCast(
 ) bool {
     const destination_tag = analyser.ip.zigTypeTag(destination_type) orelse return false;
     const source_tag = analyser.ip.zigTypeTag(source_type) orelse return false;
-    if (destination_tag != .vector or source_tag != .vector) {
-        return analyser.isValidRuntimeScalarCast(destination_type, source_type, kind);
-    }
     if (kind == .bit_cast) {
+        if (!analyser.isValidRuntimeBitCastType(destination_type) or
+            !analyser.isValidRuntimeBitCastType(source_type)) return false;
         const destination_bits = analyser.resolveTypeBitSize(
             Type.fromIP(analyser, .type_type, destination_type),
         ) orelse return false;
@@ -3518,6 +3552,9 @@ fn isValidRuntimeCast(
             Type.fromIP(analyser, .type_type, source_type),
         ) orelse return false;
         return destination_bits == source_bits;
+    }
+    if (destination_tag != .vector or source_tag != .vector) {
+        return analyser.isValidRuntimeScalarCast(destination_type, source_type, kind);
     }
 
     const destination = analyser.ip.indexToKey(destination_type).vector_type;

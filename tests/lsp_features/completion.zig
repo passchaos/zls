@@ -6038,6 +6038,55 @@ test "generic function preserves runtime unknown contextual vector bitCast type"
     });
 }
 
+test "generic function preserves runtime unknown general bitCast types" {
+    try testCompletion(
+        \\var runtime_scalar: u32 = undefined;
+        \\var runtime_float: f32 = undefined;
+        \\var runtime_vector: @Vector(4, u8) = undefined;
+        \\var runtime_array: [4]u8 = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 0;
+        \\    const vector = @as(@Vector(4, u8), @bitCast(value: {
+        \\        total += 1;
+        \\        break :value runtime_scalar;
+        \\    }));
+        \\    const scalar = @as(u32, @bitCast(value: {
+        \\        total += 1;
+        \\        break :value runtime_vector;
+        \\    }));
+        \\    const float_bits = @as(u32, @bitCast(value: {
+        \\        total += 1;
+        \\        break :value runtime_float;
+        \\    }));
+        \\    const array = @as([4]u8, @bitCast(value: {
+        \\        total += 1;
+        \\        break :value runtime_vector;
+        \\    }));
+        \\    const array_vector = @as(@Vector(4, u8), @bitCast(value: {
+        \\        total += 1;
+        \\        break :value runtime_array;
+        \\    }));
+        \\    return struct {
+        \\        vector: @TypeOf(vector),
+        \\        scalar: @TypeOf(scalar),
+        \\        float_bits: @TypeOf(float_bits),
+        \\        array: @TypeOf(array),
+        \\        array_vector: @TypeOf(array_vector),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "array", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "array_vector", .kind = .Field, .detail = "@Vector(4,u8)" },
+        .{ .label = "float_bits", .kind = .Field, .detail = "u32" },
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "scalar", .kind = .Field, .detail = "u32" },
+        .{ .label = "vector", .kind = .Field, .detail = "@Vector(4,u8)" },
+    });
+}
+
 test "generic function with comptime unknown field expressions" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {
