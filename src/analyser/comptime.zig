@@ -400,13 +400,21 @@ pub const Interpreter = struct {
                 return self.analyser.resolveDerefType(pointer);
             },
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
-                if (std.mem.eql(u8, handle.tree.tokenSlice(handle.tree.nodeMainToken(node)), "@as")) {
+                const name = handle.tree.tokenSlice(handle.tree.nodeMainToken(node));
+                if (std.mem.eql(u8, name, "@as")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
                     const destination = try self.eval(handle, params[0]) orelse return null;
                     const value = try self.eval(handle, params[1]) orelse return null;
                     return self.coerce(destination, value);
+                }
+                if (std.mem.eql(u8, name, "@intFromEnum")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    return self.analyser.resolveComptimeIntFromEnumValue(operand);
                 }
             },
             .call, .call_comma, .call_one, .call_one_comma => {

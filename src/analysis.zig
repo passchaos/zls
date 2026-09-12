@@ -4845,6 +4845,38 @@ fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) Error!Type {
     };
 }
 
+pub fn resolveComptimeIntFromEnumValue(analyser: *Analyser, operand: Type) Error!?Type {
+    if (operand.data == .enum_value) {
+        const int_value = operand.data.enum_value.int_value orelse return .unknown_type;
+        return Type.fromIP(analyser, analyser.ip.typeOf(int_value), int_value);
+    }
+    const enum_type = if (operand.is_type_val) operand else try operand.typeOf(analyser);
+    const container = switch (enum_type.data) {
+        .container => |container| container,
+        else => return .unknown_type,
+    };
+    const enum_tree = &container.scope_handle.handle.tree;
+    const enum_node = container.scope_handle.toNode();
+    var enum_buffer: [2]Ast.Node.Index = undefined;
+    const declaration = enum_tree.fullContainerDecl(&enum_buffer, enum_node) orelse return .unknown_type;
+    if (enum_tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return .unknown_type;
+    if (declaration.ast.arg.unwrap()) |arg| {
+        const tag_type = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(arg, container.scope_handle.handle),
+            .container_type = enum_type,
+        }) orelse return .unknown_type;
+        return try tag_type.instanceTypeVal(analyser) orelse .unknown_type;
+    }
+    var field_count: u32 = 0;
+    for (declaration.ast.members) |member| {
+        if (enum_tree.fullContainerField(member) != null) field_count += 1;
+    }
+    if (field_count == 0) return .unknown_type;
+    const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
+    const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+    return Type.fromIP(analyser, tag_type, null);
+}
+
 fn resolveEnumTagIntValue(
     analyser: *Analyser,
     enum_type: Type,
@@ -10891,35 +10923,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .int_from_enum => {
                     if (params.len != 1) return null;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    if (operand.data == .enum_value) {
-                        const int_value = operand.data.enum_value.int_value orelse return .unknown_type;
-                        return Type.fromIP(analyser, analyser.ip.typeOf(int_value), int_value);
-                    }
-                    const enum_type = if (operand.is_type_val) operand else try operand.typeOf(analyser);
-                    const container = switch (enum_type.data) {
-                        .container => |container| container,
-                        else => return .unknown_type,
-                    };
-                    const enum_tree = &container.scope_handle.handle.tree;
-                    const enum_node = container.scope_handle.toNode();
-                    var enum_buffer: [2]Ast.Node.Index = undefined;
-                    const declaration = enum_tree.fullContainerDecl(&enum_buffer, enum_node) orelse return .unknown_type;
-                    if (enum_tree.tokenTag(declaration.ast.main_token) != .keyword_enum) return .unknown_type;
-                    if (declaration.ast.arg.unwrap()) |arg| {
-                        const tag_type = try analyser.resolveTypeOfNodeInternal(.{
-                            .node_handle = .of(arg, container.scope_handle.handle),
-                            .container_type = enum_type,
-                        }) orelse return .unknown_type;
-                        return try tag_type.instanceTypeVal(analyser) orelse .unknown_type;
-                    }
-                    var field_count: u32 = 0;
-                    for (declaration.ast.members) |member| {
-                        if (enum_tree.fullContainerField(member) != null) field_count += 1;
-                    }
-                    if (field_count == 0) return .unknown_type;
-                    const bits: u16 = @intCast(std.math.log2_int_ceil(u32, field_count));
-                    const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
-                    return Type.fromIP(analyser, tag_type, null);
+                    return analyser.resolveComptimeIntFromEnumValue(operand);
                 },
                 .tag_name => {
                     if (params.len != 1) return null;

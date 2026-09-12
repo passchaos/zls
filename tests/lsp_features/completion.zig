@@ -7040,6 +7040,25 @@ test "generic function with comptime intFromEnum" {
     });
 }
 
+test "generic function with nested comptime intFromEnum mutation" {
+    try testCompletion(
+        \\const Mode = enum(u8) { fast = 3, safe = 7 };
+        \\fn Buffer(comptime mode: Mode) type {
+        \\    var total: usize = 1;
+        \\    const raw = @intFromEnum(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value mode;
+        \\    });
+        \\    return struct { items: [raw * total]u8 };
+        \\}
+        \\const buffer: Buffer(.safe) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[21]u8" },
+    });
+}
+
 test "generic function with comptime enum tagName length" {
     try testCompletion(
         \\const Mode = enum { @"safe\x20mode" };
