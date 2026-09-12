@@ -5248,6 +5248,26 @@ test "generic function with nested comptime control builtin mutations" {
     });
 }
 
+test "generic function with nested comptime compileLog mutations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    _ = @compileLog(first: {
+        \\        total += 1;
+        \\        break :first total;
+        \\    }, second: {
+        \\        total *= 2;
+        \\        break :second total;
+        \\    });
+        \\    return struct { order: [total]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with nested comptime min max mutations" {
     try testCompletion(
         \\fn Select(comptime a: usize, comptime b: usize, comptime c: usize) type {
