@@ -7548,6 +7548,15 @@ fn resolveComparisonValue(
     return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
 }
 
+pub fn resolveComptimeComparisonValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) ?Type {
+    return analyser.resolveComparisonValue(tag, lhs, rhs);
+}
+
 fn isIntegerValue(analyser: *Analyser, index: InternPool.Index) bool {
     return switch (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) orelse return false) {
         .int, .comptime_int => true,

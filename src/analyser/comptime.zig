@@ -319,6 +319,19 @@ pub const Interpreter = struct {
                 const rhs_value = try self.eval(handle, rhs) orelse return null;
                 return self.analyser.resolveComptimeBinaryValue(tag, lhs_value, rhs_value);
             },
+            .equal_equal,
+            .bang_equal,
+            .less_than,
+            .greater_than,
+            .less_or_equal,
+            .greater_or_equal,
+            => |tag| {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const lhs_value = try self.eval(handle, lhs) orelse return null;
+                const rhs_value = try self.eval(handle, rhs) orelse return null;
+                return self.analyser.resolveComptimeComparisonValue(tag, lhs_value, rhs_value) orelse
+                    self.analyser.resolveTypeOfNode(.of(node, handle));
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },
