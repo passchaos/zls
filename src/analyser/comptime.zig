@@ -149,7 +149,7 @@ pub const Interpreter = struct {
     const Flow = union(enum) {
         next,
         value: Type,
-        returned: Type,
+        returned: EvaluatedSource,
         continued: ?Ast.TokenIndex,
         stopped: struct { target: ?Ast.TokenIndex, value: ?Type },
         unknown,
@@ -197,7 +197,7 @@ pub const Interpreter = struct {
             .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
         };
         return switch (try interpreter.run(handle, body)) {
-            .returned => |value| value,
+            .returned => |result| result.value,
             else => null,
         };
     }
@@ -1635,10 +1635,16 @@ pub const Interpreter = struct {
         }
         switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => return self.statement(handle, tree.nodeData(node).node),
-            .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression|
-                try self.captureBindings(try self.eval(handle, expression) orelse return .unknown)
-            else
-                Type.fromIP(analyser, .void_type, .void_value) },
+            .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression| blk: {
+                const result = try self.evalSource(handle, expression) orelse return .unknown;
+                break :blk .{
+                    .value = try self.captureBindings(result.value),
+                    .source_node = result.source_node,
+                };
+            } else .{
+                .value = Type.fromIP(analyser, .void_type, .void_value),
+                .source_node = null,
+            } },
             .@"continue" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
                 if (operand != .none) return .unknown;
@@ -1859,7 +1865,7 @@ pub const Interpreter = struct {
                     return .next;
                 },
                 .value => return .unknown,
-                .returned => |value| return .{ .returned = value },
+                .returned => |result| return .{ .returned = result },
                 .unknown => return .unknown,
             }
             if (loop_node.ast.cont_expr.unwrap()) |cont_expr| {
@@ -1894,21 +1900,35 @@ pub const Interpreter = struct {
             }
         }
         for (info.parameters, call_node.ast.params) |parameter, argument| {
-            var value = if (parameter.modifier == .comptime_param and parameter.type.data != .anytype_parameter)
-                try analyser.resolveAggregateComptimeArgument(parameter.type, handle, argument) orelse try self.eval(handle, argument) orelse return .unknown
-            else
-                try self.eval(handle, argument) orelse return .unknown;
+            var evaluated: EvaluatedSource = if (parameter.modifier == .comptime_param and parameter.type.data != .anytype_parameter) blk: {
+                if (try analyser.resolveAggregateComptimeArgument(parameter.type, handle, argument)) |value| {
+                    break :blk .{ .value = value, .source_node = argument };
+                }
+                break :blk try self.evalSource(handle, argument) orelse return .unknown;
+            } else .{
+                .value = try self.eval(handle, argument) orelse return .unknown,
+                .source_node = argument,
+            };
             if (parameter.modifier == .comptime_param and parameter.type.is_type_val) {
-                value = try self.coerce(parameter.type, value) orelse return .unknown;
+                evaluated.value = if (self.optionalPayloadType(parameter.type) != null)
+                    try self.coerceAssignmentFromSource(
+                        handle,
+                        parameter.type,
+                        evaluated.value,
+                        evaluated.source_node,
+                        null,
+                    ) orelse return .unknown
+                else
+                    try self.coerce(parameter.type, evaluated.value) orelse return .unknown;
             }
-            try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
+            try child.bind(info.handle, parameter.name_token orelse return .unknown, evaluated.value);
             if (parameter.type.data == .anytype_parameter) {
-                try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
+                try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try evaluated.value.typeOf(analyser));
             }
         }
         const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
         return switch (flow) {
-            .returned => |value| blk: {
+            .returned => |result| blk: {
                 const is_type_function = Analyser.isTypeFunction(&info.handle.tree, fn_proto);
                 const return_type = if (is_type_function)
                     Type.fromIP(analyser, .type_type, .type_type)
@@ -1916,11 +1936,20 @@ pub const Interpreter = struct {
                     const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
                     break :return_type try return_value.typeOf(analyser);
                 };
-                const coerced = try child.coerce(return_type, value) orelse if (is_type_function)
-                    try return_type.instanceUnchecked(analyser)
+                const coerced = if (child.optionalPayloadType(return_type) != null)
+                    try child.coerceAssignmentFromSource(
+                        info.handle,
+                        return_type,
+                        result.value,
+                        result.source_node,
+                        null,
+                    ) orelse return .unknown
                 else
-                    return .unknown;
-                break :blk .{ .returned = coerced };
+                    try child.coerce(return_type, result.value) orelse if (is_type_function)
+                        try return_type.instanceUnchecked(analyser)
+                    else
+                        return .unknown;
+                break :blk .{ .returned = .{ .value = coerced, .source_node = null } };
             },
             else => flow,
         };
@@ -1928,7 +1957,7 @@ pub const Interpreter = struct {
 
     fn callValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         return switch (try self.invoke(handle, node)) {
-            .returned => |value| value,
+            .returned => |result| result.value,
             else => null,
         };
     }

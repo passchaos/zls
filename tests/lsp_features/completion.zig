@@ -4047,6 +4047,48 @@ test "comptime interpreter promotes typed values to optionals" {
     });
 }
 
+test "comptime interpreter promotes call boundary values to optionals" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn parameterCapacity(comptime config: ?Config) usize {
+        \\    const resolved = config orelse .{ .capacity = 9 };
+        \\    return if (@TypeOf(resolved.capacity) == usize) resolved.capacity else 99;
+        \\}
+        \\fn returnedConfig(comptime capacity: u8) ?Config {
+        \\    return if (capacity == 4)
+        \\        .{ .capacity = capacity }
+        \\    else
+        \\        .{ .capacity = 9 };
+        \\}
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const parameter_value = parameterCapacity(if (small == 4)
+        \\        .{ .capacity = small }
+        \\    else
+        \\        .{ .capacity = 9 });
+        \\    const returned_value = (returnedConfig(small) orelse
+        \\        .{ .capacity = 9 }).capacity;
+        \\    return struct {
+        \\        parameter_items: [parameter_value]u8,
+        \\        returned_items: [returned_value]u8,
+        \\        typed_items: [if (@TypeOf(parameter_value) == usize and
+        \\            @TypeOf(returned_value) == usize)
+        \\            1
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "parameter_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "returned_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "typed_items", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {
