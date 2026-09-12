@@ -479,6 +479,16 @@ pub const Interpreter = struct {
                     const c = try self.eval(handle, params[3]) orelse return null;
                     return self.analyser.resolveComptimeMulAddValue(result_type, a, b, c);
                 }
+                if (std.mem.eql(u8, name, "@select")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 4) return null;
+                    const element_type = try self.eval(handle, params[0]) orelse return null;
+                    const predicate = try self.eval(handle, params[1]) orelse return null;
+                    const lhs = try self.eval(handle, params[2]) orelse return null;
+                    const rhs = try self.eval(handle, params[3]) orelse return null;
+                    return self.analyser.resolveComptimeSelectValue(element_type, predicate, lhs, rhs);
+                }
                 if (std.mem.eql(u8, name, "@sin") or
                     std.mem.eql(u8, name, "@cos") or
                     std.mem.eql(u8, name, "@tan") or

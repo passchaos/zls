@@ -7523,6 +7523,18 @@ fn resolveSelectValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+pub fn resolveComptimeSelectValue(
+    analyser: *Analyser,
+    element_type_value: Type,
+    predicate: Type,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    if (!element_type_value.is_type_val) return null;
+    const element_type = element_type_value.ipIndex() orelse return null;
+    return analyser.resolveSelectValue(element_type, predicate, lhs, rhs);
+}
+
 fn resolveShuffleValue(
     analyser: *Analyser,
     element_type: InternPool.Index,
@@ -11422,15 +11434,18 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .select => {
                     if (params.len != 4) return null;
                     const element = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    if (!element.is_type_val) return null;
-                    const element_type = element.ipIndex() orelse return null;
                     const predicate = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                     const lhs = try analyser.resolveTypeOfNodeInternal(.of(params[2], handle)) orelse return null;
                     const rhs = try analyser.resolveTypeOfNodeInternal(.of(params[3], handle)) orelse return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (try analyser.resolveSelectValue(element_type, predicate, lhs, rhs)) |value| return value;
+                        if (try analyser.resolveComptimeSelectValue(element, predicate, lhs, rhs)) |value| return value;
                     }
-                    return try analyser.resolveSelectValue(element_type, predicate.withoutIPIndex(analyser), lhs.withoutIPIndex(analyser), rhs.withoutIPIndex(analyser));
+                    return analyser.resolveComptimeSelectValue(
+                        element,
+                        predicate.withoutIPIndex(analyser),
+                        lhs.withoutIPIndex(analyser),
+                        rhs.withoutIPIndex(analyser),
+                    );
                 },
                 .shuffle => {
                     if (params.len != 4) return null;

@@ -5115,6 +5115,21 @@ test "generic function with nested comptime mulAdd mutations" {
     });
 }
 
+test "generic function with nested comptime vector select mutations" {
+    try testCompletion(
+        \\fn Select(comptime value: u8) type {
+        \\    var total: usize = 1;
+        \\    const selected = @select(element: { total += 1; break :element u8; }, predicate: { total *= 2; break :predicate @as(@Vector(2, bool), .{ true, false }); }, lhs: { total += 3; break :lhs @as(@Vector(2, u8), .{ value, 0 }); }, rhs: { total *= 2; break :rhs @as(@Vector(2, u8), .{ 0, value + 1 }); });
+        \\    _ = selected;
+        \\    return struct { items: [total]u8 };
+        \\}
+        \\const selected: Select(4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[14]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {
