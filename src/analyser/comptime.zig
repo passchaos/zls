@@ -460,16 +460,15 @@ pub const Interpreter = struct {
     }
 
     fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While) Error!Flow {
-        if (loop_node.label_token != null or loop_node.payload_token != null or loop_node.error_token != null) return .unknown;
+        if (loop_node.label_token != null or loop_node.error_token != null) return .unknown;
+        if (loop_node.payload_token) |payload_token| {
+            if (handle.tree.tokenTag(payload_token) == .asterisk) return .unknown;
+        }
         while (true) {
-            const condition = try self.eval(handle, loop_node.ast.cond_expr) orelse return .unknown;
-            switch (condition.ipIndex() orelse return .unknown) {
-                .bool_true => {},
-                .bool_false => {
-                    if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
-                    return .next;
-                },
-                else => return .unknown,
+            const condition = try self.analyser.resolveIfConditionValue(.of(loop_node.ast.cond_expr, handle)) orelse return .unknown;
+            if (!condition) {
+                if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
+                return .next;
             }
 
             switch (try self.statement(handle, loop_node.ast.then_expr)) {

@@ -5696,6 +5696,23 @@ test "generic function with comptime while mutation" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
     });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: ?u8) type {
+        \\    var current = limit;
+        \\    var capacity: u8 = 1;
+        \\    while (current) |value| : (current = null) {
+        \\        capacity += value;
+        \\    } else {
+        \\        capacity += 1;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
 }
 
 test "generic function with comptime switch mutation" {
