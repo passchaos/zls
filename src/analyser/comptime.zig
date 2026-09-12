@@ -979,57 +979,73 @@ pub const Interpreter = struct {
 
     fn coerceAssignment(self: *Interpreter, current: Type, value: Type) Error!?Type {
         const destination = try current.typeOf(self.analyser);
+        return self.coerceAssignmentTo(destination, value);
+    }
+
+    fn coerceAssignmentTo(self: *Interpreter, destination: Type, value: Type) Error!?Type {
         return try self.coerce(destination, value) orelse
             try destination.instanceTypeVal(self.analyser);
     }
 
+    fn assignmentChildType(
+        self: *Interpreter,
+        aggregate_type: Type,
+        access: Value.Reference.Access,
+    ) Error!?Type {
+        const aggregate = try aggregate_type.instanceTypeVal(self.analyser) orelse return null;
+        const child = switch (access) {
+            .index => |index| try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null,
+            .field => |name| try self.analyser.resolveFieldAccess(aggregate, name) orelse return null,
+            .optional_payload => try self.analyser.resolveOptionalUnwrap(aggregate) orelse return null,
+        };
+        return @as(?Type, try child.typeOf(self.analyser));
+    }
+
     fn writeReference(self: *Interpreter, target: *Value.Reference, value: Type) Error!bool {
-        if (target.path.len == 0) {
-            target.storage.value = try self.coerceAssignment(target.storage.value, value) orelse return false;
-            return true;
-        }
-        target.storage.value = try self.replaceReferenceValue(target.storage.value, target.path, value) orelse return false;
+        const destination = try target.storage.value.typeOf(self.analyser);
+        target.storage.value = try self.replaceReferenceValue(target.storage.value, destination, target.path, value) orelse return false;
         return true;
     }
 
     fn replaceReferenceValue(
         self: *Interpreter,
         current: Type,
+        destination: Type,
         path: []const Value.Reference.Access,
         value: Type,
     ) Error!?Type {
-        if (path.len == 0) return value;
+        if (path.len == 0) return self.coerceAssignmentTo(destination, value);
         const analyser = self.analyser;
-        const aggregate_type = try current.typeOf(analyser);
+        const child_destination = try self.assignmentChildType(destination, path[0]) orelse return null;
         switch (path[0]) {
             .index => |index| {
                 const items = try self.mutableElements(current) orelse return null;
                 if (index >= items.len) return null;
                 const updated = try analyser.arena.dupe(Type, items);
-                updated[index] = try self.replaceReferenceValue(items[index], path[1..], value) orelse return null;
-                return try Value.create(analyser, aggregate_type, .{ .array = updated });
+                updated[index] = try self.replaceReferenceValue(items[index], child_destination, path[1..], value) orelse return null;
+                return try Value.create(analyser, destination, .{ .array = updated });
             },
             .field => |field_name| {
                 const old_value = try analyser.resolveFieldAccess(current, field_name) orelse return null;
-                const new_value = try self.replaceReferenceValue(old_value, path[1..], value) orelse return null;
+                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
                 const fields = Value.fieldEntries(current) orelse return null;
                 const updated = try analyser.arena.dupe(Value.Field, fields);
                 for (updated) |*field| {
                     if (!std.mem.eql(u8, field.name, field_name)) continue;
                     field.value = new_value;
-                    return try Value.create(analyser, aggregate_type, .{ .fields = updated });
+                    return try Value.create(analyser, destination, .{ .fields = updated });
                 }
-                if (!aggregate_type.isStructType(analyser)) return null;
-                if (try analyser.lookupSymbolContainer(try aggregate_type.instanceUnchecked(analyser), field_name, .field) == null) return null;
+                if (!destination.isStructType(analyser)) return null;
+                if (try analyser.lookupSymbolContainer(try destination.instanceUnchecked(analyser), field_name, .field) == null) return null;
                 const extended = try analyser.arena.alloc(Value.Field, fields.len + 1);
                 @memcpy(extended[0..fields.len], fields);
                 extended[fields.len] = .{ .name = field_name, .value = new_value };
-                return try Value.create(analyser, aggregate_type, .{ .fields = extended });
+                return try Value.create(analyser, destination, .{ .fields = extended });
             },
             .optional_payload => {
                 const old_value = try analyser.resolveOptionalUnwrap(current) orelse return null;
-                const new_value = try self.replaceReferenceValue(old_value, path[1..], value) orelse return null;
-                return try Value.create(analyser, aggregate_type, .{ .optional = new_value });
+                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
+                return try Value.create(analyser, destination, .{ .optional = new_value });
             },
         }
     }
@@ -1159,8 +1175,10 @@ pub const Interpreter = struct {
             const index = try self.integer(handle, index_node) orelse return false;
             if (index >= items.len) return false;
             const updated = try analyser.arena.dupe(Type, items);
-            updated[index] = value;
-            const updated_value = try Value.create(analyser, try current.typeOf(analyser), .{ .array = updated });
+            const aggregate_type = try current.typeOf(analyser);
+            const destination = try self.assignmentChildType(aggregate_type, .{ .index = index }) orelse return false;
+            updated[index] = try self.coerceAssignmentTo(destination, value) orelse return false;
+            const updated_value = try Value.create(analyser, aggregate_type, .{ .array = updated });
             return self.writeAggregate(handle, base, base_value, updated_value);
         }
         if (tree.nodeTag(node) == .field_access) {
@@ -1174,15 +1192,18 @@ pub const Interpreter = struct {
                 const items = try self.mutableElements(current) orelse return false;
                 if (index >= items.len) return false;
                 const updated = try analyser.arena.dupe(Type, items);
-                updated[index] = value;
+                const destination = try self.assignmentChildType(aggregate_type, .{ .index = index }) orelse return false;
+                updated[index] = try self.coerceAssignmentTo(destination, value) orelse return false;
                 const updated_value = try Value.create(analyser, aggregate_type, .{ .array = updated });
                 return self.writeAggregate(handle, base, base_value, updated_value);
             }
+            const destination = try self.assignmentChildType(aggregate_type, .{ .field = field_name }) orelse return false;
+            const coerced = try self.coerceAssignmentTo(destination, value) orelse return false;
             const fields = Value.fieldEntries(current) orelse return false;
             const updated = try analyser.arena.dupe(Value.Field, fields);
             for (updated) |*field| {
                 if (!std.mem.eql(u8, field.name, field_name)) continue;
-                field.value = value;
+                field.value = coerced;
                 const updated_value = try Value.create(analyser, aggregate_type, .{ .fields = updated });
                 return self.writeAggregate(handle, base, base_value, updated_value);
             }
@@ -1190,7 +1211,7 @@ pub const Interpreter = struct {
             if (try analyser.lookupSymbolContainer(try aggregate_type.instanceUnchecked(analyser), field_name, .field) == null) return false;
             const extended = try analyser.arena.alloc(Value.Field, fields.len + 1);
             @memcpy(extended[0..fields.len], fields);
-            extended[fields.len] = .{ .name = field_name, .value = value };
+            extended[fields.len] = .{ .name = field_name, .value = coerced };
             const updated_value = try Value.create(analyser, aggregate_type, .{ .fields = extended });
             return self.writeAggregate(handle, base, base_value, updated_value);
         }
@@ -1200,7 +1221,9 @@ pub const Interpreter = struct {
             const current = try self.deref(base_value) orelse return false;
             const aggregate_type = try current.typeOf(analyser);
             if (try analyser.resolveOptionalUnwrap(current) == null) return false;
-            const updated_value = try Value.create(analyser, aggregate_type, .{ .optional = value });
+            const destination = try self.assignmentChildType(aggregate_type, .optional_payload) orelse return false;
+            const coerced = try self.coerceAssignmentTo(destination, value) orelse return false;
+            const updated_value = try Value.create(analyser, aggregate_type, .{ .optional = coerced });
             return self.writeAggregate(handle, base, base_value, updated_value);
         }
         if (tree.nodeTag(node) == .deref) {

@@ -3515,6 +3515,74 @@ test "comptime interpreter coerces assignments to typed locals" {
     });
 }
 
+test "comptime interpreter coerces assignments to typed aggregate elements" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var config = Config{ .capacity = 0 };
+        \\    config.capacity = small;
+        \\    return struct { items: [if (@TypeOf(config.capacity) == usize) config.capacity else 99]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var config = Config{ .capacity = 0 };
+        \\    const pointer = &config.capacity;
+        \\    pointer.* = small;
+        \\    return struct { items: [if (@TypeOf(config.capacity) == usize) config.capacity else 99]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var values: [1]usize = undefined;
+        \\    values[0] = small;
+        \\    return struct { items: [if (@TypeOf(values[0]) == usize) values[0] else 99]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: u16 };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    var config = Config{ .capacity = 0 };
+        \\    config.capacity = "rejected";
+        \\    return if (@TypeOf(config.capacity) == u16)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { leaked: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "source union typed comptime arguments validate runtime unknown payloads" {
     try testCompletion(
         \\const U = union(enum) { count: u16, empty };
