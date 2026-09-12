@@ -6288,6 +6288,39 @@ test "generic function with comptime expression wrappers" {
     });
 }
 
+test "generic function with nested comptime arithmetic mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (value: {
+        \\        defer total += 2;
+        \\        total *= 3;
+        \\        break :value total;
+        \\    }) + 4;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[80]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = ((value: {
+        \\        total += 1;
+        \\        break :value total;
+        \\    }) << 2) | 1;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[39]u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {

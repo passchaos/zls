@@ -257,6 +257,7 @@ pub const Interpreter = struct {
         }
         switch (handle.tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => return self.eval(handle, handle.tree.nodeData(node).node),
+            .grouped_expression => return self.eval(handle, handle.tree.nodeData(node).node_and_token[0]),
             .if_simple, .@"if" => {
                 const target = try self.ifTarget(handle, node) orelse return null;
                 return switch (target) {
@@ -294,6 +295,29 @@ pub const Interpreter = struct {
                 const rhs_value = try self.eval(handle, rhs) orelse return null;
                 _ = try self.boolValue(rhs_value) orelse return null;
                 return rhs_value;
+            },
+            .mul,
+            .div,
+            .mod,
+            .mul_wrap,
+            .mul_sat,
+            .add,
+            .sub,
+            .add_wrap,
+            .sub_wrap,
+            .add_sat,
+            .sub_sat,
+            .shl,
+            .shl_sat,
+            .shr,
+            .bit_and,
+            .bit_xor,
+            .bit_or,
+            => |tag| {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const lhs_value = try self.eval(handle, lhs) orelse return null;
+                const rhs_value = try self.eval(handle, rhs) orelse return null;
+                return self.analyser.resolveComptimeBinaryValue(tag, lhs_value, rhs_value);
             },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
