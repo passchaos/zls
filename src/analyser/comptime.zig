@@ -267,7 +267,8 @@ pub const Interpreter = struct {
             .@"comptime", .@"nosuspend" => return self.eval(handle, handle.tree.nodeData(node).node),
             .grouped_expression => return self.eval(handle, handle.tree.nodeData(node).node_and_token[0]),
             .if_simple, .@"if" => {
-                const target = try self.ifTarget(handle, node) orelse return null;
+                const target = try self.ifTarget(handle, node) orelse
+                    return self.analyser.resolveTypeOfNode(.of(node, handle));
                 return switch (target) {
                     .none => Type.fromIP(self.analyser, .void_type, .void_value),
                     .node => |target_node| self.eval(handle, target_node),

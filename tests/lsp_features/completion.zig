@@ -3136,6 +3136,40 @@ test "comptime interpreter validates source union literal payloads" {
     });
 }
 
+test "comptime interpreter merges unknown if expression branches" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var condition = true;
+        \\    condition = false;
+        \\    return if (condition)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { rejected: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "rejected", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\var runtime_bool: bool = undefined;
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    return if (runtime_bool)
+        \\        struct { selected: u8 }
+        \\    else
+        \\        struct { rejected: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+        .{ .label = "rejected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function reflecting comptime container constructors" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
