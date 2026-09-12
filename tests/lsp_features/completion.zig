@@ -3547,6 +3547,66 @@ test "comptime interpreter validates explicitly typed struct declarations" {
     });
 }
 
+test "comptime interpreter validates explicitly typed union declarations" {
+    try testCompletion(
+        \\const Value = union(enum) { count: usize, empty };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const value: Value = .{ .count = small };
+        \\    return switch (value) {
+        \\        .count => |count| struct { items: [if (@TypeOf(count) == usize) count else 99]u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { text: []const u8, empty };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value: Value = .{ .text = "accepted" };
+        \\    return switch (value) {
+        \\        .text => |text| if (@TypeOf(text) == []const u8 and text.len == 8)
+        \\            struct { accepted: u8 }
+        \\        else
+        \\            struct { fallback: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: u16, empty };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const value: Value = .{ .count = "rejected" };
+        \\    return switch (value) {
+        \\        .count => |count| if (@TypeOf(count) == u16)
+        \\            struct { accepted: u8 }
+        \\        else
+        \\            struct { leaked: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {

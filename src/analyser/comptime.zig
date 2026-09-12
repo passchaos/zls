@@ -1019,7 +1019,7 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(self.analyser, destination, .{ .array = items }));
     }
 
-    fn coerceStructLiteral(self: *Interpreter, destination: Type, fields: []const Value.Field) Error!?Type {
+    fn coerceFieldLiteral(self: *Interpreter, destination: Type, fields: []const Value.Field) Error!?Type {
         const coerced = try self.analyser.arena.alloc(Value.Field, fields.len);
         for (fields, coerced) |field, *result| {
             const field_type = try self.assignmentChildType(destination, .{ .field = field.name }) orelse return null;
@@ -1305,12 +1305,14 @@ pub const Interpreter = struct {
                     try self.coerce(ty, value) orelse try self.unknownArray(ty, len) orelse return false
                 else
                     try self.unknownArray(ty, len) orelse return false;
-            } else if (ty.isStructType(analyser)) {
+            } else if (ty.isStructType(analyser) or ty.isUnionType()) {
                 const init_node = decl.ast.init_node.unwrap() orelse return false;
                 var buffer: [2]Ast.Node.Index = undefined;
                 value = if (tree.fullStructInit(&buffer, init_node)) |literal|
-                    if (literal.ast.type_expr == .none and Value.fieldEntries(value) != null)
-                        try self.coerceStructLiteral(ty, Value.fieldEntries(value).?) orelse
+                    if (literal.ast.type_expr == .none and
+                        Value.fieldEntries(value) != null and
+                        (!ty.isUnionType() or literal.ast.fields.len == 1))
+                        try self.coerceFieldLiteral(ty, Value.fieldEntries(value).?) orelse
                             try ty.instanceTypeVal(analyser) orelse return false
                     else
                         try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false
