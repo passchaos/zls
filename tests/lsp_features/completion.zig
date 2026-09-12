@@ -5039,6 +5039,26 @@ test "generic function with nested comptime min max mutations" {
     });
 }
 
+test "generic function with nested comptime abs mutation" {
+    try testCompletion(
+        \\fn Select(comptime value: i8) type {
+        \\    var total: usize = 1;
+        \\    const magnitude = @abs(operand: {
+        \\        total += 2;
+        \\        break :operand value;
+        \\    });
+        \\    return if (magnitude == 4)
+        \\        struct { items: [total]u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(-4) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {

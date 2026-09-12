@@ -3614,6 +3614,28 @@ fn resolveVectorUnaryValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+pub fn resolveComptimeAbsValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const scalar_type = analyser.ip.scalarType(payload.type);
+    const scalar_tag = analyser.ip.zigTypeTag(scalar_type) orelse return null;
+    const result_type = switch (scalar_tag) {
+        .comptime_float, .float, .comptime_int => payload.type,
+        .int => if (analyser.ip.isSignedInt(scalar_type, builtin.target))
+            try analyser.ip.toUnsigned(payload.type, builtin.target)
+        else
+            payload.type,
+        else => return null,
+    };
+    const fallback = Type.fromIP(analyser, result_type, null);
+    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+        return try analyser.resolveVectorUnaryValue(.abs, operand) orelse fallback;
+    }
+    return try analyser.resolveAbsValue(operand) orelse fallback;
+}
+
 fn floatMulAddValue(comptime T: type, a: f128, b: f128, c: f128) ?f128 {
     const lhs: T = @floatCast(a);
     const rhs: T = @floatCast(b);
@@ -11082,35 +11104,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .abs => {
                     if (params.len != 1) return null;
-
                     const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-
-                    const payload = switch (ty.data) {
-                        .ip_index => |payload| payload,
-                        else => return null,
-                    };
-
-                    // Based on Sema.zirAbs
-                    const operand_ty = payload.type;
-                    const scalar_ty = analyser.ip.scalarType(operand_ty);
-                    const scalar_tag = analyser.ip.zigTypeTag(scalar_ty) orelse return null;
-                    const result_ty = switch (scalar_tag) {
-                        .comptime_float, .float, .comptime_int => operand_ty,
-                        .int => if (analyser.ip.isSignedInt(scalar_ty, builtin.target))
-                            try analyser.ip.toUnsigned(operand_ty, builtin.target)
-                        else
-                            operand_ty,
-                        else => return null,
-                    };
-                    if (analyser.evaluate_comptime_values) {
-                        if (analyser.ip.zigTypeTag(operand_ty) == .vector) {
-                            if (try analyser.resolveVectorUnaryValue(.abs, ty)) |value| return value;
-                        } else if (try analyser.resolveAbsValue(ty)) |value| {
-                            return value;
-                        }
-                    }
-
-                    return Type.fromIP(analyser, result_ty, null);
+                    const result = try analyser.resolveComptimeAbsValue(ty) orelse return null;
+                    return if (analyser.evaluate_comptime_values) result else result.withoutIPIndex(analyser);
                 },
                 .TypeOf => {
                     if (params.len < 1) return null;
