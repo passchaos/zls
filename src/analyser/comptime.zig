@@ -14,6 +14,9 @@ pub const Value = struct {
         fields: []const Field,
         optional: ?Type,
         reference: *Cell,
+        /// Source-backed value used when an aggregate element cannot be
+        /// materialized by the intern pool but can still be copied at comptime.
+        expression: Analyser.NodeWithHandle,
     },
 
     pub const Field = struct { name: []const u8, value: Type };
@@ -33,6 +36,10 @@ pub const Value = struct {
                 if (payload) |value| value.hashWithHasher(hasher);
             },
             .reference => |cell| std.hash.autoHash(hasher, @intFromPtr(cell)),
+            .expression => |node_handle| {
+                std.hash.autoHash(hasher, node_handle.node);
+                hasher.update(node_handle.handle.uri.raw);
+            },
         }
     }
 
@@ -54,6 +61,7 @@ pub const Value = struct {
                 if (payload) |value| if (!value.eql(other.data.optional.?)) return false;
             },
             .reference => |cell| return cell == other.data.reference,
+            .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
     }
@@ -62,6 +70,10 @@ pub const Value = struct {
         const value = try analyser.arena.create(Value);
         value.* = .{ .ty = ty, .data = data };
         return .{ .data = .{ .comptime_value = value }, .is_type_val = false };
+    }
+
+    pub fn createExpression(analyser: *Analyser, ty: Type, node_handle: Analyser.NodeWithHandle) error{OutOfMemory}!Type {
+        return create(analyser, ty, .{ .expression = node_handle });
     }
 
     pub fn deref(value: Type) Type {
@@ -121,6 +133,16 @@ pub const Interpreter = struct {
         };
     }
 
+    pub fn evaluateCall(analyser: *Analyser, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        var budget: Budget = .{};
+        var interpreter: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
+        };
+        return interpreter.callValue(handle, node);
+    }
+
     pub fn enterExpression(self: *Interpreter) bool {
         if (self.budget.expression_depth >= 128 or !self.tick()) return false;
         self.budget.expression_depth += 1;
@@ -164,6 +186,12 @@ pub const Interpreter = struct {
 
     fn eval(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         if (!self.tick()) return null;
+        switch (handle.tree.nodeTag(node)) {
+            .call, .call_comma, .call_one, .call_one_comma => {
+                if (try self.callValue(handle, node)) |value| return value;
+            },
+            else => {},
+        }
         return self.analyser.resolveTypeOfNode(.of(node, handle));
     }
 
@@ -348,7 +376,7 @@ pub const Interpreter = struct {
         return .next;
     }
 
-    fn call(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+    fn invoke(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         const analyser = self.analyser;
         var buffer: [1]Ast.Node.Index = undefined;
         const call_node = handle.tree.fullCall(&buffer, node).?;
@@ -364,14 +392,35 @@ pub const Interpreter = struct {
                 .empty,
             .budget = self.budget,
         };
+        if (info.container_type.data == .container) {
+            const display_params = &info.container_type.data.container.display_params;
+            for (display_params.keys(), display_params.values()) |token_handle, node_handle| {
+                const value = try analyser.resolveComptimeDisplayArgument(token_handle, node_handle) orelse continue;
+                try child.bindings.put(analyser.arena, token_handle, value);
+            }
+        }
         for (info.parameters, call_node.ast.params) |parameter, argument| {
-            const value = try self.eval(handle, argument) orelse return .unknown;
+            const value = if (parameter.modifier == .comptime_param and parameter.type.data != .anytype_parameter)
+                try analyser.resolveAggregateComptimeArgument(parameter.type, handle, argument) orelse try self.eval(handle, argument) orelse return .unknown
+            else
+                try self.eval(handle, argument) orelse return .unknown;
             try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {
                 try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
             }
         }
-        return switch (try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1])) {
+        return child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+    }
+
+    fn callValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        return switch (try self.invoke(handle, node)) {
+            .returned => |value| value,
+            else => null,
+        };
+    }
+
+    fn call(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+        return switch (try self.invoke(handle, node)) {
             .next, .returned => .next,
             else => .unknown,
         };

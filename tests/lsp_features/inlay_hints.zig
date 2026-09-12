@@ -632,6 +632,70 @@ test "generic type with aggregate comptime argument" {
     , .{ .kind = .Type });
 }
 
+test "generic method preserves computed aggregate comptime argument" {
+    try testInlayHints(
+        \\fn copySlice(comptime T: type, comptime items: []const T) [items.len]T {
+        \\    var result: [items.len]T = undefined;
+        \\    for (items, 0..) |item<T>, index<usize>| result[index] = item;
+        \\    return result;
+        \\}
+        \\fn Tensor(comptime shape: []const usize, comptime T: type) type {
+        \\    return struct {
+        \\        const Self<type> = @This();
+        \\        fn prefixShape(comptime depth: usize) [shape.len - depth]usize {
+        \\            return copySlice(usize, shape[depth..]);
+        \\        }
+        \\        pub fn prefixSliceView(
+        \\            self: *const Self,
+        \\            comptime depth: usize,
+        \\            prefix: [depth]usize,
+        \\        ) !Tensor(&prefixShape(depth), T) {
+        \\            _ = self;
+        \\            _ = prefix;
+        \\            return undefined;
+        \\        }
+        \\    };
+        \\}
+        \\fn probe() !void {
+        \\    const input: Tensor(&.{ 2, 3, 4 }, f64) = undefined;
+        \\    const output<Tensor(&.{ 3, 4 },f64)> = try input.prefixSliceView(1, [_]usize{1});
+        \\    _ = output;
+        \\}
+    , .{ .kind = .Type });
+
+    try testInlayHints(
+        \\const SizeExpr<type> = union(enum) {
+        \\    Static: usize,
+        \\};
+        \\fn copySlice(comptime T: type, comptime items: []const T) [items.len]T {
+        \\    var result: [items.len]T = undefined;
+        \\    for (items, 0..) |item<T>, index<usize>| result[index] = item;
+        \\    return result;
+        \\}
+        \\fn Tensor(comptime shape: []const SizeExpr, comptime T: type) type {
+        \\    return struct {
+        \\        const Self<type> = @This();
+        \\        fn prefixShape(comptime depth: usize) [shape.len - depth]SizeExpr {
+        \\            return copySlice(SizeExpr, shape[depth..]);
+        \\        }
+        \\        pub fn prefixSliceView(self: *const Self, comptime depth: usize, prefix: [depth]usize) !Tensor(&prefixShape(depth), T) {
+        \\            _ = self;
+        \\            _ = prefix;
+        \\            return undefined;
+        \\        }
+        \\    };
+        \\}
+        \\const two: SizeExpr = @unionInit(SizeExpr, "Static", 2);
+        \\const three: SizeExpr = @unionInit(SizeExpr, "Static", 3);
+        \\const four: SizeExpr = @unionInit(SizeExpr, "Static", 4);
+        \\fn probe() !void {
+        \\    const input: Tensor(&.{ two, three, four }, f64) = undefined;
+        \\    const output<Tensor(&.{ three, four },f64)> = try input.prefixSliceView(1, [_]usize{1});
+        \\    _ = output;
+        \\}
+    , .{ .kind = .Type });
+}
+
 const Options = struct {
     kind: types.InlayHint.Kind,
     show_builtin: bool = true,

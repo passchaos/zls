@@ -2472,12 +2472,53 @@ fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index)
 }
 
 pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: BracketAccess) error{OutOfMemory}!?Binding {
-    if (comptime_eval.Value.elements(lhs_binding.type)) |items| {
-        if (rhs == .single) if (rhs.single) |index| {
-            if (index < items.len) return .{ .type = items[@intCast(index)], .is_const = true };
-            return null;
+    const comptime_items: ?[]const Type = comptime_eval.Value.elements(lhs_binding.type) orelse blk: {
+        if (!analyser.evaluate_comptime_values) break :blk null;
+        const payload = switch (lhs_binding.type.data) {
+            .ip_index => |payload| payload,
+            else => break :blk null,
         };
-    }
+        const value_index = payload.index orelse break :blk null;
+        const aggregate = switch (analyser.ip.indexToKey(value_index)) {
+            .aggregate => |aggregate| aggregate,
+            else => break :blk null,
+        };
+        const item_indices = aggregate.values.dupe(analyser.arena, analyser.ip) catch return error.OutOfMemory;
+        const items = try analyser.arena.alloc(Type, item_indices.len);
+        for (item_indices, items) |item_index, *item| {
+            item.* = Type.fromIP(analyser, analyser.ip.typeOf(item_index), item_index);
+        }
+        break :blk items;
+    };
+    if (analyser.comptime_interpreter != null) if (comptime_items) |items| {
+        const value_type = switch (lhs_binding.type.data) {
+            .comptime_value => |value| value.ty,
+            else => try lhs_binding.type.typeOf(analyser),
+        };
+        switch (rhs) {
+            .single => |index_optional| if (index_optional) |index| {
+                if (index < items.len) return .{ .type = items[@intCast(index)], .is_const = true };
+                return null;
+            },
+            .open => |access| if (access.start != null and access.sentinel == .none) {
+                const start = std.math.cast(usize, access.start.?) orelse return null;
+                if (start > items.len) return null;
+                return .{
+                    .type = try comptime_eval.Value.create(analyser, value_type, .{ .array = items[start..] }),
+                    .is_const = true,
+                };
+            },
+            .range => |access| if (access.bounds != null and access.sentinel == .none) {
+                const start = std.math.cast(usize, access.bounds.?[0]) orelse return null;
+                const end = std.math.cast(usize, access.bounds.?[1]) orelse return null;
+                if (start > end or end > items.len) return null;
+                return .{
+                    .type = try comptime_eval.Value.create(analyser, value_type, .{ .array = items[start..end] }),
+                    .is_const = true,
+                };
+            },
+        }
+    };
     if (analyser.evaluate_comptime_values and lhs_binding.type.data == .type_info_value) {
         const value = lhs_binding.type.data.type_info_value;
         if (value.collection) |collection| switch (rhs) {
@@ -9025,6 +9066,111 @@ fn displayComptimeArgument(
     return bindings.get(.{ .token = decl.nameToken(), .handle = decl.handle });
 }
 
+fn unwrapAggregateComptimeArgument(tree: *const Ast, argument: Ast.Node.Index) Ast.Node.Index {
+    var node = argument;
+    while (true) switch (tree.nodeTag(node)) {
+        .address_of, .@"comptime" => node = tree.nodeData(node).node,
+        .grouped_expression => node = tree.nodeData(node).node_and_token[0],
+        else => return node,
+    };
+}
+
+fn aggregateComptimeElementType(analyser: *Analyser, aggregate_type: Type) error{OutOfMemory}!?Type {
+    const runtime_type = if (aggregate_type.is_type_val)
+        try aggregate_type.instanceTypeVal(analyser) orelse return null
+    else
+        aggregate_type;
+    return switch (runtime_type.data) {
+        .array => |info| info.elem_ty.*,
+        .pointer => |info| switch (info.size) {
+            .one => switch (info.elem_ty.data) {
+                .array => |array| array.elem_ty.*,
+                else => null,
+            },
+            .many, .slice, .c => info.elem_ty.*,
+        },
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
+            .array_type => |array| Type.fromIP(analyser, .type_type, array.child),
+            .pointer_type => |pointer| switch (pointer.flags.size) {
+                .one => switch (analyser.ip.indexToKey(pointer.elem_type)) {
+                    .array_type => |array| Type.fromIP(analyser, .type_type, array.child),
+                    else => null,
+                },
+                .many, .slice, .c => Type.fromIP(analyser, .type_type, pointer.elem_type),
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+pub fn resolveAggregateComptimeArgument(
+    analyser: *Analyser,
+    parameter_type: Type,
+    handle: *DocumentStore.Handle,
+    argument: Ast.Node.Index,
+) Error!?Type {
+    const node = unwrapAggregateComptimeArgument(&handle.tree, argument);
+    const element_type = try analyser.aggregateComptimeElementType(parameter_type) orelse return null;
+    switch (handle.tree.nodeTag(node)) {
+        .call, .call_comma, .call_one, .call_one_comma => {
+            const value = try comptime_eval.Interpreter.evaluateCall(analyser, handle, node) orelse return null;
+            const items = comptime_eval.Value.elements(value) orelse return null;
+            return try comptime_eval.Value.create(analyser, parameter_type, .{ .array = items });
+        },
+        else => {},
+    }
+    var buffer: [2]Ast.Node.Index = undefined;
+    const elements = switch (handle.tree.nodeTag(node)) {
+        .array_init_one,
+        .array_init_one_comma,
+        .array_init_dot_two,
+        .array_init_dot_two_comma,
+        .array_init_dot,
+        .array_init_dot_comma,
+        .array_init,
+        .array_init_comma,
+        => handle.tree.fullArrayInit(&buffer, node).?.ast.elements,
+        .struct_init,
+        .struct_init_comma,
+        .struct_init_one,
+        .struct_init_one_comma,
+        => handle.tree.fullStructInit(&buffer, node).?.ast.fields,
+        else => return null,
+    };
+    const values = try analyser.arena.alloc(Type, elements.len);
+    for (elements, values) |element, *value| {
+        if (element_type.ipIndex()) |element_type_index| {
+            if (try analyser.resolveCoercedIPValue(element_type_index, .of(element, handle))) |value_index| {
+                value.* = Type.fromIP(analyser, element_type_index, value_index);
+                continue;
+            }
+        }
+        value.* = switch (handle.tree.nodeTag(element)) {
+            .call, .call_comma, .call_one, .call_one_comma => try comptime_eval.Interpreter.evaluateCall(analyser, handle, element) orelse
+                try comptime_eval.Value.createExpression(analyser, element_type, .of(element, handle)),
+            else => try analyser.resolveComptimeValue(.of(element, handle)) orelse
+                try comptime_eval.Value.createExpression(analyser, element_type, .of(element, handle)),
+        };
+    }
+    return try comptime_eval.Value.create(analyser, parameter_type, .{ .array = values });
+}
+
+pub fn resolveComptimeDisplayArgument(
+    analyser: *Analyser,
+    token_handle: TokenWithHandle,
+    node_handle: NodeWithHandle,
+) Error!?Type {
+    const decl = try analyser.lookupSymbolGlobal(
+        token_handle.handle,
+        offsets.identifierTokenToNameSlice(&token_handle.handle.tree, token_handle.token),
+        token_handle.handle.tree.tokenStart(token_handle.token),
+    ) orelse return null;
+    const parameter_type = try decl.resolveType(analyser) orelse return null;
+    return try analyser.resolveAggregateComptimeArgument(parameter_type, node_handle.handle, node_handle.node) orelse
+        try analyser.resolveComptimeValue(.of(node_handle.node, node_handle.handle));
+}
+
 fn resolveFunctionTypeFromCall(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -9069,6 +9215,39 @@ fn resolveFunctionTypeFromCall(
             .token = param_name_token,
             .handle = func_info.handle,
         };
+
+        if (param.modifier == .comptime_param and param_type.data != .anytype_parameter) {
+            const display_arg = try analyser.displayComptimeArgument(handle, arg) orelse null;
+            if (display_arg) |node_handle| {
+                const aggregate_node = unwrapAggregateComptimeArgument(&node_handle.handle.tree, node_handle.node);
+                switch (node_handle.handle.tree.nodeTag(aggregate_node)) {
+                    .array_init_one,
+                    .array_init_one_comma,
+                    .array_init_dot_two,
+                    .array_init_dot_two_comma,
+                    .array_init_dot,
+                    .array_init_dot_comma,
+                    .array_init,
+                    .array_init_comma,
+                    => if (try analyser.resolveAggregateComptimeArgument(param_type, node_handle.handle, node_handle.node)) |value| {
+                        try display_params.put(analyser.arena, parameter_token_handle, node_handle);
+                        try value_params.put(analyser.arena, parameter_token_handle, value);
+                        has_callsite_bindings = true;
+                        continue;
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        if (param.modifier == .comptime_param and param_type.data != .anytype_parameter) {
+            if (try analyser.resolveAggregateComptimeArgument(param_type, handle, arg)) |value| {
+                try meta_params.put(analyser.arena, parameter_token_handle, value);
+                try value_params.put(analyser.arena, parameter_token_handle, value);
+                has_callsite_bindings = true;
+                continue;
+            }
+        }
 
         if (param_type.data != .anytype_parameter and
             param.modifier == .comptime_param and
@@ -9165,6 +9344,15 @@ fn resolveFunctionTypeFromCall(
                 );
                 has_callsite_bindings = true;
                 continue;
+            }
+            if (argument_type.hasKnownValue(analyser)) {
+                const value = if (argument_type.data == .comptime_value and argument_type.data.comptime_value.data == .array)
+                    try comptime_eval.Value.create(analyser, param_type, .{ .array = argument_type.data.comptime_value.data.array })
+                else
+                    argument_type;
+                try meta_params.put(analyser.arena, parameter_token_handle, value);
+                try value_params.put(analyser.arena, parameter_token_handle, value);
+                has_callsite_bindings = true;
             }
         }
 
@@ -9447,9 +9635,14 @@ pub fn resolveBindingOfNode(analyser: *Analyser, options: ResolveOptions) Error!
 
 fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Error!?Binding {
     const old_bindings = analyser.generic_bindings;
-    defer analyser.generic_bindings = old_bindings;
+    const old_display_bindings = analyser.display_bindings;
+    defer {
+        analyser.generic_bindings = old_bindings;
+        analyser.display_bindings = old_display_bindings;
+    }
 
     var merged_bindings: TokenToTypeMap = .empty;
+    var merged_display_bindings: TokenToNodeMap = .empty;
     if (options.container_type) |*container_type| {
         if (container_type.data == .container) {
             const bindings = &container_type.data.container.bound_params;
@@ -9466,6 +9659,18 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
                     analyser.generic_bindings = bindings;
                 }
                 break;
+            }
+            const display_bindings = &container_type.data.container.display_params;
+            if (display_bindings.count() != 0) {
+                if (old_display_bindings) |outer_bindings| {
+                    merged_display_bindings = try outer_bindings.clone(analyser.arena);
+                    for (display_bindings.keys(), display_bindings.values()) |key, bound| {
+                        try merged_display_bindings.put(analyser.arena, key, bound);
+                    }
+                    analyser.display_bindings = &merged_display_bindings;
+                } else {
+                    analyser.display_bindings = display_bindings;
+                }
             }
         }
     }
@@ -11977,9 +12182,13 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
                 if (try interpreter.address(handle, expr_node)) |value| return .{ .type = value, .is_const = true };
             }
             const base_binding = try analyser.resolveBindingOfNodeInternal(.of(expr_node, handle)) orelse return null;
-
+            const result_type = try analyser.resolveAddressOf(base_binding.is_const, base_binding.type);
+            if (comptime_eval.Value.elements(base_binding.type)) |items| return .{
+                .type = try comptime_eval.Value.create(analyser, try result_type.typeOf(analyser), .{ .array = items }),
+                .is_const = true,
+            };
             return .{
-                .type = try analyser.resolveAddressOf(base_binding.is_const, base_binding.type),
+                .type = result_type,
                 .is_const = true,
             };
         },
@@ -13947,7 +14156,39 @@ pub const Type = struct {
             },
             .string_value => |value| try writer.print("\"{s}\"", .{value.bytes}),
             .type_info_value => |value| try writer.print(".{s}", .{@tagName(value.tag)}),
-            .comptime_value => |value| try value.ty.rawStringify(writer, analyser, options),
+            .comptime_value => |value| switch (value.data) {
+                .array => |items| {
+                    const address = switch (value.ty.data) {
+                        .pointer => true,
+                        .ip_index => |payload| if (payload.index) |index| switch (analyser.ip.indexToKey(index)) {
+                            .pointer_type => true,
+                            else => false,
+                        } else false,
+                        else => false,
+                    };
+                    if (address) try writer.writeByte('&');
+                    try writer.writeAll(".{");
+                    for (items, 0..) |item, index| {
+                        if (index != 0) try writer.writeByte(',');
+                        try writer.writeByte(' ');
+                        try item.rawStringify(writer, analyser, options);
+                    }
+                    if (items.len != 0) try writer.writeByte(' ');
+                    try writer.writeByte('}');
+                },
+                .fields => |fields| {
+                    try writer.writeAll(".{");
+                    for (fields, 0..) |field, index| {
+                        if (index != 0) try writer.writeByte(',');
+                        try writer.print(" .{s} = ", .{field.name});
+                        try field.value.rawStringify(writer, analyser, options);
+                    }
+                    if (fields.len != 0) try writer.writeByte(' ');
+                    try writer.writeByte('}');
+                },
+                .expression => |node_handle| try writer.writeAll(offsets.nodeToSlice(&node_handle.handle.tree, node_handle.node)),
+                else => try value.ty.rawStringify(writer, analyser, options),
+            },
             .container => |info| {
                 const scope_handle = info.scope_handle;
                 const handle = scope_handle.handle;
