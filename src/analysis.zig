@@ -8514,6 +8514,21 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
     };
 }
 
+pub const ComptimeTypeSizeKind = enum { bit_size, byte_size, alignment };
+
+pub fn resolveComptimeTypeSizeValue(
+    analyser: *Analyser,
+    operand: Type,
+    kind: ComptimeTypeSizeKind,
+) Error!?Type {
+    const value = switch (kind) {
+        .bit_size => analyser.resolveTypeBitSize(operand),
+        .byte_size => analyser.resolveTypeByteSize(operand),
+        .alignment => try analyser.resolveTypeAlignment(operand),
+    } orelse return null;
+    return try analyser.comptimeIntValue(value);
+}
+
 fn comptimeIntValue(analyser: *Analyser, value: u64) error{OutOfMemory}!Type {
     const index = try analyser.ip.get(.{
         .int_u64_value = .{ .ty = .comptime_int_type, .int = value },
@@ -10924,12 +10939,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         return Type.fromIP(analyser, .comptime_int_type, null);
                     }
                     const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    const value = switch (tag) {
-                        .bit_size_of => analyser.resolveTypeBitSize(ty),
-                        .size_of => analyser.resolveTypeByteSize(ty),
+                    const kind: ComptimeTypeSizeKind = switch (tag) {
+                        .bit_size_of => .bit_size,
+                        .size_of => .byte_size,
                         else => unreachable,
-                    } orelse return Type.fromIP(analyser, .comptime_int_type, null);
-                    return try analyser.comptimeIntValue(value);
+                    };
+                    return try analyser.resolveComptimeTypeSizeValue(ty, kind) orelse
+                        Type.fromIP(analyser, .comptime_int_type, null);
                 },
                 .align_of => {
                     if (params.len != 1) return null;
@@ -10937,9 +10953,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         return Type.fromIP(analyser, .comptime_int_type, null);
                     }
                     const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    const value = try analyser.resolveTypeAlignment(ty) orelse
-                        return Type.fromIP(analyser, .comptime_int_type, null);
-                    return try analyser.comptimeIntValue(value);
+                    return try analyser.resolveComptimeTypeSizeValue(ty, .alignment) orelse
+                        Type.fromIP(analyser, .comptime_int_type, null);
                 },
                 .int_from_bool => {
                     if (params.len != 1) return null;

@@ -2127,6 +2127,42 @@ test "generic function with comptime size builtins" {
     });
 }
 
+test "generic function with nested comptime size builtin mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    var size_total: usize = 1;
+        \\    var bits_total: usize = 1;
+        \\    var align_total: usize = 1;
+        \\    const size = @sizeOf(value: {
+        \\        defer size_total += 1;
+        \\        size_total *= 2;
+        \\        break :value T;
+        \\    });
+        \\    const bits = @bitSizeOf(value: {
+        \\        defer bits_total += 1;
+        \\        bits_total *= 2;
+        \\        break :value T;
+        \\    });
+        \\    const alignment = @alignOf(value: {
+        \\        defer align_total += 1;
+        \\        align_total *= 2;
+        \\        break :value T;
+        \\    });
+        \\    return struct {
+        \\        size: [size * size_total]u8,
+        \\        bits: [bits * bits_total]u8,
+        \\        alignment: [alignment * align_total]u8,
+        \\    };
+        \\}
+        \\const buffer: Buffer(u16) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "size", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "bits", .kind = .Field, .detail = "[48]u8" },
+        .{ .label = "alignment", .kind = .Field, .detail = "[6]u8" },
+    });
+}
+
 test "generic function with comptime Int type constructor" {
     try testCompletion(
         \\const std = @import("std");
