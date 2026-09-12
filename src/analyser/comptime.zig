@@ -399,6 +399,16 @@ pub const Interpreter = struct {
                     return self.readReference(pointer.data.comptime_value.data.reference);
                 return self.analyser.resolveDerefType(pointer);
             },
+            .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
+                if (std.mem.eql(u8, handle.tree.tokenSlice(handle.tree.nodeMainToken(node)), "@as")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const destination = try self.eval(handle, params[0]) orelse return null;
+                    const value = try self.eval(handle, params[1]) orelse return null;
+                    return self.coerce(destination, value);
+                }
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },
@@ -410,6 +420,15 @@ pub const Interpreter = struct {
     fn integer(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?usize {
         const value = try self.eval(handle, node) orelse return null;
         return self.analyser.ip.toInt(value.ipIndex() orelse return null, usize);
+    }
+
+    fn coerce(self: *Interpreter, destination: Type, value: Type) Error!?Type {
+        if (!destination.is_type_val) return null;
+        const type_index = destination.ipIndex() orelse return value;
+        if (type_index == .type_type) return value;
+        const value_index = value.ipIndex() orelse return value;
+        const coerced = try self.analyser.coerceIP(type_index, value_index) orelse return null;
+        return Type.fromIP(self.analyser, type_index, coerced);
     }
 
     fn bind(self: *Interpreter, handle: *Handle, token: Ast.TokenIndex, value: Type) Error!void {
@@ -1147,12 +1166,7 @@ pub const Interpreter = struct {
             else
                 try self.eval(handle, argument) orelse return .unknown;
             if (parameter.modifier == .comptime_param and parameter.type.is_type_val) {
-                if (parameter.type.ipIndex()) |type_index| {
-                    if (type_index != .type_type) if (value.ipIndex()) |value_index| {
-                        const coerced = try analyser.coerceIP(type_index, value_index) orelse return .unknown;
-                        value = Type.fromIP(analyser, type_index, coerced);
-                    };
-                }
+                value = try self.coerce(parameter.type, value) orelse return .unknown;
             }
             try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {
