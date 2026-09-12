@@ -11310,16 +11310,26 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         const field_decl = try analyser.lookupSymbolContainer(try lhs.instanceUnchecked(analyser), field_name, .field) orelse return null;
                         const field_type = try field_decl.resolveType(analyser) orelse return null;
                         const expected_type = try field_type.typeOf(analyser);
+                        var field_value = try analyser.resolveAggregateComptimeArgument(expected_type, handle, field_node) orelse
+                            if (expected_type.ipIndex()) |field_type_index|
+                                if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
+                                    Type.fromIP(analyser, field_type_index, value_index)
+                                else
+                                    try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse Type.unknown_type
+                            else
+                                try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse Type.unknown_type;
+                        if (lhs.isUnionType()) {
+                            if (expected_type.ipIndex()) |field_type_index| {
+                                if (field_value.data == .ip_index) {
+                                    const value_index = try analyser.coerceComptimeIPValue(field_type_index, field_value) orelse
+                                        return try lhs.instanceTypeVal(analyser);
+                                    field_value = Type.fromIP(analyser, field_type_index, value_index);
+                                }
+                            }
+                        }
                         field.* = .{
                             .name = field_name,
-                            .value = try analyser.resolveAggregateComptimeArgument(expected_type, handle, field_node) orelse
-                                if (expected_type.ipIndex()) |field_type_index|
-                                    if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
-                                        Type.fromIP(analyser, field_type_index, value_index)
-                                    else
-                                        try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type
-                                else
-                                    try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type,
+                            .value = field_value,
                         };
                     }
                     return try comptime_eval.Value.create(analyser, lhs, .{ .fields = fields });

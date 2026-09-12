@@ -284,7 +284,8 @@ pub const Interpreter = struct {
                 else => null,
             },
             .@"switch", .switch_comma => {
-                const target = try self.switchTarget(handle, node) orelse return null;
+                const target = try self.switchTarget(handle, node) orelse
+                    return self.analyser.resolveTypeOfNode(.of(node, handle));
                 return self.eval(handle, target);
             },
             .@"orelse" => {
