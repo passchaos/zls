@@ -469,6 +469,16 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeAbsValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@mulAdd")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 4) return null;
+                    const result_type = try self.eval(handle, params[0]) orelse return null;
+                    const a = try self.eval(handle, params[1]) orelse return null;
+                    const b = try self.eval(handle, params[2]) orelse return null;
+                    const c = try self.eval(handle, params[3]) orelse return null;
+                    return self.analyser.resolveComptimeMulAddValue(result_type, a, b, c);
+                }
                 if (std.mem.eql(u8, name, "@sin") or
                     std.mem.eql(u8, name, "@cos") or
                     std.mem.eql(u8, name, "@tan") or

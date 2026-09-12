@@ -5100,6 +5100,21 @@ test "generic function with nested comptime float rounding mutations" {
     });
 }
 
+test "generic function with nested comptime mulAdd mutations" {
+    try testCompletion(
+        \\fn Select(comptime a: f32, comptime b: f32, comptime c: f32) type {
+        \\    var total: usize = 1;
+        \\    const result = @mulAdd(type_value: { total += 1; break :type_value f32; }, lhs: { total *= 2; break :lhs a; }, rhs: { total += 3; break :rhs b; }, addend: { total *= 2; break :addend c; });
+        \\    _ = result;
+        \\    return struct { items: [total]u8 };
+        \\}
+        \\const selected: Select(2.5, 4.0, -1.0) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[14]u8" },
+    });
+}
+
 test "generic function with comptime vector min max" {
     try testCompletion(
         \\fn Select(comptime N: i8) type {

@@ -3739,6 +3739,35 @@ fn resolveFloatVectorMulAddValue(
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
 
+fn resolveComptimeMulAddCoercedValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    a: InternPool.Index,
+    b: InternPool.Index,
+    c: InternPool.Index,
+) error{OutOfMemory}!?Type {
+    if (analyser.ip.zigTypeTag(result_type) == .vector) {
+        return analyser.resolveFloatVectorMulAddValue(result_type, a, b, c);
+    }
+    return analyser.resolveFloatMulAddValue(result_type, a, b, c);
+}
+
+pub fn resolveComptimeMulAddValue(
+    analyser: *Analyser,
+    result_type_value: Type,
+    a: Type,
+    b: Type,
+    c: Type,
+) error{OutOfMemory}!?Type {
+    if (!result_type_value.is_type_val) return null;
+    const result_type = result_type_value.ipIndex() orelse return null;
+    const fallback = try result_type_value.instanceTypeVal(analyser) orelse return null;
+    const a_index = try analyser.coerceIP(result_type, a.ipIndex() orelse return fallback) orelse return fallback;
+    const b_index = try analyser.coerceIP(result_type, b.ipIndex() orelse return fallback) orelse return fallback;
+    const c_index = try analyser.coerceIP(result_type, c.ipIndex() orelse return fallback) orelse return fallback;
+    return try analyser.resolveComptimeMulAddCoercedValue(result_type, a_index, b_index, c_index) orelse fallback;
+}
+
 fn floatFromIntValue(
     analyser: *Analyser,
     dest_ty: InternPool.Index,
@@ -11081,10 +11110,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const a = try analyser.resolveCoercedIPValue(result_type, .of(params[1], handle)) orelse return result;
                     const b = try analyser.resolveCoercedIPValue(result_type, .of(params[2], handle)) orelse return result;
                     const c = try analyser.resolveCoercedIPValue(result_type, .of(params[3], handle)) orelse return result;
-                    if (analyser.ip.zigTypeTag(result_type) == .vector) {
-                        return try analyser.resolveFloatVectorMulAddValue(result_type, a, b, c) orelse result;
-                    }
-                    return try analyser.resolveFloatMulAddValue(result_type, a, b, c) orelse result;
+                    return try analyser.resolveComptimeMulAddCoercedValue(result_type, a, b, c) orelse result;
                 },
 
                 .c_va_arg => {
