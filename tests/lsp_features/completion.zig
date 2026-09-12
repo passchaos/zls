@@ -775,6 +775,20 @@ test "generic function with comptime compound assignments" {
 
     try testCompletion(
         \\fn Buffer(comptime base: usize) type {
+        \\    var dimensions = [_]usize{ 1, 2 };
+        \\    const dimensions_ptr = &dimensions;
+        \\    dimensions_ptr.*[0] += base;
+        \\    dimensions_ptr.*[1] *= 3;
+        \\    return struct { items: [dimensions[0] * dimensions[1]]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[30]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
         \\    var capacity = base;
         \\    for ([_]usize{ 2, 3 }) |factor| capacity *= factor;
         \\    return struct { items: [capacity]u8 };
@@ -5835,6 +5849,21 @@ test "generic function with comptime struct field mutation" {
         \\    const config_ptr = &config;
         \\    config_ptr.capacity += base;
         \\    config.capacity *= 2;
+        \\    return struct { items: [config.capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var config = Config{ .capacity = 1 };
+        \\    const config_ptr = &config;
+        \\    config_ptr.*.capacity += base;
+        \\    config_ptr.*.capacity *= 2;
         \\    return struct { items: [config.capacity]u8 };
         \\}
         \\const buffer: Buffer(2) = undefined;

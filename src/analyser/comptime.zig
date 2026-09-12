@@ -229,6 +229,9 @@ pub const Interpreter = struct {
     }
 
     fn mutationStorage(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Cell {
+        if (handle.tree.nodeTag(node) == .deref) {
+            return self.mutationStorage(handle, handle.tree.nodeData(node).node);
+        }
         if (try self.cell(handle, node)) |storage| {
             if (storage.value.data == .comptime_value and storage.value.data.comptime_value.data == .reference) {
                 return storage.value.data.comptime_value.data.reference;
