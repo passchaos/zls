@@ -3607,6 +3607,49 @@ test "comptime interpreter validates explicitly typed union declarations" {
     });
 }
 
+test "comptime interpreter coerces typed aggregate destructuring declarations" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const values: [1]usize, const config: Config = .{ .{small}, .{ .capacity = small } };
+        \\    return struct {
+        \\        items: [if (@TypeOf(values[0]) == usize and @TypeOf(config.capacity) == usize)
+        \\            values[0] + config.capacity
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize, empty };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const value: Value, const enabled: bool = .{ .{ .count = small }, true };
+        \\    return switch (value) {
+        \\        .count => |count| if (@TypeOf(count) == usize and enabled)
+        \\            struct { items: [count]u8 }
+        \\        else
+        \\            struct { leaked: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {

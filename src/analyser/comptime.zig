@@ -1283,7 +1283,13 @@ pub const Interpreter = struct {
         return result;
     }
 
-    fn declare(self: *Interpreter, handle: *Handle, decl: Ast.full.VarDecl, initial_value: Type) Error!bool {
+    fn declare(
+        self: *Interpreter,
+        handle: *Handle,
+        decl: Ast.full.VarDecl,
+        initial_value: Type,
+        initial_node: ?Ast.Node.Index,
+    ) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
         var value = initial_value;
@@ -1293,10 +1299,12 @@ pub const Interpreter = struct {
                 const len = try self.integer(handle, array.ast.elem_count) orelse return false;
                 if (len > self.budget.steps) return false;
                 const items = try self.mutableElements(value);
-                const init_node = decl.ast.init_node.unwrap() orelse return false;
                 var buffer: [2]Ast.Node.Index = undefined;
-                const is_result_location_literal = if (tree.fullArrayInit(&buffer, init_node)) |literal|
-                    literal.ast.type_expr == .none
+                const is_result_location_literal = if (initial_node) |node|
+                    if (tree.fullArrayInit(&buffer, node)) |literal|
+                        literal.ast.type_expr == .none
+                    else
+                        false
                 else
                     false;
                 value = if (is_result_location_literal and items != null and items.?.len == len)
@@ -1306,14 +1314,16 @@ pub const Interpreter = struct {
                 else
                     try self.unknownArray(ty, len) orelse return false;
             } else if (ty.isStructType(analyser) or ty.isUnionType()) {
-                const init_node = decl.ast.init_node.unwrap() orelse return false;
                 var buffer: [2]Ast.Node.Index = undefined;
-                value = if (tree.fullStructInit(&buffer, init_node)) |literal|
-                    if (literal.ast.type_expr == .none and
-                        Value.fieldEntries(value) != null and
-                        (!ty.isUnionType() or literal.ast.fields.len == 1))
-                        try self.coerceFieldLiteral(ty, Value.fieldEntries(value).?) orelse
-                            try ty.instanceTypeVal(analyser) orelse return false
+                value = if (initial_node) |node|
+                    if (tree.fullStructInit(&buffer, node)) |literal|
+                        if (literal.ast.type_expr == .none and
+                            Value.fieldEntries(value) != null and
+                            (!ty.isUnionType() or literal.ast.fields.len == 1))
+                            try self.coerceFieldLiteral(ty, Value.fieldEntries(value).?) orelse
+                                try ty.instanceTypeVal(analyser) orelse return false
+                        else
+                            try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false
                     else
                         try self.coerce(ty, value) orelse try ty.instanceTypeVal(analyser) orelse return false
                 else
@@ -1423,7 +1433,7 @@ pub const Interpreter = struct {
         if (tree.fullVarDecl(node)) |decl| {
             const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
             const value = try self.eval(handle, init_node) orelse Type.unknown_type;
-            if (!try self.declare(handle, decl, value)) return .unknown;
+            if (!try self.declare(handle, decl, value, init_node)) return .unknown;
             return .next;
         }
         switch (tree.nodeTag(node)) {
@@ -1473,9 +1483,15 @@ pub const Interpreter = struct {
                 const value = try self.eval(handle, assignment.ast.value_expr) orelse return .unknown;
                 const items = try self.mutableElements(value) orelse return .unknown;
                 if (items.len != assignment.ast.variables.len) return .unknown;
-                for (assignment.ast.variables, items) |lhs, item| {
+                var literal_buffer: [2]Ast.Node.Index = undefined;
+                const literal_elements = if (tree.fullArrayInit(&literal_buffer, assignment.ast.value_expr)) |literal|
+                    if (literal.ast.elements.len == items.len) literal.ast.elements else null
+                else
+                    null;
+                for (assignment.ast.variables, items, 0..) |lhs, item, index| {
                     if (tree.fullVarDecl(lhs)) |decl| {
-                        if (!try self.declare(handle, decl, item)) return .unknown;
+                        const initial_node = if (literal_elements) |elements| elements[index] else null;
+                        if (!try self.declare(handle, decl, item, initial_node)) return .unknown;
                         continue;
                     }
                     if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) continue;
