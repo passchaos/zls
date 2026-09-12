@@ -827,10 +827,18 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
             if (try analyser.lookupSymbolContainer(try ty.instanceUnchecked(analyser), field_name, .field)) |decl| {
                 if (decl.decl == .ast_node) {
                     const field = decl.handle.tree.fullContainerField(decl.decl.ast_node) orelse return null;
-                    if (field.ast.value_expr.unwrap()) |value_node| return .{
-                        .type = try analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(value_node, decl.handle), .container_type = ty }) orelse return null,
-                        .is_const = true,
-                    };
+                    if (field.ast.value_expr.unwrap()) |value_node| {
+                        if (analyser.comptime_interpreter != null) {
+                            const field_type = try decl.resolveType(analyser) orelse return null;
+                            if (try analyser.resolveAggregateComptimeArgument(try field_type.typeOf(analyser), decl.handle, value_node)) |value| {
+                                return .{ .type = value, .is_const = true };
+                            }
+                        }
+                        return .{
+                            .type = try analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(value_node, decl.handle), .container_type = ty }) orelse return null,
+                            .is_const = true,
+                        };
+                    }
                 }
             }
         }
@@ -9210,13 +9218,14 @@ pub fn resolveAggregateComptimeArgument(
     argument: Ast.Node.Index,
 ) Error!?Type {
     const node = unwrapAggregateComptimeArgument(&handle.tree, argument);
-    if (parameter_type.isUnionType()) {
+    const aggregate_type = if (parameter_type.is_type_val) parameter_type else try parameter_type.typeOf(analyser);
+    if (aggregate_type.isUnionType()) {
         var buffer: [2]Ast.Node.Index = undefined;
         const literal = handle.tree.fullStructInit(&buffer, node) orelse return null;
         if (literal.ast.fields.len != 1) return null;
         const field_node = literal.ast.fields[0];
         const field_name = try analyser.identifierTokenName(&handle.tree, handle.tree.firstToken(field_node) - 2) orelse return null;
-        const field_decl = try analyser.lookupSymbolContainer(parameter_type, field_name, .field) orelse return null;
+        const field_decl = try analyser.lookupSymbolContainer(aggregate_type, field_name, .field) orelse return null;
         const field_type = try field_decl.resolveType(analyser) orelse return null;
         const value = if ((try field_type.typeOf(analyser)).ipIndex()) |field_type_index|
             if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
@@ -9227,14 +9236,37 @@ pub fn resolveAggregateComptimeArgument(
             try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null;
         const fields = try analyser.arena.alloc(comptime_eval.Value.Field, 1);
         fields[0] = .{ .name = field_name, .value = value };
-        return try comptime_eval.Value.create(analyser, parameter_type, .{ .fields = fields });
+        return try comptime_eval.Value.create(analyser, aggregate_type, .{ .fields = fields });
     }
-    const element_type = try analyser.aggregateComptimeElementType(parameter_type) orelse return null;
+    if (aggregate_type.isStructType(analyser)) {
+        var buffer: [2]Ast.Node.Index = undefined;
+        const literal = handle.tree.fullStructInit(&buffer, node) orelse return null;
+        const fields = try analyser.arena.alloc(comptime_eval.Value.Field, literal.ast.fields.len);
+        for (literal.ast.fields, fields) |field_node, *field| {
+            const field_name = try analyser.identifierTokenName(&handle.tree, handle.tree.firstToken(field_node) - 2) orelse return null;
+            const field_decl = try analyser.lookupSymbolContainer(try aggregate_type.instanceUnchecked(analyser), field_name, .field) orelse return null;
+            const field_type = try field_decl.resolveType(analyser) orelse return null;
+            const expected_type = try field_type.typeOf(analyser);
+            field.* = .{
+                .name = field_name,
+                .value = try analyser.resolveAggregateComptimeArgument(expected_type, handle, field_node) orelse
+                    if (expected_type.ipIndex()) |field_type_index|
+                        if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
+                            Type.fromIP(analyser, field_type_index, value_index)
+                        else
+                            try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null
+                    else
+                        try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null,
+            };
+        }
+        return try comptime_eval.Value.create(analyser, aggregate_type, .{ .fields = fields });
+    }
+    const element_type = try analyser.aggregateComptimeElementType(aggregate_type) orelse return null;
     switch (handle.tree.nodeTag(node)) {
         .call, .call_comma, .call_one, .call_one_comma => {
             const value = try comptime_eval.Interpreter.evaluateCall(analyser, handle, node) orelse return null;
             const items = comptime_eval.Value.elements(value) orelse return null;
-            return try comptime_eval.Value.create(analyser, parameter_type, .{ .array = items });
+            return try comptime_eval.Value.create(analyser, aggregate_type, .{ .array = items });
         },
         else => {},
     }
@@ -9271,7 +9303,7 @@ pub fn resolveAggregateComptimeArgument(
                 try comptime_eval.Value.createExpression(analyser, element_type, .of(element, handle)),
         };
     }
-    return try comptime_eval.Value.create(analyser, parameter_type, .{ .array = values });
+    return try comptime_eval.Value.create(analyser, aggregate_type, .{ .array = values });
 }
 
 pub fn resolveComptimeDisplayArgument(
