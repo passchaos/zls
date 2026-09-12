@@ -3985,6 +3985,30 @@ test "comptime interpreter coerces switched aggregate result locations" {
     });
 }
 
+test "comptime interpreter coerces orelse aggregate result locations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const missing: ?[1]usize = null;
+        \\    const declared: [1]usize = missing orelse .{small};
+        \\    var assigned: [1]usize = undefined;
+        \\    assigned = missing orelse .{small};
+        \\    return struct {
+        \\        items: [if (@TypeOf(declared[0]) == usize and @TypeOf(assigned[0]) == usize)
+        \\            declared[0] + assigned[0]
+        \\        else
+        \\            99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {

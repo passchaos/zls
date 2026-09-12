@@ -858,6 +858,15 @@ pub const Interpreter = struct {
                 };
                 break :blk self.evalSource(handle, target);
             },
+            .@"orelse" => blk: {
+                if (!self.tick()) return null;
+                const lhs, const rhs = tree.nodeData(node).node_and_node;
+                const optional = try self.eval(handle, lhs) orelse return null;
+                break :blk switch (try self.optionalValue(optional) orelse return null) {
+                    .absent => self.evalSource(handle, rhs),
+                    .payload => |payload| .{ .value = payload, .source_node = null },
+                };
+            },
             else => .{
                 .value = try self.eval(handle, node) orelse return null,
                 .source_node = node,
