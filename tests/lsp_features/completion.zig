@@ -6220,6 +6220,40 @@ test "generic function with wrapped comptime return statements" {
     });
 }
 
+test "generic function with comptime nosuspend statements" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: usize = base;
+        \\    nosuspend {
+        \\        defer capacity += 2;
+        \\        capacity *= 3;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime base: usize) type {
+        \\    var capacity: usize = base;
+        \\    nosuspend {
+        \\        capacity += 1;
+        \\        return if (capacity == 3)
+        \\            struct { selected: u8 }
+        \\        else
+        \\            struct { fallback: u8 };
+        \\    }
+        \\}
+        \\const selected: Select(2) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {

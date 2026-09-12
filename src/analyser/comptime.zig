@@ -649,7 +649,7 @@ pub const Interpreter = struct {
             return .next;
         }
         switch (tree.nodeTag(node)) {
-            .@"comptime" => return self.statement(handle, tree.nodeData(node).node),
+            .@"comptime", .@"nosuspend" => return self.statement(handle, tree.nodeData(node).node),
             .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression|
                 try self.captureBindings(try self.eval(handle, expression) orelse return .unknown)
             else
