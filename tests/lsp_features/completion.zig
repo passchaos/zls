@@ -5763,6 +5763,24 @@ test "generic function with comptime switch mutation" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const Config = union(enum) { fixed: u8, fallback };
+        \\fn Buffer(comptime config: Config) type {
+        \\    var capacity: u8 = 1;
+        \\    switch (config) {
+        \\        inline .fixed => |value, tag| {
+        \\            if (tag == .fixed) capacity += value else capacity = 9;
+        \\        },
+        \\        .fallback => capacity = 8,
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(.{ .fixed = 2 }) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "generic function with runtime if before return" {

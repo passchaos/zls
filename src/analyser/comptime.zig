@@ -336,8 +336,11 @@ pub const Interpreter = struct {
                     const switch_case = tree.fullSwitchCase(case).?;
                     if (switch_case.ast.target_expr != target) continue;
                     if (switch_case.payload_token) |payload_token| {
-                        if (tree.tokenTag(payload_token) == .asterisk or
-                            tree.tokenTag(payload_token + 1) == .comma) return .unknown;
+                        if (tree.tokenTag(payload_token) == .asterisk) return .unknown;
+                        if (tree.tokenTag(payload_token + 1) == .comma) {
+                            const condition = try self.eval(handle, switch_node.ast.condition) orelse return .unknown;
+                            if (try analyser.resolveKnownUnionFieldName(condition) == null) return .unknown;
+                        }
                     }
                 }
                 return self.statement(handle, target);

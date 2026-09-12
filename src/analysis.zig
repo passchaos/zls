@@ -1011,7 +1011,7 @@ fn bodyAlwaysBreaksCurrentLoop(
     };
 }
 
-fn resolveKnownUnionFieldName(analyser: *Analyser, value: Type) Error!?[]const u8 {
+pub fn resolveKnownUnionFieldName(analyser: *Analyser, value: Type) Error!?[]const u8 {
     if (value.data == .comptime_value and value.data.comptime_value.data == .fields) {
         const fields = value.data.comptime_value.data.fields;
         if (value.data.comptime_value.ty.isUnionType() and fields.len == 1) return fields[0].name;
@@ -15709,7 +15709,9 @@ pub const DeclWithHandle = struct {
                 }
 
                 if (self.decl == .switch_inline_tag_payload) {
-                    return try analyser.resolveUnionTag(switch_expr_type_type);
+                    const tag_value = try analyser.resolveUnionTag(switch_expr_type_type) orelse return null;
+                    const active_field = try analyser.resolveKnownUnionFieldName(switch_expr_type) orelse return tag_value;
+                    return try analyser.enumValue(try tag_value.typeOf(analyser), active_field);
                 }
 
                 if (switch_expr_type.data == .type_info_value and case.ast.values.len == 1) {
