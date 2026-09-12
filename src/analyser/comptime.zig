@@ -301,16 +301,25 @@ pub const Interpreter = struct {
             const base, const field_token = tree.nodeData(node).node_and_token;
             const base_value = try self.eval(handle, base) orelse return false;
             const current = Value.deref(base_value);
-            const fields = Value.fieldEntries(current) orelse return false;
             const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
+            const aggregate_type = try current.typeOf(analyser);
+            if (aggregate_type.isTupleType(analyser)) {
+                const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return false;
+                const items = try self.mutableElements(current) orelse return false;
+                if (index >= items.len) return false;
+                const updated = try analyser.arena.dupe(Type, items);
+                updated[index] = value;
+                const updated_value = try Value.create(analyser, aggregate_type, .{ .array = updated });
+                return self.writeAggregate(handle, base, base_value, updated_value);
+            }
+            const fields = Value.fieldEntries(current) orelse return false;
             const updated = try analyser.arena.dupe(Value.Field, fields);
             for (updated) |*field| {
                 if (!std.mem.eql(u8, field.name, field_name)) continue;
                 field.value = value;
-                const updated_value = try Value.create(analyser, try current.typeOf(analyser), .{ .fields = updated });
+                const updated_value = try Value.create(analyser, aggregate_type, .{ .fields = updated });
                 return self.writeAggregate(handle, base, base_value, updated_value);
             }
-            const aggregate_type = try current.typeOf(analyser);
             if (!aggregate_type.isStructType(analyser)) return false;
             if (try analyser.lookupSymbolContainer(try aggregate_type.instanceUnchecked(analyser), field_name, .field) == null) return false;
             const extended = try analyser.arena.alloc(Value.Field, fields.len + 1);

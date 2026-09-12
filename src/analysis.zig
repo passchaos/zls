@@ -845,6 +845,12 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
     }
     if (comptime_eval.Value.elements(lhs)) |items| {
         if (std.mem.eql(u8, field_name, "len")) return .{ .type = try analyser.comptimeIntValue(items.len), .is_const = true };
+        const value_type = try comptime_eval.Value.deref(lhs).typeOf(analyser);
+        if (value_type.isTupleType(analyser) and allDigits(field_name)) {
+            const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return null;
+            if (index < items.len) return .{ .type = items[index], .is_const = true };
+            return null;
+        }
     }
     if (lhs.data == .string_value) {
         if (try analyser.resolvePropertyType(lhs, field_name)) |t| return .{ .type = t, .is_const = true };
@@ -13357,8 +13363,13 @@ pub const Type = struct {
             .enum_value, .string_value, .type_info_value, .comptime_value => true,
             .ip_index => |payload| if (payload.index) |index|
                 !analyser.ip.isUndefined(index) and !analyser.ip.isUnknown(index)
-            else
-                false,
+            else switch (analyser.ip.indexToKey(payload.type)) {
+                .tuple_type => |tuple| for (0..tuple.values.len) |index| {
+                    const value = tuple.values.at(@intCast(index), analyser.ip);
+                    if (value == .none or analyser.ip.isUndefined(value) or analyser.ip.isUnknown(value)) break false;
+                } else true,
+                else => false,
+            },
             else => false,
         };
     }
@@ -13862,6 +13873,18 @@ pub const Type = struct {
                 return analyser.ip.zigTypeTag(index) == .@"struct";
             },
             else => self.isContainerKind(.keyword_struct) or self.isRoot(),
+        };
+    }
+
+    pub fn isTupleType(self: Type, analyser: *Analyser) bool {
+        if (!self.is_type_val) return false;
+        return switch (self.data) {
+            .tuple => true,
+            .ip_index => |payload| if (payload.index) |index|
+                analyser.ip.indexToKey(index) == .tuple_type
+            else
+                false,
+            else => false,
         };
     }
 

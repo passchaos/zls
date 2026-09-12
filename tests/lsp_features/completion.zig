@@ -5559,6 +5559,48 @@ test "generic function with comptime destructuring assignment" {
     });
 }
 
+test "generic function with comptime tuple field mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var dimensions = .{ @as(usize, 1), @as(usize, 2) };
+        \\    dimensions.@"0" += base;
+        \\    dimensions.@"1" *= 3;
+        \\    return struct { items: [dimensions.@"0" * dimensions.@"1"]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[18]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var state = .{ @as(usize, 2), .{ @as(usize, 3), @as(usize, 4) } };
+        \\    state.@"0" += base;
+        \\    state.@"1".@"1" += base;
+        \\    return struct { items: [state.@"0" * state.@"1".@"0" * state.@"1".@"1"]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[72]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var dimensions = .{ @as(usize, 1), @as(usize, 2) };
+        \\    const dimensions_ptr = &dimensions;
+        \\    dimensions_ptr.*.@"0" += base;
+        \\    dimensions_ptr.*.@"1" *= 3;
+        \\    return struct { items: [dimensions.@"0" * dimensions.@"1"]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[18]u8" },
+    });
+}
+
 test "generic function with comptime while expression branches" {
     try testCompletion(
         \\fn Select(comptime enabled: bool, comptime N: u8) type {
