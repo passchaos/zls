@@ -560,6 +560,14 @@ pub const Interpreter = struct {
                         import_path.data.string_value.bytes,
                     );
                 }
+                if (std.mem.eql(u8, name, "@embedFile")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const path = try self.eval(handle, params[0]) orelse return null;
+                    if (path.data != .string_value) return null;
+                    return self.analyser.resolveComptimeEmbedFileValue(handle, path.data.string_value.bytes);
+                }
                 if (std.mem.eql(u8, name, "@setEvalBranchQuota")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

@@ -761,14 +761,19 @@ const ReadFileError = std.mem.Allocator.Error || std.Io.Cancelable || std.Io.Fil
 
 /// Must satisfy `uri.isFileScheme()`.
 fn readFile(self: *DocumentStore, uri: Uri) ReadFileError![:0]u8 {
+    return self.readFileAlloc(self.allocator, uri);
+}
+
+/// Must satisfy `uri.isFileScheme()`. Caller owns the returned memory.
+pub fn readFileAlloc(self: *DocumentStore, allocator: std.mem.Allocator, uri: Uri) ReadFileError![:0]u8 {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
-    const file_path = uri.toFsPath(self.allocator) catch |err| switch (err) {
+    const file_path = uri.toFsPath(allocator) catch |err| switch (err) {
         error.UnsupportedScheme => unreachable,
         error.OutOfMemory => return error.OutOfMemory,
     };
-    defer self.allocator.free(file_path);
+    defer allocator.free(file_path);
 
     const dir, const sub_path = blk: {
         if (builtin.target.cpu.arch.isWasm() and !builtin.link_libc) {
@@ -788,7 +793,7 @@ fn readFile(self: *DocumentStore, uri: Uri) ReadFileError![:0]u8 {
     return try dir.readFileAllocOptions(
         self.io,
         sub_path,
-        self.allocator,
+        allocator,
         .limited(std.zig.max_src_size),
         .of(u8),
         0,

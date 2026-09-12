@@ -320,6 +320,21 @@ fn ZeroParameterArray() type {
 const zero_parameter_array: ZeroParameterArray() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([1]u8)()
 
+fn EmbeddedFileArray() type {
+    var total: usize = 1;
+    const bytes = @embedFile(path: {
+        total += 1;
+        break :path "generics.zig";
+    });
+    return if (bytes.len > 3 and bytes[0] == 'f' and bytes[1] == 'n' and bytes[2] == ' ') [total]u8 else bool;
+}
+
+const embedded_file_array: EmbeddedFileArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([2]u8)()
+const embedded_file = @embedFile("generics.zig");
+const embedded_file_first = embedded_file[0];
+//    ^^^^^^^^^^^^^^^^^^^ (u8)(102)
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

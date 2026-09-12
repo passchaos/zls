@@ -11686,6 +11686,18 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const import_string = string_literal[1 .. string_literal.len - 1];
                     return analyser.resolveComptimeImportValue(handle, import_string);
                 },
+                .embed_file => {
+                    if (params.len != 1) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        const path = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                        if (path.data == .string_value) {
+                            if (try analyser.resolveComptimeEmbedFileValue(handle, path.data.string_value.bytes)) |value| {
+                                return value;
+                            }
+                        }
+                    }
+                    return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
+                },
                 .c_import => {
                     if (!DocumentStore.supports_build_system) return null;
                     const cimport_uri = (try analyser.store.resolveCImport(handle, node)) orelse return null;
@@ -15083,6 +15095,21 @@ pub fn resolveComptimeImportValue(
     if (try analyser.resolveImportString(handle, import_string)) |ty| return ty;
     if (try analyser.resolveImportString(analyser.root_handle orelse return null, import_string)) |ty| return ty;
     return null;
+}
+
+pub fn resolveComptimeEmbedFileValue(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    path: []const u8,
+) Error!?Type {
+    if (!handle.uri.isFileScheme()) return null;
+    const uri = try Uri.resolveImport(analyser.arena, handle.uri, handle.uri.toStdUri(), path);
+    const bytes = analyser.store.readFileAlloc(analyser.arena, uri) catch |err| switch (err) {
+        error.OutOfMemory, error.Canceled => |e| return e,
+        else => return null,
+    };
+    const value = try analyser.stringValue(bytes);
+    return value;
 }
 
 fn resolveLangrefType(analyser: *Analyser, type_str: []const u8) Error!?Type {
