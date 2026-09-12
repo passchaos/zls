@@ -727,9 +727,13 @@ fn handleConfiguration(server: *Server, json: std.json.Value) error{ Canceled, O
     const maybe_root_dir: ?[]const u8 = dir: {
         if (server.workspaces.items.len != 1) break :dir null;
         const workspace = server.workspaces.items[0];
-        break :dir workspace.uri.toFsPath(arena) catch |err| {
+        const workspace_path = workspace.uri.toFsPath(arena) catch |err| {
             log.err("failed to parse root uri for workspace {s}: {}", .{ workspace.uri.raw, err });
             break :dir null;
+        };
+        break :dir switch (workspace.kind) {
+            .directory => workspace_path,
+            .file => std.Io.Dir.path.dirname(workspace_path) orelse workspace_path,
         };
     };
 
@@ -760,18 +764,38 @@ fn handleConfiguration(server: *Server, json: std.json.Value) error{ Canceled, O
 
 const Workspace = struct {
     uri: Uri,
+    kind: Kind,
     build_on_save: if (BuildOnSaveSupport.isSupportedComptime()) ?BuildOnSave else void,
     build_on_save_mode: if (BuildOnSaveSupport.isSupportedComptime()) ?enum { watch, manual } else void,
 
-    fn init(server: *Server, uri: Uri) error{OutOfMemory}!Workspace {
+    const Kind = enum { directory, file };
+
+    fn init(server: *Server, uri: Uri) error{ Canceled, OutOfMemory }!Workspace {
         const duped_uri = try uri.dupe(server.allocator);
         errdefer duped_uri.deinit(server.allocator);
 
         return .{
             .uri = duped_uri,
+            .kind = try detectKind(server, uri),
             .build_on_save = if (BuildOnSaveSupport.isSupportedComptime()) null else {},
             .build_on_save_mode = if (BuildOnSaveSupport.isSupportedComptime()) null else {},
         };
+    }
+
+    fn detectKind(server: *Server, uri: Uri) error{ Canceled, OutOfMemory }!Kind {
+        if (!uri.isFileScheme()) return .directory;
+
+        const path = uri.toFsPath(server.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnsupportedScheme => return .directory,
+        };
+        defer server.allocator.free(path);
+
+        const stat = std.Io.Dir.cwd().statFile(server.io, path, .{}) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            else => return .directory,
+        };
+        return if (stat.kind == .file) .file else .directory;
     }
 
     fn deinit(workspace: *Workspace, allocator: std.mem.Allocator) void {
@@ -799,6 +823,16 @@ const Workspace = struct {
         comptime std.debug.assert(BuildOnSaveSupport.isSupportedComptime());
 
         const config = &args.server.config_manager.config;
+
+        if (workspace.kind == .file) {
+            if (workspace.build_on_save) |*build_on_save| {
+                log.debug("stopped Build-On-Save for '{s}'", .{workspace.uri.raw});
+                build_on_save.deinit();
+                workspace.build_on_save = null;
+            }
+            workspace.build_on_save_mode = null;
+            return;
+        }
 
         if (args.server.config_manager.zig_exe) |zig_exe| {
             workspace.build_on_save_mode = switch (BuildOnSaveSupport.isSupportedRuntime(zig_exe.version)) {
@@ -857,6 +891,7 @@ const Workspace = struct {
 fn addWorkspace(server: *Server, uri: Uri) error{ Canceled, OutOfMemory }!void {
     try server.workspaces.ensureUnusedCapacity(server.allocator, 1);
     server.workspaces.appendAssumeCapacity(try Workspace.init(server, uri));
+    const workspace = &server.workspaces.items[server.workspaces.items.len - 1];
 
     if (BuildOnSaveSupport.isSupportedComptime() and
         // Don't initialize build on save until initialization finished.
@@ -864,22 +899,28 @@ fn addWorkspace(server: *Server, uri: Uri) error{ Canceled, OutOfMemory }!void {
         // until we have received workspace configuration from the server.
         (server.status == .initialized and !server.client_capabilities.supports_configuration))
     {
-        try server.workspaces.items[server.workspaces.items.len - 1].refreshBuildOnSave(.{
+        try workspace.refreshBuildOnSave(.{
             .server = server,
             .restart = false,
         });
     }
 
-    const file_count = server.document_store.loadDirectoryRecursive(uri) catch |err| switch (err) {
-        error.Canceled, error.OutOfMemory => |e| return e,
-        error.UnsupportedScheme => return, // https://github.com/microsoft/language-server-protocol/issues/1264
-        else => {
-            log.err("failed to load files in workspace '{s}': {}", .{ uri.raw, err });
-            return;
+    const file_count: usize = switch (workspace.kind) {
+        .file => @intFromBool((try server.document_store.getOrLoadHandle(uri)) != null),
+        .directory => server.document_store.loadDirectoryRecursive(uri) catch |err| switch (err) {
+            error.Canceled, error.OutOfMemory => |e| return e,
+            error.UnsupportedScheme => return, // https://github.com/microsoft/language-server-protocol/issues/1264
+            else => {
+                log.err("failed to load files in workspace '{s}': {}", .{ uri.raw, err });
+                return;
+            },
         },
     };
 
-    log.info("added Workspace Folder: {s} ({d} files)", .{ uri.raw, file_count });
+    switch (workspace.kind) {
+        .directory => log.info("added Workspace Folder: {s} ({d} files)", .{ uri.raw, file_count }),
+        .file => log.info("added Workspace File: {s} ({d} files)", .{ uri.raw, file_count }),
+    }
 }
 
 fn removeWorkspace(server: *Server, uri: Uri) void {

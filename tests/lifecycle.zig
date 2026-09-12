@@ -44,3 +44,86 @@ test "LSP lifecycle" {
     try server.sendNotificationSync(arena, "exit", {});
     try std.testing.expectEqual(zls.Server.Status.exiting_success, server.status);
 }
+
+test "file workspace during initialization" {
+    try testFileWorkspace(.initialize);
+}
+
+test "file workspace added after initialization" {
+    try testFileWorkspace(.did_change_workspace_folders);
+}
+
+const FileWorkspaceMode = enum { initialize, did_change_workspace_folders };
+
+fn testFileWorkspace(mode: FileWorkspaceMode) !void {
+    if (builtin.target.os.tag == .wasi) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "Translator.zig",
+        .data = "const answer = 42;\n",
+    });
+
+    const file_path = try tmp.dir.realPathFileAlloc(io, "Translator.zig", allocator);
+    defer allocator.free(file_path);
+    const file_uri: zls.Uri = try .fromPath(allocator, file_path);
+    defer file_uri.deinit(allocator);
+
+    var environ_map: std.process.Environ.Map = .init(std.testing.failing_allocator);
+    var config_manager: zls.configuration.Manager = try .init(io, allocator, &environ_map);
+    defer config_manager.deinit();
+
+    var arena_allocator: std.heap.ArenaAllocator = .init(allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
+    try config_manager.setConfiguration(.frontend, &.{
+        .enable_build_on_save = true,
+        .zig_exe_path = try std.Io.Dir.path.resolve(arena, &.{ cwd, test_options.zig_exe_path }),
+        .zig_lib_path = try std.Io.Dir.path.resolve(arena, &.{ cwd, test_options.zig_lib_path }),
+        .global_cache_path = try std.Io.Dir.path.resolve(arena, &.{ cwd, test_options.global_cache_path }),
+    });
+
+    var server: *zls.Server = try .create(.{
+        .io = io,
+        .allocator = allocator,
+        .transport = null,
+        .config_manager = &config_manager,
+    });
+    defer server.destroy();
+
+    const workspace_folders: []const zls.lsp.types.workspace.Folder = &.{.{
+        .uri = file_uri.raw,
+        .name = "Translator.zig",
+    }};
+    _ = try server.sendRequestSync(arena, "initialize", .{
+        .capabilities = .{
+            .textDocument = .{
+                .publishDiagnostics = .{},
+            },
+        },
+        .workspaceFolders = if (mode == .initialize) workspace_folders else null,
+    });
+    try server.sendNotificationSync(arena, "initialized", .{});
+
+    if (mode == .did_change_workspace_folders) {
+        try server.sendNotificationSync(arena, "workspace/didChangeWorkspaceFolders", .{
+            .event = .{
+                .added = workspace_folders,
+                .removed = &.{},
+            },
+        });
+    }
+
+    try std.testing.expect(server.document_store.getHandle(file_uri) != null);
+    try std.testing.expectEqual(@as(usize, 1), server.workspaces.items.len);
+    try std.testing.expect(server.workspaces.items[0].build_on_save_mode == null);
+    try std.testing.expect(server.workspaces.items[0].build_on_save == null);
+
+    _ = try server.sendRequestSync(arena, "shutdown", {});
+    try server.sendNotificationSync(arena, "exit", {});
+    try std.testing.expectEqual(zls.Server.Status.exiting_success, server.status);
+}
