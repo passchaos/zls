@@ -249,19 +249,26 @@ pub const Interpreter = struct {
             .ip_index => |payload| payload,
             else => return null,
         };
-        const value_index = payload.index orelse return null;
-        const aggregate = switch (self.analyser.ip.indexToKey(value_index)) {
-            .aggregate => |aggregate| aggregate,
-            else => return null,
-        };
-        if (aggregate.ty != payload.type) return null;
-        switch (self.analyser.ip.indexToKey(payload.type)) {
+        const type_key = self.analyser.ip.indexToKey(payload.type);
+        switch (type_key) {
             .array_type, .vector_type, .tuple_type => {},
             else => return null,
         }
-        const items = try self.analyser.arena.alloc(Type, aggregate.values.len);
+        const values = if (payload.index) |value_index| blk: {
+            const aggregate = switch (self.analyser.ip.indexToKey(value_index)) {
+                .aggregate => |aggregate| aggregate,
+                else => return null,
+            };
+            if (aggregate.ty != payload.type) return null;
+            break :blk aggregate.values;
+        } else switch (type_key) {
+            .tuple_type => |tuple| tuple.values,
+            else => return null,
+        };
+        const items = try self.analyser.arena.alloc(Type, values.len);
         for (items, 0..) |*item, index| {
-            const item_index = aggregate.values.at(@intCast(index), self.analyser.ip);
+            const item_index = values.at(@intCast(index), self.analyser.ip);
+            if (item_index == .none or self.analyser.ip.isUndefined(item_index) or self.analyser.ip.isUnknown(item_index)) return null;
             item.* = Type.fromIP(self.analyser, self.analyser.ip.typeOf(item_index), item_index);
         }
         return items;
@@ -440,6 +447,18 @@ pub const Interpreter = struct {
                 }
                 const value = try self.eval(handle, rhs) orelse return .unknown;
                 if (!try self.write(handle, lhs, value)) return .unknown;
+                return .next;
+            },
+            .assign_destructure => {
+                const assignment = tree.assignDestructure(node);
+                const value = try self.eval(handle, assignment.ast.value_expr) orelse return .unknown;
+                const items = try self.mutableElements(value) orelse return .unknown;
+                if (items.len != assignment.ast.variables.len) return .unknown;
+                for (assignment.ast.variables, items) |lhs, item| {
+                    if (tree.fullVarDecl(lhs) != null) return .unknown;
+                    if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) continue;
+                    if (!try self.write(handle, lhs, item)) return .unknown;
+                }
                 return .next;
             },
             .assign_mul,

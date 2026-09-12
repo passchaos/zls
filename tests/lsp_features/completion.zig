@@ -5518,6 +5518,47 @@ test "generic function with peer-typed loop expressions" {
     });
 }
 
+test "generic function with comptime destructuring assignment" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var width: usize = 1;
+        \\    var height: usize = 2;
+        \\    width, height = [_]usize{ height + base, width + 2 };
+        \\    return struct { items: [width * height]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[15]u8" },
+    });
+
+    try testCompletion(
+        \\const State = struct { dimensions: [2]usize };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var state = State{ .dimensions = [2]usize{ 1, 2 } };
+        \\    state.dimensions[0], state.dimensions[1] = [_]usize{ base + 1, 6 };
+        \\    return struct { items: [state.dimensions[0] * state.dimensions[1]]u8 };
+        \\}
+        \\const buffer: Buffer(4) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[30]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer() type {
+        \\    var width: usize = 2;
+        \\    var height: usize = 3;
+        \\    width, _, height = .{ height, 99, width };
+        \\    return struct { items: [width * height]u8 };
+        \\}
+        \\const buffer: Buffer() = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+    });
+}
+
 test "generic function with comptime while expression branches" {
     try testCompletion(
         \\fn Select(comptime enabled: bool, comptime N: u8) type {
