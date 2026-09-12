@@ -7919,6 +7919,145 @@ test "generic function with typed comptime scalar argument mutation" {
     });
 }
 
+test "comptime interpreter preserves as aggregate result locations" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, count: []const u8 }{
+        .{ .type = "Config", .initializer = ".{}", .count = "value.capacity" },
+        .{ .type = "Config", .initializer = ".{ .capacity = small }", .count = "value.capacity" },
+        .{ .type = "[1]usize", .initializer = ".{small}", .count = "value[0]" },
+        .{ .type = "[1]Config", .initializer = ".{.{}}", .count = "value[0].capacity" },
+        .{ .type = "struct { Config, ?usize }", .initializer = ".{ .{}, small }", .count = "value.@\"0\".capacity + value.@\"1\".? - 4" },
+        .{ .type = "union(enum) { count: usize, empty }", .initializer = ".{ .count = small }", .count = "value.count" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const Config = struct {{ capacity: usize = @as(u8, 4) }};
+            \\fn Select() type {{
+            \\    const small: u8 = 4;
+            \\    var executions: usize = 0;
+            \\    const value = @as(destination: {{
+            \\        executions += 1;
+            \\        break :destination {s};
+            \\    }}, result: {{
+            \\        executions = executions * 10 + 2;
+            \\        break :result {s};
+            \\    }});
+            \\    const count = {s};
+            \\    return struct {{
+            \\        items: [if (@TypeOf(count) == usize) count else 99]u8,
+            \\        executions: [executions]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.type, case.initializer, case.count });
+        defer allocator.free(source);
+        errdefer std.debug.print("as aggregate source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+            .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+        });
+    }
+}
+
+test "comptime interpreter preserves nested as aggregate evaluation" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize = @as(u8, 4) };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const pair = .{ @as(Config, result: {
+        \\        executions += 1;
+        \\        break :result .{};
+        \\    }), @as([1]usize, result: {
+        \\        executions = executions * 10 + 2;
+        \\        break :result .{@as(u8, 4)};
+        \\    }) };
+        \\    return struct {
+        \\        items: [pair[0].capacity + pair[1][0]]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
+test "comptime interpreter preserves generated as aggregate values" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize = @as(u8, 4) };
+        \\fn Select() type {
+        \\    const S = @Struct(.auto, null, &.{ "config", "sibling" }, &.{ Config, usize }, &.{ .{}, .{} });
+        \\    const U = @Union(.auto, @Enum(u8, .exhaustive, &.{ "count", "empty" }, &.{ 0, 1 }), &.{ "count", "empty" }, &.{ usize, void }, &.{ .{}, .{} });
+        \\    var state = @as(S, .{ .config = .{}, .sibling = @as(u8, 7) });
+        \\    const original = state;
+        \\    state.config.capacity += 2;
+        \\    const value = @as(U, .{ .count = @as(u8, 4) });
+        \\    return switch (value) {
+        \\        .count => |count| struct {
+        \\            original: [original.config.capacity]u8,
+        \\            changed: [state.config.capacity + count]u8,
+        \\            sibling: [state.sibling]u8,
+        \\        },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "original", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[10]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter keeps invalid as union payloads unknown" {
+    for ([_][]const u8{ "true", "256", "\"invalid\"" }) |payload| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const U = union(enum) {{ count: u8, empty }};
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const value = @as(U, .{{ .count = {s} }});
+            \\    return switch (value) {{
+            \\        .count => struct {{ accepted: u8 }},
+            \\        .empty => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{payload});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+            .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+        });
+    }
+}
+
+test "comptime interpreter preserves unknown as aggregate element types" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const values = @as([2]usize, .{ runtime_u8, @as(u8, 4) });
+        \\    return struct {
+        \\        unknown: [values[0]]u8,
+        \\        known: [values[1]]u8,
+        \\        typed: [if (@TypeOf(values[0]) == usize and @TypeOf(values[1]) == usize) 1 else 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "known", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "typed", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with nested comptime as coercion mutation" {
     try testCompletion(
         \\fn Buffer(comptime base: usize) type {

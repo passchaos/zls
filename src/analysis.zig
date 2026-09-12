@@ -11588,6 +11588,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return options.container_type orelse try analyser.innermostContainer(handle, tree.tokenStart(tree.firstToken(node)));
                 },
                 .as => {
+                    if (analyser.comptime_interpreter) |interpreter| {
+                        return interpreter.evaluateAs(handle, params);
+                    }
                     if (params.len < 1) return null;
                     const ty = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
                     if (analyser.evaluate_comptime_values and params.len >= 2 and ty.isEnumType(analyser)) {

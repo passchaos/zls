@@ -355,6 +355,20 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(analyser, destination, .{ .fields = fields }));
     }
 
+    pub fn evaluateAs(self: *Interpreter, handle: *Handle, params: []const Ast.Node.Index) Error!?Type {
+        if (params.len != 2) return null;
+        const destination = try self.eval(handle, params[0]) orelse return null;
+        const evaluated = try self.evalTypedSource(handle, params[1], destination) orelse return null;
+        return self.coerceFromSource(
+            handle,
+            destination,
+            evaluated.value,
+            evaluated.source_node,
+            null,
+            self.optionalPayloadType(destination) != null,
+        );
+    }
+
     pub fn evaluateUnionInit(self: *Interpreter, handle: *Handle, params: []const Ast.Node.Index) Error!?Type {
         if (params.len != 3) return null;
         const union_type = try self.eval(handle, params[0]) orelse return null;
@@ -578,19 +592,7 @@ pub const Interpreter = struct {
                 if (std.mem.eql(u8, name, "@as")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
-                    if (params.len != 2) return null;
-                    const destination = try self.eval(handle, params[0]) orelse return null;
-                    const evaluated = try self.evalTypedSource(handle, params[1], destination) orelse return null;
-                    return if (self.optionalPayloadType(destination) != null)
-                        self.coerceAssignmentFromSource(
-                            handle,
-                            destination,
-                            evaluated.value,
-                            evaluated.source_node,
-                            null,
-                        )
-                    else
-                        self.coerce(destination, evaluated.value);
+                    return self.evaluateAs(handle, params);
                 }
                 if (std.mem.eql(u8, name, "@intFromEnum")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -1255,13 +1257,13 @@ pub const Interpreter = struct {
         self: *Interpreter,
         handle: *Handle,
         destination: Type,
-        items: []const Type,
+        value: Type,
         item_nodes: []const Ast.Node.Index,
         allow_invalid: bool,
     ) Error!?Type {
-        if (items.len != item_nodes.len) return null;
-        const coerced = try self.analyser.arena.alloc(Type, items.len);
-        for (items, item_nodes, coerced, 0..) |item, item_node, *result, index| {
+        const coerced = try self.analyser.arena.alloc(Type, item_nodes.len);
+        for (item_nodes, coerced, 0..) |item_node, *result, index| {
+            const item = try self.analyser.resolveBracketAccessType(value, .{ .single = index }) orelse return null;
             const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
             result.* = try self.coerceFromSource(
                 handle,
@@ -1385,9 +1387,8 @@ pub const Interpreter = struct {
                 if (literal.ast.type_expr == .none) {
                     if (declared_array_len orelse self.assignmentAggregateLength(destination)) |len| {
                         if (len > self.budget.steps) return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
-                        const items = try self.mutableElements(value);
-                        if (items != null and items.?.len == len) {
-                            if (try self.coerceArrayLiteral(handle, destination, items.?, literal.ast.elements, allow_invalid)) |result| return result;
+                        if (literal.ast.elements.len == len) {
+                            if (try self.coerceArrayLiteral(handle, destination, value, literal.ast.elements, allow_invalid)) |result| return result;
                         }
                         return if (allow_invalid) self.unknownArray(destination, len) else null;
                     }
