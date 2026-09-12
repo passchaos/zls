@@ -343,6 +343,18 @@ pub const Interpreter = struct {
                 const operand = try self.eval(handle, handle.tree.nodeData(node).node) orelse return null;
                 return self.analyser.resolveComptimeUnaryValue(tag, operand);
             },
+            .field_access => {
+                const base, const field_token = handle.tree.nodeData(node).node_and_token;
+                const value = try self.eval(handle, base) orelse return null;
+                const field_name = offsets.identifierTokenToNameSlice(&handle.tree, field_token);
+                return self.analyser.resolveFieldAccess(value, field_name);
+            },
+            .array_access => {
+                const base, const index_node = handle.tree.nodeData(node).node_and_node;
+                const value = try self.eval(handle, base) orelse return null;
+                const index = try self.integer(handle, index_node) orelse return null;
+                return self.analyser.resolveBracketAccessType(value, .{ .single = index });
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },

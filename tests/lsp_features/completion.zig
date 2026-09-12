@@ -7490,6 +7490,39 @@ test "generic function with nested comptime optional unwrap mutation" {
     });
 }
 
+test "generic function with nested comptime aggregate access mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value .{ total, total + 1 };
+        \\    }).@"1";
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[25]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (value: {
+        \\        total += 1;
+        \\        break :value .{ total, total * 2 };
+        \\    })[1];
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[18]u8" },
+    });
+}
+
 test "generic function with comptime boolean short circuit mutations" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {
