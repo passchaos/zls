@@ -223,6 +223,57 @@ pub const Interpreter = struct {
         self.budget.expression_depth -= 1;
     }
 
+    pub fn evaluateFieldDefault(analyser: *Analyser, decl: Analyser.DeclWithHandle) Error!?Type {
+        const field_node = switch (decl.decl) {
+            .ast_node => |node| node,
+            else => return null,
+        };
+        const field = decl.handle.tree.fullContainerField(field_node) orelse return null;
+        const value_node = field.ast.value_expr.unwrap() orelse return null;
+        var budget: Budget = .{};
+        var child: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
+        };
+        var display_bindings = if (analyser.display_bindings) |bindings| try bindings.clone(analyser.arena) else Analyser.TokenToNodeMap.empty;
+        if (decl.container_type) |container| {
+            if (container.data == .container) {
+                const info = container.data.container;
+                for (info.bound_params.keys(), info.bound_params.values()) |key, value| {
+                    try child.bindings.put(analyser.arena, key, value);
+                }
+                for (info.display_params.keys(), info.display_params.values()) |key, value| {
+                    try display_bindings.put(analyser.arena, key, value);
+                }
+            }
+        }
+        if (!child.enterExpression()) return null;
+        defer child.leaveExpression();
+        const old_interpreter = analyser.comptime_interpreter;
+        const old_bindings = analyser.generic_bindings;
+        const old_display_bindings = analyser.display_bindings;
+        const old_values = analyser.evaluate_comptime_values;
+        const old_numbers = analyser.resolve_number_literal_values;
+        const old_flow = analyser.evaluate_comptime_control_flow;
+        analyser.comptime_interpreter = &child;
+        analyser.generic_bindings = &child.bindings;
+        analyser.display_bindings = &display_bindings;
+        analyser.evaluate_comptime_values = true;
+        analyser.resolve_number_literal_values = true;
+        analyser.evaluate_comptime_control_flow = true;
+        defer {
+            analyser.comptime_interpreter = old_interpreter;
+            analyser.generic_bindings = old_bindings;
+            analyser.display_bindings = old_display_bindings;
+            analyser.evaluate_comptime_values = old_values;
+            analyser.resolve_number_literal_values = old_numbers;
+            analyser.evaluate_comptime_control_flow = old_flow;
+        }
+        const field_value = try decl.resolveType(analyser) orelse return null;
+        return child.evaluateTypedExpression(decl.handle, value_node, try field_value.typeOf(analyser));
+    }
+
     pub fn evaluateExpression(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         return self.eval(handle, node);
     }

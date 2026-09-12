@@ -833,15 +833,9 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
             if (try analyser.lookupSymbolContainer(try ty.instanceUnchecked(analyser), field_name, .field)) |decl| {
                 if (decl.decl == .ast_node) {
                     const field = decl.handle.tree.fullContainerField(decl.decl.ast_node) orelse return null;
-                    if (field.ast.value_expr.unwrap()) |value_node| {
-                        if (analyser.comptime_interpreter != null) {
-                            const field_type = try decl.resolveType(analyser) orelse return null;
-                            if (try analyser.resolveAggregateComptimeArgument(try field_type.typeOf(analyser), decl.handle, value_node)) |value| {
-                                return .{ .type = value, .is_const = true };
-                            }
-                        }
+                    if (field.ast.value_expr != .none) {
                         return .{
-                            .type = try analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(value_node, decl.handle), .container_type = ty }) orelse return null,
+                            .type = try comptime_eval.Interpreter.evaluateFieldDefault(analyser, decl) orelse return null,
                             .is_const = true,
                         };
                     }

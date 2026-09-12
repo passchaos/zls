@@ -9304,6 +9304,184 @@ test "generic function with comptime struct field mutation" {
     });
 }
 
+test "comptime interpreter coerces nested field defaults" {
+    const cases = [_]struct { declaration: []const u8, value: []const u8 }{
+        .{ .declaration = "value: usize = @as(u8, 4)", .value = "state.value" },
+        .{ .declaration = "value: ?usize = @as(u8, 4)", .value = "state.value.?" },
+        .{ .declaration = "value: ?[1]usize = .{@as(u8, 4)}", .value = "state.value.?[0]" },
+        .{ .declaration = "value: ?Config = .{}", .value = "state.value.?.capacity" },
+        .{ .declaration = "value: [1]Config = .{.{}}", .value = "state.value[0].capacity" },
+        .{ .declaration = "value: usize = @intCast(@as(u16, 4))", .value = "state.value" },
+    };
+    for (cases) |case| {
+        for ([_][]const u8{ "State{}", ".{}" }) |initializer| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Config = struct {{ capacity: usize = @as(u8, 4) }};
+                \\const State = struct {{ {s}, sibling: usize = 7 }};
+                \\fn Select() type {{
+                \\    var marker: usize = 0;
+                \\    marker += 1;
+                \\    const state: State = {s};
+                \\    const value = {s};
+                \\    return struct {{
+                \\        items: [if (@TypeOf(value) == usize) value else 99]u8,
+                \\        repeated: [{s}]u8,
+                \\        sibling: [state.sibling]u8,
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{ case.declaration, initializer, case.value, case.value });
+            defer allocator.free(source);
+            errdefer std.debug.print("field default source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "repeated", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter keeps default value copies independent" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize = @as(u8, 4) };
+        \\const State = struct { optional: ?Config = .{}, values: [1]Config = .{.{}} };
+        \\fn Select() type {
+        \\    var state = State{};
+        \\    const original = state;
+        \\    const other = State{};
+        \\    state.optional.?.capacity += 2;
+        \\    state.values[0].capacity += 3;
+        \\    return struct {
+        \\        original: [original.optional.?.capacity + original.values[0].capacity]u8,
+        \\        other: [other.optional.?.capacity + other.values[0].capacity]u8,
+        \\        changed: [state.optional.?.capacity + state.values[0].capacity]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "original", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "other", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[13]u8" },
+    });
+}
+
+test "comptime interpreter resolves specialized field defaults" {
+    try testCompletion(
+        \\fn Config(comptime base: u8) type {
+        \\    return struct {
+        \\        count: ?usize = base,
+        \\        values: ?[1]usize = .{base},
+        \\        nested: struct { capacity: usize = base } = .{},
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const first = Config(4){};
+        \\    const second = Config(7){};
+        \\    return struct {
+        \\        first: [first.count.? + first.values.?[0] + first.nested.capacity]u8,
+        \\        second: [second.count.? + second.values.?[0] + second.nested.capacity]u8,
+        \\        repeated: [first.count.? + first.values.?[0] + first.nested.capacity]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[21]u8" },
+        .{ .label = "repeated", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
+test "comptime interpreter isolates field default locals" {
+    try testCompletion(
+        \\const Config = struct {
+        \\    capacity: usize = value: {
+        \\        var small: u8 = 1;
+        \\        small += 3;
+        \\        break :value small;
+        \\    },
+        \\    unused: usize = 99,
+        \\};
+        \\fn Select() type {
+        \\    var state = Config{ .unused = 7 };
+        \\    const original = state;
+        \\    const other = Config{ .unused = 8 };
+        \\    state.capacity += 2;
+        \\    return struct {
+        \\        original: [original.capacity]u8,
+        \\        other: [other.capacity]u8,
+        \\        changed: [state.capacity]u8,
+        \\        overridden: [state.unused + other.unused]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "original", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "other", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "overridden", .kind = .Field, .detail = "[15]u8" },
+    });
+}
+
+test "cross-file comptime field defaults preserve generic bindings" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+    _ = try ctx.addDocument(.{ .source =
+        \\pub fn Config(comptime base: u8) type {
+        \\    const Inner = struct { capacity: usize = base };
+        \\    return struct { optional: ?Inner = .{} };
+        \\}
+    });
+    const source =
+        \\const api = @import("Untitled-0.zig");
+        \\fn Select() type {
+        \\    var state = api.Config(4){};
+        \\    const original = state;
+        \\    const other = api.Config(7){};
+        \\    state.optional.?.capacity += 2;
+        \\    return struct { items: [original.optional.?.capacity + other.optional.?.capacity + state.optional.?.capacity]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const uri = try ctx.addDocument(.{ .source = source[0..cursor_idx] });
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })).?.completion_list;
+    try std.testing.expectEqual(@as(usize, 1), response.items.len);
+    try std.testing.expectEqualStrings("items", response.items[0].label);
+    try std.testing.expectEqualStrings("[17]u8", response.items[0].detail.?);
+}
+
+test "comptime interpreter keeps invalid field defaults unknown" {
+    for ([_][]const u8{ "\"invalid\"", "Config{}.capacity" }) |value| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const Config = struct {{ capacity: usize = {s}, sibling: usize = 7 }};
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const state = Config{{}};
+            \\    return struct {{ items: [state.capacity]u8, sibling: [state.sibling]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{value});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+        });
+    }
+}
+
 test "generic function with nested comptime aggregate mutation" {
     try testCompletion(
         \\const Inner = struct { capacity: usize = 1 };

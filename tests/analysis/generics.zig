@@ -399,6 +399,19 @@ const first_builtin_union: BuiltinUnionInitializerArray(4) = undefined;
 const second_builtin_union: BuiltinUnionInitializerArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([4]u8)()
 
+fn DefaultFieldArray(comptime base: u8) type {
+    const Config = struct { capacity: ?usize = base };
+    var state = Config{};
+    const original = state;
+    state.capacity.? += 1;
+    return [original.capacity.? + state.capacity.?]u8;
+}
+
+const first_default_array: DefaultFieldArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([9]u8)()
+const second_default_array: DefaultFieldArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
