@@ -6004,6 +6004,50 @@ test "generic function with comptime labeled loop breaks" {
     });
 }
 
+test "generic function with comptime labeled continues" {
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var outer_index: usize = 0;
+        \\    var capacity: usize = 0;
+        \\    outer: while (outer_index < limit) : (outer_index += 1) {
+        \\        var inner_index: usize = 0;
+        \\        while (inner_index < 2) : (inner_index += 1) {
+        \\            capacity += 1;
+        \\            continue :outer;
+        \\        }
+        \\        capacity = 99;
+        \\    } else {
+        \\        capacity += 10;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[13]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime limit: usize) type {
+        \\    var capacity: usize = 0;
+        \\    outer: for (0..limit) |_| {
+        \\        for (0..2) |_| {
+        \\            capacity += 1;
+        \\            continue :outer;
+        \\        }
+        \\        capacity = 99;
+        \\    } else {
+        \\        capacity += 10;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[13]u8" },
+    });
+}
+
 test "generic function with comptime intFromEnum" {
     try testCompletion(
         \\const Mode = enum(u128) { low = 1, high = 170141183460469231731687303715884105728 };

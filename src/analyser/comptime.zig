@@ -105,7 +105,7 @@ pub const Interpreter = struct {
     budget: *Budget,
 
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
-    const Flow = union(enum) { next, returned: Type, continued, stopped: ?Ast.TokenIndex, unknown };
+    const Flow = union(enum) { next, returned: Type, continued: ?Ast.TokenIndex, stopped: ?Ast.TokenIndex, unknown };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -321,7 +321,11 @@ pub const Interpreter = struct {
                 try self.captureCells(try self.eval(handle, expression) orelse return .unknown)
             else
                 Type.fromIP(analyser, .void_type, .void_value) },
-            .@"continue" => return if (tree.nodeData(node).opt_token_and_opt_node[0] != .none) .unknown else .continued,
+            .@"continue" => {
+                const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
+                if (operand != .none) return .unknown;
+                return .{ .continued = label.unwrap() };
+            },
             .@"break" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
                 if (operand != .none) return .unknown;
@@ -415,7 +419,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn stopsLoop(tree: *const Ast, label_token: ?Ast.TokenIndex, target: ?Ast.TokenIndex) bool {
+    fn targetsLoop(tree: *const Ast, label_token: ?Ast.TokenIndex, target: ?Ast.TokenIndex) bool {
         const target_token = target orelse return true;
         const loop_label_token = label_token orelse return false;
         return std.mem.eql(u8, tree.tokenSlice(loop_label_token), tree.tokenSlice(target_token));
@@ -466,8 +470,9 @@ pub const Interpreter = struct {
             }
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
-                .next, .continued => {},
-                .stopped => |target| return if (stopsLoop(tree, loop_node.label_token, target)) .next else flow,
+                .next => {},
+                .continued => |target| if (!targetsLoop(tree, loop_node.label_token, target)) return flow,
+                .stopped => |target| return if (targetsLoop(tree, loop_node.label_token, target)) .next else flow,
                 .returned, .unknown => return flow,
             }
         }
@@ -489,8 +494,9 @@ pub const Interpreter = struct {
 
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
-                .next, .continued => {},
-                .stopped => |target| return if (stopsLoop(&handle.tree, loop_node.label_token, target)) .next else flow,
+                .next => {},
+                .continued => |target| if (!targetsLoop(&handle.tree, loop_node.label_token, target)) return flow,
+                .stopped => |target| return if (targetsLoop(&handle.tree, loop_node.label_token, target)) .next else flow,
                 .returned => |value| return .{ .returned = value },
                 .unknown => return .unknown,
             }
