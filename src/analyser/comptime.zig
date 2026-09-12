@@ -996,11 +996,24 @@ pub const Interpreter = struct {
         return @as(?Type, try child.typeOf(self.analyser));
     }
 
-    fn coerceArrayLiteral(self: *Interpreter, destination: Type, items: []const Type) Error!?Type {
+    fn coerceArrayLiteral(
+        self: *Interpreter,
+        handle: *Handle,
+        destination: Type,
+        items: []const Type,
+        item_nodes: []const Ast.Node.Index,
+    ) Error!?Type {
+        if (items.len != item_nodes.len) return null;
         const coerced = try self.analyser.arena.alloc(Type, items.len);
-        for (items, coerced, 0..) |item, *result, index| {
+        for (items, item_nodes, coerced, 0..) |item, item_node, *result, index| {
             const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
-            result.* = try self.coerceAssignmentTo(element_type, item) orelse return null;
+            result.* = try self.coerceAssignmentFromSource(
+                handle,
+                element_type,
+                item,
+                item_node,
+                null,
+            ) orelse return null;
         }
         return @as(?Type, try Value.create(self.analyser, destination, .{ .array = coerced }));
     }
@@ -1014,13 +1027,33 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(self.analyser, destination, .{ .array = items }));
     }
 
-    fn coerceFieldLiteral(self: *Interpreter, destination: Type, fields: []const Value.Field) Error!?Type {
+    fn coerceFieldLiteral(
+        self: *Interpreter,
+        handle: *Handle,
+        destination: Type,
+        fields: []const Value.Field,
+        field_nodes: []const Ast.Node.Index,
+    ) Error!?Type {
+        if (fields.len != field_nodes.len) return null;
+        const tree = &handle.tree;
         const coerced = try self.analyser.arena.alloc(Value.Field, fields.len);
         for (fields, coerced) |field, *result| {
             const field_type = try self.assignmentChildType(destination, .{ .field = field.name }) orelse return null;
+            const field_node = for (field_nodes) |node| {
+                const name_token = tree.firstToken(node) - 2;
+                if (tree.tokenTag(name_token) != .identifier) return null;
+                const name = offsets.identifierTokenToNameSlice(tree, name_token);
+                if (std.mem.eql(u8, field.name, name)) break node;
+            } else return null;
             result.* = .{
                 .name = field.name,
-                .value = try self.coerceAssignmentTo(field_type, field.value) orelse return null,
+                .value = try self.coerceAssignmentFromSource(
+                    handle,
+                    field_type,
+                    field.value,
+                    field_node,
+                    null,
+                ) orelse return null,
             };
         }
         return @as(?Type, try Value.create(self.analyser, destination, .{ .fields = coerced }));
@@ -1062,7 +1095,12 @@ pub const Interpreter = struct {
                     if (len > self.budget.steps) return destination.instanceTypeVal(analyser);
                     const items = try self.mutableElements(value);
                     return if (items != null and items.?.len == len)
-                        try self.coerceArrayLiteral(destination, items.?) orelse try self.unknownArray(destination, len)
+                        try self.coerceArrayLiteral(
+                            handle,
+                            destination,
+                            items.?,
+                            literal.ast.elements,
+                        ) orelse try self.unknownArray(destination, len)
                     else
                         try self.unknownArray(destination, len);
                 }
@@ -1073,7 +1111,12 @@ pub const Interpreter = struct {
                 {
                     const fields = Value.fieldEntries(value);
                     return if (fields != null and (!destination.isUnionType() or literal.ast.fields.len == 1))
-                        try self.coerceFieldLiteral(destination, fields.?) orelse try destination.instanceTypeVal(analyser)
+                        try self.coerceFieldLiteral(
+                            handle,
+                            destination,
+                            fields.?,
+                            literal.ast.fields,
+                        ) orelse try destination.instanceTypeVal(analyser)
                     else
                         try destination.instanceTypeVal(analyser);
                 }

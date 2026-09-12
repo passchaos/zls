@@ -3748,6 +3748,91 @@ test "comptime interpreter coerces typed aggregate destructuring reassignments" 
     });
 }
 
+test "comptime interpreter coerces nested aggregate result locations" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\const Value = union(enum) { count: usize, empty };
+        \\const State = struct { values: [1]usize, config: Config, value: Value };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    const state: State = .{
+        \\        .values = .{small},
+        \\        .config = .{ .capacity = small },
+        \\        .value = .{ .count = small },
+        \\    };
+        \\    return switch (state.value) {
+        \\        .count => |count| struct {
+        \\            items: [if (@TypeOf(state.values[0]) == usize and
+        \\                @TypeOf(state.config.capacity) == usize and @TypeOf(count) == usize)
+        \\                state.values[0] + state.config.capacity + count
+        \\            else
+        \\                99]u8,
+        \\        },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var configs: [1]Config = undefined;
+        \\    configs = .{.{ .capacity = small }};
+        \\    return struct {
+        \\        items: [if (@TypeOf(configs[0].capacity) == usize) configs[0].capacity else 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\const Value = union(enum) { count: usize, empty };
+        \\const State = struct { values: [1]usize, config: Config, value: Value };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var state = State{
+        \\        .values = undefined,
+        \\        .config = .{ .capacity = 0 },
+        \\        .value = .{ .empty = {} },
+        \\    };
+        \\    state = .{
+        \\        .values = .{small},
+        \\        .config = .{ .capacity = small },
+        \\        .value = .{ .count = small },
+        \\    };
+        \\    return switch (state.value) {
+        \\        .count => |count| struct {
+        \\            items: [if (@TypeOf(state.values[0]) == usize and
+        \\                @TypeOf(state.config.capacity) == usize and @TypeOf(count) == usize)
+        \\                state.values[0] + state.config.capacity + count
+        \\            else
+        \\                99]u8,
+        \\        },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {
