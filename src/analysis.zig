@@ -11324,6 +11324,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                                     const value_index = try analyser.coerceComptimeIPValue(field_type_index, field_value) orelse
                                         return try lhs.instanceTypeVal(analyser);
                                     field_value = Type.fromIP(analyser, field_type_index, value_index);
+                                } else {
+                                    const source_type = try field_value.typeOf(analyser);
+                                    if (source_type.ipIndex()) |source_type_index| {
+                                        const source_value = Type.fromIP(analyser, source_type_index, null);
+                                        _ = try analyser.coerceComptimeIPValue(field_type_index, source_value) orelse
+                                            return try lhs.instanceTypeVal(analyser);
+                                    }
                                 }
                             }
                         }
