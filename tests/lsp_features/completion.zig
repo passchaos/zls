@@ -1698,6 +1698,36 @@ test "generic function with nested comptime intFromBool mutation" {
     });
 }
 
+test "generic function with comptime unknown intFromBool types" {
+    try testCompletion(
+        \\var runtime_bool: bool = undefined;
+        \\var runtime_vector: @Vector(2, bool) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 0;
+        \\    const scalar = @intFromBool(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_bool;
+        \\    });
+        \\    const vector = @intFromBool(operand: {
+        \\        total += 1;
+        \\        break :operand runtime_vector;
+        \\    });
+        \\    total += 1;
+        \\    return struct {
+        \\        scalar: @TypeOf(scalar),
+        \\        vector: @TypeOf(vector),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "scalar", .kind = .Field, .detail = "u1" },
+        .{ .label = "vector", .kind = .Field, .detail = "@Vector(2,u1)" },
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

@@ -2262,11 +2262,16 @@ fn resolveVectorIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOf
 
 pub fn resolveComptimeIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
     if (try analyser.resolveVectorIntFromBoolValue(operand)) |result| return result;
-    const value = operand.ipIndex() orelse return null;
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (payload.type != .bool_type) return null;
+    const value = payload.index orelse return Type.fromIP(analyser, .u1_type, null);
     return switch (value) {
         .bool_true => Type.fromIP(analyser, .u1_type, .one_u1),
         .bool_false => Type.fromIP(analyser, .u1_type, .zero_u1),
-        else => null,
+        else => if (analyser.ip.isUnknown(value)) Type.fromIP(analyser, .u1_type, null) else null,
     };
 }
 
