@@ -1660,6 +1660,24 @@ test "generic function with comptime vector int from bool" {
     });
 }
 
+test "generic function with nested comptime intFromBool mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime enabled: bool) type {
+        \\    var total: usize = 1;
+        \\    const bit = @intFromBool(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value enabled;
+        \\    });
+        \\    return struct { items: [if (bit == 1) total * 2 else 99]u8 };
+        \\}
+        \\const buffer: Buffer(true) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+    });
+}
+
 test "generic function with comptime vector comparison" {
     try testCompletion(
         \\fn Select(comptime N: u8) type {

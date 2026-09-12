@@ -2244,6 +2244,16 @@ fn resolveVectorIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOf
     return analyser.aggregateValue(result, values);
 }
 
+pub fn resolveComptimeIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+    if (try analyser.resolveVectorIntFromBoolValue(operand)) |result| return result;
+    const value = operand.ipIndex() orelse return null;
+    return switch (value) {
+        .bool_true => Type.fromIP(analyser, .u1_type, .one_u1),
+        .bool_false => Type.fromIP(analyser, .u1_type, .zero_u1),
+        else => null,
+    };
+}
+
 fn resolveVectorCastValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -10903,15 +10913,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .int_from_bool => {
                     if (params.len != 1) return null;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
-                    if (try analyser.resolveVectorIntFromBoolValue(operand)) |result| {
+                    if (try analyser.resolveComptimeIntFromBoolValue(operand)) |result| {
                         return if (analyser.evaluate_comptime_values) result else result.withoutIPIndex(analyser);
                     }
                     if (!analyser.evaluate_comptime_values) {
                         return Type.fromIP(analyser, .u1_type, null);
                     }
-                    const value = try analyser.resolveBoolValue(.of(params[0], handle)) orelse
-                        return Type.fromIP(analyser, .u1_type, null);
-                    return Type.fromIP(analyser, .u1_type, if (value) .one_u1 else .zero_u1);
+                    return Type.fromIP(analyser, .u1_type, null);
                 },
                 .in_comptime => {
                     if (params.len != 0) return null;
