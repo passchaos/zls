@@ -376,7 +376,20 @@ pub const Interpreter = struct {
             .array_access => {
                 const base, const index_node = handle.tree.nodeData(node).node_and_node;
                 const value = try self.eval(handle, base) orelse return null;
-                const index = try self.integer(handle, index_node) orelse return null;
+                const index_value = try self.eval(handle, index_node) orelse return null;
+                const index_payload = switch (index_value.data) {
+                    .ip_index => |payload| payload,
+                    else => return null,
+                };
+                switch (self.analyser.ip.zigTypeTag(index_payload.type) orelse return null) {
+                    .int, .comptime_int => {},
+                    else => return null,
+                }
+                const index: ?u64 = if (index_payload.index) |index| blk: {
+                    if (self.analyser.ip.isUndefined(index)) return null;
+                    if (self.analyser.ip.isUnknown(index)) break :blk null;
+                    break :blk self.analyser.ip.toInt(index, u64) orelse return null;
+                } else null;
                 return self.analyser.resolveBracketAccessType(value, .{ .single = index });
             },
             .slice, .slice_open, .slice_sentinel => {

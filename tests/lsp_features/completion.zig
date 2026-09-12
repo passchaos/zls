@@ -8501,6 +8501,29 @@ test "generic function with nested comptime aggregate access mutations" {
     });
 }
 
+test "generic function with comptime unknown array index type" {
+    try testCompletion(
+        \\var runtime_index: usize = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const selected = (source: {
+        \\        total += 1;
+        \\        break :source [_]i16{ 10, 20 };
+        \\    })[index: {
+        \\        total *= 2;
+        \\        break :index runtime_index;
+        \\    }];
+        \\    total += 1;
+        \\    return struct { value: @TypeOf(selected), items: [total]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "i16" },
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "generic function with nested comptime array operator mutations" {
     try testCompletion(
         \\fn Buffer(comptime base: usize) type {
