@@ -9283,13 +9283,7 @@ pub fn resolveAggregateComptimeArgument(
         const field_name = try analyser.identifierTokenName(&handle.tree, handle.tree.firstToken(field_node) - 2) orelse return null;
         const field_decl = try analyser.lookupSymbolContainer(aggregate_type, field_name, .field) orelse return null;
         const field_type = try field_decl.resolveType(analyser) orelse return null;
-        const value = if ((try field_type.typeOf(analyser)).ipIndex()) |field_type_index|
-            if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
-                Type.fromIP(analyser, field_type_index, value_index)
-            else
-                try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null
-        else
-            try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null;
+        const value = try analyser.resolveAggregateComptimeElement(try field_type.typeOf(analyser), handle, field_node) orelse return null;
         const fields = try analyser.arena.alloc(comptime_eval.Value.Field, 1);
         fields[0] = .{ .name = field_name, .value = value };
         return try comptime_eval.Value.create(analyser, aggregate_type, .{ .fields = fields });
@@ -9305,14 +9299,7 @@ pub fn resolveAggregateComptimeArgument(
             const expected_type = try field_type.typeOf(analyser);
             field.* = .{
                 .name = field_name,
-                .value = try analyser.resolveAggregateComptimeArgument(expected_type, handle, field_node) orelse
-                    if (expected_type.ipIndex()) |field_type_index|
-                        if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
-                            Type.fromIP(analyser, field_type_index, value_index)
-                        else
-                            try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null
-                    else
-                        try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null,
+                .value = try analyser.resolveAggregateComptimeElement(expected_type, handle, field_node) orelse return null,
             };
         }
         return try comptime_eval.Value.create(analyser, aggregate_type, .{ .fields = fields });
@@ -9346,20 +9333,39 @@ pub fn resolveAggregateComptimeArgument(
     };
     const values = try analyser.arena.alloc(Type, elements.len);
     for (elements, values) |element, *value| {
-        if (element_type.ipIndex()) |element_type_index| {
-            if (try analyser.resolveCoercedIPValue(element_type_index, .of(element, handle))) |value_index| {
-                value.* = Type.fromIP(analyser, element_type_index, value_index);
-                continue;
-            }
-        }
-        value.* = switch (handle.tree.nodeTag(element)) {
-            .call, .call_comma, .call_one, .call_one_comma => try comptime_eval.Interpreter.evaluateCall(analyser, handle, element) orelse
-                try comptime_eval.Value.createExpression(analyser, element_type, .of(element, handle)),
-            else => try analyser.resolveComptimeValue(.of(element, handle)) orelse
-                try comptime_eval.Value.createExpression(analyser, element_type, .of(element, handle)),
-        };
+        value.* = try analyser.resolveAggregateComptimeElement(element_type, handle, element) orelse
+            try comptime_eval.Value.createExpression(analyser, element_type, .of(element, handle));
     }
     return try comptime_eval.Value.create(analyser, aggregate_type, .{ .array = values });
+}
+
+fn resolveAggregateComptimeElement(
+    analyser: *Analyser,
+    expected_type: Type,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) Error!?Type {
+    if (analyser.comptime_interpreter) |interpreter| {
+        const evaluated = try interpreter.evaluateExpression(handle, node) orelse return null;
+        if (expected_type.ipIndex()) |expected_index| {
+            if (evaluated.ipIndex()) |value_index| {
+                const coerced = try analyser.coerceIP(expected_index, value_index) orelse return null;
+                return Type.fromIP(analyser, expected_index, coerced);
+            }
+        }
+        return evaluated;
+    }
+    if (try analyser.resolveAggregateComptimeArgument(expected_type, handle, node)) |value| return value;
+    if (expected_type.ipIndex()) |expected_index| {
+        if (try analyser.resolveCoercedIPValue(expected_index, .of(node, handle))) |value_index| {
+            return Type.fromIP(analyser, expected_index, value_index);
+        }
+    }
+    return switch (handle.tree.nodeTag(node)) {
+        .call, .call_comma, .call_one, .call_one_comma => try comptime_eval.Interpreter.evaluateCall(analyser, handle, node) orelse
+            try comptime_eval.Value.createExpression(analyser, expected_type, .of(node, handle)),
+        else => analyser.resolveComptimeValue(.of(node, handle)),
+    };
 }
 
 pub fn resolveComptimeDisplayArgument(

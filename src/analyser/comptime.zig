@@ -214,6 +214,10 @@ pub const Interpreter = struct {
         self.budget.expression_depth -= 1;
     }
 
+    pub fn evaluateExpression(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        return self.eval(handle, node);
+    }
+
     fn tick(self: *Interpreter) bool {
         if (self.budget.steps == 0) return false;
         self.budget.steps -= 1;
