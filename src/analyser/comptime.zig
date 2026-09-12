@@ -13,7 +13,7 @@ pub const Value = struct {
         array: []const Type,
         fields: []const Field,
         optional: ?Type,
-        reference: *Cell,
+        reference: *Reference,
         /// Source-backed value used when an aggregate element cannot be
         /// materialized by the intern pool but can still be copied at comptime.
         expression: Analyser.NodeWithHandle,
@@ -21,6 +21,38 @@ pub const Value = struct {
 
     pub const Field = struct { name: []const u8, value: Type };
     pub const Cell = struct { value: Type };
+    pub const Reference = struct {
+        storage: *Cell,
+        path: []const Access,
+
+        pub const Access = union(enum) {
+            field: []const u8,
+            index: usize,
+        };
+
+        fn hash(self: Reference, hasher: anytype) void {
+            std.hash.autoHash(hasher, @intFromPtr(self.storage));
+            for (self.path) |access| {
+                std.hash.autoHash(hasher, std.meta.activeTag(access));
+                switch (access) {
+                    .field => |name| hasher.update(name),
+                    .index => |index| std.hash.autoHash(hasher, index),
+                }
+            }
+        }
+
+        fn eql(self: Reference, other: Reference) bool {
+            if (self.storage != other.storage or self.path.len != other.path.len) return false;
+            for (self.path, other.path) |lhs, rhs| {
+                if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+                switch (lhs) {
+                    .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
+                    .index => |index| if (index != rhs.index) return false,
+                }
+            }
+            return true;
+        }
+    };
 
     pub fn hash(self: *const Value, hasher: anytype) void {
         self.ty.hashWithHasher(hasher);
@@ -35,7 +67,7 @@ pub const Value = struct {
                 std.hash.autoHash(hasher, payload != null);
                 if (payload) |value| value.hashWithHasher(hasher);
             },
-            .reference => |cell| std.hash.autoHash(hasher, @intFromPtr(cell)),
+            .reference => |reference| reference.hash(hasher),
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
                 hasher.update(node_handle.handle.uri.raw);
@@ -60,7 +92,7 @@ pub const Value = struct {
                 if ((payload == null) != (other.data.optional == null)) return false;
                 if (payload) |value| if (!value.eql(other.data.optional.?)) return false;
             },
-            .reference => |cell| return cell == other.data.reference,
+            .reference => |reference| return reference.eql(other.data.reference.*),
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
@@ -77,8 +109,10 @@ pub const Value = struct {
     }
 
     pub fn deref(value: Type) Type {
-        if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
-            return value.data.comptime_value.data.reference.value;
+        if (value.data == .comptime_value and value.data.comptime_value.data == .reference) {
+            const reference = value.data.comptime_value.data.reference;
+            if (reference.path.len == 0) return reference.storage.value;
+        }
         return value;
     }
 
@@ -223,24 +257,131 @@ pub const Interpreter = struct {
     }
 
     pub fn address(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
-        const storage = try self.cell(handle, node) orelse return null;
-        const ty = try self.analyser.resolveAddressOf(false, storage.value);
-        return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = storage });
+        const target = try self.referenceForNode(handle, node) orelse return null;
+        const current = try self.readReference(target) orelse return null;
+        const ty = try self.analyser.resolveAddressOf(false, current);
+        return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = target });
     }
 
-    fn mutationStorage(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Cell {
-        if (handle.tree.nodeTag(node) == .deref) {
-            return self.mutationStorage(handle, handle.tree.nodeData(node).node);
-        }
+    fn referenceForNode(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Reference {
         if (try self.cell(handle, node)) |storage| {
-            if (storage.value.data == .comptime_value and storage.value.data.comptime_value.data == .reference) {
-                return storage.value.data.comptime_value.data.reference;
-            }
-            return storage;
+            const result = try self.analyser.arena.create(Value.Reference);
+            result.* = .{ .storage = storage, .path = &.{} };
+            return result;
         }
-        const pointer = try self.eval(handle, node) orelse return null;
-        if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return null;
-        return pointer.data.comptime_value.data.reference;
+        const tree = &handle.tree;
+        switch (tree.nodeTag(node)) {
+            .array_access => {
+                const base, const index_node = tree.nodeData(node).node_and_node;
+                const parent = try self.aggregateReference(handle, base) orelse return null;
+                const current = try self.readReference(parent) orelse return null;
+                const items = try self.mutableElements(current) orelse return null;
+                const index = try self.integer(handle, index_node) orelse return null;
+                if (index >= items.len) return null;
+                return self.extendReference(parent, .{ .index = index });
+            },
+            .field_access => {
+                const base, const field_token = tree.nodeData(node).node_and_token;
+                const parent = try self.aggregateReference(handle, base) orelse return null;
+                const current = try self.readReference(parent) orelse return null;
+                const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
+                const aggregate_type = try current.typeOf(self.analyser);
+                if (aggregate_type.isTupleType(self.analyser)) {
+                    const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return null;
+                    const items = try self.mutableElements(current) orelse return null;
+                    if (index >= items.len) return null;
+                    return self.extendReference(parent, .{ .index = index });
+                }
+                if (try self.analyser.resolveFieldAccess(current, field_name) == null) return null;
+                return self.extendReference(parent, .{ .field = field_name });
+            },
+            .deref => {
+                const pointer = try self.eval(handle, tree.nodeData(node).node) orelse return null;
+                if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return null;
+                return pointer.data.comptime_value.data.reference;
+            },
+            .grouped_expression => return self.referenceForNode(handle, tree.nodeData(node).node_and_token[0]),
+            else => return null,
+        }
+    }
+
+    fn aggregateReference(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Reference {
+        const value = try self.eval(handle, node) orelse return null;
+        if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
+            return value.data.comptime_value.data.reference;
+        return self.referenceForNode(handle, node);
+    }
+
+    fn extendReference(self: *Interpreter, reference_value: *Value.Reference, access: Value.Reference.Access) Error!*Value.Reference {
+        const path = try self.analyser.arena.alloc(Value.Reference.Access, reference_value.path.len + 1);
+        @memcpy(path[0..reference_value.path.len], reference_value.path);
+        path[reference_value.path.len] = access;
+        const result = try self.analyser.arena.create(Value.Reference);
+        result.* = .{ .storage = reference_value.storage, .path = path };
+        return result;
+    }
+
+    pub fn readReference(self: *Interpreter, target: *Value.Reference) Error!?Type {
+        var current = target.storage.value;
+        for (target.path) |access| {
+            current = switch (access) {
+                .index => |index| blk: {
+                    const items = try self.mutableElements(current) orelse return null;
+                    if (index >= items.len) return null;
+                    break :blk items[index];
+                },
+                .field => |name| try self.analyser.resolveFieldAccess(current, name) orelse return null,
+            };
+        }
+        return current;
+    }
+
+    fn writeReference(self: *Interpreter, target: *Value.Reference, value: Type) Error!bool {
+        target.storage.value = try self.replaceReferenceValue(target.storage.value, target.path, value) orelse return false;
+        return true;
+    }
+
+    fn replaceReferenceValue(
+        self: *Interpreter,
+        current: Type,
+        path: []const Value.Reference.Access,
+        value: Type,
+    ) Error!?Type {
+        if (path.len == 0) return value;
+        const analyser = self.analyser;
+        const aggregate_type = try current.typeOf(analyser);
+        switch (path[0]) {
+            .index => |index| {
+                const items = try self.mutableElements(current) orelse return null;
+                if (index >= items.len) return null;
+                const updated = try analyser.arena.dupe(Type, items);
+                updated[index] = try self.replaceReferenceValue(items[index], path[1..], value) orelse return null;
+                return try Value.create(analyser, aggregate_type, .{ .array = updated });
+            },
+            .field => |field_name| {
+                const old_value = try analyser.resolveFieldAccess(current, field_name) orelse return null;
+                const new_value = try self.replaceReferenceValue(old_value, path[1..], value) orelse return null;
+                const fields = Value.fieldEntries(current) orelse return null;
+                const updated = try analyser.arena.dupe(Value.Field, fields);
+                for (updated) |*field| {
+                    if (!std.mem.eql(u8, field.name, field_name)) continue;
+                    field.value = new_value;
+                    return try Value.create(analyser, aggregate_type, .{ .fields = updated });
+                }
+                if (!aggregate_type.isStructType(analyser)) return null;
+                if (try analyser.lookupSymbolContainer(try aggregate_type.instanceUnchecked(analyser), field_name, .field) == null) return null;
+                const extended = try analyser.arena.alloc(Value.Field, fields.len + 1);
+                @memcpy(extended[0..fields.len], fields);
+                extended[fields.len] = .{ .name = field_name, .value = new_value };
+                return try Value.create(analyser, aggregate_type, .{ .fields = extended });
+            },
+        }
+    }
+
+    fn deref(self: *Interpreter, value: Type) Error!?Type {
+        if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
+            return self.readReference(value.data.comptime_value.data.reference);
+        return value;
     }
 
     fn mutableElements(self: *Interpreter, value: Type) Error!?[]const Type {
@@ -276,8 +417,7 @@ pub const Interpreter = struct {
 
     fn writeAggregate(self: *Interpreter, handle: *Handle, base: Ast.Node.Index, current: Type, updated: Type) Error!bool {
         if (current.data == .comptime_value and current.data.comptime_value.data == .reference) {
-            current.data.comptime_value.data.reference.value = updated;
-            return true;
+            return self.writeReference(current.data.comptime_value.data.reference, updated);
         }
         return self.write(handle, base, updated);
     }
@@ -288,7 +428,7 @@ pub const Interpreter = struct {
         if (tree.nodeTag(node) == .array_access) {
             const base, const index_node = tree.nodeData(node).node_and_node;
             const base_value = try self.eval(handle, base) orelse return false;
-            const current = Value.deref(base_value);
+            const current = try self.deref(base_value) orelse return false;
             const items = try self.mutableElements(current) orelse return false;
             const index = try self.integer(handle, index_node) orelse return false;
             if (index >= items.len) return false;
@@ -300,7 +440,7 @@ pub const Interpreter = struct {
         if (tree.nodeTag(node) == .field_access) {
             const base, const field_token = tree.nodeData(node).node_and_token;
             const base_value = try self.eval(handle, base) orelse return false;
-            const current = Value.deref(base_value);
+            const current = try self.deref(base_value) orelse return false;
             const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
             const aggregate_type = try current.typeOf(analyser);
             if (aggregate_type.isTupleType(analyser)) {
@@ -329,9 +469,9 @@ pub const Interpreter = struct {
             return self.writeAggregate(handle, base, base_value, updated_value);
         }
         if (tree.nodeTag(node) == .deref) {
-            const storage = try self.mutationStorage(handle, tree.nodeData(node).node) orelse return false;
-            storage.value = value;
-            return true;
+            const pointer = try self.eval(handle, tree.nodeData(node).node) orelse return false;
+            if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .reference) return false;
+            return self.writeReference(pointer.data.comptime_value.data.reference, value);
         }
         const storage = try self.cell(handle, node) orelse return false;
         storage.value = value;

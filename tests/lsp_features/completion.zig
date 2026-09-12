@@ -6019,6 +6019,40 @@ test "generic function with comptime pointer deref mutation" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
     });
+
+    try testCompletion(
+        \\const State = struct { capacity: usize, dimensions: [2]usize };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var state = State{ .capacity = 1, .dimensions = .{ 1, 2 } };
+        \\    var dimension_index: usize = 1;
+        \\    const capacity_ptr = &state.capacity;
+        \\    const height_ptr = &state.dimensions[dimension_index];
+        \\    dimension_index = 0;
+        \\    state.capacity += base;
+        \\    state.dimensions[1] += base;
+        \\    capacity_ptr.* *= 2;
+        \\    height_ptr.* *= 3;
+        \\    return struct { items: [state.capacity * state.dimensions[1]]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[72]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var dimensions = .{ @as(usize, 1), @as(usize, 2) };
+        \\    const width_ptr = &dimensions.@"0";
+        \\    dimensions.@"0" += base;
+        \\    width_ptr.* *= 2;
+        \\    return struct { items: [dimensions.@"0" * dimensions.@"1"]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
 }
 
 test "generic function with runtime if before return" {

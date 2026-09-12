@@ -820,6 +820,12 @@ pub fn resolveFieldAccess(analyser: *Analyser, lhs: Type, field_name: []const u8
 
 pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, field_name: []const u8) Error!?Binding {
     const lhs = lhs_binding.type;
+    if (lhs.data == .comptime_value and lhs.data.comptime_value.data == .reference) {
+        if (analyser.comptime_interpreter) |interpreter| {
+            const target = try interpreter.readReference(lhs.data.comptime_value.data.reference) orelse return null;
+            return analyser.resolveFieldAccessBinding(.{ .type = target, .is_const = false }, field_name);
+        }
+    }
     if (comptime_eval.Value.field(lhs, field_name)) |value| return .{ .type = value, .is_const = true };
     if (lhs.data == .comptime_value and lhs.data.comptime_value.data == .fields) {
         const ty = lhs.data.comptime_value.ty;
@@ -2004,10 +2010,16 @@ pub fn resolveDerefType(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?
 }
 
 pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?Binding {
-    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .reference) return .{
-        .type = pointer.data.comptime_value.data.reference.value,
-        .is_const = false,
-    };
+    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .reference) {
+        const reference = pointer.data.comptime_value.data.reference;
+        const target = if (analyser.comptime_interpreter) |interpreter|
+            interpreter.readReference(reference) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Canceled => return null,
+            }
+        else if (reference.path.len == 0) reference.storage.value else null;
+        if (target) |value| return .{ .type = value, .is_const = false };
+    }
     const runtime_pointer = pointer.runtimeType(analyser);
     if (runtime_pointer.is_type_val) return null;
 
