@@ -493,6 +493,15 @@ pub const Interpreter = struct {
                         value,
                     );
                 }
+                if (std.mem.eql(u8, name, "@Vector")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const len_value = try self.eval(handle, params[0]) orelse return null;
+                    const len = self.analyser.ip.toInt(len_value.ipIndex() orelse return null, u32) orelse return null;
+                    const child_type = try self.eval(handle, params[1]) orelse return null;
+                    return self.analyser.resolveComptimeVectorType(len, child_type);
+                }
                 if (std.mem.eql(u8, name, "@select")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

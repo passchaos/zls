@@ -2487,6 +2487,18 @@ pub fn resolveComptimeUnionInitValue(
     return try analyser.comptimeUnionInitValue(field, coerced);
 }
 
+pub fn resolveComptimeVectorType(
+    analyser: *Analyser,
+    len: u32,
+    child_type: Type,
+) error{OutOfMemory}!?Type {
+    if (!child_type.is_type_val) return null;
+    return .{
+        .data = try Type.Data.createVector(analyser, len, child_type),
+        .is_type_val = true,
+    };
+}
+
 fn aggregateValues(analyser: *Analyser, value: Type) ?InternPool.Index.Slice {
     const payload = switch (value.data) {
         .ip_index => |payload| payload,
@@ -11807,14 +11819,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (params.len != 2) return null;
 
                     const child_ty = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
-                    if (!child_ty.is_type_val) return null;
-
                     const len = try analyser.resolveIntegerLiteral(u32, .of(params[0], handle)) orelse
                         return null; // `InternPool.Key.Vector.len` can't represent unknown length yet
-                    return .{
-                        .data = try Type.Data.createVector(analyser, len, child_ty),
-                        .is_type_val = true,
-                    };
+                    return analyser.resolveComptimeVectorType(len, child_ty);
                 },
                 else => {
                     const data = version_data.builtins.get(call_name) orelse return null;

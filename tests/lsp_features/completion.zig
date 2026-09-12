@@ -2850,6 +2850,29 @@ test "generic function reflecting comptime container constructors" {
     });
 }
 
+test "generic function with nested comptime Vector mutations" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var total: usize = 1;
+        \\    const V = @Vector(len: {
+        \\        total += 1;
+        \\        break :len 4;
+        \\    }, child: {
+        \\        total *= 2;
+        \\        break :child T;
+        \\    });
+        \\    return if (V == @Vector(4, u8))
+        \\        struct { order: [total]V }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[4]@Vector(4,u8)" },
+    });
+}
+
 test "generic function with comptime Enum type constructor" {
     try testCompletion(
         \\fn Mode(comptime Tag: type) type {
