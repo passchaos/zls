@@ -105,7 +105,7 @@ pub const Interpreter = struct {
     budget: *Budget,
 
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
-    const Flow = union(enum) { next, returned: Type, continued, stopped, unknown };
+    const Flow = union(enum) { next, returned: Type, continued, stopped: ?Ast.TokenIndex, unknown };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -271,7 +271,16 @@ pub const Interpreter = struct {
         if (tree.blockStatements(&buffer, node)) |statements| {
             for (statements) |child| {
                 const flow = try self.statement(handle, child);
-                if (flow != .next) return flow;
+                switch (flow) {
+                    .next => {},
+                    .stopped => |target| {
+                        const label_token = ast.blockLabel(tree, node) orelse return flow;
+                        const target_token = target orelse return flow;
+                        if (!std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_token))) return flow;
+                        return .next;
+                    },
+                    else => return flow,
+                }
             }
             return .next;
         }
@@ -315,7 +324,8 @@ pub const Interpreter = struct {
             .@"continue" => return if (tree.nodeData(node).opt_token_and_opt_node[0] != .none) .unknown else .continued,
             .@"break" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
-                return if (label != .none or operand != .none) .unknown else .stopped;
+                if (operand != .none) return .unknown;
+                return .{ .stopped = label.unwrap() };
             },
             .if_simple, .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
@@ -451,7 +461,7 @@ pub const Interpreter = struct {
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
                 .next, .continued => {},
-                .stopped => return .next,
+                .stopped => |target| return if (target == null) .next else flow,
                 .returned, .unknown => return flow,
             }
         }
@@ -471,9 +481,10 @@ pub const Interpreter = struct {
                 return .next;
             }
 
-            switch (try self.statement(handle, loop_node.ast.then_expr)) {
+            const flow = try self.statement(handle, loop_node.ast.then_expr);
+            switch (flow) {
                 .next, .continued => {},
-                .stopped => return .next,
+                .stopped => |target| return if (target == null) .next else flow,
                 .returned => |value| return .{ .returned = value },
                 .unknown => return .unknown,
             }

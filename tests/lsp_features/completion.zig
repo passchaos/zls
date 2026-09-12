@@ -5861,6 +5861,25 @@ test "generic function with wrapped comptime return statements" {
 
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
+        \\fn Buffer(comptime enabled: bool) type {
+        \\    var capacity: usize = 1;
+        \\    outer: {
+        \\        while (true) {
+        \\            capacity += 2;
+        \\            if (enabled) break :outer;
+        \\            break;
+        \\        }
+        \\        capacity = 9;
+        \\    }
+        \\    return struct { items: [capacity]u8 };
+        \\}
+        \\const buffer: Buffer(true) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
         \\fn Select(comptime enabled: bool) type {
         \\    const T = blk: {
         \\        if (!enabled) break :blk struct { fallback: u8 };
