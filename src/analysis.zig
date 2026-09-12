@@ -3510,7 +3510,15 @@ fn isValidRuntimeCast(
     if (destination_tag != .vector or source_tag != .vector) {
         return analyser.isValidRuntimeScalarCast(destination_type, source_type, kind);
     }
-    if (kind == .bit_cast) return false;
+    if (kind == .bit_cast) {
+        const destination_bits = analyser.resolveTypeBitSize(
+            Type.fromIP(analyser, .type_type, destination_type),
+        ) orelse return false;
+        const source_bits = analyser.resolveTypeBitSize(
+            Type.fromIP(analyser, .type_type, source_type),
+        ) orelse return false;
+        return destination_bits == source_bits;
+    }
 
     const destination = analyser.ip.indexToKey(destination_type).vector_type;
     const source = analyser.ip.indexToKey(source_type).vector_type;

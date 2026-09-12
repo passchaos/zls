@@ -6016,6 +6016,28 @@ test "generic function preserves runtime unknown contextual vector cast types" {
     });
 }
 
+test "generic function preserves runtime unknown contextual vector bitCast type" {
+    try testCompletion(
+        \\var runtime_vector: @Vector(2, u16) = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const bit_casted = @as(@Vector(4, u8), @bitCast(value: {
+        \\        total += 1;
+        \\        break :value runtime_vector;
+        \\    }));
+        \\    return struct {
+        \\        value: @TypeOf(bit_casted),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "value", .kind = .Field, .detail = "@Vector(4,u8)" },
+    });
+}
+
 test "generic function with comptime unknown field expressions" {
     try testCompletion(
         \\fn Vector(comptime N: usize, comptime T: type) type {
