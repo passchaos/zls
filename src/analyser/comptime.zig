@@ -148,10 +148,10 @@ pub const Interpreter = struct {
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
     const Flow = union(enum) {
         next,
-        value: Type,
+        value: EvaluatedSource,
         returned: EvaluatedSource,
         continued: ?Ast.TokenIndex,
-        stopped: struct { target: ?Ast.TokenIndex, value: ?Type },
+        stopped: struct { target: ?Ast.TokenIndex, result: ?EvaluatedSource },
         unknown,
     };
     const BranchTarget = union(enum) {
@@ -263,7 +263,7 @@ pub const Interpreter = struct {
         if (handle.tree.blockStatements(&block_buffer, node) != null) {
             return switch (try self.block(handle, node)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
-                .value => |value| value,
+                .value => |result| result.value,
                 else => null,
             };
         }
@@ -280,12 +280,12 @@ pub const Interpreter = struct {
             },
             .for_simple, .@"for" => return switch (try self.forLoop(handle, handle.tree.fullFor(node).?, true)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
-                .value => |value| value,
+                .value => |result| result.value,
                 else => null,
             },
             .while_simple, .while_cont, .@"while" => return switch (try self.whileLoop(handle, ast.fullWhile(&handle.tree, node).?, true)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
-                .value => |value| value,
+                .value => |result| result.value,
                 else => null,
             },
             .@"switch", .switch_comma => {
@@ -840,6 +840,18 @@ pub const Interpreter = struct {
 
     fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
         const tree = &handle.tree;
+        var block_buffer: [2]Ast.Node.Index = undefined;
+        if (tree.blockStatements(&block_buffer, node) != null) {
+            if (!self.tick()) return null;
+            return switch (try self.block(handle, node)) {
+                .next => .{
+                    .value = Type.fromIP(self.analyser, .void_type, .void_value),
+                    .source_node = null,
+                },
+                .value => |result| result,
+                else => null,
+            };
+        }
         return switch (tree.nodeTag(node)) {
             .grouped_expression => blk: {
                 if (!self.tick()) return null;
@@ -1567,7 +1579,7 @@ pub const Interpreter = struct {
                         break;
                     };
                     block_flow = if (std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_token)))
-                        if (stopped.value) |value| .{ .value = value } else .next
+                        if (stopped.result) |result| .{ .value = result } else .next
                     else
                         flow;
                     break;
@@ -1661,11 +1673,14 @@ pub const Interpreter = struct {
             },
             .@"break" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
-                const value = if (operand.unwrap()) |expression|
-                    try self.captureBindings(try self.eval(handle, expression) orelse return .unknown)
-                else
-                    null;
-                return .{ .stopped = .{ .target = label.unwrap(), .value = value } };
+                const result: ?EvaluatedSource = if (operand.unwrap()) |expression| blk: {
+                    const evaluated = try self.evalSource(handle, expression) orelse return .unknown;
+                    break :blk .{
+                        .value = try self.captureBindings(evaluated.value),
+                        .source_node = evaluated.source_node,
+                    };
+                } else null;
+                return .{ .stopped = .{ .target = label.unwrap(), .result = result } };
             },
             .if_simple, .@"if" => {
                 const target = try self.ifTarget(handle, node) orelse return .unknown;
@@ -1836,14 +1851,14 @@ pub const Interpreter = struct {
                 .continued => |target| if (!targetsLoop(tree, loop_node.label_token, target)) return flow,
                 .stopped => |stopped| {
                     if (!targetsLoop(tree, loop_node.label_token, stopped.target)) return flow;
-                    if (stopped.value) |value| return if (expression) .{ .value = value } else .unknown;
+                    if (stopped.result) |result| return if (expression) .{ .value = result } else .unknown;
                     return .next;
                 },
                 .value, .returned, .unknown => return flow,
             }
         }
         if (loop_node.ast.else_expr.unwrap()) |else_node| {
-            if (expression) return .{ .value = try self.eval(handle, else_node) orelse return .unknown };
+            if (expression) return .{ .value = try self.evalSource(handle, else_node) orelse return .unknown };
             return self.statement(handle, else_node);
         }
         return .next;
@@ -1855,7 +1870,7 @@ pub const Interpreter = struct {
             const condition = try self.analyser.resolveIfConditionValue(.of(loop_node.ast.cond_expr, handle)) orelse return .unknown;
             if (!condition) {
                 if (loop_node.ast.else_expr.unwrap()) |else_node| {
-                    if (expression) return .{ .value = try self.eval(handle, else_node) orelse return .unknown };
+                    if (expression) return .{ .value = try self.evalSource(handle, else_node) orelse return .unknown };
                     return self.statement(handle, else_node);
                 }
                 return .next;
@@ -1870,7 +1885,7 @@ pub const Interpreter = struct {
                 .continued => |target| if (!targetsLoop(&handle.tree, loop_node.label_token, target)) return flow,
                 .stopped => |stopped| {
                     if (!targetsLoop(&handle.tree, loop_node.label_token, stopped.target)) return flow;
-                    if (stopped.value) |value| return if (expression) .{ .value = value } else .unknown;
+                    if (stopped.result) |result| return if (expression) .{ .value = result } else .unknown;
                     return .next;
                 },
                 .value => return .unknown,
