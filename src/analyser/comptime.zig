@@ -162,6 +162,10 @@ pub const Interpreter = struct {
         absent,
         payload: Type,
     };
+    const IntegerValue = union(enum) {
+        known: u64,
+        unknown,
+    };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -376,41 +380,40 @@ pub const Interpreter = struct {
             .array_access => {
                 const base, const index_node = handle.tree.nodeData(node).node_and_node;
                 const value = try self.eval(handle, base) orelse return null;
-                const index_value = try self.eval(handle, index_node) orelse return null;
-                const index_payload = switch (index_value.data) {
-                    .ip_index => |payload| payload,
-                    else => return null,
+                const index = switch (try self.integerValue(handle, index_node) orelse return null) {
+                    .known => |known| known,
+                    .unknown => null,
                 };
-                switch (self.analyser.ip.zigTypeTag(index_payload.type) orelse return null) {
-                    .int, .comptime_int => {},
-                    else => return null,
-                }
-                const index: ?u64 = if (index_payload.index) |index| blk: {
-                    if (self.analyser.ip.isUndefined(index)) return null;
-                    if (self.analyser.ip.isUnknown(index)) break :blk null;
-                    break :blk self.analyser.ip.toInt(index, u64) orelse return null;
-                } else null;
                 return self.analyser.resolveBracketAccessType(value, .{ .single = index });
             },
             .slice, .slice_open, .slice_sentinel => {
                 const slice = handle.tree.fullSlice(node).?;
                 const value = try self.eval(handle, slice.ast.sliced) orelse return null;
-                const start = try self.integer(handle, slice.ast.start) orelse return null;
+                const start_value = try self.integerValue(handle, slice.ast.start) orelse return null;
                 const end = if (slice.ast.end.unwrap()) |end_node|
-                    try self.integer(handle, end_node) orelse return null
+                    try self.integerValue(handle, end_node) orelse return null
                 else
                     null;
                 const sentinel = if (slice.ast.sentinel.unwrap()) |sentinel_node|
                     (try self.eval(handle, sentinel_node) orelse return null).ipIndex() orelse return null
                 else
                     .none;
-                const access: Analyser.BracketAccess = if (end) |end_index|
+                const access: Analyser.BracketAccess = if (end) |end_value|
                     .{ .range = .{
-                        .bounds = .{ start, end_index },
+                        .bounds = if (start_value == .known and end_value == .known)
+                            .{ start_value.known, end_value.known }
+                        else
+                            null,
                         .sentinel = sentinel,
                     } }
                 else
-                    .{ .open = .{ .start = start, .sentinel = sentinel } };
+                    .{ .open = .{
+                        .start = switch (start_value) {
+                            .known => |known| known,
+                            .unknown => null,
+                        },
+                        .sentinel = sentinel,
+                    } };
                 return self.analyser.resolveBracketAccessType(value, access);
             },
             .deref => {
@@ -821,8 +824,26 @@ pub const Interpreter = struct {
     }
 
     fn integer(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?usize {
+        return switch (try self.integerValue(handle, node) orelse return null) {
+            .known => |value| std.math.cast(usize, value),
+            .unknown => null,
+        };
+    }
+
+    fn integerValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?IntegerValue {
         const value = try self.eval(handle, node) orelse return null;
-        return self.analyser.ip.toInt(value.ipIndex() orelse return null, usize);
+        const payload = switch (value.data) {
+            .ip_index => |payload| payload,
+            else => return null,
+        };
+        switch (self.analyser.ip.zigTypeTag(payload.type) orelse return null) {
+            .int, .comptime_int => {},
+            else => return null,
+        }
+        const index = payload.index orelse return .unknown;
+        if (self.analyser.ip.isUndefined(index)) return null;
+        if (self.analyser.ip.isUnknown(index)) return .unknown;
+        return .{ .known = self.analyser.ip.toInt(index, u64) orelse return null };
     }
 
     fn coerce(self: *Interpreter, destination: Type, value: Type) Error!?Type {

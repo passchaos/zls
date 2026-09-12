@@ -8620,6 +8620,45 @@ test "generic function with nested comptime slice mutations" {
     });
 }
 
+test "generic function with comptime unknown slice bound types" {
+    try testCompletion(
+        \\var runtime_start: usize = undefined;
+        \\var runtime_end: usize = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const open = (source: {
+        \\        total += 1;
+        \\        break :source [_]i16{ 10, 20, 30, 40 };
+        \\    })[(start: {
+        \\        total *= 2;
+        \\        break :start runtime_start;
+        \\    })..];
+        \\    const ranged = (source: {
+        \\        total += 1;
+        \\        break :source [_]i16{ 10, 20, 30, 40 };
+        \\    })[(start: {
+        \\        total *= 2;
+        \\        break :start runtime_start;
+        \\    })..(end: {
+        \\        total += 3;
+        \\        break :end runtime_end;
+        \\    })];
+        \\    total += 1;
+        \\    return struct {
+        \\        open: @TypeOf(open),
+        \\        ranged: @TypeOf(ranged),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "open", .kind = .Field, .detail = "[]i16" },
+        .{ .label = "ranged", .kind = .Field, .detail = "[]i16" },
+        .{ .label = "items", .kind = .Field, .detail = "[14]u8" },
+    });
+}
+
 test "generic function with comptime boolean short circuit mutations" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {
