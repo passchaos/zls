@@ -5194,17 +5194,37 @@ pub fn resolveComptimeIntFromEnumValue(analyser: *Analyser, operand: Type) Error
     return Type.fromIP(analyser, tag_type, null);
 }
 
-pub fn resolveComptimeTagNameValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
+pub fn resolveComptimeTagNameValue(analyser: *Analyser, operand: Type) Error!?Type {
     const tag_name = switch (operand.data) {
         .type_info_value => |value| @tagName(value.tag),
         .enum_value => |value| value.tag,
-        else => return null,
+        else => {
+            if (operand.is_type_val) return null;
+            if (operand.data == .ip_index) {
+                const index = operand.data.ip_index.index;
+                if (index != null and analyser.ip.isUndefined(index.?)) return null;
+            }
+            const operand_type = try operand.typeOf(analyser);
+            if (!operand_type.isEnumType(analyser) and try analyser.resolveUnionTag(operand_type) == null) return null;
+            return analyser.resolveLangrefType(version_data.builtins.get("@tagName").?.return_type);
+        },
     };
     return try analyser.stringValue(tag_name);
 }
 
 pub fn resolveComptimeErrorNameValue(analyser: *Analyser, operand: Type) Error!?Type {
-    const index = operand.ipIndex() orelse return null;
+    const payload = switch (operand.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(payload.type) != .error_set) return null;
+    const index = payload.index orelse return analyser.resolveLangrefType(
+        version_data.builtins.get("@errorName").?.return_type,
+    );
+    if (analyser.ip.isUndefined(index)) return null;
+    if (analyser.ip.isUnknown(index)) return analyser.resolveLangrefType(
+        version_data.builtins.get("@errorName").?.return_type,
+    );
     const error_value = switch (analyser.ip.indexToKey(index)) {
         .error_value => |value| value,
         else => return null,

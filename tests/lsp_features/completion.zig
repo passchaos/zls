@@ -8184,6 +8184,44 @@ test "generic function with nested comptime tagName mutation" {
     });
 }
 
+test "generic function preserves runtime unknown comptime name types" {
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\const Value = union(enum) { integer: u8, none };
+        \\var runtime_mode: Mode = undefined;
+        \\var runtime_value: Value = undefined;
+        \\var runtime_error: anyerror = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const tag_name = @tagName(value: {
+        \\        total += 1;
+        \\        break :value runtime_mode;
+        \\    });
+        \\    const union_name = @tagName(value: {
+        \\        total += 1;
+        \\        break :value runtime_value;
+        \\    });
+        \\    const error_name = @errorName(value: {
+        \\        total += 1;
+        \\        break :value runtime_error;
+        \\    });
+        \\    return struct {
+        \\        tag_name: @TypeOf(tag_name),
+        \\        union_name: @TypeOf(union_name),
+        \\        error_name: @TypeOf(error_name),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "error_name", .kind = .Field, .detail = "[:0]const u8" },
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "tag_name", .kind = .Field, .detail = "[:0]const u8" },
+        .{ .label = "union_name", .kind = .Field, .detail = "[:0]const u8" },
+    });
+}
+
 test "generic function with comptime errorName" {
     try testCompletion(
         \\const Fields = struct { Missing: u8 };
