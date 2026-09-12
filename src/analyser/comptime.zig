@@ -154,6 +154,10 @@ pub const Interpreter = struct {
         stopped: struct { target: ?Ast.TokenIndex, value: ?Type },
         unknown,
     };
+    const BranchTarget = union(enum) {
+        none,
+        node: Ast.Node.Index,
+    };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
         const tree = &handle.tree;
@@ -248,6 +252,13 @@ pub const Interpreter = struct {
             };
         }
         switch (handle.tree.nodeTag(node)) {
+            .if_simple, .@"if" => {
+                const target = try self.ifTarget(handle, node) orelse return null;
+                return switch (target) {
+                    .none => Type.fromIP(self.analyser, .void_type, .void_value),
+                    .node => |target_node| self.eval(handle, target_node),
+                };
+            },
             .for_simple, .@"for" => return switch (try self.forLoop(handle, handle.tree.fullFor(node).?, true)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
                 .value => |value| value,
@@ -257,6 +268,10 @@ pub const Interpreter = struct {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
                 .value => |value| value,
                 else => null,
+            },
+            .@"switch", .switch_comma => {
+                const target = try self.switchTarget(handle, node) orelse return null;
+                return self.eval(handle, target);
             },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
@@ -667,6 +682,42 @@ pub const Interpreter = struct {
         return block_flow;
     }
 
+    fn ifTarget(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?BranchTarget {
+        const branch = ast.fullIf(&handle.tree, node).?;
+        if (branch.error_token != null) return null;
+        const known = try self.analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return null;
+        if (known) if (branch.payload_token) |payload_token| {
+            if (!try self.bindOptionalPointerPayload(handle, branch.ast.cond_expr, payload_token)) return null;
+        };
+        return if (known)
+            .{ .node = branch.ast.then_expr }
+        else if (branch.ast.else_expr.unwrap()) |else_node|
+            .{ .node = else_node }
+        else
+            .none;
+    }
+
+    fn switchTarget(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Ast.Node.Index {
+        const tree = &handle.tree;
+        const switch_node = tree.switchFull(node);
+        if (switch_node.label_token != null) return null;
+        const target = try self.analyser.resolveKnownSwitchTarget(.of(node, handle)) orelse return null;
+        for (switch_node.ast.cases) |case| {
+            const switch_case = tree.fullSwitchCase(case).?;
+            if (switch_case.ast.target_expr != target) continue;
+            if (switch_case.payload_token) |payload_token| {
+                if (!try self.bindSwitchPointerPayload(handle, switch_node, switch_case, payload_token)) return null;
+                const name_token = payload_token + @intFromBool(tree.tokenTag(payload_token) == .asterisk);
+                if (tree.tokenTag(name_token + 1) == .comma) {
+                    const condition = try self.eval(handle, switch_node.ast.condition) orelse return null;
+                    if (try self.analyser.resolveKnownUnionFieldName(condition) == null) return null;
+                }
+            }
+            return target;
+        }
+        return null;
+    }
+
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         if (!self.tick()) return .unknown;
         const analyser = self.analyser;
@@ -704,32 +755,16 @@ pub const Interpreter = struct {
                 return .{ .stopped = .{ .target = label.unwrap(), .value = value } };
             },
             .if_simple, .@"if" => {
-                const branch = ast.fullIf(tree, node).?;
-                if (branch.error_token != null) return .unknown;
-                const known = try analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return .unknown;
-                if (known) if (branch.payload_token) |payload_token| {
-                    if (!try self.bindOptionalPointerPayload(handle, branch.ast.cond_expr, payload_token)) return .unknown;
+                const target = try self.ifTarget(handle, node) orelse return .unknown;
+                return switch (target) {
+                    .none => .next,
+                    .node => |target_node| self.statement(handle, target_node),
                 };
-                return self.statement(handle, if (known) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse return .next);
             },
             .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?, false),
             .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?, false),
             .@"switch", .switch_comma => {
-                const switch_node = tree.switchFull(node);
-                if (switch_node.label_token != null) return .unknown;
-                const target = try analyser.resolveKnownSwitchTarget(.of(node, handle)) orelse return .unknown;
-                for (switch_node.ast.cases) |case| {
-                    const switch_case = tree.fullSwitchCase(case).?;
-                    if (switch_case.ast.target_expr != target) continue;
-                    if (switch_case.payload_token) |payload_token| {
-                        if (!try self.bindSwitchPointerPayload(handle, switch_node, switch_case, payload_token)) return .unknown;
-                        const name_token = payload_token + @intFromBool(tree.tokenTag(payload_token) == .asterisk);
-                        if (tree.tokenTag(name_token + 1) == .comma) {
-                            const condition = try self.eval(handle, switch_node.ast.condition) orelse return .unknown;
-                            if (try analyser.resolveKnownUnionFieldName(condition) == null) return .unknown;
-                        }
-                    }
-                }
+                const target = try self.switchTarget(handle, node) orelse return .unknown;
                 return self.statement(handle, target);
             },
             .assign => {

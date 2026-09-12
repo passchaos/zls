@@ -6550,6 +6550,77 @@ test "generic function with comptime loop expression values" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[42]u8" },
     });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var capacity: ?usize = 1;
+        \\    const selected = if (capacity) |*payload| value: {
+        \\        payload.* += base;
+        \\        break :value payload.*;
+        \\    } else 99;
+        \\    return struct { items: [selected * capacity.?]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = union(enum) { fixed: usize, fallback };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var config = Config{ .fixed = 2 };
+        \\    const selected = switch (config) {
+        \\        .fixed => |*payload| value: {
+        \\            payload.* += base;
+        \\            break :value payload.*;
+        \\        },
+        \\        .fallback => 99,
+        \\    };
+        \\    return struct { items: [selected * config.fixed]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[25]u8" },
+    });
+}
+
+test "generic function with comptime branch expression mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime enabled: bool) type {
+        \\    var total: usize = 1;
+        \\    const selected = if (enabled) value: {
+        \\        defer total += 1;
+        \\        total *= 3;
+        \\        break :value total;
+        \\    } else 99;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(true) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime mode: u8) type {
+        \\    var total: usize = 2;
+        \\    const selected = switch (mode) {
+        \\        1 => value: {
+        \\            defer total += 1;
+        \\            total *= 3;
+        \\            break :value total;
+        \\        },
+        \\        else => 99,
+        \\    };
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(1) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[42]u8" },
+    });
 }
 
 test "generic function with comptime labeled continues" {
