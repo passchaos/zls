@@ -7344,6 +7344,39 @@ test "generic function with comptime orelse expression mutations" {
     });
 }
 
+test "generic function with comptime boolean short circuit mutations" {
+    try testCompletion(
+        \\fn Buffer(comptime enabled: bool) type {
+        \\    var total: usize = 1;
+        \\    const selected = enabled and branch: {
+        \\        defer total += 1;
+        \\        total *= 3;
+        \\        break :branch total == 3;
+        \\    };
+        \\    return struct { items: [if (selected) total else 99]u8 };
+        \\}
+        \\const buffer: Buffer(true) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime enabled: bool) type {
+        \\    var total: usize = 1;
+        \\    const selected = enabled or branch: {
+        \\        total = 99;
+        \\        break :branch false;
+        \\    };
+        \\    return struct { items: [if (selected) total else 200]u8 };
+        \\}
+        \\const buffer: Buffer(true) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
         \\fn Select() type {

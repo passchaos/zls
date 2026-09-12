@@ -285,6 +285,15 @@ pub const Interpreter = struct {
                     .payload => |payload| payload,
                 };
             },
+            .bool_and, .bool_or => |tag| {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const lhs_value = try self.boolValue(try self.eval(handle, lhs) orelse return null) orelse return null;
+                if (tag == .bool_and and !lhs_value) return Type.fromIP(self.analyser, .bool_type, .bool_false);
+                if (tag == .bool_or and lhs_value) return Type.fromIP(self.analyser, .bool_type, .bool_true);
+                const rhs_value = try self.eval(handle, rhs) orelse return null;
+                _ = try self.boolValue(rhs_value) orelse return null;
+                return rhs_value;
+            },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;
             },
@@ -517,6 +526,16 @@ pub const Interpreter = struct {
             .optional_value => |optional| .{
                 .payload = Type.fromIP(self.analyser, self.analyser.ip.typeOf(optional.val), optional.val),
             },
+            else => null,
+        };
+    }
+
+    fn boolValue(self: *Interpreter, value: Type) Error!?bool {
+        const resolved = try self.deref(value) orelse return null;
+        const index = resolved.ipIndex() orelse return null;
+        return switch (index) {
+            .bool_false => false,
+            .bool_true => true,
             else => null,
         };
     }
