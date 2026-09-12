@@ -295,7 +295,14 @@ pub const Interpreter = struct {
                 storage.value = try Value.create(analyser, try current.typeOf(analyser), .{ .fields = updated });
                 return true;
             }
-            return false;
+            const aggregate_type = try current.typeOf(analyser);
+            if (!aggregate_type.isStructType(analyser)) return false;
+            if (try analyser.lookupSymbolContainer(try aggregate_type.instanceUnchecked(analyser), field_name, .field) == null) return false;
+            const extended = try analyser.arena.alloc(Value.Field, fields.len + 1);
+            @memcpy(extended[0..fields.len], fields);
+            extended[fields.len] = .{ .name = field_name, .value = value };
+            storage.value = try Value.create(analyser, aggregate_type, .{ .fields = extended });
+            return true;
         }
         if (tree.nodeTag(node) == .deref) {
             const storage = try self.mutationStorage(handle, tree.nodeData(node).node) orelse return false;

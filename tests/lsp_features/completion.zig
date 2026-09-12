@@ -5871,6 +5871,20 @@ test "generic function with comptime struct field mutation" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
     });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize = 1, scale: usize = 2 };
+        \\fn Buffer(comptime base: usize) type {
+        \\    var config = Config{};
+        \\    config.capacity += base;
+        \\    config.scale *= 3;
+        \\    return struct { items: [config.capacity * config.scale]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[18]u8" },
+    });
 }
 
 test "generic function with comptime pointer deref mutation" {
