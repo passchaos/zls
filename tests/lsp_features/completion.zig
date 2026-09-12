@@ -4399,6 +4399,34 @@ test "generic function with nested comptime bit count mutations" {
     });
 }
 
+test "generic function with nested comptime bit permutation mutations" {
+    try testCompletion(
+        \\fn Select(comptime reverse_value: u8, comptime swap_value: u16) type {
+        \\    var reverse_total: usize = 1;
+        \\    var swap_total: usize = 1;
+        \\    const reversed = @bitReverse(operand: {
+        \\        defer reverse_total += 1;
+        \\        reverse_total *= 2;
+        \\        break :operand reverse_value;
+        \\    });
+        \\    const swapped = @byteSwap(operand: {
+        \\        defer swap_total += 1;
+        \\        swap_total *= 2;
+        \\        break :operand swap_value;
+        \\    });
+        \\    return if (reversed == 192 and swapped == 13330) struct {
+        \\        reverse_order: [reverse_total]u8,
+        \\        swap_order: [swap_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(3, 0x1234) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "reverse_order", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "swap_order", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with cmpxchg result type" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

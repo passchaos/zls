@@ -8985,6 +8985,24 @@ fn resolveVectorBitPermutationValue(
     return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
 }
 
+pub const ComptimeBitPermutationKind = enum { bit_reverse, byte_swap };
+
+pub fn resolveComptimeBitPermutationValue(
+    analyser: *Analyser,
+    operand: Type,
+    kind: ComptimeBitPermutationKind,
+) error{OutOfMemory}!?Type {
+    const tag: std.zig.BuiltinFn.Tag = switch (kind) {
+        .bit_reverse => .bit_reverse,
+        .byte_swap => .byte_swap,
+    };
+    const index = operand.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
+        return analyser.resolveVectorBitPermutationValue(tag, operand);
+    }
+    return analyser.resolveBitPermutationValue(tag, operand);
+}
+
 fn resolveExactShiftValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
@@ -11196,13 +11214,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     if (operand.is_type_val) return null;
                     if (analyser.evaluate_comptime_values) {
-                        if (operand.ipIndex()) |index| {
-                            if (analyser.ip.zigTypeTag(analyser.ip.typeOf(index)) == .vector) {
-                                if (try analyser.resolveVectorBitPermutationValue(tag, operand)) |value| return value;
-                            } else if (try analyser.resolveBitPermutationValue(tag, operand)) |value| {
-                                return value;
-                            }
-                        }
+                        const kind: ComptimeBitPermutationKind = switch (tag) {
+                            .bit_reverse => .bit_reverse,
+                            .byte_swap => .byte_swap,
+                            else => unreachable,
+                        };
+                        if (try analyser.resolveComptimeBitPermutationValue(operand, kind)) |value| return value;
                     }
                     return operand.withoutIPIndex(analyser);
                 },

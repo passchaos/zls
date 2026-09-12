@@ -484,6 +484,17 @@ pub const Interpreter = struct {
                         .pop_count;
                     return self.analyser.resolveComptimeBitCountValue(operand, kind);
                 }
+                if (std.mem.eql(u8, name, "@bitReverse") or std.mem.eql(u8, name, "@byteSwap")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    const kind: Analyser.ComptimeBitPermutationKind = if (std.mem.eql(u8, name, "@bitReverse"))
+                        .bit_reverse
+                    else
+                        .byte_swap;
+                    return self.analyser.resolveComptimeBitPermutationValue(operand, kind);
+                }
                 if (std.mem.eql(u8, name, "@sizeOf") or
                     std.mem.eql(u8, name, "@bitSizeOf") or
                     std.mem.eql(u8, name, "@alignOf"))
