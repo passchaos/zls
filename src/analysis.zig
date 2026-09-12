@@ -1011,6 +1011,35 @@ fn bodyAlwaysBreaksCurrentLoop(
     };
 }
 
+fn resolveKnownUnionFieldName(analyser: *Analyser, value: Type) Error!?[]const u8 {
+    if (value.data == .comptime_value and value.data.comptime_value.data == .fields) {
+        const fields = value.data.comptime_value.data.fields;
+        if (value.data.comptime_value.ty.isUnionType() and fields.len == 1) return fields[0].name;
+        return null;
+    }
+    const payload = switch (value.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const value_index = payload.index orelse return null;
+    const union_value = switch (analyser.ip.indexToKey(value_index)) {
+        .union_value => |union_value| union_value,
+        else => return null,
+    };
+    if (union_value.ty != payload.type) return null;
+    const union_index = switch (analyser.ip.indexToKey(payload.type)) {
+        .union_type => |union_index| union_index,
+        else => return null,
+    };
+    const fields = analyser.ip.getUnion(union_index).fields;
+    if (union_value.field_index >= fields.count()) return null;
+    return try analyser.ip.string_pool.stringToSliceAlloc(
+        analyser.store.io,
+        analyser.arena,
+        fields.keys()[union_value.field_index],
+    );
+}
+
 pub fn resolveKnownSwitchTarget(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -1024,6 +1053,7 @@ pub fn resolveKnownSwitchTarget(
         .node_handle = .of(switch_node.ast.condition, handle),
         .container_type = options.container_type,
     }) orelse return null;
+    const union_field_name = try analyser.resolveKnownUnionFieldName(condition);
 
     var else_target: ?Ast.Node.Index = null;
     for (switch_node.ast.cases) |case| {
@@ -1034,6 +1064,12 @@ pub fn resolveKnownSwitchTarget(
         }
 
         for (switch_case.ast.values) |case_value| {
+            if (union_field_name) |field_name| {
+                if (tree.nodeTag(case_value) != .enum_literal) return null;
+                const case_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
+                if (std.mem.eql(u8, field_name, case_name)) return switch_case.ast.target_expr;
+                continue;
+            }
             if (condition.data == .type_info_value) {
                 if (tree.nodeTag(case_value) != .enum_literal) return null;
                 const case_tag_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
@@ -1864,6 +1900,15 @@ fn resolveSwitchUnionPayload(
     switch_node: Ast.full.Switch,
     selected_case: Ast.full.SwitchCase,
 ) Error!?Type {
+    if (try analyser.resolveKnownUnionFieldName(union_type)) |active_field| {
+        for (selected_case.ast.values) |case_value| {
+            if (switch_tree.nodeTag(case_value) != .enum_literal) break;
+            const case_name = try analyser.identifierTokenName(switch_tree, switch_tree.nodeMainToken(case_value)) orelse break;
+            if (std.mem.eql(u8, active_field, case_name)) {
+                return analyser.resolveFieldAccess(union_type, active_field);
+            }
+        }
+    }
     const container = switch (union_type.data) {
         .container => |container| container,
         else => return null,
@@ -9160,6 +9205,25 @@ pub fn resolveAggregateComptimeArgument(
     argument: Ast.Node.Index,
 ) Error!?Type {
     const node = unwrapAggregateComptimeArgument(&handle.tree, argument);
+    if (parameter_type.isUnionType()) {
+        var buffer: [2]Ast.Node.Index = undefined;
+        const literal = handle.tree.fullStructInit(&buffer, node) orelse return null;
+        if (literal.ast.fields.len != 1) return null;
+        const field_node = literal.ast.fields[0];
+        const field_name = try analyser.identifierTokenName(&handle.tree, handle.tree.firstToken(field_node) - 2) orelse return null;
+        const field_decl = try analyser.lookupSymbolContainer(parameter_type, field_name, .field) orelse return null;
+        const field_type = try field_decl.resolveType(analyser) orelse return null;
+        const value = if ((try field_type.typeOf(analyser)).ipIndex()) |field_type_index|
+            if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
+                Type.fromIP(analyser, field_type_index, value_index)
+            else
+                try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null
+        else
+            try analyser.resolveComptimeValue(.of(field_node, handle)) orelse return null;
+        const fields = try analyser.arena.alloc(comptime_eval.Value.Field, 1);
+        fields[0] = .{ .name = field_name, .value = value };
+        return try comptime_eval.Value.create(analyser, parameter_type, .{ .fields = fields });
+    }
     const element_type = try analyser.aggregateComptimeElementType(parameter_type) orelse return null;
     switch (handle.tree.nodeTag(node)) {
         .call, .call_comma, .call_one, .call_one_comma => {
@@ -15662,7 +15726,7 @@ pub const DeclWithHandle = struct {
                 }
 
                 if (switch_expr_type.isEnumType(analyser)) break :blk switch_expr_type;
-                if (!switch_expr_type.isUnionType()) return switch_expr_type;
+                if (!switch_expr_type_type.isUnionType()) return switch_expr_type;
 
                 if (case.ast.values.len == 0) {
                     if (case.inline_token == null) {
