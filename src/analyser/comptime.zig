@@ -562,6 +562,19 @@ pub const Interpreter = struct {
                         kind,
                     );
                 }
+                if (std.mem.eql(u8, name, "@field") or std.mem.eql(u8, name, "@FieldType")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const container = try self.eval(handle, params[0]) orelse return null;
+                    const name_value = try self.eval(handle, params[1]) orelse return null;
+                    if (name_value.data != .string_value) return null;
+                    const field_name = name_value.data.string_value.bytes;
+                    if (std.mem.eql(u8, name, "@field")) {
+                        return self.analyser.resolveComptimeFieldValue(container, field_name);
+                    }
+                    return self.analyser.resolveComptimeFieldTypeValue(container, field_name);
+                }
                 if (std.mem.eql(u8, name, "@clz") or
                     std.mem.eql(u8, name, "@ctz") or
                     std.mem.eql(u8, name, "@popCount"))

@@ -5051,6 +5051,40 @@ test "generic function with nested comptime member reflection mutations" {
     });
 }
 
+test "generic function with nested comptime field reflection mutations" {
+    try testCompletion(
+        \\const Mode = enum { fast, safe };
+        \\const S = struct { payload: u16 };
+        \\fn Select() type {
+        \\    var field_total: usize = 1;
+        \\    var field_type_total: usize = 1;
+        \\    const mode = @field(container: {
+        \\        field_total += 1;
+        \\        break :container Mode;
+        \\    }, name: {
+        \\        field_total *= 2;
+        \\        break :name "safe";
+        \\    });
+        \\    const Payload = @FieldType(container: {
+        \\        field_type_total += 1;
+        \\        break :container S;
+        \\    }, name: {
+        \\        field_type_total *= 2;
+        \\        break :name "payload";
+        \\    });
+        \\    return if (mode == .safe and Payload == u16) struct {
+        \\        field_order: [field_total]u8,
+        \\        field_type_order: [field_type_total]u8,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "field_order", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "field_type_order", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with nested comptime min max mutations" {
     try testCompletion(
         \\fn Select(comptime a: usize, comptime b: usize, comptime c: usize) type {

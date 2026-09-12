@@ -5200,6 +5200,18 @@ pub fn resolveComptimeMemberPresenceValue(
     return Type.fromIP(analyser, .bool_type, if (found) .bool_true else .bool_false);
 }
 
+pub fn resolveComptimeFieldValue(
+    analyser: *Analyser,
+    container: Type,
+    field_name: []const u8,
+) Error!?Type {
+    if (container.isEnumType(analyser)) {
+        const declaration = try analyser.lookupSymbolContainer(container, field_name, .field);
+        if (declaration != null) return try analyser.enumValue(container, field_name);
+    }
+    return analyser.resolveFieldAccess(container, field_name);
+}
+
 fn internPoolFieldType(analyser: *Analyser, container_type: Type, name: []const u8) ?Type {
     if (!container_type.is_type_val) return null;
     const type_index = container_type.ipIndex() orelse return null;
@@ -5224,6 +5236,19 @@ fn internPoolFieldType(analyser: *Analyser, container_type: Type, name: []const 
         },
         else => null,
     };
+}
+
+pub fn resolveComptimeFieldTypeValue(
+    analyser: *Analyser,
+    container_type: Type,
+    field_name: []const u8,
+) Error!?Type {
+    if (!container_type.is_type_val) return null;
+    if (analyser.internPoolFieldType(container_type, field_name)) |field_type| return field_type;
+    const instance = try container_type.instanceTypeVal(analyser) orelse return null;
+    const field = try instance.lookupSymbol(analyser, field_name) orelse return null;
+    const result = try field.resolveType(analyser) orelse return null;
+    return try result.typeOf(analyser);
 }
 
 fn resolveIntegerLiteral(analyser: *Analyser, comptime T: type, options: ResolveOptions) Error!?T {
@@ -11562,12 +11587,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
                     const container_type = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse return null;
-                    if (analyser.internPoolFieldType(container_type, field_name)) |field_type| return field_type;
-                    const instance = try container_type.instanceTypeVal(analyser) orelse return null;
-
-                    const field = try instance.lookupSymbol(analyser, field_name) orelse return null;
-                    const result = try field.resolveType(analyser) orelse return null;
-                    return try result.typeOf(analyser);
+                    return analyser.resolveComptimeFieldTypeValue(container_type, field_name);
                 },
                 .field => {
                     if (params.len < 2) return null;
@@ -11575,12 +11595,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     const lhs = (try analyser.resolveTypeOfNodeInternal(.of(params[0], handle))) orelse return null;
 
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse return null;
-                    if (analyser.evaluate_comptime_values and lhs.isEnumType(analyser)) {
-                        const decl = try analyser.lookupSymbolContainer(lhs, field_name, .field);
-                        if (decl != null) return try analyser.enumValue(lhs, field_name);
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveComptimeFieldValue(lhs, field_name)) |value| return value;
                     }
-
-                    return try analyser.resolveFieldAccess(lhs, field_name);
+                    return analyser.resolveFieldAccess(lhs, field_name);
                 },
                 .compile_error => {
                     return .{ .data = .{ .compile_error = node_handle }, .is_type_val = false };
