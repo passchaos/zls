@@ -851,7 +851,7 @@ pub const Interpreter = struct {
     fn coerce(self: *Interpreter, destination: Type, value: Type) Error!?Type {
         if (!destination.is_type_val) return null;
         const type_index = destination.ipIndex() orelse return value;
-        if (type_index == .type_type) return value;
+        if (type_index == .type_type) return if (value.is_type_val) value else null;
         if (value.data == .ip_index) {
             const coerced = try self.analyser.coerceComptimeIPValue(type_index, value) orelse return null;
             return Type.fromIP(self.analyser, type_index, coerced);
@@ -1581,6 +1581,8 @@ pub const Interpreter = struct {
         const function = try analyser.resolveFuncProtoOfCallable(callable) orelse return .unknown;
         const info = function.data.function;
         if (info.parameters.len != call_node.ast.params.len or info.handle.tree.nodeTag(info.fn_node) != .fn_decl) return .unknown;
+        var fn_buffer: [1]Ast.Node.Index = undefined;
+        const fn_proto = info.handle.tree.fullFnProto(&fn_buffer, info.fn_node).?;
         var child: Interpreter = .{
             .analyser = analyser,
             .bindings = if (info.container_type.data == .container)
@@ -1612,9 +1614,18 @@ pub const Interpreter = struct {
         const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
         return switch (flow) {
             .returned => |value| blk: {
-                const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
-                const return_type = try return_value.typeOf(analyser);
-                break :blk .{ .returned = try child.coerce(return_type, value) orelse return .unknown };
+                const is_type_function = Analyser.isTypeFunction(&info.handle.tree, fn_proto);
+                const return_type = if (is_type_function)
+                    Type.fromIP(analyser, .type_type, .type_type)
+                else return_type: {
+                    const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
+                    break :return_type try return_value.typeOf(analyser);
+                };
+                const coerced = try child.coerce(return_type, value) orelse if (is_type_function)
+                    try return_type.instanceUnchecked(analyser)
+                else
+                    return .unknown;
+                break :blk .{ .returned = coerced };
             },
             else => flow,
         };

@@ -3381,6 +3381,25 @@ test "comptime interpreter validates non-IP function parameter types" {
     });
 }
 
+test "comptime interpreter validates declared type function returns" {
+    try testCompletion(
+        \\fn invalid() type { return 4; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const T = invalid();
+        \\    return if (@TypeOf(T) == type)
+        \\        struct { accepted: u8 }
+        \\    else
+        \\        struct { leaked: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "source union typed comptime arguments validate runtime unknown payloads" {
     try testCompletion(
         \\const U = union(enum) { count: u16, empty };
