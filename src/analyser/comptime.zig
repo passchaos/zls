@@ -475,8 +475,17 @@ pub const Interpreter = struct {
                             return self.analyser.resolveComptimeCastValue(destination, source, kind);
                         }
                     }
-                    const value = try self.eval(handle, params[1]) orelse return null;
-                    return self.coerce(destination, value);
+                    const evaluated = try self.evalSource(handle, params[1]) orelse return null;
+                    return if (self.optionalPayloadType(destination) != null)
+                        self.coerceAssignmentFromSource(
+                            handle,
+                            destination,
+                            evaluated.value,
+                            evaluated.source_node,
+                            null,
+                        )
+                    else
+                        self.coerce(destination, evaluated.value);
                 }
                 if (std.mem.eql(u8, name, "@intFromEnum")) {
                     var buffer: [2]Ast.Node.Index = undefined;
