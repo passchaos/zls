@@ -287,6 +287,13 @@ pub const Interpreter = struct {
                     .payload => |payload| payload,
                 };
             },
+            .unwrap_optional => {
+                const optional = try self.eval(handle, handle.tree.nodeData(node).node_and_token[0]) orelse return null;
+                return switch (try self.optionalValue(optional) orelse return null) {
+                    .absent => null,
+                    .payload => |payload| payload,
+                };
+            },
             .bool_and, .bool_or => |tag| {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
                 const lhs_value = try self.boolValue(try self.eval(handle, lhs) orelse return null) orelse return null;

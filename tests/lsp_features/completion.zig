@@ -7472,6 +7472,24 @@ test "generic function with comptime orelse expression mutations" {
     });
 }
 
+test "generic function with nested comptime optional unwrap mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = (value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value @as(?usize, total);
+        \\    }).?;
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[20]u8" },
+    });
+}
+
 test "generic function with comptime boolean short circuit mutations" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {
