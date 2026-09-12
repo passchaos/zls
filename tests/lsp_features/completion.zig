@@ -3718,6 +3718,36 @@ test "comptime interpreter coerces typed aggregate reassignments" {
     });
 }
 
+test "comptime interpreter coerces typed aggregate destructuring reassignments" {
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\const Value = union(enum) { count: usize, empty };
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const small: u8 = 4;
+        \\    var values: [1]usize = undefined;
+        \\    var config = Config{ .capacity = 0 };
+        \\    var value = Value{ .empty = {} };
+        \\    values, config, value = .{ .{small}, .{ .capacity = small }, .{ .count = small } };
+        \\    return switch (value) {
+        \\        .count => |count| struct {
+        \\            items: [if (@TypeOf(values[0]) == usize and
+        \\                @TypeOf(config.capacity) == usize and @TypeOf(count) == usize)
+        \\                values[0] + config.capacity + count
+        \\            else
+        \\                99]u8,
+        \\        },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime interpreter coerces assignments to typed locals" {
     try testCompletion(
         \\fn Select() type {

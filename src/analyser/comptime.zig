@@ -1546,13 +1546,13 @@ pub const Interpreter = struct {
                 else
                     null;
                 for (assignment.ast.variables, items, 0..) |lhs, item, index| {
+                    const item_node = if (literal_elements) |elements| elements[index] else null;
                     if (tree.fullVarDecl(lhs)) |decl| {
-                        const initial_node = if (literal_elements) |elements| elements[index] else null;
-                        if (!try self.declare(handle, decl, item, initial_node)) return .unknown;
+                        if (!try self.declare(handle, decl, item, item_node)) return .unknown;
                         continue;
                     }
                     if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) continue;
-                    if (!try self.write(handle, lhs, item, null)) return .unknown;
+                    if (!try self.write(handle, lhs, item, item_node)) return .unknown;
                 }
                 return .next;
             },
