@@ -3888,6 +3888,20 @@ fn resolveTypeInfoTag(analyser: *Analyser, ty: Type) ?std.builtin.TypeId {
     };
 }
 
+pub fn resolveComptimeTypeInfoValue(analyser: *Analyser, operand: Type) Error!?Type {
+    const result_type = try analyser.resolveLangrefType(
+        version_data.builtins.get("@typeInfo").?.return_type,
+    ) orelse return null;
+    const tag = analyser.resolveTypeInfoTag(operand) orelse return null;
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(result_type),
+        .reflected_type = try analyser.allocType(operand),
+        .tag = tag,
+        .is_payload = false,
+        .collection = null,
+    } }, .is_type_val = false };
+}
+
 fn resolveTypeInfoFieldAccess(
     analyser: *Analyser,
     value: Type.TypeInfoValue,
@@ -10924,14 +10938,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     ) orelse return null;
                     if (!analyser.evaluate_comptime_values) return result_type;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return result_type;
-                    const tag = analyser.resolveTypeInfoTag(operand) orelse return result_type;
-                    return .{ .data = .{ .type_info_value = .{
-                        .value_type = try analyser.allocType(result_type),
-                        .reflected_type = try analyser.allocType(operand),
-                        .tag = tag,
-                        .is_payload = false,
-                        .collection = null,
-                    } }, .is_type_val = false };
+                    return try analyser.resolveComptimeTypeInfoValue(operand) orelse result_type;
                 },
                 .bit_size_of, .size_of => |tag| {
                     if (params.len != 1) return null;

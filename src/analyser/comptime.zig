@@ -444,6 +444,13 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeTypeNameValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@typeInfo")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    return self.analyser.resolveComptimeTypeInfoValue(operand);
+                }
                 if (std.mem.eql(u8, name, "@sizeOf") or
                     std.mem.eql(u8, name, "@bitSizeOf") or
                     std.mem.eql(u8, name, "@alignOf"))

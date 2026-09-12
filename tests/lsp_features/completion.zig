@@ -3172,6 +3172,24 @@ test "generic function with comptime std meta string to enum" {
     });
 }
 
+test "generic function with nested comptime typeInfo mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime T: type) type {
+        \\    var total: usize = 1;
+        \\    const info = @typeInfo(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value T;
+        \\    });
+        \\    return struct { items: [@tagName(info).len * total]u8 };
+        \\}
+        \\const buffer: Buffer(u16) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
 test "generic function switching on comptime type info" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
