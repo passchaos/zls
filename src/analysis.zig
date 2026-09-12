@@ -4896,6 +4896,23 @@ pub fn resolveComptimeTagNameValue(analyser: *Analyser, operand: Type) error{Out
     return try analyser.stringValue(tag_name);
 }
 
+pub fn resolveComptimeErrorNameValue(analyser: *Analyser, operand: Type) Error!?Type {
+    const index = operand.ipIndex() orelse return null;
+    const error_value = switch (analyser.ip.indexToKey(index)) {
+        .error_value => |value| value,
+        else => return null,
+    };
+    const bytes = try analyser.ip.string_pool.stringToSliceAlloc(
+        analyser.store.io,
+        analyser.arena,
+        error_value.error_tag_name,
+    );
+    const result = try analyser.resolveLangrefType(
+        version_data.builtins.get("@errorName").?.return_type,
+    ) orelse return null;
+    return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+}
+
 fn resolveEnumTagIntValue(
     analyser: *Analyser,
     enum_type: Type,
@@ -10955,23 +10972,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .error_name => {
                     if (params.len != 1) return null;
-                    const result = try analyser.resolveLangrefType(
-                        version_data.builtins.get(call_name).?.return_type,
-                    ) orelse return null;
-                    if (!analyser.evaluate_comptime_values) return result;
+                    if (!analyser.evaluate_comptime_values) {
+                        return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
+                    }
 
-                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return result;
-                    const index = operand.ipIndex() orelse return result;
-                    const error_value = switch (analyser.ip.indexToKey(index)) {
-                        .error_value => |value| value,
-                        else => return result,
-                    };
-                    const bytes = try analyser.ip.string_pool.stringToSliceAlloc(
-                        analyser.store.io,
-                        analyser.arena,
-                        error_value.error_tag_name,
-                    );
-                    return try analyser.stringValueWithType(bytes, try result.typeOf(analyser));
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse
+                        return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
+                    if (try analyser.resolveComptimeErrorNameValue(operand)) |value| return value;
+                    return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
                 },
                 .type_name => {
                     if (params.len != 1) return null;

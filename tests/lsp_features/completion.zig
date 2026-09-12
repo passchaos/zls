@@ -7181,6 +7181,24 @@ test "generic function with comptime errorName" {
     });
 }
 
+test "generic function with nested comptime errorName mutation" {
+    try testCompletion(
+        \\fn Buffer(comptime err: anyerror) type {
+        \\    var total: usize = 1;
+        \\    const name = @errorName(value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value err;
+        \\    });
+        \\    return struct { items: [name.len * total]u8 };
+        \\}
+        \\const buffer: Buffer(error.Missing) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[21]u8" },
+    });
+}
+
 test "generic function with comptime catch" {
     try testCompletion(
         \\var runtime_error_union: error{Failure}!u8 = undefined;
