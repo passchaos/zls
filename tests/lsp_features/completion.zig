@@ -3058,6 +3058,45 @@ test "generic function rejects invalid runtime unknown comptime unionInit payloa
     });
 }
 
+test "generic function coerces runtime unknown comptime union literal payload" {
+    try testCompletion(
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select() type {
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "count", "empty" }, &.{ 0, 1 });
+        \\    const U = @Union(.auto, Tag, &.{ "count", "empty" }, &.{ u16, void }, &.{ .{}, .{} });
+        \\    const value = U{ .count = runtime_u8 };
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "generic function rejects invalid runtime unknown comptime union literal payload" {
+    try testCompletion(
+        \\var runtime_bool: bool = undefined;
+        \\fn Select() type {
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "count", "empty" }, &.{ 0, 1 });
+        \\    const U = @Union(.auto, Tag, &.{ "count", "empty" }, &.{ u16, void }, &.{ .{}, .{} });
+        \\    const value = U{ .count = runtime_bool };
+        \\    return switch (value) {
+        \\        .count => struct { accepted: u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "accepted", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function reflecting comptime container constructors" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
