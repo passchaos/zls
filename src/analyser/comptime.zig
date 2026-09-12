@@ -28,6 +28,7 @@ pub const Value = struct {
         pub const Access = union(enum) {
             field: []const u8,
             index: usize,
+            optional_payload,
         };
 
         fn hash(self: Reference, hasher: anytype) void {
@@ -37,6 +38,7 @@ pub const Value = struct {
                 switch (access) {
                     .field => |name| hasher.update(name),
                     .index => |index| std.hash.autoHash(hasher, index),
+                    .optional_payload => {},
                 }
             }
         }
@@ -48,6 +50,7 @@ pub const Value = struct {
                 switch (lhs) {
                     .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
                     .index => |index| if (index != rhs.index) return false,
+                    .optional_payload => {},
                 }
             }
             return true;
@@ -335,6 +338,7 @@ pub const Interpreter = struct {
                     break :blk items[index];
                 },
                 .field => |name| try self.analyser.resolveFieldAccess(current, name) orelse return null,
+                .optional_payload => try self.analyser.resolveOptionalUnwrap(current) orelse return null,
             };
         }
         return current;
@@ -379,7 +383,26 @@ pub const Interpreter = struct {
                 extended[fields.len] = .{ .name = field_name, .value = new_value };
                 return try Value.create(analyser, aggregate_type, .{ .fields = extended });
             },
+            .optional_payload => {
+                const old_value = try analyser.resolveOptionalUnwrap(current) orelse return null;
+                const new_value = try self.replaceReferenceValue(old_value, path[1..], value) orelse return null;
+                return try Value.create(analyser, aggregate_type, .{ .optional = new_value });
+            },
         }
+    }
+
+    fn bindOptionalPointerPayload(
+        self: *Interpreter,
+        handle: *Handle,
+        condition: Ast.Node.Index,
+        payload_token: Ast.TokenIndex,
+    ) Error!bool {
+        if (handle.tree.tokenTag(payload_token) != .asterisk) return true;
+        const optional = try self.referenceForNode(handle, condition) orelse return false;
+        const payload = try self.extendReference(optional, .optional_payload);
+        const value = try self.referenceValue(payload) orelse return false;
+        try self.bind(handle, payload_token + 1, value);
+        return true;
     }
 
     fn deref(self: *Interpreter, value: Type) Error!?Type {
@@ -567,10 +590,10 @@ pub const Interpreter = struct {
             .if_simple, .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
                 if (branch.error_token != null) return .unknown;
-                if (branch.payload_token) |payload_token| {
-                    if (tree.tokenTag(payload_token) == .asterisk) return .unknown;
-                }
                 const known = try analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return .unknown;
+                if (known) if (branch.payload_token) |payload_token| {
+                    if (!try self.bindOptionalPointerPayload(handle, branch.ast.cond_expr, payload_token)) return .unknown;
+                };
                 return self.statement(handle, if (known) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse return .next);
             },
             .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?),
@@ -743,14 +766,14 @@ pub const Interpreter = struct {
 
     fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While) Error!Flow {
         if (loop_node.error_token != null) return .unknown;
-        if (loop_node.payload_token) |payload_token| {
-            if (handle.tree.tokenTag(payload_token) == .asterisk) return .unknown;
-        }
         while (true) {
             const condition = try self.analyser.resolveIfConditionValue(.of(loop_node.ast.cond_expr, handle)) orelse return .unknown;
             if (!condition) {
                 if (loop_node.ast.else_expr.unwrap()) |else_node| return self.statement(handle, else_node);
                 return .next;
+            }
+            if (loop_node.payload_token) |payload_token| {
+                if (!try self.bindOptionalPointerPayload(handle, loop_node.ast.cond_expr, payload_token)) return .unknown;
             }
 
             const flow = try self.statement(handle, loop_node.ast.then_expr);

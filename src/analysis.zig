@@ -10178,10 +10178,23 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
                 if (lhs.data == .container and analyser.comptime_interpreter != null) {
                     const fields = try analyser.arena.alloc(comptime_eval.Value.Field, struct_init.ast.fields.len);
-                    for (struct_init.ast.fields, fields) |field_node, *field| field.* = .{
-                        .name = try analyser.identifierTokenName(tree, tree.firstToken(field_node) - 2) orelse return null,
-                        .value = try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type,
-                    };
+                    for (struct_init.ast.fields, fields) |field_node, *field| {
+                        const field_name = try analyser.identifierTokenName(tree, tree.firstToken(field_node) - 2) orelse return null;
+                        const field_decl = try analyser.lookupSymbolContainer(try lhs.instanceUnchecked(analyser), field_name, .field) orelse return null;
+                        const field_type = try field_decl.resolveType(analyser) orelse return null;
+                        const expected_type = try field_type.typeOf(analyser);
+                        field.* = .{
+                            .name = field_name,
+                            .value = try analyser.resolveAggregateComptimeArgument(expected_type, handle, field_node) orelse
+                                if (expected_type.ipIndex()) |field_type_index|
+                                    if (try analyser.resolveCoercedIPValue(field_type_index, .of(field_node, handle))) |value_index|
+                                        Type.fromIP(analyser, field_type_index, value_index)
+                                    else
+                                        try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type
+                                else
+                                    try analyser.resolveTypeOfNodeInternal(.of(field_node, handle)) orelse .unknown_type,
+                        };
+                    }
                     return try comptime_eval.Value.create(analyser, lhs, .{ .fields = fields });
                 }
             }
