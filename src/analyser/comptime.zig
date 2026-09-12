@@ -520,6 +520,22 @@ pub const Interpreter = struct {
                         import_path.data.string_value.bytes,
                     );
                 }
+                if (std.mem.eql(u8, name, "@setEvalBranchQuota")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const quota = try self.eval(handle, params[0]) orelse return null;
+                    _ = self.analyser.ip.toInt(quota.ipIndex() orelse return null, u32) orelse return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
+                if (std.mem.eql(u8, name, "@setRuntimeSafety")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const enabled = try self.eval(handle, params[0]) orelse return null;
+                    _ = try self.boolValue(enabled) orelse return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@select")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

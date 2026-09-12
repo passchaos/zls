@@ -5202,6 +5202,32 @@ test "generic function with nested comptime import mutation" {
     });
 }
 
+test "generic function with nested comptime control builtin mutations" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var quota_total: usize = 1;
+        \\    var safety_total: usize = 1;
+        \\    _ = @setEvalBranchQuota(quota: {
+        \\        quota_total *= 2;
+        \\        break :quota 10_000;
+        \\    });
+        \\    _ = @setRuntimeSafety(enabled: {
+        \\        safety_total += 2;
+        \\        break :enabled true;
+        \\    });
+        \\    return struct {
+        \\        quota_order: [quota_total]u8,
+        \\        safety_order: [safety_total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "quota_order", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "safety_order", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with nested comptime min max mutations" {
     try testCompletion(
         \\fn Select(comptime a: usize, comptime b: usize, comptime c: usize) type {
