@@ -256,6 +256,7 @@ pub const Interpreter = struct {
             };
         }
         switch (handle.tree.nodeTag(node)) {
+            .@"comptime", .@"nosuspend" => return self.eval(handle, handle.tree.nodeData(node).node),
             .if_simple, .@"if" => {
                 const target = try self.ifTarget(handle, node) orelse return null;
                 return switch (target) {

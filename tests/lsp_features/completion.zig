@@ -6254,6 +6254,40 @@ test "generic function with comptime nosuspend statements" {
     });
 }
 
+test "generic function with comptime expression wrappers" {
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = comptime value: {
+        \\        defer total += 2;
+        \\        total *= 3;
+        \\        break :value total;
+        \\    };
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(2) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[48]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime base: usize) type {
+        \\    var total: usize = base;
+        \\    const selected = nosuspend value: {
+        \\        defer total += 1;
+        \\        total *= 2;
+        \\        break :value total;
+        \\    };
+        \\    return struct { items: [selected * total]u8 };
+        \\}
+        \\const buffer: Buffer(3) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[42]u8" },
+    });
+}
+
 test "generic function with comptime labeled block breaks" {
     try testCompletion(
         \\fn Buffer(comptime enabled: bool) type {
