@@ -8056,6 +8056,29 @@ test "generic function with nested contextual enumFromInt mutations" {
     });
 }
 
+test "generic function preserves runtime unknown contextual enumFromInt type" {
+    try testCompletion(
+        \\const Mode = enum(u8) { fast = 3, safe = 7 };
+        \\var runtime_u8: u8 = undefined;
+        \\fn Select() type {
+        \\    var total: usize = 1;
+        \\    const mode = @as(Mode, @enumFromInt(value: {
+        \\        total += 1;
+        \\        break :value runtime_u8;
+        \\    }));
+        \\    return struct {
+        \\        value: @TypeOf(mode),
+        \\        items: [total]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "value", .kind = .EnumMember, .detail = "Mode" },
+    });
+}
+
 test "generic function with nested comptime intFromEnum mutation" {
     try testCompletion(
         \\const Mode = enum(u8) { fast = 3, safe = 7 };

@@ -5145,7 +5145,18 @@ pub fn resolveComptimeEnumFromIntValue(
     integer: Type,
 ) Error!?Type {
     if (!enum_type.is_type_val or !enum_type.isEnumType(analyser)) return null;
-    const int_value = analyser.ip.toInt(integer.ipIndex() orelse return null, i256) orelse return null;
+    const integer_payload = switch (integer.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    switch (analyser.ip.zigTypeTag(integer_payload.type) orelse return null) {
+        .int, .comptime_int => {},
+        else => return null,
+    }
+    const integer_index = integer_payload.index orelse return enum_type.instanceTypeVal(analyser);
+    if (analyser.ip.isUndefined(integer_index)) return null;
+    if (analyser.ip.isUnknown(integer_index)) return enum_type.instanceTypeVal(analyser);
+    const int_value = analyser.ip.toInt(integer_index, i256) orelse return null;
     const tag = try analyser.resolveEnumTagFromIntValue(enum_type, int_value) orelse return null;
     const value = try analyser.enumValue(enum_type, tag);
     return value;
