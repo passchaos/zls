@@ -13448,6 +13448,19 @@ test "zero-parameter type function comptime evaluation" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[6]u8" }});
 
     try testCompletion(
+        \\fn capacity() comptime_int {
+        \\    var value = 2;
+        \\    value *= 4;
+        \\    return value;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [capacity()]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[8]u8" }});
+
+    try testCompletion(
         \\fn Select() type {
         \\    return if (@inComptime())
         \\        struct { comptime_only: u8 }
