@@ -13708,6 +13708,19 @@ test "zero-parameter type function comptime evaluation" {
     , &.{.{ .label = "preserved", .kind = .Field, .detail = "u8" }});
 
     try testCompletion(
+        \\fn invalidLength() i32 {
+        \\    var value: i32 = 0;
+        \\    value -= 1;
+        \\    return value;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [invalidLength()]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\fn Select() type {
         \\    return if (@inComptime())
         \\        struct { comptime_only: u8 }
