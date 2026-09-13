@@ -11403,25 +11403,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl)
             {
                 const return_type = try func_info.return_value.typeOf(analyser);
-                const return_tag = if (return_type.ipIndex()) |index|
-                    analyser.ip.zigTypeTag(index)
-                else
-                    null;
                 const body = func_info.handle.tree.nodeData(func_info.fn_node).node_and_node[1];
-                const return_is_aggregate = return_type.isStructType(analyser) or
-                    return_type.isUnionType() or return_tag == .@"union";
-                const return_is_supported = return_type.isEnumType(analyser) or
-                    return_type.isOptionalType(analyser) or return_type.isErrorSetType(analyser) or
-                    return_is_aggregate or
-                    return_type.isConstSequencePointerType(analyser) or
-                    switch (return_tag orelse .void) {
-                        .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => true,
-                        else => false,
-                    };
-                const return_is_integer = return_tag == .int or return_tag == .comptime_int;
-                const can_evaluate = return_is_integer or (return_is_supported and
-                    (analyser.evaluate_comptime_control_flow or
-                        try analyser.comptimeInterpreterNeeded(func_info.handle, body)));
+                const can_evaluate = switch (return_type.comptimeCallEvaluation(analyser)) {
+                    .never => false,
+                    .eager => true,
+                    .if_needed => analyser.evaluate_comptime_control_flow or
+                        try analyser.comptimeInterpreterNeeded(func_info.handle, body),
+                };
                 if (can_evaluate) {
                     if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
                 }
@@ -15101,6 +15089,39 @@ pub const Type = struct {
                 else => false,
             },
             .c => false,
+        };
+    }
+
+    const ComptimeCallEvaluation = enum { never, if_needed, eager };
+
+    fn comptimeCallEvaluation(self: Type, analyser: *Analyser) ComptimeCallEvaluation {
+        if (!self.is_type_val) return .never;
+        return switch (self.data) {
+            .array, .vector, .tuple, .optional, .union_tag => .if_needed,
+            .container => switch (self.getContainerKind() orelse return .never) {
+                .keyword_struct, .keyword_union, .keyword_enum => .if_needed,
+                else => .never,
+            },
+            .pointer => if (self.isConstSequencePointerType(analyser)) .if_needed else .never,
+            .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return .never) orelse return .never) {
+                .int, .comptime_int => .eager,
+                .array,
+                .vector,
+                .bool,
+                .float,
+                .comptime_float,
+                .enum_literal,
+                .null,
+                .@"enum",
+                .optional,
+                .error_set,
+                .@"struct",
+                .@"union",
+                => .if_needed,
+                .pointer => if (self.isConstSequencePointerType(analyser)) .if_needed else .never,
+                else => .never,
+            },
+            else => .never,
         };
     }
 
