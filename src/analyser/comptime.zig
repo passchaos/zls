@@ -1718,15 +1718,7 @@ pub const Interpreter = struct {
             if (tree.nodeTag(literal_node) == .address_of) static_pointer: {
                 const pointee_type = destination.constMaterializedPointerChild(analyser) orelse break :static_pointer;
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
-                const declaration = if (tree.nodeTag(operand) == .identifier) direct: {
-                    const token = ast.identifierTokenFromIdentifierNode(tree, operand) orelse break :static_pointer;
-                    const name = offsets.identifierTokenToNameSlice(tree, token);
-                    break :direct try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(token)) orelse
-                        break :static_pointer;
-                } else try analyser.resolveVarDeclAlias(.{
-                    .decl = .{ .ast_node = operand },
-                    .handle = handle,
-                }) orelse break :static_pointer;
+                const declaration = try analyser.resolveDeclarationOfNode(.of(operand, handle)) orelse break :static_pointer;
                 const declaration_node = switch (declaration.decl) {
                     .ast_node => |decl_node| decl_node,
                     else => break :static_pointer,

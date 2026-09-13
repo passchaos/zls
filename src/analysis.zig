@@ -727,6 +727,33 @@ pub fn isTypeFunction(tree: *const Ast, func: Ast.full.FnProto) bool {
 
 // ANALYSIS ENGINE
 
+pub fn resolveDeclarationOfNode(analyser: *Analyser, options: ResolveOptions) Error!?DeclWithHandle {
+    const node = options.node_handle.node;
+    const handle = options.node_handle.handle;
+    const tree = &handle.tree;
+    return switch (tree.nodeTag(node)) {
+        .identifier => blk: {
+            const name_token = ast.identifierTokenFromIdentifierNode(tree, node) orelse break :blk null;
+            const name = offsets.identifierTokenToNameSlice(tree, name_token);
+            if (options.container_type) |ty| {
+                if (try ty.lookupSymbol(analyser, name)) |symbol| break :blk symbol;
+            }
+            break :blk try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(name_token));
+        },
+        .field_access => blk: {
+            const lhs, const field_name = tree.nodeData(node).node_and_token;
+            const resolved = (try analyser.resolveTypeOfNode(.{
+                .node_handle = .of(lhs, handle),
+                .container_type = options.container_type,
+            })) orelse break :blk null;
+            if (!resolved.is_type_val) break :blk null;
+            const symbol_name = offsets.identifierTokenToNameSlice(tree, field_name);
+            break :blk try resolved.lookupSymbol(analyser, symbol_name);
+        },
+        else => null,
+    };
+}
+
 /// Resolves variable declarations consisting of chains of imports and field accesses of containers
 /// Examples:
 ///```zig
@@ -756,31 +783,7 @@ pub fn resolveVarDeclAlias(analyser: *Analyser, decl: DeclWithHandle) Error!?Dec
         const tree = &handle.tree;
 
         const resolved: DeclWithHandle = switch (tree.nodeTag(node)) {
-            .identifier => blk: {
-                const name_token = ast.identifierTokenFromIdentifierNode(tree, node) orelse break :blk null;
-                const name = offsets.identifierTokenToNameSlice(tree, name_token);
-                if (current.container_type) |ty| {
-                    if (try ty.lookupSymbol(analyser, name)) |symbol| break :blk symbol;
-                }
-                break :blk try analyser.lookupSymbolGlobal(
-                    handle,
-                    name,
-                    tree.tokenStart(name_token),
-                );
-            },
-            .field_access => blk: {
-                const lhs, const field_name = tree.nodeData(node).node_and_token;
-                const resolved = (try analyser.resolveTypeOfNode(.{
-                    .node_handle = .of(lhs, handle),
-                    .container_type = current.container_type,
-                })) orelse break :blk null;
-                if (!resolved.is_type_val)
-                    break :blk null;
-
-                const symbol_name = offsets.identifierTokenToNameSlice(tree, field_name);
-
-                break :blk try resolved.lookupSymbol(analyser, symbol_name);
-            },
+            .identifier, .field_access => try analyser.resolveDeclarationOfNode(current),
             .global_var_decl,
             .local_var_decl,
             .aligned_var_decl,

@@ -14963,6 +14963,36 @@ test "comptime pointer identities isolate generic containers" {
     try std.testing.expect(first.hash64() != second.hash64());
 }
 
+test "comptime pointer identities preserve distinct aliases" {
+    const source =
+        \\const Namespace = struct {
+        \\    const value: usize = 4;
+        \\    const alias = value;
+        \\};
+        \\fn pointer(comptime use_alias: bool) *const usize {
+        \\    var result: *const usize = &Namespace.value;
+        \\    if (use_alias) result = &Namespace.alias;
+        \\    return result;
+        \\}
+        \\const first = pointer(false);
+        \\const second = pointer(true);
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    analyser.resolve_number_literal_values = true;
+    const first_decl = try analyser.lookupSymbolGlobal(handle, "first", source.len) orelse return error.TestUnexpectedResult;
+    const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
+    const first = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const second = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!first.eql(second));
+    try std.testing.expect(first.hash64() != second.hash64());
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
