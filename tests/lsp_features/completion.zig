@@ -15717,6 +15717,20 @@ test "comptime sequence pointer parameter values" {
     });
 }
 
+test "comptime slice values are not pointer comparable" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const first: []const usize = &.{ 2, 3 };
+        \\    const second: []const usize = &.{ 2, 3 };
+        \\    if (first == second) state = 1;
+        \\    return struct { items: [state]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
