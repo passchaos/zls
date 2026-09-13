@@ -7932,6 +7932,150 @@ test "comptime interpreter coerces aggregate call returns" {
     }
 }
 
+test "comptime interpreter preserves contextual return casts" {
+    const cases = [_]struct { type: []const u8, builtin: []const u8, operand: []const u8, matches: []const u8 }{
+        .{ .type = "u8", .builtin = "@intCast", .operand = "@as(u16, 4)", .matches = "value == 4" },
+        .{ .type = "u8", .builtin = "@truncate", .operand = "@as(u16, 260)", .matches = "value == 4" },
+        .{ .type = "i8", .builtin = "@bitCast", .operand = "@as(u8, 252)", .matches = "value == -4" },
+        .{ .type = "usize", .builtin = "@intFromFloat", .operand = "@as(f64, 4.75)", .matches = "value == 4" },
+        .{ .type = "f32", .builtin = "@floatFromInt", .operand = "@as(u16, 4)", .matches = "value == 4.0" },
+        .{ .type = "f32", .builtin = "@floatCast", .operand = "@as(f64, 4.5)", .matches = "value == 4.5" },
+        .{ .type = "@Vector(2, usize)", .builtin = "@splat", .operand = "@as(u8, 4)", .matches = "value[0] == 4 and value[1] == 4" },
+        .{ .type = "Mode", .builtin = "@enumFromInt", .operand = "@as(u8, 4)", .matches = "value == .selected" },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |generic| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Mode = enum(u8) {{ selected = 4, other = 9 }};
+                \\fn produce({s}executions: *usize) {s} {{
+                \\    defer executions.* = executions.* * 10 + 2;
+                \\    return {s}(operand: {{
+                \\        executions.* += 1;
+                \\        break :operand {s};
+                \\    }});
+                \\}}
+                \\fn Select() type {{
+                \\    var executions: usize = 0;
+                \\    const value = produce({s}{s}&executions);
+                \\    return struct {{
+                \\        matched: [if (@TypeOf(value) == {s} and ({s})) 4 else 99]u8,
+                \\        executions: [executions]u8,
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                if (generic) "comptime T: type, " else "",
+                if (generic) "T" else case.type,
+                case.builtin,
+                case.operand,
+                if (generic) case.type else "",
+                if (generic) ", " else "",
+                case.type,
+                case.matches,
+            });
+            defer allocator.free(source);
+            errdefer std.debug.print("contextual return source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "matched", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter isolates nested return cast types" {
+    try testCompletion(
+        \\fn inner(executions: *usize) u16 {
+        \\    return @intCast(operand: {
+        \\        executions.* = executions.* * 10 + 2;
+        \\        break :operand @as(usize, 4);
+        \\    });
+        \\}
+        \\fn outer(executions: *usize) u8 {
+        \\    executions.* += 1;
+        \\    defer executions.* = executions.* * 10 + 3;
+        \\    if (executions.* == 1) return @intCast(inner(executions));
+        \\    return 99;
+        \\}
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const value = outer(&executions);
+        \\    return struct {
+        \\        items: [if (@TypeOf(value) == u8) value else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
+test "comptime interpreter preserves unknown contextual return types" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, count: []const u8, detail: []const u8 }{
+        .{ .type = "u8", .initializer = "@intCast(runtime_u16)", .count = "value", .detail = "u8" },
+        .{ .type = "usize", .initializer = "@intFromFloat(runtime_float)", .count = "value", .detail = "usize" },
+        .{ .type = "@Vector(2, usize)", .initializer = "@splat(runtime_u8)", .count = "value[0]", .detail = "@Vector(2,usize)" },
+        .{ .type = "u8", .initializer = "@intCast(@as(u16, 256))", .count = "value", .detail = "u8" },
+        .{ .type = "u8", .initializer = "@intCast(true)", .count = "value", .detail = "u8" },
+        .{ .type = "usize", .initializer = "@intFromFloat(@as(f64, -1.5))", .count = "value", .detail = "usize" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\var runtime_u16: u16 = undefined;
+            \\var runtime_u8: u8 = undefined;
+            \\var runtime_float: f64 = undefined;
+            \\fn produce() {s} {{ return {s}; }}
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const value = produce();
+            \\    return struct {{ result: @TypeOf(value), items: [{s}]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.type, case.initializer, case.count });
+        defer allocator.free(source);
+        errdefer std.debug.print("unknown return source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "result", .kind = .Field, .detail = case.detail },
+            .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+        });
+    }
+}
+
+test "comptime interpreter validates float coercion precision" {
+    try testCompletion(
+        \\fn exact() f32 { return @as(f64, 4.5); }
+        \\fn lossy() f32 { return @as(f64, 16777217.0); }
+        \\fn explicit() f32 { return @floatCast(@as(f64, 16777217.0)); }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const a = exact();
+        \\    const b = lossy();
+        \\    const c = explicit();
+        \\    const literal = @as(f32, 16777217.0);
+        \\    return struct {
+        \\        exact: [if (@TypeOf(a) == f32 and a == 4.5) 1 else 99]u8,
+        \\        lossy: [if (b == 16777216.0) 1 else 99]u8,
+        \\        explicit: [if (c == 16777216.0) 1 else 99]u8,
+        \\        literal: [if (literal == 16777216.0) 1 else 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "lossy", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "explicit", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "literal", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime interpreter preserves dependent call parameter types" {
     try testCompletion(
         \\const Config = struct { capacity: usize };

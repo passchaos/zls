@@ -2520,6 +2520,15 @@ pub fn coerceComptimeIPValue(
         const int = analyser.ip.toInt(typed_value_index, i256) orelse return null;
         return (try analyser.intValueWithType(destination_type, int) orelse return null).ipIndex();
     }
+    if (!analyser.ip.isUnknown(typed_value_index) and
+        analyser.ip.zigTypeTag(destination_type) == .float and
+        (source_tag == .float or source_tag == .comptime_float))
+    {
+        const coerced = try analyser.coerceFloatValue(destination_type, typed_value_index) orelse return null;
+        if (source_tag == .float and
+            try analyser.coerceFloatValue(value_payload.type, coerced) != typed_value_index) return null;
+        return coerced;
+    }
     const coerced = try analyser.coerceIP(destination_type, typed_value_index) orelse return null;
     return if (analyser.ip.isUnknown(coerced))
         try analyser.ip.getUnknown(destination_type)

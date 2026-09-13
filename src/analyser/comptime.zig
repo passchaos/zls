@@ -145,6 +145,7 @@ pub const Interpreter = struct {
     bindings: Analyser.TokenToTypeMap,
     cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
     budget: *Budget,
+    return_type: ?Type = null,
 
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
     const Flow = union(enum) {
@@ -1823,7 +1824,10 @@ pub const Interpreter = struct {
         switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => return self.statement(handle, tree.nodeData(node).node),
             .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression| blk: {
-                const result = try self.evalSource(handle, expression) orelse return .unknown;
+                const result = (if (self.return_type) |destination|
+                    try self.evalTypedSource(handle, expression, destination)
+                else
+                    try self.evalSource(handle, expression)) orelse return .unknown;
                 break :blk .{
                     .value = try self.captureBindings(result.value),
                     .source_node = result.source_node,
@@ -2109,16 +2113,17 @@ pub const Interpreter = struct {
                 try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
             }
         }
+        const is_type_function = Analyser.isTypeFunction(&info.handle.tree, fn_proto);
+        const return_type = if (is_type_function)
+            Type.fromIP(analyser, .type_type, .type_type)
+        else return_type: {
+            const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
+            break :return_type try return_value.typeOf(analyser);
+        };
+        child.return_type = return_type;
         const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
         return switch (flow) {
             .returned => |result| blk: {
-                const is_type_function = Analyser.isTypeFunction(&info.handle.tree, fn_proto);
-                const return_type = if (is_type_function)
-                    Type.fromIP(analyser, .type_type, .type_type)
-                else return_type: {
-                    const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
-                    break :return_type try return_value.typeOf(analyser);
-                };
                 const coerced = try child.coerceFromSource(
                     info.handle,
                     return_type,

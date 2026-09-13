@@ -449,6 +449,26 @@ const first_call_boundary: CallBoundaryArray(4) = undefined;
 const second_call_boundary: CallBoundaryArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
 
+fn ReturnCastArray(comptime base: u16) type {
+    const Helpers = struct {
+        fn narrow(comptime T: type, value: u16, executions: *usize) T {
+            defer executions.* += 1;
+            return @intCast(operand: {
+                executions.* += 1;
+                break :operand value;
+            });
+        }
+    };
+    var executions: usize = 0;
+    const value = Helpers.narrow(u8, base, &executions);
+    return [value + executions]u8;
+}
+
+const first_return_cast: ReturnCastArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^ ([6]u8)()
+const second_return_cast: ReturnCastArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^ ([5]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
