@@ -1338,18 +1338,31 @@ pub const Interpreter = struct {
                 null;
             const is_splat = std.mem.eql(u8, name, "@splat");
             const is_enum = std.mem.eql(u8, name, "@enumFromInt");
-            if (kind != null or is_splat or is_enum) {
+            const is_pointer = std.mem.eql(u8, name, "@ptrCast");
+            if (kind != null or is_splat or is_enum or is_pointer) {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
                 if (params.len != 1) return null;
                 const operand = try self.eval(handle, params[0]) orelse return null;
-                const value = if (kind) |cast_kind|
+                const value: ?Type = if (kind) |cast_kind|
                     try self.analyser.resolveComptimeCastValue(ty, operand, cast_kind)
                 else if (is_splat)
                     try self.analyser.resolveComptimeSplatValue(ty, operand)
-                else
-                    try self.analyser.resolveComptimeEnumFromIntValue(ty, operand);
+                else if (is_enum)
+                    try self.analyser.resolveComptimeEnumFromIntValue(ty, operand)
+                else pointer_cast: {
+                    const source_type = try operand.typeOf(self.analyser);
+                    if (!ty.preservesIdentityThroughPtrCast(self.analyser, source_type)) break :pointer_cast null;
+                    break :pointer_cast switch (operand.data) {
+                        .comptime_value => |comptime_value| switch (comptime_value.data) {
+                            .reference => |reference| try Value.create(self.analyser, ty, .{ .reference = reference }),
+                            .pointee => |pointee| try Value.create(self.analyser, ty, .{ .pointee = pointee }),
+                            else => null,
+                        },
+                        else => null,
+                    };
+                };
                 return .{ .value = value orelse return null, .source_node = null };
             }
         };

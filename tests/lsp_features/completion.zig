@@ -15259,6 +15259,42 @@ test "comptime pointer comparisons preserve wrapped identity" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime pointer casts preserve address identity" {
+    try testCompletion(
+        \\const first: usize = 4;
+        \\const second: usize = 4;
+        \\fn casted(comptime other: bool) *const anyopaque {
+        \\    return @ptrCast(if (other) &second else &first);
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (casted(false) == casted(false)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (casted(false) != casted(true)) distinct = 3;
+        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: usize = undefined;
+        \\fn casted() *const anyopaque {
+        \\    return @ptrCast(&runtime);
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (casted() == casted()) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

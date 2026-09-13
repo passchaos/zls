@@ -15216,6 +15216,18 @@ pub const Type = struct {
         };
     }
 
+    pub fn preservesIdentityThroughPtrCast(destination: Type, analyser: *Analyser, source: Type) bool {
+        const dest = destination.typePointerInfo(analyser) orelse return false;
+        const src = source.typePointerInfo(analyser) orelse return false;
+        return dest.size == .one and src.size == .one and
+            dest.is_const == src.is_const and
+            dest.is_volatile == src.is_volatile and
+            dest.is_allowzero == src.is_allowzero and
+            dest.address_space == src.address_space and
+            dest.alignment == src.alignment and
+            std.meta.eql(dest.packed_offset, src.packed_offset);
+    }
+
     pub fn constAggregatePointerChild(self: Type, analyser: *Analyser) ?Type {
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one or !info.is_const or info.elem_ty.isTupleType(analyser)) return null;
@@ -15331,6 +15343,11 @@ pub const Type = struct {
     const TypePointerInfo = struct {
         size: std.builtin.Type.Pointer.Size,
         is_const: bool,
+        is_volatile: bool,
+        is_allowzero: bool,
+        address_space: std.builtin.AddressSpace,
+        alignment: u32,
+        packed_offset: InternPool.Key.Pointer.PackedOffset,
         elem_ty: Type,
     };
 
@@ -15340,12 +15357,22 @@ pub const Type = struct {
             .pointer => |info| .{
                 .size = info.size,
                 .is_const = info.is_const,
+                .is_volatile = info.is_volatile,
+                .is_allowzero = info.is_allowzero,
+                .address_space = info.address_space,
+                .alignment = info.alignment,
+                .packed_offset = info.packed_offset,
                 .elem_ty = info.elem_ty.*,
             },
             .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
                 .pointer_type => |info| .{
                     .size = info.flags.size,
                     .is_const = info.flags.is_const,
+                    .is_volatile = info.flags.is_volatile,
+                    .is_allowzero = info.flags.is_allowzero,
+                    .address_space = info.flags.address_space,
+                    .alignment = info.flags.alignment,
+                    .packed_offset = info.packed_offset,
                     .elem_ty = Type.fromIP(analyser, .type_type, info.elem_type),
                 },
                 else => null,
