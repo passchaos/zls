@@ -336,6 +336,7 @@ pub const Value = struct {
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
         const lhs_pointer = lhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
         const rhs_pointer = rhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
+        if (!lhs.data.comptime_value.ty.hasSamePointerElementType(analyser, rhs.data.comptime_value.ty)) return null;
         switch (lhs_pointer.pointerSize(analyser) orelse return null) {
             .one, .many => {},
             .slice, .c => return null,

@@ -13817,6 +13817,20 @@ test "zero-parameter type function comptime evaluation" {
     });
 
     try testCompletion(
+        \\const value: u32 = 4;
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const wide: *const u32 = &value;
+        \\    const byte: *const u8 = @ptrCast(wide);
+        \\    const invalid = wide - byte;
+        \\    state += 0;
+        \\    return struct { items: [invalid]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\fn Select() type {
         \\    var values = [_]usize{ 2, 3, 5 };
         \\    const first = &values[0];
