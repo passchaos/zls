@@ -833,8 +833,12 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
     if (comptime_eval.Value.field(lhs, field_name)) |value| return .{ .type = value, .is_const = true };
     if (lhs.data == .comptime_value and lhs.data.comptime_value.data == .fields) {
         const ty = lhs.data.comptime_value.ty;
-        if (ty.data == .container) {
-            if (try analyser.lookupSymbolContainer(try ty.instanceUnchecked(analyser), field_name, .field)) |decl| {
+        const container_ty = if (ty.data == .container)
+            ty
+        else
+            ty.constAggregatePointerChild(analyser) orelse ty;
+        if (container_ty.data == .container) {
+            if (try analyser.lookupSymbolContainer(try container_ty.instanceUnchecked(analyser), field_name, .field)) |decl| {
                 if (decl.decl == .ast_node) {
                     const field = decl.handle.tree.fullContainerField(decl.decl.ast_node) orelse return null;
                     if (field.ast.value_expr != .none) {
