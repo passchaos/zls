@@ -334,6 +334,50 @@ pub const Interpreter = struct {
         return interpreter.evaluateTypedExpression(handle, node, destination);
     }
 
+    fn evaluateTypedWithContainer(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        destination: Type,
+        container_type: ?Type,
+    ) Error!?Type {
+        const analyser = self.analyser;
+        var child: Interpreter = .{
+            .analyser = analyser,
+            .bindings = try self.bindings.clone(analyser.arena),
+            .budget = self.budget,
+        };
+        var display_bindings = if (analyser.display_bindings) |bindings|
+            try bindings.clone(analyser.arena)
+        else
+            Analyser.TokenToNodeMap.empty;
+        if (container_type) |container| {
+            if (container.data == .container) {
+                const info = container.data.container;
+                for (info.bound_params.keys(), info.bound_params.values()) |key, value| {
+                    try child.bindings.put(analyser.arena, key, value);
+                }
+                for (info.display_params.keys(), info.display_params.values()) |key, value| {
+                    try display_bindings.put(analyser.arena, key, value);
+                }
+            }
+        }
+        if (!child.enterExpression()) return null;
+        defer child.leaveExpression();
+        const old_interpreter = analyser.comptime_interpreter;
+        const old_bindings = analyser.generic_bindings;
+        const old_display_bindings = analyser.display_bindings;
+        analyser.comptime_interpreter = &child;
+        analyser.generic_bindings = &child.bindings;
+        analyser.display_bindings = &display_bindings;
+        defer {
+            analyser.comptime_interpreter = old_interpreter;
+            analyser.generic_bindings = old_bindings;
+            analyser.display_bindings = old_display_bindings;
+        }
+        return child.evaluateTypedExpression(handle, node, destination);
+    }
+
     pub fn enterExpression(self: *Interpreter) bool {
         if (self.pending_flow != null or self.budget.expression_depth >= 128 or !self.tick()) return false;
         self.budget.expression_depth += 1;
@@ -1672,13 +1716,23 @@ pub const Interpreter = struct {
                     else => break :static_pointer,
                 };
                 const pointee = switch (declaration.handle.tree.nodeTag(declaration_node)) {
-                    .fn_decl => try self.evaluateTypedExpression(handle, operand, pointee_type) orelse
+                    .fn_decl => try self.evaluateTypedWithContainer(
+                        handle,
+                        operand,
+                        pointee_type,
+                        declaration.container_type,
+                    ) orelse
                         return if (allow_invalid) destination.instanceTypeVal(analyser) else null,
                     .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => blk: {
                         if (!declaration.isConst() or !try declaration.isStatic()) break :static_pointer;
                         const variable = declaration.handle.tree.fullVarDecl(declaration_node).?;
                         const initializer = variable.ast.init_node.unwrap() orelse break :static_pointer;
-                        break :blk try self.evaluateTypedExpression(declaration.handle, initializer, pointee_type) orelse
+                        break :blk try self.evaluateTypedWithContainer(
+                            declaration.handle,
+                            initializer,
+                            pointee_type,
+                            declaration.container_type,
+                        ) orelse
                             return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                     },
                     else => break :static_pointer,
