@@ -9427,6 +9427,33 @@ fn isStringSliceType(analyser: *Analyser, ty: Type) bool {
     };
 }
 
+fn isStringArrayPointerType(analyser: *Analyser, ty: Type) bool {
+    if (!ty.is_type_val) return false;
+    const elem_ty = switch (ty.data) {
+        .pointer => |info| blk: {
+            if (info.size != .one or !info.is_const) return false;
+            break :blk info.elem_ty.*;
+        },
+        .ip_index => |payload| blk: {
+            const pointer = switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+                .pointer_type => |info| info,
+                else => return false,
+            };
+            if (pointer.flags.size != .one or !pointer.flags.is_const) return false;
+            break :blk Type.fromIP(analyser, .type_type, pointer.elem_type);
+        },
+        else => return false,
+    };
+    return switch (elem_ty.data) {
+        .array => |info| info.elem_ty.ipIndex() == .u8_type,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+            .array_type => |info| info.child == .u8_type,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
     if (!ty.is_type_val) return false;
     return switch (ty.data) {
@@ -11407,7 +11434,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 const can_evaluate = if (return_type.isEnumType(analyser) or
                     return_type.isOptionalType(analyser) or return_type.isErrorSetType(analyser) or
                     return_is_aggregate or
-                    analyser.isStringSliceType(return_type))
+                    analyser.isStringSliceType(return_type) or
+                    analyser.isStringArrayPointerType(return_type))
                     try analyser.comptimeInterpreterNeeded(func_info.handle, body)
                 else switch (return_tag orelse .void) {
                     .int, .comptime_int => true,
