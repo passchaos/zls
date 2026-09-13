@@ -419,50 +419,6 @@ pub const Interpreter = struct {
         return self.analyser.ip.zigTypeTag(index) == .@"union";
     }
 
-    fn isSequencePointerType(self: *Interpreter, ty: Type) bool {
-        if (!ty.is_type_val) return false;
-        return switch (ty.data) {
-            .pointer => |info| info.is_const and
-                (info.size == .slice or info.size == .many or
-                    (info.size == .one and (info.elem_ty.data == .array or info.elem_ty.data == .tuple))),
-            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
-                .pointer_type => |info| info.flags.is_const and
-                    (info.flags.size == .slice or info.flags.size == .many or
-                        (info.flags.size == .one and switch (self.analyser.ip.indexToKey(info.elem_type)) {
-                            .array_type, .tuple_type => true,
-                            else => false,
-                        })),
-                else => false,
-            },
-            else => false,
-        };
-    }
-
-    fn sequencePointerLength(self: *Interpreter, ty: Type) ?usize {
-        return switch (ty.data) {
-            .pointer => |info| switch (info.size) {
-                .one => switch (info.elem_ty.data) {
-                    .array => |array| std.math.cast(usize, array.elem_count orelse return null),
-                    .tuple => |tuple| tuple.len,
-                    else => null,
-                },
-                .many, .slice, .c => null,
-            },
-            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
-                .pointer_type => |pointer| switch (pointer.flags.size) {
-                    .one => switch (self.analyser.ip.indexToKey(pointer.elem_type)) {
-                        .array_type => |array| std.math.cast(usize, array.len),
-                        .tuple_type => |tuple| tuple.types.len,
-                        else => null,
-                    },
-                    .many, .slice, .c => null,
-                },
-                else => null,
-            },
-            else => null,
-        };
-    }
-
     pub fn evaluateStructInit(self: *Interpreter, handle: *Handle, destination: Type, field_nodes: []const Ast.Node.Index) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
@@ -1684,12 +1640,12 @@ pub const Interpreter = struct {
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
             if (tree.nodeTag(literal_node) == .address_of and
-                self.isSequencePointerType(destination))
+                destination.isConstSequencePointerType(analyser))
             {
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
                 if (tree.fullArrayInit(&buffer, operand)) |literal| {
                     if (literal.ast.type_expr == .none) {
-                        if (self.sequencePointerLength(destination)) |len| {
+                        if (destination.sequencePointerLength(analyser)) |len| {
                             if (literal.ast.elements.len != len)
                                 return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                         }

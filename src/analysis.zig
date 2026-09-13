@@ -9433,57 +9433,6 @@ fn isStringSliceType(analyser: *Analyser, ty: Type) bool {
     };
 }
 
-fn isSliceType(analyser: *Analyser, ty: Type) bool {
-    if (!ty.is_type_val) return false;
-    return switch (ty.data) {
-        .pointer => |info| info.size == .slice and info.is_const,
-        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-            .pointer_type => |info| info.flags.size == .slice and info.flags.is_const,
-            else => false,
-        },
-        else => false,
-    };
-}
-
-fn isConstSequencePointerType(analyser: *Analyser, ty: Type) bool {
-    if (!ty.is_type_val) return false;
-    const elem_ty = switch (ty.data) {
-        .pointer => |info| blk: {
-            if (info.size != .one or !info.is_const) return false;
-            break :blk info.elem_ty.*;
-        },
-        .ip_index => |payload| blk: {
-            const pointer = switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-                .pointer_type => |info| info,
-                else => return false,
-            };
-            if (pointer.flags.size != .one or !pointer.flags.is_const) return false;
-            break :blk Type.fromIP(analyser, .type_type, pointer.elem_type);
-        },
-        else => return false,
-    };
-    return switch (elem_ty.data) {
-        .array, .tuple => true,
-        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-            .array_type, .tuple_type => true,
-            else => false,
-        },
-        else => false,
-    };
-}
-
-fn isConstManyPointerType(analyser: *Analyser, ty: Type) bool {
-    if (!ty.is_type_val) return false;
-    return switch (ty.data) {
-        .pointer => |info| info.size == .many and info.is_const,
-        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-            .pointer_type => |info| info.flags.size == .many and info.flags.is_const,
-            else => false,
-        },
-        else => false,
-    };
-}
-
 fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
     if (!ty.is_type_val) return false;
     return switch (ty.data) {
@@ -11464,8 +11413,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 const return_is_supported = return_type.isEnumType(analyser) or
                     return_type.isOptionalType(analyser) or return_type.isErrorSetType(analyser) or
                     return_is_aggregate or
-                    analyser.isSliceType(return_type) or
-                    analyser.isConstSequencePointerType(return_type) or analyser.isConstManyPointerType(return_type) or
+                    return_type.isConstSequencePointerType(analyser) or
                     switch (return_tag orelse .void) {
                         .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => true,
                         else => false,
@@ -15122,6 +15070,59 @@ pub const Type = struct {
             .pointer => |info| info.size,
             .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
                 .pointer_type => |pointer_info| pointer_info.flags.size,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    pub fn isConstSequencePointerType(self: Type, analyser: *Analyser) bool {
+        if (!self.is_type_val) return false;
+        const size, const elem_ty = switch (self.data) {
+            .pointer => |info| blk: {
+                if (!info.is_const) return false;
+                break :blk .{ info.size, info.elem_ty.* };
+            },
+            .ip_index => |payload| blk: {
+                const info = switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+                    .pointer_type => |pointer| pointer,
+                    else => return false,
+                };
+                if (!info.flags.is_const) return false;
+                break :blk .{ info.flags.size, Type.fromIP(analyser, .type_type, info.elem_type) };
+            },
+            else => return false,
+        };
+        return switch (size) {
+            .slice, .many => true,
+            .one => elem_ty.isTupleType(analyser) or switch (elem_ty.data) {
+                .array => true,
+                .ip_index => |payload| analyser.ip.indexToKey(payload.index orelse return false) == .array_type,
+                else => false,
+            },
+            .c => false,
+        };
+    }
+
+    pub fn sequencePointerLength(self: Type, analyser: *Analyser) ?usize {
+        if (!self.isConstSequencePointerType(analyser)) return null;
+        const elem_ty = switch (self.data) {
+            .pointer => |info| if (info.size == .one) info.elem_ty.* else return null,
+            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .pointer_type => |pointer| if (pointer.flags.size == .one)
+                    Type.fromIP(analyser, .type_type, pointer.elem_type)
+                else
+                    return null,
+                else => return null,
+            },
+            else => return null,
+        };
+        return switch (elem_ty.data) {
+            .array => |array| std.math.cast(usize, array.elem_count orelse return null),
+            .tuple => |tuple| tuple.len,
+            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .array_type => |array| std.math.cast(usize, array.len),
+                .tuple_type => |tuple| tuple.types.len,
                 else => null,
             },
             else => null,
