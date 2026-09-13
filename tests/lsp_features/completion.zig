@@ -13798,6 +13798,41 @@ test "zero-parameter type function comptime evaluation" {
     });
 
     try testCompletion(
+        \\const values = [_]usize{ 2, 3, 5 };
+        \\fn pointer(comptime index: usize) *const usize {
+        \\    return &values[index];
+        \\}
+        \\fn Select() type {
+        \\    const same = pointer(0) - pointer(0);
+        \\    const distance = pointer(2) - pointer(0);
+        \\    const negative = pointer(0) - pointer(1);
+        \\    return struct { same: [same]u8, distance: [distance]u8, negative: [negative]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "distance", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "negative", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values = [_]usize{ 2, 3, 5 };
+        \\    const first = &values[0];
+        \\    const last = &values[2];
+        \\    const same = first - first;
+        \\    const distance = last - first;
+        \\    return struct { same: [same]u8, distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "distance", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
         \\fn Select() type {
         \\    var pointer = "xy".ptr;
         \\    pointer = "abcd".ptr;

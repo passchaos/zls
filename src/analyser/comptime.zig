@@ -99,15 +99,7 @@ pub const Value = struct {
 
         fn eql(self: Reference, other: Reference) bool {
             if (self.storage != other.storage or self.path.len != other.path.len) return false;
-            for (self.path, other.path) |lhs, rhs| {
-                if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
-                switch (lhs) {
-                    .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
-                    .index => |index| if (index != rhs.index) return false,
-                    .optional_payload, .error_union_payload => {},
-                }
-            }
-            return true;
+            return pathEql(self.path, other.path);
         }
     };
 
@@ -338,6 +330,72 @@ pub const Value = struct {
         const rhs_sequence = sequence(rhs) orelse return null;
         if (!(lhs_sequence.sameBacking(rhs_sequence, analyser) orelse return null)) return null;
         return std.math.sub(usize, lhs_sequence.offset, rhs_sequence.offset) catch null;
+    }
+
+    pub fn pointerOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) ?usize {
+        if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
+        const lhs_pointer = lhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
+        const rhs_pointer = rhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
+        switch (lhs_pointer.pointerSize(analyser) orelse return null) {
+            .one, .many => {},
+            .slice, .c => return null,
+        }
+        switch (rhs_pointer.pointerSize(analyser) orelse return null) {
+            .one, .many => {},
+            .slice, .c => return null,
+        }
+        if (sequenceOffsetDifference(analyser, lhs, rhs)) |difference| return difference;
+        return switch (lhs.data.comptime_value.data) {
+            .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
+                .reference => |rhs_reference| if (lhs_reference.storage == rhs_reference.storage)
+                    pathOffsetDifference(lhs_reference.path, rhs_reference.path)
+                else
+                    null,
+                else => null,
+            },
+            .pointee => |lhs_pointee| switch (rhs.data.comptime_value.data) {
+                .pointee => |rhs_pointee| if (lhs_pointee.source.eql(rhs_pointee.source) and
+                    optionalTypeEql(lhs_pointee.container_type, rhs_pointee.container_type))
+                    pathOffsetDifference(lhs_pointee.path, rhs_pointee.path)
+                else
+                    null,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn optionalTypeEql(lhs: ?Type, rhs: ?Type) bool {
+        if ((lhs == null) != (rhs == null)) return false;
+        return if (lhs) |lhs_type| lhs_type.eql(rhs.?) else true;
+    }
+
+    fn pathEql(lhs: []const Reference.Access, rhs: []const Reference.Access) bool {
+        if (lhs.len != rhs.len) return false;
+        for (lhs, rhs) |lhs_access, rhs_access| {
+            if (std.meta.activeTag(lhs_access) != std.meta.activeTag(rhs_access)) return false;
+            switch (lhs_access) {
+                .field => |name| if (!std.mem.eql(u8, name, rhs_access.field)) return false,
+                .index => |index| if (index != rhs_access.index) return false,
+                .optional_payload, .error_union_payload => {},
+            }
+        }
+        return true;
+    }
+
+    fn pathOffsetDifference(lhs: []const Reference.Access, rhs: []const Reference.Access) ?usize {
+        if (lhs.len != rhs.len) return null;
+        if (pathEql(lhs, rhs)) return 0;
+        if (lhs.len == 0 or !pathEql(lhs[0 .. lhs.len - 1], rhs[0 .. rhs.len - 1])) return null;
+        const lhs_index = switch (lhs[lhs.len - 1]) {
+            .index => |index| index,
+            else => return null,
+        };
+        const rhs_index = switch (rhs[rhs.len - 1]) {
+            .index => |index| index,
+            else => return null,
+        };
+        return std.math.sub(usize, lhs_index, rhs_index) catch null;
     }
 
     pub fn fieldEntries(value: Type) ?[]const Field {

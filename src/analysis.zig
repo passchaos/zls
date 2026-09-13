@@ -6384,12 +6384,10 @@ pub fn resolveComptimeBinaryValue(
     rhs: Type,
     options: ComptimeBinaryOptions,
 ) error{OutOfMemory}!?Type {
-    if (tag == .sub and lhs.data == .comptime_value and rhs.data == .comptime_value and
-        lhs.data.comptime_value.ty.isManyPointerType(analyser) and
-        rhs.data.comptime_value.ty.isManyPointerType(analyser))
-    {
-        if (comptime_eval.Value.sequenceOffsetDifference(analyser, lhs, rhs)) |difference|
+    if (tag == .sub and lhs.data == .comptime_value and rhs.data == .comptime_value) {
+        if (comptime_eval.Value.pointerOffsetDifference(analyser, lhs, rhs)) |difference| {
             return analyser.intValueWithType(.usize_type, difference);
+        }
     }
     if (tag == .add or tag == .sub) {
         if (try analyser.resolveComptimePointerOffset(lhs, rhs, tag == .sub)) |value| return value;
