@@ -423,11 +423,15 @@ pub const Interpreter = struct {
         if (!ty.is_type_val) return false;
         return switch (ty.data) {
             .pointer => |info| info.is_const and
-                (info.size == .slice or (info.size == .one and info.elem_ty.data == .array)),
+                (info.size == .slice or
+                    (info.size == .one and (info.elem_ty.data == .array or info.elem_ty.data == .tuple))),
             .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
                 .pointer_type => |info| info.flags.is_const and
                     (info.flags.size == .slice or
-                        (info.flags.size == .one and self.analyser.ip.indexToKey(info.elem_type) == .array_type)),
+                        (info.flags.size == .one and switch (self.analyser.ip.indexToKey(info.elem_type)) {
+                            .array_type, .tuple_type => true,
+                            else => false,
+                        })),
                 else => false,
             },
             else => false,
@@ -439,6 +443,7 @@ pub const Interpreter = struct {
             .pointer => |info| switch (info.size) {
                 .one => switch (info.elem_ty.data) {
                     .array => |array| std.math.cast(usize, array.elem_count orelse return null),
+                    .tuple => |tuple| tuple.len,
                     else => null,
                 },
                 .many, .slice, .c => null,
@@ -447,6 +452,7 @@ pub const Interpreter = struct {
                 .pointer_type => |pointer| switch (pointer.flags.size) {
                     .one => switch (self.analyser.ip.indexToKey(pointer.elem_type)) {
                         .array_type => |array| std.math.cast(usize, array.len),
+                        .tuple_type => |tuple| tuple.types.len,
                         else => null,
                     },
                     .many, .slice, .c => null,

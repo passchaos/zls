@@ -9445,7 +9445,7 @@ fn isSliceType(analyser: *Analyser, ty: Type) bool {
     };
 }
 
-fn isConstArrayPointerType(analyser: *Analyser, ty: Type) bool {
+fn isConstSequencePointerType(analyser: *Analyser, ty: Type) bool {
     if (!ty.is_type_val) return false;
     const elem_ty = switch (ty.data) {
         .pointer => |info| blk: {
@@ -9463,9 +9463,9 @@ fn isConstArrayPointerType(analyser: *Analyser, ty: Type) bool {
         else => return false,
     };
     return switch (elem_ty.data) {
-        .array => true,
+        .array, .tuple => true,
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-            .array_type => true,
+            .array_type, .tuple_type => true,
             else => false,
         },
         else => false,
@@ -11453,7 +11453,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return_type.isOptionalType(analyser) or return_type.isErrorSetType(analyser) or
                     return_is_aggregate or
                     analyser.isSliceType(return_type) or
-                    analyser.isConstArrayPointerType(return_type) or
+                    analyser.isConstSequencePointerType(return_type) or
                     switch (return_tag orelse .void) {
                         .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => true,
                         else => false,
