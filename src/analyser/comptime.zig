@@ -1724,7 +1724,13 @@ pub const Interpreter = struct {
                     ) orelse
                         return if (allow_invalid) destination.instanceTypeVal(analyser) else null,
                     .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => blk: {
-                        if (!declaration.isConst() or !try declaration.isStatic()) break :static_pointer;
+                        if (!declaration.isConst()) break :static_pointer;
+                        if (!try declaration.isStatic()) {
+                            break :blk self.bindings.get(.{
+                                .handle = declaration.handle,
+                                .token = declaration.nameToken(),
+                            }) orelse break :static_pointer;
+                        }
                         const variable = declaration.handle.tree.fullVarDecl(declaration_node).?;
                         const initializer = variable.ast.init_node.unwrap() orelse break :static_pointer;
                         break :blk try self.evaluateTypedWithContainer(
@@ -2118,6 +2124,27 @@ pub const Interpreter = struct {
         info.bound_params = bindings;
         result.data = .{ .container = info };
         return result;
+    }
+
+    fn containsOwnedReference(self: *Interpreter, value: Type, depth: u8) bool {
+        if (depth == 128 or value.data != .comptime_value) return depth == 128;
+        return switch (value.data.comptime_value.data) {
+            .reference => |reference| for (self.cells.values()) |storage| {
+                if (reference.storage == storage) break true;
+            } else false,
+            .pointee => |pointee| self.containsOwnedReference(pointee.value, depth + 1),
+            .array => |items| for (items) |item| {
+                if (self.containsOwnedReference(item, depth + 1)) break true;
+            } else false,
+            .fields => |fields| for (fields) |field| {
+                if (self.containsOwnedReference(field.value, depth + 1)) break true;
+            } else false,
+            .optional => |payload| if (payload) |item| self.containsOwnedReference(item, depth + 1) else false,
+            .error_union => |result| switch (result) {
+                inline else => |item| self.containsOwnedReference(item, depth + 1),
+            },
+            .expression => false,
+        };
     }
 
     fn declare(
@@ -2835,6 +2862,7 @@ pub const Interpreter = struct {
                 break :blk .{ .returned = .{ .value = coerced, .source_node = null } };
             },
             .returned => |result| blk: {
+                if (child.containsOwnedReference(result.value, 0)) return .unknown;
                 const coerced = try child.coerceFromSource(
                     info.handle,
                     return_type,
