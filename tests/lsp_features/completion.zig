@@ -13474,6 +13474,35 @@ test "zero-parameter type function comptime evaluation" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[7]u8" }});
 
     try testCompletion(
+        \\fn capacity() i32 {
+        \\    var value: i32 = 2;
+        \\    value += 3;
+        \\    return value;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [capacity()]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[5]u8" }});
+
+    try testCompletion(
+        \\fn signedValue() i32 {
+        \\    var value: i32 = 1;
+        \\    value -= 2;
+        \\    return value;
+        \\}
+        \\fn Select() type {
+        \\    return if (signedValue() == -1)
+        \\        struct { preserved: u8 }
+        \\    else
+        \\        struct { corrupted: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "preserved", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
         \\fn Select() type {
         \\    return if (@inComptime())
         \\        struct { comptime_only: u8 }
