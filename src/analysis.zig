@@ -15162,6 +15162,7 @@ pub const Type = struct {
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one or !info.is_const) return null;
         if (info.elem_ty.isFunc()) return info.elem_ty;
+        if (info.elem_ty.constMaterializedPointerChild(analyser) != null) return info.elem_ty;
         return if (info.elem_ty.isTupleType(analyser) or switch (info.elem_ty.data) {
             .array => true,
             .ip_index => |payload| analyser.ip.indexToKey(payload.index orelse return null) == .array_type,
