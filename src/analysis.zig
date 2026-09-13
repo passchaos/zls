@@ -11402,7 +11402,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 else
                     null;
                 const body = func_info.handle.tree.nodeData(func_info.fn_node).node_and_node[1];
-                const can_evaluate = if (return_type.isEnumType(analyser))
+                const can_evaluate = if (return_type.isEnumType(analyser) or return_type.isOptionalType(analyser))
                     try analyser.comptimeInterpreterNeeded(func_info.handle, body)
                 else switch (return_tag orelse .void) {
                     .int, .comptime_int => true,
