@@ -10439,6 +10439,30 @@ test "comptime interpreter evaluates labeled switch loops" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[6]u8" }});
+
+    try testCompletion(
+        \\const State = error{ Start, Middle, Done };
+        \\fn Select() type {
+        \\    var transitions: usize = 0;
+        \\    const selected: usize = state: switch (@as(State, error.Start)) {
+        \\        error.Start => {
+        \\            transitions += 1;
+        \\            continue :state error.Middle;
+        \\        },
+        \\        error.Middle => {
+        \\            transitions += 1;
+        \\            continue :state error.Done;
+        \\        },
+        \\        error.Done => 5,
+        \\    };
+        \\    return struct { items: [selected]u8, transitions: [transitions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "transitions", .kind = .Field, .detail = "[2]u8" },
+    });
 }
 
 test "generic function with comptime switch mutation" {

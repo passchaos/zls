@@ -773,6 +773,26 @@ fn LabeledUnionSwitchArray() type {
 const labeled_union_switch: LabeledUnionSwitchArray() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([6]u8)()
 
+fn LabeledErrorSwitchArray() type {
+    const State = error{ Start, Middle, Done };
+    var transitions: usize = 0;
+    const selected: usize = state: switch (@as(State, error.Start)) {
+        error.Start => {
+            transitions += 1;
+            continue :state error.Middle;
+        },
+        error.Middle => {
+            transitions += 1;
+            continue :state error.Done;
+        },
+        error.Done => 5,
+    };
+    return [selected + transitions]u8;
+}
+
+const labeled_error_switch: LabeledErrorSwitchArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
+
 comptime {
     if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
     if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");
@@ -780,6 +800,7 @@ comptime {
     if (@TypeOf(labeled_switch) != [7]u8) @compileError("unexpected labeled switch result");
     if (@TypeOf(labeled_enum_switch) != [7]u8) @compileError("unexpected labeled enum switch result");
     if (@TypeOf(labeled_union_switch) != [6]u8) @compileError("unexpected labeled union switch result");
+    if (@TypeOf(labeled_error_switch) != [7]u8) @compileError("unexpected labeled error switch result");
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
 }

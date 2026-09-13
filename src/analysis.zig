@@ -2583,6 +2583,19 @@ pub fn coerceComptimeIPValue(
         return coerced;
     }
     const coerced = try analyser.coerceIP(destination_type, typed_value_index) orelse return null;
+    if (!analyser.ip.isUnknown(typed_value_index) and
+        analyser.ip.zigTypeTag(destination_type) == .error_set and
+        source_tag == .error_set)
+    {
+        const error_value = switch (analyser.ip.indexToKey(typed_value_index)) {
+            .error_value => |error_value| error_value,
+            else => return null,
+        };
+        return @as(?InternPool.Index, try analyser.ip.get(.{ .error_value = .{
+            .ty = destination_type,
+            .error_tag_name = error_value.error_tag_name,
+        } }));
+    }
     return if (analyser.ip.isUnknown(coerced))
         try analyser.ip.getUnknown(destination_type)
     else
