@@ -39,6 +39,7 @@ resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_specialized_nodes: std.HashMapUnmanaged(GeneratedContainerTypeKey, ?Binding, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
+resolved_enum_literals: std.HashMapUnmanaged(EnumLiteralCacheKey, ?DeclWithHandle, EnumLiteralCacheKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
@@ -102,6 +103,7 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_control_flow_values.deinit(self.gpa);
     self.resolved_specialized_nodes.deinit(self.gpa);
     self.generated_container_types.deinit(self.gpa);
+    self.resolved_enum_literals.deinit(self.gpa);
     self.sequential_enum_types.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
     self.generated_struct_fields.deinit(self.gpa);
@@ -15686,6 +15688,49 @@ pub const NodeWithUri = struct {
     };
 };
 
+fn hashTypeBindings(hasher: anytype, bindings: TokenToTypeMap) void {
+    var bindings_hash: u64 = 0;
+    for (bindings.keys(), bindings.values()) |token_handle, ty| {
+        var binding_hasher: std.hash.Wyhash = .init(0);
+        token_handle.hashWithHasher(&binding_hasher);
+        ty.hashWithHasher(&binding_hasher);
+        bindings_hash ^= binding_hasher.final();
+    }
+    std.hash.autoHash(hasher, bindings.count());
+    std.hash.autoHash(hasher, bindings_hash);
+}
+
+fn eqlTypeBindings(a: TokenToTypeMap, b: TokenToTypeMap) bool {
+    if (a.count() != b.count()) return false;
+    for (a.keys(), a.values()) |token_handle, ty| {
+        const other = b.get(token_handle) orelse return false;
+        if (!ty.eql(other)) return false;
+    }
+    return true;
+}
+
+fn hashDisplayBindings(hasher: anytype, bindings: TokenToNodeMap) void {
+    var bindings_hash: u64 = 0;
+    for (bindings.keys(), bindings.values()) |token_handle, node_handle| {
+        var binding_hasher: std.hash.Wyhash = .init(0);
+        token_handle.hashWithHasher(&binding_hasher);
+        std.hash.autoHash(&binding_hasher, node_handle.node);
+        binding_hasher.update(node_handle.handle.uri.raw);
+        bindings_hash ^= binding_hasher.final();
+    }
+    std.hash.autoHash(hasher, bindings.count());
+    std.hash.autoHash(hasher, bindings_hash);
+}
+
+fn eqlDisplayBindings(a: TokenToNodeMap, b: TokenToNodeMap) bool {
+    if (a.count() != b.count()) return false;
+    for (a.keys(), a.values()) |token_handle, node_handle| {
+        const other = b.get(token_handle) orelse return false;
+        if (!node_handle.eql(other)) return false;
+    }
+    return true;
+}
+
 const GeneratedContainerTypeKey = struct {
     node: NodeWithUri,
     container_type: ?Type,
@@ -15703,25 +15748,8 @@ const GeneratedContainerTypeKey = struct {
             } else {
                 hasher.update(&.{0});
             }
-            var bindings_hash: u64 = 0;
-            for (key.bindings.keys(), key.bindings.values()) |token_handle, ty| {
-                var binding_hasher: std.hash.Wyhash = .init(0);
-                token_handle.hashWithHasher(&binding_hasher);
-                ty.hashWithHasher(&binding_hasher);
-                bindings_hash ^= binding_hasher.final();
-            }
-            std.hash.autoHash(&hasher, key.bindings.count());
-            std.hash.autoHash(&hasher, bindings_hash);
-            var display_bindings_hash: u64 = 0;
-            for (key.display_bindings.keys(), key.display_bindings.values()) |token_handle, node_handle| {
-                var binding_hasher: std.hash.Wyhash = .init(0);
-                token_handle.hashWithHasher(&binding_hasher);
-                std.hash.autoHash(&binding_hasher, node_handle.node);
-                binding_hasher.update(node_handle.handle.uri.raw);
-                display_bindings_hash ^= binding_hasher.final();
-            }
-            std.hash.autoHash(&hasher, key.display_bindings.count());
-            std.hash.autoHash(&hasher, display_bindings_hash);
+            hashTypeBindings(&hasher, key.bindings);
+            hashDisplayBindings(&hasher, key.display_bindings);
             return hasher.final();
         }
 
@@ -15731,17 +15759,32 @@ const GeneratedContainerTypeKey = struct {
             if (a.container_type) |container_type| {
                 if (!container_type.eql(b.container_type.?)) return false;
             }
-            if (a.bindings.count() != b.bindings.count()) return false;
-            for (a.bindings.keys(), a.bindings.values()) |token_handle, ty| {
-                const other = b.bindings.get(token_handle) orelse return false;
-                if (!ty.eql(other)) return false;
-            }
-            if (a.display_bindings.count() != b.display_bindings.count()) return false;
-            for (a.display_bindings.keys(), a.display_bindings.values()) |token_handle, node_handle| {
-                const other = b.display_bindings.get(token_handle) orelse return false;
-                if (!node_handle.eql(other)) return false;
-            }
-            return true;
+            return eqlTypeBindings(a.bindings, b.bindings) and eqlDisplayBindings(a.display_bindings, b.display_bindings);
+        }
+    };
+};
+
+const EnumLiteralCacheKey = struct {
+    uri: Uri,
+    source_index: usize,
+    name: []const u8,
+    bindings: TokenToTypeMap,
+    display_bindings: TokenToNodeMap,
+
+    const Context = struct {
+        pub fn hash(_: Context, key: EnumLiteralCacheKey) u64 {
+            var hasher: std.hash.Wyhash = .init(0);
+            hasher.update(key.uri.raw);
+            std.hash.autoHash(&hasher, key.source_index);
+            hasher.update(key.name);
+            hashTypeBindings(&hasher, key.bindings);
+            hashDisplayBindings(&hasher, key.display_bindings);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: EnumLiteralCacheKey, b: EnumLiteralCacheKey) bool {
+            if (!a.uri.eql(b.uri) or a.source_index != b.source_index or !std.mem.eql(u8, a.name, b.name)) return false;
+            return eqlTypeBindings(a.bindings, b.bindings) and eqlDisplayBindings(a.display_bindings, b.display_bindings);
         }
     };
 };
@@ -17790,10 +17833,33 @@ pub fn getSymbolEnumLiteral(
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
+    const key: EnumLiteralCacheKey = .{
+        .uri = handle.uri,
+        .source_index = source_index,
+        .name = name,
+        .bindings = if (analyser.generic_bindings) |bindings| bindings.* else .empty,
+        .display_bindings = if (analyser.display_bindings) |bindings| bindings.* else .empty,
+    };
+    const cached = try analyser.resolved_enum_literals.getOrPut(analyser.gpa, key);
+    if (cached.found_existing) return cached.value_ptr.*;
+    errdefer _ = analyser.resolved_enum_literals.remove(key);
+    cached.key_ptr.name = try analyser.arena.dupe(u8, name);
+    cached.key_ptr.bindings = if (analyser.generic_bindings) |bindings|
+        try bindings.clone(analyser.arena)
+    else
+        .empty;
+    cached.key_ptr.display_bindings = if (analyser.display_bindings) |bindings|
+        try bindings.clone(analyser.arena)
+    else
+        .empty;
+    cached.value_ptr.* = null;
+
     const tree = &handle.tree;
     const nodes = try ast.nodesOverlappingIndex(analyser.arena, tree, source_index);
     if (nodes.len == 0) return null;
-    return try analyser.lookupSymbolFieldInit(handle, name, nodes[0], nodes[1..]);
+    const result = try analyser.lookupSymbolFieldInit(handle, name, nodes[0], nodes[1..]);
+    analyser.resolved_enum_literals.getPtr(key).?.* = result;
+    return result;
 }
 
 pub fn resolveStructInitType(

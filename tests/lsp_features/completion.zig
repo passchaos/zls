@@ -15034,6 +15034,67 @@ test "enum literal" {
     });
 }
 
+test "enum literal resolution cache" {
+    const source =
+        \\const E = enum { same };
+        \\const value: E = .same;
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    const source_index = std.mem.find(u8, source, ".same").? + 1;
+
+    const first = try analyser.getSymbolEnumLiteral(handle, source_index, "same") orelse return error.TestUnexpectedResult;
+    const second = try analyser.getSymbolEnumLiteral(handle, source_index, "same") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first.eql(second));
+    try std.testing.expectEqual(@as(usize, 1), analyser.resolved_enum_literals.count());
+
+    try std.testing.expectEqual(null, try analyser.getSymbolEnumLiteral(handle, source_index, "missing"));
+    try std.testing.expectEqual(null, try analyser.getSymbolEnumLiteral(handle, source_index, "missing"));
+    try std.testing.expectEqual(@as(usize, 2), analyser.resolved_enum_literals.count());
+}
+
+test "enum literal resolution cache isolates generic bindings" {
+    const source =
+        \\const E1 = enum { same };
+        \\const E2 = enum { same };
+        \\fn select(comptime T: type) T {
+        \\    return .same;
+        \\}
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+
+    const e1_decl = try analyser.lookupSymbolGlobal(handle, "E1", source.len) orelse return error.TestUnexpectedResult;
+    const e2_decl = try analyser.lookupSymbolGlobal(handle, "E2", source.len) orelse return error.TestUnexpectedResult;
+    const e1_type = try e1_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const e2_type = try e2_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const param_start = std.mem.find(u8, source, "T: type").?;
+    const param_token = offsets.sourceIndexToTokenIndex(&handle.tree, param_start).pickPreferred(&.{.identifier}, &handle.tree).?;
+    const token_handle: zls.Analyser.TokenWithHandle = .{ .token = param_token, .handle = handle };
+    var bindings: zls.Analyser.TokenToTypeMap = .empty;
+    analyser.generic_bindings = &bindings;
+    const literal_index = std.mem.find(u8, source, ".same").? + 1;
+
+    try bindings.put(ctx.arena.allocator(), token_handle, e1_type);
+    const first = try analyser.getSymbolEnumLiteral(handle, literal_index, "same") orelse return error.TestUnexpectedResult;
+    bindings.clearRetainingCapacity();
+    try bindings.put(ctx.arena.allocator(), token_handle, e2_type);
+    const second = try analyser.getSymbolEnumLiteral(handle, literal_index, "same") orelse return error.TestUnexpectedResult;
+
+    try std.testing.expect(!first.eql(second));
+    try std.testing.expectEqual(@as(usize, 2), analyser.resolved_enum_literals.count());
+}
+
 test "tagged union" {
     try testCompletion(
         \\const Birdie = enum {
