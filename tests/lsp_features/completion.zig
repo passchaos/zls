@@ -11499,6 +11499,250 @@ test "cross-file generic function with comptime member reflection" {
     try std.testing.expect(found_enabled);
 }
 
+test "comptime interpreter evaluates optional if conditions once" {
+    for ([_][]const u8{ "4", "null" }) |initial| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    var optional: ?usize = {s};
+            \\    var evaluations: usize = 0;
+            \\    const selected = if (condition: {{
+            \\        evaluations += 1;
+            \\        break :condition optional;
+            \\    }}) |payload| result: {{
+            \\        optional = 9;
+            \\        break :result payload + payload;
+            \\    }} else 7;
+            \\    return struct {{ items: [selected]u8, evaluations: [evaluations]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{initial});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = if (std.mem.eql(u8, initial, "4")) "[8]u8" else "[7]u8" },
+            .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter snapshots optional if captures" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var optional: ?usize = 4;
+        \\    var selected: usize = 0;
+        \\    if (optional) |payload| {
+        \\        optional = 9;
+        \\        selected = payload + payload;
+        \\    }
+        \\    return struct { items: [selected]u8, changed: [optional.?]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
+test "comptime interpreter evaluates optional while conditions once" {
+    try testCompletion(
+        \\fn next(value: *usize, evaluations: *usize) ?usize {
+        \\    evaluations.* += 1;
+        \\    if (value.* == 0) return null;
+        \\    value.* -= 1;
+        \\    return value.* + 1;
+        \\}
+        \\fn Select() type {
+        \\    var remaining: usize = 3;
+        \\    var evaluations: usize = 0;
+        \\    var total: usize = 0;
+        \\    var completed: usize = 0;
+        \\    while (next(&remaining, &evaluations)) |payload| {
+        \\        total += payload + payload;
+        \\    } else completed += 1;
+        \\    return struct {
+        \\        items: [total]u8,
+        \\        evaluations: [evaluations]u8,
+        \\        completed: [completed]u8,
+        \\        remaining: [remaining]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "completed", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "remaining", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
+test "comptime interpreter evaluates optional pointer capture lvalues once" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [2]?usize = .{ 4, 7 };
+        \\    var evaluations: usize = 0;
+        \\    var selected: usize = 0;
+        \\    if (values[index: {
+        \\        evaluations += 1;
+        \\        break :index 0;
+        \\    }]) |*payload| {
+        \\        payload.* += 2;
+        \\        selected = payload.*;
+        \\    }
+        \\    return struct {
+        \\        items: [selected]u8,
+        \\        evaluations: [evaluations]u8,
+        \\        changed: [values[0].?]u8,
+        \\        sibling: [values[1].?]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter evaluates nested optional pointer lvalues once" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [1][2]?usize = .{.{ 4, 7 }};
+        \\    var evaluations: usize = 0;
+        \\    if (values[row: {
+        \\        evaluations += 1;
+        \\        break :row 0;
+        \\    }][column: {
+        \\        evaluations = evaluations * 10 + 2;
+        \\        break :column 0;
+        \\    }]) |*payload| payload.* += 2;
+        \\    return struct {
+        \\        changed: [values[0][0].?]u8,
+        \\        sibling: [values[0][1].?]u8,
+        \\        evaluations: [evaluations]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
+test "comptime interpreter refreshes optional while captures" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var optional: ?usize = 3;
+        \\    var total: usize = 0;
+        \\    var continuations: usize = 0;
+        \\    while (optional) |payload| : (continuations += 1) {
+        \\        optional = if (payload > 1) payload - 1 else null;
+        \\        total += payload;
+        \\        if (payload == 2) continue;
+        \\        total += payload;
+        \\    }
+        \\    return struct { items: [total]u8, continuations: [continuations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[10]u8" },
+        .{ .label = "continuations", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
+test "comptime interpreter evaluates while pointer conditions once" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [2]?usize = .{ 3, 7 };
+        \\    var evaluations: usize = 0;
+        \\    var total: usize = 0;
+        \\    var completed: usize = 0;
+        \\    while (values[index: {
+        \\        evaluations += 1;
+        \\        break :index 0;
+        \\    }]) |*payload| {
+        \\        total += payload.*;
+        \\        if (payload.* > 1) payload.* -= 1 else values[0] = null;
+        \\    } else completed += 1;
+        \\    return struct {
+        \\        items: [total]u8,
+        \\        evaluations: [evaluations]u8,
+        \\        completed: [completed]u8,
+        \\        sibling: [values[1].?]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "completed", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter evaluates boolean while conditions once" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    var total: usize = 0;
+        \\    while (condition: {
+        \\        evaluations += 1;
+        \\        break :condition total < 3;
+        \\    }) total += 1;
+        \\    return struct { items: [total]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
+test "comptime interpreter preserves optional condition uncertainty" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const present: ?usize = runtime;
+        \\    return if (present) |payload|
+        \\        struct { value: @TypeOf(payload), items: [payload]u8 }
+        \\    else
+        \\        struct { absent: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "usize" },
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: ?usize = undefined;
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    return if (runtime) |payload|
+        \\        struct { present: @TypeOf(payload) }
+        \\    else
+        \\        struct { absent: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "present", .kind = .Field, .detail = "usize" },
+        .{ .label = "absent", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime optional condition" {
     try testCompletion(
         \\fn Select(comptime value: ?usize) type {

@@ -1189,10 +1189,14 @@ pub const Interpreter = struct {
     }
 
     fn aggregateReference(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Reference {
-        const value = try self.eval(handle, node) orelse return null;
+        const reference = try self.referenceForNode(handle, node);
+        const value = if (reference) |target|
+            try self.readReference(target) orelse return null
+        else
+            try self.eval(handle, node) orelse return null;
         if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
             return value.data.comptime_value.data.reference;
-        return self.referenceForNode(handle, node);
+        return reference;
     }
 
     fn extendReference(self: *Interpreter, reference_value: *Value.Reference, access: Value.Reference.Access) Error!*Value.Reference {
@@ -1490,17 +1494,31 @@ pub const Interpreter = struct {
         }
     }
 
-    fn bindOptionalPointerPayload(
+    fn conditionValue(
         self: *Interpreter,
         handle: *Handle,
         condition: Ast.Node.Index,
-        payload_token: Ast.TokenIndex,
-    ) Error!bool {
-        if (handle.tree.tokenTag(payload_token) != .asterisk) return true;
-        const optional = try self.referenceForNode(handle, condition) orelse return false;
-        const payload = try self.extendReference(optional, .optional_payload);
-        const value = try self.referenceValue(payload) orelse return false;
-        try self.bind(handle, payload_token + 1, value);
+        payload_token: ?Ast.TokenIndex,
+    ) Error!?bool {
+        const token = payload_token orelse return self.boolValue(try self.eval(handle, condition) orelse return null);
+        const capture_by_ref = handle.tree.tokenTag(token) == .asterisk;
+        const reference = if (capture_by_ref)
+            try self.referenceForNode(handle, condition) orelse return null
+        else
+            null;
+        const value = if (reference) |target|
+            try self.readReference(target) orelse return null
+        else
+            try self.eval(handle, condition) orelse return null;
+        const payload = switch (try self.optionalValue(value) orelse return null) {
+            .absent => return false,
+            .payload => |payload| payload,
+        };
+        const captured = if (reference) |target|
+            try self.referenceValue(try self.extendReference(target, .optional_payload)) orelse return null
+        else
+            payload;
+        try self.bind(handle, token + @intFromBool(capture_by_ref), captured);
         return true;
     }
 
@@ -1787,13 +1805,7 @@ pub const Interpreter = struct {
     fn ifTarget(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?BranchTarget {
         const branch = ast.fullIf(&handle.tree, node).?;
         if (branch.error_token != null) return null;
-        const known = if (branch.payload_token == null)
-            try self.boolValue(try self.eval(handle, branch.ast.cond_expr) orelse return null) orelse return null
-        else
-            try self.analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return null;
-        if (known) if (branch.payload_token) |payload_token| {
-            if (!try self.bindOptionalPointerPayload(handle, branch.ast.cond_expr, payload_token)) return null;
-        };
+        const known = try self.conditionValue(handle, branch.ast.cond_expr, branch.payload_token) orelse return null;
         return if (known)
             .{ .node = branch.ast.then_expr }
         else if (branch.ast.else_expr.unwrap()) |else_node|
@@ -2082,7 +2094,7 @@ pub const Interpreter = struct {
         defer self.break_context = context.parent;
         if (loop_node.error_token != null) return .unknown;
         while (true) {
-            const condition = try self.analyser.resolveIfConditionValue(.of(loop_node.ast.cond_expr, handle)) orelse return .unknown;
+            const condition = try self.conditionValue(handle, loop_node.ast.cond_expr, loop_node.payload_token) orelse return .unknown;
             if (!condition) {
                 if (loop_node.ast.else_expr.unwrap()) |else_node| {
                     if (expression) return .{ .value = try self.evalSourceWithType(handle, else_node, destination) orelse return .unknown };
@@ -2090,10 +2102,6 @@ pub const Interpreter = struct {
                 }
                 return .next;
             }
-            if (loop_node.payload_token) |payload_token| {
-                if (!try self.bindOptionalPointerPayload(handle, loop_node.ast.cond_expr, payload_token)) return .unknown;
-            }
-
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
                 .next => {},

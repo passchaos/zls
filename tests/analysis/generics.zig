@@ -491,6 +491,24 @@ const first_branch_cast: BranchCastArray(4) = undefined;
 const second_branch_cast: BranchCastArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^ ([4]u8)()
 
+fn OptionalCaptureArray(comptime base: usize) type {
+    var optional: ?usize = base;
+    var evaluations: usize = 0;
+    const value = if (condition: {
+        evaluations += 1;
+        break :condition optional;
+    }) |payload| result: {
+        optional = 9;
+        break :result payload + payload;
+    } else 0;
+    return [value + evaluations]u8;
+}
+
+const first_optional_capture: OptionalCaptureArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^ ([9]u8)()
+const second_optional_capture: OptionalCaptureArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
