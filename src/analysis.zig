@@ -11455,7 +11455,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     analyser.isSliceType(return_type) or
                     analyser.isConstArrayPointerType(return_type) or
                     switch (return_tag orelse .void) {
-                        .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal => true,
+                        .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => true,
                         else => false,
                     };
                 const can_evaluate = return_is_supported and

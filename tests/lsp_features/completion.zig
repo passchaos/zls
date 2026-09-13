@@ -13566,6 +13566,20 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn nothing() @TypeOf(null) {
+        \\    return null;
+        \\}
+        \\fn Select() type {
+        \\    return if (nothing() == null)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "matched", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
         \\fn enabled() bool {
         \\    return true;
         \\}
