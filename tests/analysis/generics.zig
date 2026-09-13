@@ -803,6 +803,22 @@ fn PureLabeledSwitch(comptime initial: enum { start, done }) type {
 const pure_labeled_switch: PureLabeledSwitch(.start) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^ (struct { resolved: u8 })()
 
+fn PackedLabeledSwitchArray() type {
+    const State = packed struct { value: u8 };
+    var transitions: usize = 0;
+    const selected = state: switch (State{ .value = 1 }) {
+        .{ .value = 3 } => |value| break :state value.value,
+        else => |value| {
+            transitions += 1;
+            continue :state .{ .value = value.value + 1 };
+        },
+    };
+    return [selected + transitions]u8;
+}
+
+const packed_labeled_switch: PackedLabeledSwitchArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^ ([5]u8)()
+
 comptime {
     if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
     if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");
@@ -812,6 +828,7 @@ comptime {
     if (@TypeOf(labeled_union_switch) != [6]u8) @compileError("unexpected labeled union switch result");
     if (@TypeOf(labeled_error_switch) != [7]u8) @compileError("unexpected labeled error switch result");
     if (!@hasField(@TypeOf(pure_labeled_switch), "resolved")) @compileError("unexpected pure labeled switch result");
+    if (@TypeOf(packed_labeled_switch) != [5]u8) @compileError("unexpected packed labeled switch result");
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
 }

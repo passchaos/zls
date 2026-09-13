@@ -1091,6 +1091,18 @@ pub fn resolveKnownSwitchTargetFromValue(
         }
 
         for (switch_case.ast.values) |case_value| {
+            var literal_buffer: [2]Ast.Node.Index = undefined;
+            const is_aggregate_literal = tree.fullStructInit(&literal_buffer, case_value) != null or
+                tree.fullArrayInit(&literal_buffer, case_value) != null;
+            if (is_aggregate_literal) {
+                const interpreter = analyser.comptime_interpreter orelse return null;
+                const condition_type = try condition.typeOf(analyser);
+                const value = try interpreter.evaluateTypedExpression(handle, case_value, condition_type) orelse return null;
+                if (comptime_eval.Value.deref(condition).eql(comptime_eval.Value.deref(value))) {
+                    return switch_case.ast.target_expr;
+                }
+                continue;
+            }
             if (union_field_name) |field_name| {
                 if (tree.nodeTag(case_value) != .enum_literal) return null;
                 const case_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
