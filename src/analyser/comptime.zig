@@ -419,6 +419,18 @@ pub const Interpreter = struct {
         return self.analyser.ip.zigTypeTag(index) == .@"union";
     }
 
+    fn isSliceType(self: *Interpreter, ty: Type) bool {
+        if (!ty.is_type_val) return false;
+        return switch (ty.data) {
+            .pointer => |info| info.size == .slice,
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
+                .pointer_type => |info| info.flags.size == .slice,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
     pub fn evaluateStructInit(self: *Interpreter, handle: *Handle, destination: Type, field_nodes: []const Ast.Node.Index) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
@@ -1639,6 +1651,28 @@ pub const Interpreter = struct {
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
+            if (tree.nodeTag(literal_node) == .address_of and
+                self.isSliceType(destination))
+            {
+                const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
+                if (tree.fullArrayInit(&buffer, operand)) |literal| {
+                    if (literal.ast.type_expr == .none) {
+                        if (literal.ast.elements.len > self.budget.steps)
+                            return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                        const items = try analyser.arena.alloc(Type, literal.ast.elements.len);
+                        for (literal.ast.elements, items, 0..) |item_node, *item, index| {
+                            const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse
+                                return null;
+                            item.* = try self.evaluateTypedExpression(handle, item_node, element_type) orelse
+                                if (allow_invalid)
+                                    try element_type.instanceTypeVal(analyser) orelse return null
+                                else
+                                    return null;
+                        }
+                        return @as(?Type, try Value.create(analyser, destination, .{ .array = items }));
+                    }
+                }
+            }
             if (tree.nodeTag(literal_node) == .enum_literal) {
                 if (destination.isEnumType(analyser)) {
                     const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse return null;

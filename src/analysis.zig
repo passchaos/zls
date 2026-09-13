@@ -9433,6 +9433,18 @@ fn isStringSliceType(analyser: *Analyser, ty: Type) bool {
     };
 }
 
+fn isSliceType(analyser: *Analyser, ty: Type) bool {
+    if (!ty.is_type_val) return false;
+    return switch (ty.data) {
+        .pointer => |info| info.size == .slice,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+            .pointer_type => |info| info.flags.size == .slice,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 fn isStringArrayPointerType(analyser: *Analyser, ty: Type) bool {
     if (!ty.is_type_val) return false;
     const elem_ty = switch (ty.data) {
@@ -11440,7 +11452,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 const can_evaluate = if (return_type.isEnumType(analyser) or
                     return_type.isOptionalType(analyser) or return_type.isErrorSetType(analyser) or
                     return_is_aggregate or
-                    analyser.isStringSliceType(return_type) or
+                    analyser.isSliceType(return_type) or
                     analyser.isStringArrayPointerType(return_type))
                     try analyser.comptimeInterpreterNeeded(func_info.handle, body)
                 else switch (return_tag orelse .void) {
