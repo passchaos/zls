@@ -637,6 +637,7 @@ pub const Interpreter = struct {
                 };
                 break :blk .{ base, .{ .index = index } };
             },
+            .unwrap_optional => .{ tree.nodeData(unwrapped).node_and_token[0], .optional_payload },
             else => return null,
         };
         const parent = try self.staticPointeeTarget(handle, base, depth + 1) orelse return null;

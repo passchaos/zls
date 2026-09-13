@@ -15469,6 +15469,37 @@ test "comptime pointer comparisons preserve wrapped identity" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime static optional payload pointers" {
+    try testCompletion(
+        \\const present: ?usize = 4;
+        \\fn pointer() *const usize {
+        \\    return &present.?;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &present.?) same = 1;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const absent: ?usize = null;
+        \\fn pointer() *const usize {
+        \\    return &absent.?;
+        \\}
+        \\fn Select() type {
+        \\    return struct { value: [pointer().*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime pointer casts preserve address identity" {
     try testCompletion(
         \\const first: usize = 4;
