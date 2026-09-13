@@ -29,6 +29,7 @@ pub const Value = struct {
         backing: []const Type,
         offset: usize,
         len: usize,
+        elements_valid: bool,
 
         fn sameAddress(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
             if (self.backing.ptr == other.backing.ptr) return self.offset == other.offset;
@@ -115,6 +116,7 @@ pub const Value = struct {
                 for (view.backing) |item| item.hashWithHasher(hasher);
                 std.hash.autoHash(hasher, view.offset);
                 std.hash.autoHash(hasher, view.len);
+                std.hash.autoHash(hasher, view.elements_valid);
             },
             .fields => |fields| {
                 var fields_hash: u64 = 0;
@@ -170,6 +172,7 @@ pub const Value = struct {
             .sequence => |view| {
                 const other_sequence = other.data.sequence;
                 if (view.offset != other_sequence.offset or view.len != other_sequence.len or
+                    view.elements_valid != other_sequence.elements_valid or
                     view.backing.len != other_sequence.backing.len) return false;
                 for (view.backing, other_sequence.backing) |a, b| if (!a.eql(b)) return false;
             },
@@ -235,6 +238,14 @@ pub const Value = struct {
     fn pointerIdentityEqlDepth(analyser: *Analyser, lhs: Type, rhs: Type, depth: u8) ?bool {
         if (depth == 128) return null;
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
+        if (lhs.data.comptime_value.ty.isManyPointerType(analyser) and
+            rhs.data.comptime_value.ty.isManyPointerType(analyser))
+        {
+            if (sequence(lhs)) |lhs_sequence| {
+                if (sequence(rhs)) |rhs_sequence|
+                    return lhs_sequence.sameAddress(rhs_sequence, analyser);
+            }
+        }
         return switch (lhs.data.comptime_value.data) {
             .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
                 .reference => |rhs_reference| lhs_reference.eql(rhs_reference.*),
@@ -288,7 +299,7 @@ pub const Value = struct {
         if (resolved.data != .comptime_value) return null;
         return switch (resolved.data.comptime_value.data) {
             .array => |items| items,
-            .sequence => |view| view.backing[view.offset..][0..view.len],
+            .sequence => |view| if (view.elements_valid) view.backing[view.offset..][0..view.len] else null,
             else => null,
         };
     }
@@ -297,7 +308,7 @@ pub const Value = struct {
         const resolved = deref(value);
         if (resolved.data != .comptime_value) return null;
         return switch (resolved.data.comptime_value.data) {
-            .array => |items| .{ .backing = items, .offset = 0, .len = items.len },
+            .array => |items| .{ .backing = items, .offset = 0, .len = items.len, .elements_valid = true },
             .sequence => |sequence_value| sequence_value,
             else => null,
         };
@@ -1382,10 +1393,22 @@ pub const Interpreter = struct {
             const payload = operand.data.comptime_value.data.optional orelse return null;
             return self.pointerCastValue(destination, payload, qualifier_cast);
         }
+        if (destination.isManyPointerType(self.analyser)) {
+            if (Value.sequence(operand)) |sequence| {
+                var casted = sequence;
+                casted.elements_valid = casted.elements_valid and destination.hasSamePointerElementType(self.analyser, source_type);
+                return @as(?Type, try Value.create(self.analyser, destination, .{ .sequence = casted }));
+            }
+        }
         return switch (operand.data) {
             .comptime_value => |comptime_value| switch (comptime_value.data) {
                 .reference => |reference| @as(?Type, try Value.create(self.analyser, destination, .{ .reference = reference })),
                 .pointee => |pointee| @as(?Type, try Value.create(self.analyser, destination, .{ .pointee = pointee })),
+                .sequence => |sequence| blk: {
+                    var casted = sequence;
+                    casted.elements_valid = casted.elements_valid and destination.hasSamePointerElementType(self.analyser, source_type);
+                    break :blk @as(?Type, try Value.create(self.analyser, destination, .{ .sequence = casted }));
+                },
                 else => null,
             },
             else => null,

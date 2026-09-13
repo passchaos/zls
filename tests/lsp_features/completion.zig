@@ -15428,6 +15428,31 @@ test "comptime pointer casts preserve address identity" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\fn bytes() [*]const u8 {
+        \\    return &.{ 1, 2, 3, 4 };
+        \\}
+        \\fn signed() [*]const i8 {
+        \\    return @ptrCast(bytes());
+        \\}
+        \\fn roundtrip() [*]const u8 {
+        \\    return @ptrCast(signed());
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (roundtrip() == bytes()) same = 1;
+        \\    var shifted: usize = 4;
+        \\    if (roundtrip() + 1 == bytes() + 1) shifted = 3;
+        \\    return struct { same: [same]u8, shifted: [shifted]u8, reinterpreted: [signed()[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "shifted", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "reinterpreted", .kind = .Field, .detail = "[?]u8" },
+    });
 }
 
 test "type function with comptime early returns" {

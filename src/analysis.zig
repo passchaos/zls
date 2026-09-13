@@ -868,6 +868,7 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
                         .backing = view.backing,
                         .offset = view.offset,
                         .len = view.backing.len - view.offset,
+                        .elements_valid = view.elements_valid,
                     } }),
                     .is_const = true,
                 };
@@ -2151,6 +2152,7 @@ pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory
                 };
             },
             .sequence => |sequence| {
+                if (!sequence.elements_valid) return null;
                 const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
                 const pointee = try analyser.resolveDerefType(pointer_instance) orelse return null;
                 return .{
@@ -2922,6 +2924,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                         .backing = view.backing,
                         .offset = view.offset + start,
                         .len = items.len - start,
+                        .elements_valid = view.elements_valid,
                     } }),
                     .is_const = true,
                 };
@@ -2943,6 +2946,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                         .backing = view.backing,
                         .offset = view.offset + start,
                         .len = end - start,
+                        .elements_valid = view.elements_valid,
                     } }),
                     .is_const = true,
                 };
@@ -6324,6 +6328,7 @@ fn resolveComptimePointerOffset(
             .backing = sequence.backing,
             .offset = new_offset,
             .len = sequence.backing.len - new_offset,
+            .elements_valid = sequence.elements_valid,
         } },
     ));
 }
@@ -15231,13 +15236,25 @@ pub const Type = struct {
     pub fn preservesIdentityThroughPtrCast(destination: Type, analyser: *Analyser, source: Type) bool {
         const dest = destination.pointerCastInfo(analyser) orelse return false;
         const src = source.pointerCastInfo(analyser) orelse return false;
-        return dest.pointer.size == .one and src.pointer.size == .one and
+        return dest.pointer.size == src.pointer.size and
+            (dest.pointer.size == .one or dest.pointer.size == .many) and
             dest.pointer.is_const == src.pointer.is_const and
             dest.pointer.is_volatile == src.pointer.is_volatile and
             dest.pointer.is_allowzero == src.pointer.is_allowzero and
             dest.pointer.address_space == src.pointer.address_space and
             dest.pointer.alignment == src.pointer.alignment and
             std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset);
+    }
+
+    pub fn hasSamePointerElementType(lhs: Type, analyser: *Analyser, rhs: Type) bool {
+        const lhs_info = lhs.pointerCastInfo(analyser) orelse return false;
+        const rhs_info = rhs.pointerCastInfo(analyser) orelse return false;
+        return lhs_info.pointer.elem_ty.eql(rhs_info.pointer.elem_ty);
+    }
+
+    pub fn isManyPointerType(self: Type, analyser: *Analyser) bool {
+        const info = self.pointerCastInfo(analyser) orelse return false;
+        return !info.is_optional and info.pointer.size == .many;
     }
 
     pub const PointerQualifierCast = enum { discard_const, discard_volatile };
