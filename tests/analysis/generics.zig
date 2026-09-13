@@ -773,18 +773,19 @@ const labeled_enum_switch: LabeledEnumSwitchArray() = undefined;
 fn LabeledUnionSwitchArray() type {
     const State = union(enum) { start, count: usize };
     var initial = State{ .start = {} };
+    var next = State{ .count = 4 };
     const selected: usize = state: switch (initial) {
-        .start => continue :state .{ .count = 4 },
+        .start => continue :state next,
         .count => |*value| result: {
             value.* += 2;
             break :result value.*;
         },
     };
-    return [selected]u8;
+    return [selected + next.count]u8;
 }
 
 const labeled_union_switch: LabeledUnionSwitchArray() = undefined;
-//    ^^^^^^^^^^^^^^^^^^^^ ([6]u8)()
+//    ^^^^^^^^^^^^^^^^^^^^ ([12]u8)()
 
 fn LabeledErrorSwitchArray() type {
     const State = error{ Start, Middle, Done };
@@ -870,7 +871,7 @@ comptime {
     if (@TypeOf(error_union_loop) != [21]u8) @compileError("unexpected error union loop");
     if (@TypeOf(labeled_switch) != [7]u8) @compileError("unexpected labeled switch result");
     if (@TypeOf(labeled_enum_switch) != [7]u8) @compileError("unexpected labeled enum switch result");
-    if (@TypeOf(labeled_union_switch) != [6]u8) @compileError("unexpected labeled union switch result");
+    if (@TypeOf(labeled_union_switch) != [12]u8) @compileError("unexpected labeled union switch result");
     if (@TypeOf(labeled_error_switch) != [7]u8) @compileError("unexpected labeled error switch result");
     if (!@hasField(@TypeOf(pure_labeled_switch), "resolved")) @compileError("unexpected pure labeled switch result");
     if (@TypeOf(packed_labeled_switch) != [5]u8) @compileError("unexpected packed labeled switch result");

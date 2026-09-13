@@ -10523,18 +10523,36 @@ test "comptime interpreter evaluates labeled switch loops" {
         \\const State = union(enum) { start, count: usize };
         \\fn Select() type {
         \\    var initial = State{ .start = {} };
+        \\    var next = State{ .count = 4 };
         \\    const selected: usize = state: switch (initial) {
-        \\        .start => continue :state .{ .count = 4 },
+        \\        .start => continue :state next,
         \\        .count => |*value| result: {
         \\            value.* += 2;
         \\            break :result value.*;
         \\        },
         \\    };
+        \\    return struct { items: [selected]u8, changed: [next.count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+    });
+
+    try testCompletion(
+        \\const State = union(enum) { start, count: usize };
+        \\fn Select() type {
+        \\    var initial = State{ .start = {} };
+        \\    const selected = state: switch (initial) {
+        \\        .start => continue :state .{ .count = 4 },
+        \\        .count => |*payload| break :state payload.*,
+        \\    };
         \\    return struct { items: [selected]u8 };
         \\}
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
-    , &.{.{ .label = "items", .kind = .Field, .detail = "[6]u8" }});
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 
     try testCompletion(
         \\const State = error{ Start, Middle, Done };
