@@ -844,6 +844,26 @@ fn PackedUnionLabeledSwitchArray() type {
 const packed_union_labeled_switch: PackedUnionLabeledSwitchArray() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ([3]u8)()
 
+fn TaggedUnionCaptureSwitchArray() type {
+    const State = union(enum) { a, b: usize, c: usize };
+    var trace: usize = 0;
+    const selected = state: switch (State{ .a = {} }) {
+        .a => |payload, tag| {
+            trace = if (payload == {} and tag == .a) 1 else 99;
+            continue :state .{ .b = 4 };
+        },
+        .b => |payload, tag| {
+            trace = trace * 10 + if (tag == .b) payload else 99;
+            continue :state .{ .c = 7 };
+        },
+        .c => |payload, tag| break :state if (tag == .c) payload else 99,
+    };
+    return [selected + trace]u8;
+}
+
+const tagged_union_capture_switch: TaggedUnionCaptureSwitchArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ([21]u8)()
+
 comptime {
     if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
     if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");
@@ -855,6 +875,7 @@ comptime {
     if (!@hasField(@TypeOf(pure_labeled_switch), "resolved")) @compileError("unexpected pure labeled switch result");
     if (@TypeOf(packed_labeled_switch) != [5]u8) @compileError("unexpected packed labeled switch result");
     if (@TypeOf(packed_union_labeled_switch) != [3]u8) @compileError("unexpected packed union labeled switch result");
+    if (@TypeOf(tagged_union_capture_switch) != [21]u8) @compileError("unexpected tagged union capture switch result");
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
 }

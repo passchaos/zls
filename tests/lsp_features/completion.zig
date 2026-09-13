@@ -10408,6 +10408,30 @@ test "comptime interpreter evaluates unknown switch conditions once" {
 
 test "comptime interpreter evaluates labeled switch loops" {
     try testCompletion(
+        \\const State = union(enum) { a, b: usize, c: usize };
+        \\fn Select() type {
+        \\    var trace: usize = 0;
+        \\    const selected = state: switch (State{ .a = {} }) {
+        \\        .a => |payload, tag| {
+        \\            trace = if (payload == {} and tag == .a) 1 else 99;
+        \\            continue :state .{ .b = 4 };
+        \\        },
+        \\        .b => |payload, tag| {
+        \\            trace = trace * 10 + if (tag == .b) payload else 99;
+        \\            continue :state .{ .c = 7 };
+        \\        },
+        \\        .c => |payload, tag| break :state if (tag == .c) payload else 99,
+        \\    };
+        \\    return struct { items: [selected]u8, trace: [trace]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "trace", .kind = .Field, .detail = "[14]u8" },
+    });
+
+    try testCompletion(
         \\const State = enum { start, done };
         \\fn Select(comptime initial: State) type {
         \\    return state: switch (initial) {
