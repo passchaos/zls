@@ -10372,6 +10372,18 @@ test "comptime interpreter evaluates unknown switch conditions once" {
 
 test "comptime interpreter evaluates labeled switch loops" {
     try testCompletion(
+        \\const State = enum { start, done };
+        \\fn Select(comptime initial: State) type {
+        \\    return state: switch (initial) {
+        \\        .start => continue :state .done,
+        \\        .done => struct { resolved: u8 },
+        \\    };
+        \\}
+        \\const selected: Select(.start) = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "resolved", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
         \\fn Select() type {
         \\    var evaluations: usize = 0;
         \\    var trace: usize = 0;
@@ -12188,6 +12200,35 @@ test "cross-file generic function with comptime member reflection" {
         }
     }
     try std.testing.expect(found_enabled);
+}
+
+test "comptime interpreter evaluates labeled error switch fallbacks" {
+    for ([_]struct { initial: []const u8, items: []const u8, transitions: []const u8 }{
+        .{ .initial = "4", .items = "[8]u8", .transitions = "[0]u8" },
+        .{ .initial = "error.Start", .items = "[10]u8", .transitions = "[1]u8" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const State = error{{ Start, Done }};
+            \\fn Select(comptime initial: State!usize) type {{
+            \\    var transitions: usize = 0;
+            \\    const selected = initial catch |err| state: switch (err) {{
+            \\        error.Start => {{
+            \\            transitions += 1;
+            \\            continue :state error.Done;
+            \\        }},
+            \\        error.Done => break :state 5,
+            \\    }};
+            \\    return struct {{ items: [selected * 2]u8, transitions: [transitions]u8 }};
+            \\}}
+            \\const selected: Select({s}) = undefined;
+            \\const field = selected.<cursor>
+        , .{case.initial});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.items },
+            .{ .label = "transitions", .kind = .Field, .detail = case.transitions },
+        });
+    }
 }
 
 test "comptime interpreter executes known error catch fallbacks" {

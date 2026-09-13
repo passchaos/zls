@@ -219,6 +219,7 @@ pub const Interpreter = struct {
             .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
             .@"if" => if (ast.fullIf(tree, node).?.error_token != null) return true,
             .@"while" => if (ast.fullWhile(tree, node).?.error_token != null) return true,
+            .@"switch", .switch_comma => if (tree.switchFull(node).label_token != null) return true,
             .assign_destructure => {
                 for (tree.assignDestructure(node).ast.variables) |lhs| {
                     if (tree.fullVarDecl(lhs) != null) return true;
