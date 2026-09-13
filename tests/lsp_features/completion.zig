@@ -12418,6 +12418,63 @@ test "cross-file generic function with comptime member reflection" {
     try std.testing.expect(found_enabled);
 }
 
+test "cross-file comptime pointer target" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    _ = try ctx.addDocument(.{ .source =
+        \\pub const one: usize = 1;
+        \\pub const four: usize = 4;
+        \\pub var runtime: usize = undefined;
+    });
+
+    const source =
+        \\const api = @import("Untitled-0.zig");
+        \\fn value() *const usize {
+        \\    var result: *const usize = &api.one;
+        \\    result = &api.four;
+        \\    return result;
+        \\}
+        \\fn runtimeValue() *const usize {
+        \\    return &api.runtime;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        items: [value().*]u8,
+        \\        runtime_items: [runtimeValue().*]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
+    defer allocator.free(text);
+    const uri = try ctx.addDocument(.{ .source = text });
+
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })).?.completion_list;
+
+    var found_items = false;
+    var found_runtime_items = false;
+    for (response.items) |item| {
+        if (std.mem.eql(u8, item.label, "items")) {
+            found_items = true;
+            try std.testing.expectEqual(types.completion.Item.Kind.Field, item.kind.?);
+            try std.testing.expectEqualStrings("[4]u8", item.detail.?);
+        }
+        if (std.mem.eql(u8, item.label, "runtime_items")) {
+            found_runtime_items = true;
+            try std.testing.expectEqual(types.completion.Item.Kind.Field, item.kind.?);
+            try std.testing.expectEqualStrings("[?]u8", item.detail.?);
+        }
+    }
+    try std.testing.expect(found_items);
+    try std.testing.expect(found_runtime_items);
+}
+
 test "comptime interpreter evaluates labeled error switch fallbacks" {
     for ([_]struct { initial: []const u8, items: []const u8, transitions: []const u8 }{
         .{ .initial = "4", .items = "[8]u8", .transitions = "[0]u8" },
