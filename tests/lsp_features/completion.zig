@@ -13695,6 +13695,39 @@ test "zero-parameter type function comptime evaluation" {
     });
 }
 
+test "comptime interpreter eligibility cache" {
+    const source =
+        \\fn Select(comptime value: usize) type {
+        \\    var capacity = value;
+        \\    capacity += 1;
+        \\    return [capacity]u8;
+        \\}
+        \\const first: Select(1) = undefined;
+        \\const second: Select(2) = undefined;
+        \\fn Static(comptime T: type) type {
+        \\    return struct { value: T };
+        \\}
+        \\const third: Static(u8) = undefined;
+        \\const fourth: Static(u16) = undefined;
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    const first_decl = try analyser.lookupSymbolGlobal(handle, "first", source.len) orelse return error.TestUnexpectedResult;
+    const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
+    const third_decl = try analyser.lookupSymbolGlobal(handle, "third", source.len) orelse return error.TestUnexpectedResult;
+    const fourth_decl = try analyser.lookupSymbolGlobal(handle, "fourth", source.len) orelse return error.TestUnexpectedResult;
+    _ = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    _ = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    _ = try third_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    _ = try fourth_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), analyser.comptime_interpreter_needed.count());
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

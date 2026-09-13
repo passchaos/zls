@@ -40,6 +40,7 @@ resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWi
 resolved_specialized_nodes: std.HashMapUnmanaged(GeneratedContainerTypeKey, ?Binding, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_enum_literals: std.HashMapUnmanaged(EnumLiteralCacheKey, ?DeclWithHandle, EnumLiteralCacheKey.Context, std.hash_map.default_max_load_percentage) = .empty,
+comptime_interpreter_needed: std.HashMapUnmanaged(NodeWithUri, bool, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
@@ -104,6 +105,7 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_specialized_nodes.deinit(self.gpa);
     self.generated_container_types.deinit(self.gpa);
     self.resolved_enum_literals.deinit(self.gpa);
+    self.comptime_interpreter_needed.deinit(self.gpa);
     self.sequential_enum_types.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
     self.generated_struct_fields.deinit(self.gpa);
@@ -1275,7 +1277,7 @@ fn resolveReturnValueOfFuncNode(
         if (!has_body) return .unknown_type;
         const body = tree.nodeData(func_node).node_and_node[1];
         if (analyser.generic_bindings != null) {
-            if (comptime_eval.Interpreter.needed(handle, body)) {
+            if (try analyser.comptimeInterpreterNeeded(handle, body)) {
                 if (try comptime_eval.Interpreter.evaluate(analyser, handle, body)) |value| return value;
             }
             return switch (try analyser.findKnownReturnExpression(handle, body)) {
@@ -1304,6 +1306,13 @@ fn resolveReturnValueOfFuncNode(
     }
 
     return try child_type.instanceTypeVal(analyser);
+}
+
+fn comptimeInterpreterNeeded(analyser: *Analyser, handle: *DocumentStore.Handle, body: Ast.Node.Index) error{OutOfMemory}!bool {
+    const key: NodeWithUri = .{ .node = body, .uri = handle.uri };
+    const cached = try analyser.comptime_interpreter_needed.getOrPut(analyser.gpa, key);
+    if (!cached.found_existing) cached.value_ptr.* = comptime_eval.Interpreter.needed(handle, body);
+    return cached.value_ptr.*;
 }
 
 /// `optional.?`
