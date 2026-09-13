@@ -31,13 +31,17 @@ pub const Value = struct {
         len: usize,
         elements_valid: bool,
 
-        fn sameAddress(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
-            if (self.backing.ptr == other.backing.ptr) return self.offset == other.offset;
+        fn sameBacking(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
+            if (self.backing.ptr == other.backing.ptr) return true;
             for (self.backing) |item| if (!isKnown(item, analyser, 0)) return null;
             for (other.backing) |item| if (!isKnown(item, analyser, 0)) return null;
-            if (self.offset != other.offset or self.backing.len != other.backing.len) return false;
+            if (self.backing.len != other.backing.len) return false;
             for (self.backing, other.backing) |lhs, rhs| if (!lhs.eql(rhs)) return false;
             return true;
+        }
+
+        fn sameAddress(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
+            return (self.sameBacking(other, analyser) orelse return null) and self.offset == other.offset;
         }
     };
     pub const ErrorUnion = union(enum) {
@@ -327,6 +331,13 @@ pub const Value = struct {
             .sequence => |sequence_value| sequence_value,
             else => null,
         };
+    }
+
+    pub fn sequenceOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) ?usize {
+        const lhs_sequence = sequence(lhs) orelse return null;
+        const rhs_sequence = sequence(rhs) orelse return null;
+        if (!(lhs_sequence.sameBacking(rhs_sequence, analyser) orelse return null)) return null;
+        return std.math.sub(usize, lhs_sequence.offset, rhs_sequence.offset) catch null;
     }
 
     pub fn fieldEntries(value: Type) ?[]const Field {

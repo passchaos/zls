@@ -13769,6 +13769,35 @@ test "zero-parameter type function comptime evaluation" {
     });
 
     try testCompletion(
+        \\fn values() [*]const usize {
+        \\    var result: [*]const usize = &.{ 1, 1 };
+        \\    result = &.{ 2, 3, 5 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    const base = values();
+        \\    const distance = (base + 2) - base;
+        \\    const one_past = (base + 3) - (base + 1);
+        \\    const negative = base - (base + 1);
+        \\    const other: [*]const usize = &.{ 7, 8, 9 };
+        \\    const unrelated = (base + 1) - other;
+        \\    return struct {
+        \\        distance: [distance]u8,
+        \\        one_past: [one_past]u8,
+        \\        negative: [negative]u8,
+        \\        unrelated: [unrelated]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "distance", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "one_past", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "negative", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "unrelated", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\fn Select() type {
         \\    var pointer = "xy".ptr;
         \\    pointer = "abcd".ptr;
