@@ -469,6 +469,28 @@ const first_return_cast: ReturnCastArray(4) = undefined;
 const second_return_cast: ReturnCastArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^ ([5]u8)()
 
+fn BranchCastArray(comptime base: u16) type {
+    const Helpers = struct {
+        fn narrow(value: u16, executions: *usize) u8 {
+            return result: {
+                defer executions.* += 1;
+                for (0..1) |_| {
+                    break :result if (value < 10) @intCast(value) else unreachable;
+                }
+                unreachable;
+            };
+        }
+    };
+    var executions: usize = 0;
+    const value = Helpers.narrow(base, &executions);
+    return [value + executions]u8;
+}
+
+const first_branch_cast: BranchCastArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^ ([5]u8)()
+const second_branch_cast: BranchCastArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^ ([4]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

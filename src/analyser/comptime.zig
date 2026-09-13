@@ -146,7 +146,14 @@ pub const Interpreter = struct {
     cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
     budget: *Budget,
     return_type: ?Type = null,
+    break_context: ?*const BreakContext = null,
 
+    const BreakContext = struct {
+        parent: ?*const BreakContext,
+        label: ?Ast.TokenIndex,
+        destination: ?Type,
+        is_loop: bool,
+    };
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
     const Flow = union(enum) {
         next,
@@ -421,7 +428,7 @@ pub const Interpreter = struct {
         if (!self.tick()) return null;
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (handle.tree.blockStatements(&block_buffer, node) != null) {
-            return switch (try self.block(handle, node)) {
+            return switch (try self.block(handle, node, null)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
                 .value => |result| result.value,
                 else => null,
@@ -438,12 +445,12 @@ pub const Interpreter = struct {
                     .node => |target_node| self.eval(handle, target_node),
                 };
             },
-            .for_simple, .@"for" => return switch (try self.forLoop(handle, handle.tree.fullFor(node).?, true)) {
+            .for_simple, .@"for" => return switch (try self.forLoop(handle, handle.tree.fullFor(node).?, true, null)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
                 .value => |result| result.value,
                 else => null,
             },
-            .while_simple, .while_cont, .@"while" => return switch (try self.whileLoop(handle, ast.fullWhile(&handle.tree, node).?, true)) {
+            .while_simple, .while_cont, .@"while" => return switch (try self.whileLoop(handle, ast.fullWhile(&handle.tree, node).?, true, null)) {
                 .next => Type.fromIP(self.analyser, .void_type, .void_value),
                 .value => |result| result.value,
                 else => null,
@@ -938,8 +945,16 @@ pub const Interpreter = struct {
     }
 
     fn evalTypedSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?EvaluatedSource {
+        return self.evalSourceWithType(handle, node, destination);
+    }
+
+    fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
+        return self.evalSourceWithType(handle, node, null);
+    }
+
+    fn evalSourceWithType(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: ?Type) Error!?EvaluatedSource {
         const tree = &handle.tree;
-        if (ast.isBuiltinCall(tree, node)) {
+        if (destination) |ty| if (ast.isBuiltinCall(tree, node)) {
             const name = tree.tokenSlice(tree.nodeMainToken(node));
             const kind: ?Analyser.ComptimeCastKind = if (std.mem.eql(u8, name, "@intCast"))
                 .int_cast
@@ -964,23 +979,18 @@ pub const Interpreter = struct {
                 if (params.len != 1) return null;
                 const operand = try self.eval(handle, params[0]) orelse return null;
                 const value = if (kind) |cast_kind|
-                    try self.analyser.resolveComptimeCastValue(destination, operand, cast_kind)
+                    try self.analyser.resolveComptimeCastValue(ty, operand, cast_kind)
                 else if (is_splat)
-                    try self.analyser.resolveComptimeSplatValue(destination, operand)
+                    try self.analyser.resolveComptimeSplatValue(ty, operand)
                 else
-                    try self.analyser.resolveComptimeEnumFromIntValue(destination, operand);
+                    try self.analyser.resolveComptimeEnumFromIntValue(ty, operand);
                 return .{ .value = value orelse return null, .source_node = null };
             }
-        }
-        return self.evalSource(handle, node);
-    }
-
-    fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
-        const tree = &handle.tree;
+        };
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&block_buffer, node) != null) {
             if (!self.tick()) return null;
-            return switch (try self.block(handle, node)) {
+            return switch (try self.block(handle, node, destination)) {
                 .next => .{
                     .value = Type.fromIP(self.analyser, .void_type, .void_value),
                     .source_node = null,
@@ -992,11 +1002,11 @@ pub const Interpreter = struct {
         return switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => blk: {
                 if (!self.tick()) return null;
-                break :blk self.evalSource(handle, tree.nodeData(node).node);
+                break :blk self.evalSourceWithType(handle, tree.nodeData(node).node, destination);
             },
             .grouped_expression => blk: {
                 if (!self.tick()) return null;
-                break :blk self.evalSource(handle, tree.nodeData(node).node_and_token[0]);
+                break :blk self.evalSourceWithType(handle, tree.nodeData(node).node_and_token[0], destination);
             },
             .if_simple, .@"if" => blk: {
                 if (!self.tick()) return null;
@@ -1009,12 +1019,12 @@ pub const Interpreter = struct {
                         .value = Type.fromIP(self.analyser, .void_type, .void_value),
                         .source_node = null,
                     },
-                    .node => |target_node| self.evalSource(handle, target_node),
+                    .node => |target_node| self.evalSourceWithType(handle, target_node, destination),
                 };
             },
             .for_simple, .@"for" => blk: {
                 if (!self.tick()) return null;
-                break :blk switch (try self.forLoop(handle, tree.fullFor(node).?, true)) {
+                break :blk switch (try self.forLoop(handle, tree.fullFor(node).?, true, destination)) {
                     .next => .{
                         .value = Type.fromIP(self.analyser, .void_type, .void_value),
                         .source_node = null,
@@ -1025,7 +1035,7 @@ pub const Interpreter = struct {
             },
             .while_simple, .while_cont, .@"while" => blk: {
                 if (!self.tick()) return null;
-                break :blk switch (try self.whileLoop(handle, ast.fullWhile(tree, node).?, true)) {
+                break :blk switch (try self.whileLoop(handle, ast.fullWhile(tree, node).?, true, destination)) {
                     .next => .{
                         .value = Type.fromIP(self.analyser, .void_type, .void_value),
                         .source_node = null,
@@ -1040,14 +1050,14 @@ pub const Interpreter = struct {
                     .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
                     .source_node = null,
                 };
-                break :blk self.evalSource(handle, target);
+                break :blk self.evalSourceWithType(handle, target, destination);
             },
             .@"orelse" => blk: {
                 if (!self.tick()) return null;
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
                 const optional = try self.eval(handle, lhs) orelse return null;
                 break :blk switch (try self.optionalValue(optional) orelse return null) {
-                    .absent => self.evalSource(handle, rhs),
+                    .absent => self.evalSourceWithType(handle, rhs, destination),
                     .payload => |payload| .{ .value = payload, .source_node = null },
                 };
             },
@@ -1724,8 +1734,16 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn block(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+    fn block(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: ?Type) Error!Flow {
         const tree = &handle.tree;
+        const context: BreakContext = .{
+            .parent = self.break_context,
+            .label = ast.blockLabel(tree, node),
+            .destination = destination,
+            .is_loop = false,
+        };
+        self.break_context = &context;
+        defer self.break_context = context.parent;
         var buffer: [2]Ast.Node.Index = undefined;
         const statements = tree.blockStatements(&buffer, node) orelse return .unknown;
         var executed_count: usize = 0;
@@ -1769,7 +1787,10 @@ pub const Interpreter = struct {
     fn ifTarget(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?BranchTarget {
         const branch = ast.fullIf(&handle.tree, node).?;
         if (branch.error_token != null) return null;
-        const known = try self.analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return null;
+        const known = if (branch.payload_token == null)
+            try self.boolValue(try self.eval(handle, branch.ast.cond_expr) orelse return null) orelse return null
+        else
+            try self.analyser.resolveIfConditionValue(.of(branch.ast.cond_expr, handle)) orelse return null;
         if (known) if (branch.payload_token) |payload_token| {
             if (!try self.bindOptionalPointerPayload(handle, branch.ast.cond_expr, payload_token)) return null;
         };
@@ -1808,7 +1829,7 @@ pub const Interpreter = struct {
         const tree = &handle.tree;
         var buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&buffer, node) != null) {
-            return switch (try self.block(handle, node)) {
+            return switch (try self.block(handle, node, null)) {
                 .value => .next,
                 else => |flow| flow,
             };
@@ -1844,7 +1865,15 @@ pub const Interpreter = struct {
             .@"break" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
                 const result: ?EvaluatedSource = if (operand.unwrap()) |expression| blk: {
-                    const evaluated = try self.evalSource(handle, expression) orelse return .unknown;
+                    var context = self.break_context;
+                    const destination: ?Type = while (context) |target| : (context = target.parent) {
+                        if (label.unwrap()) |target_label| {
+                            const context_label = target.label orelse continue;
+                            if (!std.mem.eql(u8, tree.tokenSlice(target_label), tree.tokenSlice(context_label))) continue;
+                        } else if (!target.is_loop) continue;
+                        break target.destination;
+                    } else null;
+                    const evaluated = try self.evalSourceWithType(handle, expression, destination) orelse return .unknown;
                     break :blk .{
                         .value = try self.captureBindings(evaluated.value),
                         .source_node = evaluated.source_node,
@@ -1859,8 +1888,8 @@ pub const Interpreter = struct {
                     .node => |target_node| self.statement(handle, target_node),
                 };
             },
-            .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?, false),
-            .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?, false),
+            .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?, false, null),
+            .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?, false, null),
             .@"switch", .switch_comma => {
                 const target = try self.switchTarget(handle, node) orelse return .unknown;
                 return self.statement(handle, target);
@@ -1956,9 +1985,17 @@ pub const Interpreter = struct {
         return std.mem.eql(u8, tree.tokenSlice(loop_label_token), tree.tokenSlice(target_token));
     }
 
-    fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For, expression: bool) Error!Flow {
+    fn forLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.For, expression: bool, destination: ?Type) Error!Flow {
         const analyser = self.analyser;
         const tree = &handle.tree;
+        const context: BreakContext = .{
+            .parent = self.break_context,
+            .label = loop_node.label_token,
+            .destination = destination,
+            .is_loop = true,
+        };
+        self.break_context = &context;
+        defer self.break_context = context.parent;
         const Input = union(enum) {
             sequence: struct {
                 value: Type,
@@ -2028,19 +2065,27 @@ pub const Interpreter = struct {
             }
         }
         if (loop_node.ast.else_expr.unwrap()) |else_node| {
-            if (expression) return .{ .value = try self.evalSource(handle, else_node) orelse return .unknown };
+            if (expression) return .{ .value = try self.evalSourceWithType(handle, else_node, destination) orelse return .unknown };
             return self.statement(handle, else_node);
         }
         return .next;
     }
 
-    fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While, expression: bool) Error!Flow {
+    fn whileLoop(self: *Interpreter, handle: *Handle, loop_node: Ast.full.While, expression: bool, destination: ?Type) Error!Flow {
+        const context: BreakContext = .{
+            .parent = self.break_context,
+            .label = loop_node.label_token,
+            .destination = destination,
+            .is_loop = true,
+        };
+        self.break_context = &context;
+        defer self.break_context = context.parent;
         if (loop_node.error_token != null) return .unknown;
         while (true) {
             const condition = try self.analyser.resolveIfConditionValue(.of(loop_node.ast.cond_expr, handle)) orelse return .unknown;
             if (!condition) {
                 if (loop_node.ast.else_expr.unwrap()) |else_node| {
-                    if (expression) return .{ .value = try self.evalSource(handle, else_node) orelse return .unknown };
+                    if (expression) return .{ .value = try self.evalSourceWithType(handle, else_node, destination) orelse return .unknown };
                     return self.statement(handle, else_node);
                 }
                 return .next;

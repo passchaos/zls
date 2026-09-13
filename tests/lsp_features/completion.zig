@@ -7984,6 +7984,194 @@ test "comptime interpreter preserves contextual return casts" {
     }
 }
 
+test "comptime interpreter propagates contextual branch and block casts" {
+    const wrappers = [_]struct { prefix: []const u8, suffix: []const u8 }{
+        .{ .prefix = "(", .suffix = ")" },
+        .{ .prefix = "comptime ", .suffix = "" },
+        .{ .prefix = "nosuspend ", .suffix = "" },
+        .{ .prefix = "if (true) ", .suffix = " else unreachable" },
+        .{ .prefix = "if (false) unreachable else ", .suffix = "" },
+        .{ .prefix = "switch (@as(u8, 1)) { 1 => ", .suffix = ", else => unreachable }" },
+        .{ .prefix = "@as(?Payload, null) orelse ", .suffix = "" },
+        .{ .prefix = "result: { break :result ", .suffix = "; }" },
+        .{ .prefix = "for (0..1) |_| { break ", .suffix = "; } else unreachable" },
+        .{ .prefix = "for (0..0) |_| { unreachable; } else ", .suffix = "" },
+        .{ .prefix = "while (true) { break ", .suffix = "; } else unreachable" },
+        .{ .prefix = "while (false) { unreachable; } else ", .suffix = "" },
+    };
+    for (wrappers) |wrapper| {
+        for ([_]bool{ false, true }) |vector| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Payload = {s};
+                \\fn produce(executions: *usize) Payload {{
+                \\    defer executions.* = executions.* * 10 + 2;
+                \\    return {s}{s}(operand: {{
+                \\        executions.* += 1;
+                \\        break :operand @as(u16, 4);
+                \\    }}){s};
+                \\}}
+                \\fn Select() type {{
+                \\    var executions: usize = 0;
+                \\    const value = produce(&executions);
+                \\    return struct {{
+                \\        items: [if (@TypeOf(value) == Payload) {s} else 99]u8,
+                \\        executions: [executions]u8,
+                \\    }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{
+                if (vector) "@Vector(2, usize)" else "u8",
+                wrapper.prefix,
+                if (vector) "@splat" else "@intCast",
+                wrapper.suffix,
+                if (vector) "value[0] + value[1]" else "value",
+            });
+            defer allocator.free(source);
+            errdefer std.debug.print("contextual branch source:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "items", .kind = .Field, .detail = if (vector) "[8]u8" else "[4]u8" },
+                .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter isolates nested break result types" {
+    try testCompletion(
+        \\fn produce(executions: *usize) u8 {
+        \\    return outer: {
+        \\        defer executions.* = executions.* * 10 + 4;
+        \\        const inner = @as(u16, nested: {
+        \\            defer executions.* = executions.* * 10 + 2;
+        \\            break :nested @intCast(operand: {
+        \\                executions.* += 1;
+        \\                break :operand @as(u32, 260);
+        \\            });
+        \\        });
+        \\        for (0..1) |_| {
+        \\            break :outer @truncate(operand: {
+        \\                executions.* = executions.* * 10 + 3;
+        \\                break :operand inner;
+        \\            });
+        \\        }
+        \\        unreachable;
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const value = produce(&executions);
+        \\    return struct { items: [value]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
+test "comptime interpreter propagates contextual branch casts at typed boundaries" {
+    try testCompletion(
+        \\fn consume(value: @Vector(2, usize)) usize { return value[0] + value[1]; }
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const values = consume(if (true) @splat(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(u8, 4);
+        \\    }) else unreachable);
+        \\    const config = struct { count: u8 }{ .count = switch (values) {
+        \\        8 => @intCast(operand: {
+        \\            executions = executions * 10 + 2;
+        \\            break :operand @as(u16, 4);
+        \\        }),
+        \\        else => unreachable,
+        \\    } };
+        \\    const count = @as(u8, result: {
+        \\        while (true) {
+        \\            break :result @intCast(operand: {
+        \\                executions = executions * 10 + 3;
+        \\                break :operand @as(u16, 4);
+        \\            });
+        \\        }
+        \\        unreachable;
+        \\    });
+        \\    return struct { items: [values + config.count + count]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[16]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
+test "comptime interpreter skips unselected contextual cast branches" {
+    try testCompletion(
+        \\fn produce(comptime selected: bool, executions: *usize) u8 {
+        \\    return if (condition: {
+        \\        executions.* += 1;
+        \\        break :condition selected;
+        \\    }) @intCast(operand: {
+        \\        executions.* = executions.* * 10 + 2;
+        \\        break :operand @as(u16, 4);
+        \\    }) else @intCast(operand: {
+        \\        executions.* = executions.* * 10 + 3;
+        \\        break :operand @as(u16, 7);
+        \\    });
+        \\}
+        \\fn Select() type {
+        \\    var then_executions: usize = 0;
+        \\    var else_executions: usize = 0;
+        \\    const a = produce(true, &then_executions);
+        \\    const b = produce(false, &else_executions);
+        \\    return struct {
+        \\        items: [a + b]u8,
+        \\        then_executions: [then_executions]u8,
+        \\        else_executions: [else_executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[11]u8" },
+        .{ .label = "then_executions", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "else_executions", .kind = .Field, .detail = "[13]u8" },
+    });
+}
+
+test "comptime interpreter preserves unknown contextual branch types" {
+    const expressions = [_][]const u8{
+        "if (true) @intCast(runtime_u16) else unreachable",
+        "result: { break :result @intCast(runtime_u16); }",
+        "while (true) { break @intCast(runtime_u16); } else unreachable",
+        "if (runtime_bool) @intCast(@as(u16, 4)) else @intCast(@as(u16, 7))",
+        "result: { break :result @intCast(@as(u16, 256)); }",
+        "for (0..1) |_| { break @intCast(true); } else unreachable",
+    };
+    for (expressions) |expression| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\var runtime_u16: u16 = undefined;
+            \\var runtime_bool: bool = undefined;
+            \\fn produce() u8 {{ return {s}; }}
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const value = produce();
+            \\    return struct {{ value: @TypeOf(value), items: [value]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{expression});
+        defer allocator.free(source);
+        errdefer std.debug.print("unknown contextual branch: {s}\n", .{expression});
+        try testCompletion(source, &.{
+            .{ .label = "value", .kind = .Field, .detail = "u8" },
+            .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+        });
+    }
+}
+
 test "comptime interpreter isolates nested return cast types" {
     try testCompletion(
         \\fn inner(executions: *usize) u16 {
