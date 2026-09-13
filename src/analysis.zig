@@ -11470,9 +11470,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => true,
                         else => false,
                     };
-                const can_evaluate = return_is_supported and
+                const return_is_integer = return_tag == .int or return_tag == .comptime_int;
+                const can_evaluate = return_is_integer or (return_is_supported and
                     (analyser.evaluate_comptime_control_flow or
-                        try analyser.comptimeInterpreterNeeded(func_info.handle, body));
+                        try analyser.comptimeInterpreterNeeded(func_info.handle, body)));
                 if (can_evaluate) {
                     if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
                 }

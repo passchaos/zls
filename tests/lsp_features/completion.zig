@@ -14181,6 +14181,10 @@ test "comptime interpreter eligibility cache" {
         \\}
         \\const third: Static(u8) = undefined;
         \\const fourth: Static(u16) = undefined;
+        \\fn constant() usize {
+        \\    return 4;
+        \\}
+        \\const fifth = constant();
     ;
     var ctx: Context = try .init();
     defer ctx.deinit();
@@ -14193,10 +14197,15 @@ test "comptime interpreter eligibility cache" {
     const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
     const third_decl = try analyser.lookupSymbolGlobal(handle, "third", source.len) orelse return error.TestUnexpectedResult;
     const fourth_decl = try analyser.lookupSymbolGlobal(handle, "fourth", source.len) orelse return error.TestUnexpectedResult;
+    const fifth_decl = try analyser.lookupSymbolGlobal(handle, "fifth", source.len) orelse return error.TestUnexpectedResult;
     _ = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
     _ = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
     _ = try third_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
     _ = try fourth_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), analyser.comptime_interpreter_needed.count());
+    analyser.resolve_number_literal_values = true;
+    const fifth = try fifth_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 4), analyser.ip.toInt(fifth.ipIndex().?, u64).?);
     try std.testing.expectEqual(@as(usize, 2), analyser.comptime_interpreter_needed.count());
 }
 
