@@ -10555,6 +10555,22 @@ test "comptime interpreter evaluates labeled switch loops" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 
     try testCompletion(
+        \\const State = union(enum) { count: usize, done };
+        \\fn Select() type {
+        \\    const selected = state: switch (State{ .count = 4 }) {
+        \\        .count => |*payload| result: {
+        \\            payload.* += 2;
+        \\            break :result payload.*;
+        \\        },
+        \\        .done => 0,
+        \\    };
+        \\    return struct { items: [selected]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\const State = error{ Start, Middle, Done };
         \\fn Select() type {
         \\    var transitions: usize = 0;
