@@ -2718,9 +2718,17 @@ fn aggregateValue(
     return Type.fromIP(analyser, payload.type, aggregate);
 }
 
-fn stringSentinel(analyser: *Analyser, string: Type) ?InternPool.Index {
-    const runtime_type = string.runtimeType(analyser);
-    const pointer_info = switch (runtime_type.data) {
+fn sequenceSentinel(analyser: *Analyser, value: Type) ?InternPool.Index {
+    const ty = switch (value.data) {
+        .comptime_value => |comptime_value| comptime_value.ty,
+        .string_value => |string_value| string_value.string_type.*,
+        else => value,
+    };
+    const pointer_info = switch (ty.data) {
+        .array => |info| return if (info.sentinel == .none or info.sentinel == .unknown_unknown)
+            null
+        else
+            info.sentinel,
         .pointer => |info| return switch (info.size) {
             .one => switch (info.elem_ty.data) {
                 .array => |array_info| known: {
@@ -2735,7 +2743,14 @@ fn stringSentinel(analyser: *Analyser, string: Type) ?InternPool.Index {
                 info.sentinel,
             .c => null,
         },
-        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.type)) {
+        .ip_index => |payload| switch (analyser.ip.indexToKey(if (ty.is_type_val)
+            payload.index orelse return null
+        else
+            payload.type)) {
+            .array_type => |info| return if (info.sentinel == .none or info.sentinel == .unknown_unknown)
+                null
+            else
+                info.sentinel,
             .pointer_type => |info| info,
             else => return null,
         },
@@ -2842,6 +2857,13 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
         switch (rhs) {
             .single => |index_optional| if (index_optional) |index| {
                 if (index < items.len) return .{ .type = items[@intCast(index)], .is_const = true };
+                if (index == items.len) {
+                    const sentinel = analyser.sequenceSentinel(lhs_binding.type) orelse return null;
+                    return .{
+                        .type = Type.fromIP(analyser, analyser.ip.typeOf(sentinel), sentinel),
+                        .is_const = true,
+                    };
+                }
                 return null;
             },
             .open => |access| if (access.start != null) {
@@ -2922,7 +2944,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                         .int = bytes[@intCast(i)],
                     } })
                 else if (i == bytes.len)
-                    analyser.stringSentinel(lhs_binding.type) orelse return null
+                    analyser.sequenceSentinel(lhs_binding.type) orelse return null
                 else
                     return null;
                 return .{

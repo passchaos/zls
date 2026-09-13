@@ -13566,6 +13566,39 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn values() [:7]const usize {
+        \\    var result: [:7]const usize = &.{ 1, 2 };
+        \\    result = &.{ 4, 5 };
+        \\    return result;
+        \\}
+        \\fn array() *const [2:7]usize {
+        \\    var result: *const [2:7]usize = &.{ 1, 2 };
+        \\    result = &.{ 4, 5 };
+        \\    return result;
+        \\}
+        \\fn plain() *const [2]usize {
+        \\    var result: *const [2]usize = &.{ 1, 2 };
+        \\    result = &.{ 4, 5 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        slice_sentinel: [values()[values().len]]u8,
+        \\        array_sentinel: [array()[2]]u8,
+        \\        without_sentinel: [plain()[2]]u8,
+        \\        past_sentinel: [array()[3]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "slice_sentinel", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "array_sentinel", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "without_sentinel", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "past_sentinel", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\const Config = struct { capacity: usize = 4 };
         \\const small = Config{ .capacity = 1 };
         \\const large = Config{};
