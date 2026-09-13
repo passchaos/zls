@@ -15306,13 +15306,28 @@ test "comptime pointer comparisons preserve wrapped identity" {
         \\    if (optional(0) == optional(0)) same = 1;
         \\    var distinct: usize = 4;
         \\    if (optional(0) != optional(1)) distinct = 3;
-        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\    var mixed_same: usize = 6;
+        \\    if (&values[0] == optional(0)) mixed_same = 5;
+        \\    var mixed_distinct: usize = 8;
+        \\    if (optional(0) != &values[1]) mixed_distinct = 7;
+        \\    var null_distinct: usize = 10;
+        \\    if (@as(?*const usize, null) != &values[0]) null_distinct = 9;
+        \\    return struct {
+        \\        same: [same]u8,
+        \\        distinct: [distinct]u8,
+        \\        mixed_same: [mixed_same]u8,
+        \\        mixed_distinct: [mixed_distinct]u8,
+        \\        null_distinct: [null_distinct]u8,
+        \\    };
         \\}
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "mixed_same", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "mixed_distinct", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "null_distinct", .kind = .Field, .detail = "[9]u8" },
     });
 
     try testCompletion(

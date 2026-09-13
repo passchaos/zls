@@ -235,8 +235,33 @@ pub const Value = struct {
         return pointerIdentityEqlDepth(analyser, lhs, rhs, 0);
     }
 
+    fn hasPointerIdentity(value: Type, depth: u8) bool {
+        if (depth == 128 or value.data != .comptime_value) return false;
+        return switch (value.data.comptime_value.data) {
+            .reference, .pointee, .sequence => true,
+            .optional => |payload| if (payload) |item| hasPointerIdentity(item, depth + 1) else false,
+            else => false,
+        };
+    }
+
     fn pointerIdentityEqlDepth(analyser: *Analyser, lhs: Type, rhs: Type, depth: u8) ?bool {
         if (depth == 128) return null;
+        if (lhs.ipIndex()) |index| {
+            if (analyser.ip.isNull(index) and hasPointerIdentity(rhs, depth + 1)) return false;
+        }
+        if (rhs.ipIndex()) |index| {
+            if (analyser.ip.isNull(index) and hasPointerIdentity(lhs, depth + 1)) return false;
+        }
+        if (lhs.data == .comptime_value and lhs.data.comptime_value.data == .optional) {
+            return if (lhs.data.comptime_value.data.optional) |payload|
+                pointerIdentityEqlDepth(analyser, payload, rhs, depth + 1)
+            else if (hasPointerIdentity(rhs, depth + 1)) false else null;
+        }
+        if (rhs.data == .comptime_value and rhs.data.comptime_value.data == .optional) {
+            return if (rhs.data.comptime_value.data.optional) |payload|
+                pointerIdentityEqlDepth(analyser, lhs, payload, depth + 1)
+            else if (hasPointerIdentity(lhs, depth + 1)) false else null;
+        }
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
         if (lhs.data.comptime_value.ty.isManyPointerType(analyser) and
             rhs.data.comptime_value.ty.isManyPointerType(analyser))
@@ -257,16 +282,6 @@ pub const Value = struct {
             },
             .sequence => |lhs_sequence| switch (rhs.data.comptime_value.data) {
                 .sequence => |rhs_sequence| lhs_sequence.sameAddress(rhs_sequence, analyser),
-                else => null,
-            },
-            .optional => |lhs_payload| switch (rhs.data.comptime_value.data) {
-                .optional => |rhs_payload| if (lhs_payload) |lhs_value|
-                    if (rhs_payload) |rhs_value|
-                        pointerIdentityEqlDepth(analyser, lhs_value, rhs_value, depth + 1)
-                    else
-                        false
-                else
-                    rhs_payload == null,
                 else => null,
             },
             else => null,
