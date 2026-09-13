@@ -15133,9 +15133,12 @@ test "comptime pointer comparisons preserve address identity" {
         \\    if (pointer(0) == pointer(0)) same = 1;
         \\    var distinct: usize = 4;
         \\    if (pointer(0) != pointer(1)) distinct = 3;
+        \\    var direct: usize = 6;
+        \\    if (pointer(0) == &values[0] and &values[0] != &values[1]) direct = 5;
         \\    return struct {
         \\        same: [same]u8,
         \\        distinct: [distinct]u8,
+        \\        direct: [direct]u8,
         \\    };
         \\}
         \\const selected: Select() = undefined;
@@ -15143,7 +15146,23 @@ test "comptime pointer comparisons preserve address identity" {
     , &.{
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "direct", .kind = .Field, .detail = "[5]u8" },
     });
+
+    try testCompletion(
+        \\var runtime: usize = undefined;
+        \\const value: usize = 4;
+        \\fn pointer() *const usize {
+        \\    return &value;
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (pointer() == &runtime) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
 test "type function with comptime early returns" {

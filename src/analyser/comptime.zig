@@ -721,6 +721,13 @@ pub const Interpreter = struct {
             return result.value;
         }
         switch (handle.tree.nodeTag(node)) {
+            .address_of => {
+                const operand = handle.tree.nodeData(node).node;
+                if (try self.address(handle, operand)) |value| return value;
+                const pointer = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
+                const destination = try pointer.typeOf(self.analyser);
+                return try self.coerceFromSource(handle, destination, pointer, node, null, false) orelse pointer;
+            },
             .@"return", .@"break", .@"continue" => {
                 _ = self.expressionResult(try self.statement(handle, node));
                 return null;
