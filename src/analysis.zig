@@ -15244,7 +15244,7 @@ pub const Type = struct {
         };
     }
 
-    fn pointerSize(self: Type, analyser: *Analyser) ?std.builtin.Type.Pointer.Size {
+    pub fn pointerSize(self: Type, analyser: *Analyser) ?std.builtin.Type.Pointer.Size {
         if (self.is_type_val) return null;
         return switch (self.data) {
             .pointer => |info| info.size,

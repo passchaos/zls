@@ -15203,6 +15203,38 @@ test "comptime pointer comparisons preserve address identity" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 
     try testCompletion(
+        \\const value: usize = 4;
+        \\fn pointer() *const usize {
+        \\    return &value;
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (&pointer().* == pointer()) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var count: usize = 0;
+        \\    const value: usize = 4;
+        \\    const pointer = &(source: {
+        \\        count += 1;
+        \\        break :source &value;
+        \\    }).*;
+        \\    const final_count = count;
+        \\    return struct { items: [pointer.*]u8, count: [final_count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "count", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
         \\fn pointer(comptime offset: usize) [*]const usize {
         \\    return @as([*]const usize, &.{ 4, 4 }) + offset;
         \\}

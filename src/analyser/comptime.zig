@@ -806,6 +806,14 @@ pub const Interpreter = struct {
         switch (handle.tree.nodeTag(node)) {
             .address_of => {
                 const operand = handle.tree.nodeData(node).node;
+                if (handle.tree.nodeTag(operand) == .deref) {
+                    const pointer = try self.eval(handle, handle.tree.nodeData(operand).node) orelse return null;
+                    if (pointer.data == .comptime_value and
+                        (try pointer.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) == .one and
+                        try self.analyser.resolveDerefType(pointer) != null and
+                        (pointer.data.comptime_value.data == .reference or
+                            pointer.data.comptime_value.data == .pointee)) return pointer;
+                }
                 if (try self.address(handle, operand)) |value| return value;
                 const pointer = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
                 const destination = try pointer.typeOf(self.analyser);
