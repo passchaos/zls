@@ -15557,6 +15557,29 @@ test "comptime pointer casts preserve address identity" {
         .{ .label = "shifted", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "reinterpreted", .kind = .Field, .detail = "[?]u8" },
     });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    state += 0;
+        \\    const values = [_]usize{ 2, 3, 5 };
+        \\    const many: [*]const usize = &values;
+        \\    const writable_many: [*]usize = @constCast(many);
+        \\    const slice: []const usize = many[0..3];
+        \\    const writable_slice: []usize = @constCast(slice);
+        \\    return struct {
+        \\        many: [writable_many[1]]u8,
+        \\        slice: [writable_slice[2]]u8,
+        \\        len: [writable_slice.len]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "many", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "slice", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "len", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "type function with comptime early returns" {

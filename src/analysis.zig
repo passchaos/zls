@@ -15310,7 +15310,10 @@ pub const Type = struct {
     ) error{OutOfMemory}!?Type {
         const cast_info = source.pointerCastInfo(analyser) orelse return null;
         const info = cast_info.pointer;
-        if (info.size != .one) return null;
+        switch (info.size) {
+            .one, .many, .slice => {},
+            .c => return null,
+        }
         var flags: InternPool.Key.Pointer.Flags = .{
             .size = info.size,
             .is_const = info.is_const,
@@ -15351,12 +15354,16 @@ pub const Type = struct {
         const dest = destination.pointerCastInfo(analyser) orelse return false;
         const src = source.pointerCastInfo(analyser) orelse return false;
         if (dest.is_optional != src.is_optional or
-            dest.pointer.size != .one or src.pointer.size != .one or
+            dest.pointer.size != src.pointer.size or
             !dest.pointer.elem_ty.eql(src.pointer.elem_ty) or
             dest.pointer.is_allowzero != src.pointer.is_allowzero or
             dest.pointer.address_space != src.pointer.address_space or
             dest.pointer.alignment != src.pointer.alignment or
             !std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset)) return false;
+        switch (dest.pointer.size) {
+            .one, .many, .slice => {},
+            .c => return false,
+        }
         return switch (kind) {
             .discard_const => !dest.pointer.is_const and src.pointer.is_const and
                 dest.pointer.is_volatile == src.pointer.is_volatile,
