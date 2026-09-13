@@ -33,6 +33,7 @@ pub const Value = struct {
         value: Type,
         source: Analyser.NodeWithHandle,
         container_type: ?Type,
+        path: []const Reference.Access,
     };
     pub const Reference = struct {
         storage: *Cell,
@@ -104,6 +105,14 @@ pub const Value = struct {
                 hasher.update(pointee.source.handle.uri.raw);
                 std.hash.autoHash(hasher, pointee.container_type != null);
                 if (pointee.container_type) |container_type| container_type.hashWithHasher(hasher);
+                for (pointee.path) |access| {
+                    std.hash.autoHash(hasher, std.meta.activeTag(access));
+                    switch (access) {
+                        .field => |name| hasher.update(name),
+                        .index => |index| std.hash.autoHash(hasher, index),
+                        .optional_payload, .error_union_payload => {},
+                    }
+                }
             },
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
@@ -143,11 +152,20 @@ pub const Value = struct {
                 const other_pointee = other.data.pointee;
                 if (!pointee.source.eql(other_pointee.source) or
                     !pointee.value.eql(other_pointee.value) or
-                    (pointee.container_type == null) != (other_pointee.container_type == null)) return false;
-                return if (pointee.container_type) |container_type|
-                    container_type.eql(other_pointee.container_type.?)
-                else
-                    true;
+                    (pointee.container_type == null) != (other_pointee.container_type == null) or
+                    pointee.path.len != other_pointee.path.len) return false;
+                if (pointee.container_type) |container_type| {
+                    if (!container_type.eql(other_pointee.container_type.?)) return false;
+                }
+                for (pointee.path, other_pointee.path) |lhs, rhs| {
+                    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+                    switch (lhs) {
+                        .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
+                        .index => |index| if (index != rhs.index) return false,
+                        .optional_payload, .error_union_payload => {},
+                    }
+                }
+                return true;
             },
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
@@ -387,6 +405,46 @@ pub const Interpreter = struct {
             analyser.display_bindings = old_display_bindings;
         }
         return child.evaluateTypedExpression(handle, node, destination);
+    }
+
+    const StaticPointeeTarget = struct {
+        declaration: Analyser.DeclWithHandle,
+        path: []const Value.Reference.Access,
+    };
+
+    fn staticPointeeTarget(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        depth: u8,
+    ) Error!?StaticPointeeTarget {
+        if (depth == 128) return null;
+        const tree = &handle.tree;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |declaration| {
+            return .{ .declaration = declaration, .path = &.{} };
+        }
+        const base, const access: Value.Reference.Access = switch (tree.nodeTag(unwrapped)) {
+            .field_access => blk: {
+                const base, const name_token = tree.nodeData(unwrapped).node_and_token;
+                const name = try self.analyser.identifierTokenName(tree, name_token) orelse return null;
+                break :blk .{ base, .{ .field = name } };
+            },
+            .array_access => blk: {
+                const base, const index_node = tree.nodeData(unwrapped).node_and_node;
+                const index = switch (tree.nodeTag(unwrapGroupedSource(tree, index_node))) {
+                    .number_literal, .identifier => try self.integer(handle, index_node) orelse return null,
+                    else => return null,
+                };
+                break :blk .{ base, .{ .index = index } };
+            },
+            else => return null,
+        };
+        const parent = try self.staticPointeeTarget(handle, base, depth + 1) orelse return null;
+        const path = try self.analyser.arena.alloc(Value.Reference.Access, parent.path.len + 1);
+        @memcpy(path[0..parent.path.len], parent.path);
+        path[parent.path.len] = access;
+        return .{ .declaration = parent.declaration, .path = path };
     }
 
     pub fn enterExpression(self: *Interpreter) bool {
@@ -1718,12 +1776,20 @@ pub const Interpreter = struct {
             if (tree.nodeTag(literal_node) == .address_of) static_pointer: {
                 const pointee_type = destination.constMaterializedPointerChild(analyser) orelse break :static_pointer;
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
-                const declaration = try analyser.resolveDeclarationOfNode(.of(operand, handle)) orelse break :static_pointer;
+                const target = try self.staticPointeeTarget(handle, operand, 0) orelse break :static_pointer;
+                const declaration = target.declaration;
                 const declaration_node = switch (declaration.decl) {
                     .ast_node => |decl_node| decl_node,
                     else => break :static_pointer,
                 };
-                const pointee = switch (declaration.handle.tree.nodeTag(declaration_node)) {
+                const pointee = if (target.path.len != 0)
+                    try self.evaluateTypedWithContainer(
+                        handle,
+                        operand,
+                        pointee_type,
+                        declaration.container_type,
+                    ) orelse return if (allow_invalid) destination.instanceTypeVal(analyser) else null
+                else switch (declaration.handle.tree.nodeTag(declaration_node)) {
                     .fn_decl => try self.evaluateTypedWithContainer(
                         handle,
                         operand,
@@ -1755,6 +1821,7 @@ pub const Interpreter = struct {
                     .value = pointee,
                     .source = .of(declaration_node, declaration.handle),
                     .container_type = declaration.container_type,
+                    .path = target.path,
                 } }));
             }
             if (tree.nodeTag(literal_node) == .address_of) aggregate_pointer: {

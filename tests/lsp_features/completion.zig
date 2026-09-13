@@ -13623,6 +13623,42 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\const config = Config{ .capacity = 4 };
+        \\const values = [_]usize{ 1, 5 };
+        \\fn configValue() *const usize {
+        \\    return &config.capacity;
+        \\}
+        \\fn arrayValue() *const usize {
+        \\    return &values[1];
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        config_items: [configValue().*]u8,
+        \\        array_items: [arrayValue().*]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "config_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "array_items", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime_index: usize = undefined;
+        \\const values = [_]usize{ 1, 5 };
+        \\fn value() *const usize {
+        \\    return &values[runtime_index];
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [value().*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\fn values() []const usize {
         \\    var result: []const usize = &.{ 1, 2 };
         \\    result = &.{ 4, 5 };
@@ -15022,6 +15058,38 @@ test "comptime pointer identities merge equal local constants" {
     try std.testing.expect(first.eql(second));
     try std.testing.expectEqual(first.hash64(), second.hash64());
     try std.testing.expect(!first.eql(third));
+}
+
+test "comptime pointer identities distinguish static subobjects" {
+    const source =
+        \\const values = [_]usize{ 4, 4 };
+        \\fn pointer(comptime index: usize) *const usize {
+        \\    var result: *const usize = &values[0];
+        \\    result = &values[index];
+        \\    return result;
+        \\}
+        \\const first = pointer(0);
+        \\const second = pointer(0);
+        \\const third = pointer(1);
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    analyser.resolve_number_literal_values = true;
+    const first_decl = try analyser.lookupSymbolGlobal(handle, "first", source.len) orelse return error.TestUnexpectedResult;
+    const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
+    const third_decl = try analyser.lookupSymbolGlobal(handle, "third", source.len) orelse return error.TestUnexpectedResult;
+    const first = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const second = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const third = try third_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first.eql(second));
+    try std.testing.expectEqual(first.hash64(), second.hash64());
+    try std.testing.expect(!first.eql(third));
+    try std.testing.expect(first.hash64() != third.hash64());
 }
 
 test "type function with comptime early returns" {
