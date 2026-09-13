@@ -961,6 +961,21 @@ pub const Interpreter = struct {
             },
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
                 const name = handle.tree.tokenSlice(handle.tree.nodeMainToken(node));
+                const qualifier_cast: ?Type.PointerQualifierCast = if (std.mem.eql(u8, name, "@constCast"))
+                    .discard_const
+                else if (std.mem.eql(u8, name, "@volatileCast"))
+                    .discard_volatile
+                else
+                    null;
+                if (qualifier_cast) |kind| {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    const source_type = try operand.typeOf(self.analyser);
+                    const destination = try source_type.qualifierCastType(self.analyser, kind) orelse return null;
+                    return self.pointerCastValue(destination, operand, kind);
+                }
                 if (std.mem.eql(u8, name, "@as")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
@@ -1313,6 +1328,28 @@ pub const Interpreter = struct {
         return self.evalSourceWithType(handle, node, destination);
     }
 
+    fn pointerCastValue(
+        self: *Interpreter,
+        destination: Type,
+        operand: Type,
+        qualifier_cast: ?Type.PointerQualifierCast,
+    ) Error!?Type {
+        const source_type = try operand.typeOf(self.analyser);
+        const preserves_identity = if (qualifier_cast) |kind|
+            destination.preservesIdentityThroughQualifierCast(self.analyser, source_type, kind)
+        else
+            destination.preservesIdentityThroughPtrCast(self.analyser, source_type);
+        if (!preserves_identity) return null;
+        return switch (operand.data) {
+            .comptime_value => |comptime_value| switch (comptime_value.data) {
+                .reference => |reference| @as(?Type, try Value.create(self.analyser, destination, .{ .reference = reference })),
+                .pointee => |pointee| @as(?Type, try Value.create(self.analyser, destination, .{ .pointee = pointee })),
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
         return self.evalSourceWithType(handle, node, null);
     }
@@ -1339,7 +1376,13 @@ pub const Interpreter = struct {
             const is_splat = std.mem.eql(u8, name, "@splat");
             const is_enum = std.mem.eql(u8, name, "@enumFromInt");
             const is_pointer = std.mem.eql(u8, name, "@ptrCast");
-            if (kind != null or is_splat or is_enum or is_pointer) {
+            const qualifier_cast: ?Type.PointerQualifierCast = if (std.mem.eql(u8, name, "@constCast"))
+                .discard_const
+            else if (std.mem.eql(u8, name, "@volatileCast"))
+                .discard_volatile
+            else
+                null;
+            if (kind != null or is_splat or is_enum or is_pointer or qualifier_cast != null) {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
@@ -1351,18 +1394,8 @@ pub const Interpreter = struct {
                     try self.analyser.resolveComptimeSplatValue(ty, operand)
                 else if (is_enum)
                     try self.analyser.resolveComptimeEnumFromIntValue(ty, operand)
-                else pointer_cast: {
-                    const source_type = try operand.typeOf(self.analyser);
-                    if (!ty.preservesIdentityThroughPtrCast(self.analyser, source_type)) break :pointer_cast null;
-                    break :pointer_cast switch (operand.data) {
-                        .comptime_value => |comptime_value| switch (comptime_value.data) {
-                            .reference => |reference| try Value.create(self.analyser, ty, .{ .reference = reference }),
-                            .pointee => |pointee| try Value.create(self.analyser, ty, .{ .pointee = pointee }),
-                            else => null,
-                        },
-                        else => null,
-                    };
-                };
+                else
+                    try self.pointerCastValue(ty, operand, qualifier_cast);
                 return .{ .value = value orelse return null, .source_node = null };
             }
         };
@@ -1484,6 +1517,12 @@ pub const Interpreter = struct {
         }
         return switch (value.data) {
             .string_value => |string| try self.analyser.stringValueWithType(string.bytes, destination),
+            .comptime_value => |comptime_value| switch (comptime_value.data) {
+                .reference => |reference| try Value.create(self.analyser, destination, .{ .reference = reference }),
+                .pointee => |pointee| try Value.create(self.analyser, destination, .{ .pointee = pointee }),
+                .sequence => |sequence| try Value.create(self.analyser, destination, .{ .sequence = sequence }),
+                else => value,
+            },
             else => value,
         };
     }

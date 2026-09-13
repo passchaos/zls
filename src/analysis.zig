@@ -15228,6 +15228,62 @@ pub const Type = struct {
             std.meta.eql(dest.packed_offset, src.packed_offset);
     }
 
+    pub const PointerQualifierCast = enum { discard_const, discard_volatile };
+
+    pub fn qualifierCastType(
+        source: Type,
+        analyser: *Analyser,
+        kind: PointerQualifierCast,
+    ) error{OutOfMemory}!?Type {
+        const info = source.typePointerInfo(analyser) orelse return null;
+        if (info.size != .one) return null;
+        var flags: InternPool.Key.Pointer.Flags = .{
+            .size = info.size,
+            .is_const = info.is_const,
+            .is_volatile = info.is_volatile,
+            .is_allowzero = info.is_allowzero,
+            .address_space = info.address_space,
+            .alignment = std.math.cast(u16, info.alignment) orelse return null,
+        };
+        switch (kind) {
+            .discard_const => {
+                if (!flags.is_const) return null;
+                flags.is_const = false;
+            },
+            .discard_volatile => {
+                if (!flags.is_volatile) return null;
+                flags.is_volatile = false;
+            },
+        }
+        return @as(?Type, try Type.createPointerTypeWithFlags(
+            analyser,
+            flags,
+            info.packed_offset,
+            info.sentinel,
+            info.elem_ty,
+        ));
+    }
+
+    pub fn preservesIdentityThroughQualifierCast(
+        destination: Type,
+        analyser: *Analyser,
+        source: Type,
+        kind: PointerQualifierCast,
+    ) bool {
+        const dest = destination.typePointerInfo(analyser) orelse return false;
+        const src = source.typePointerInfo(analyser) orelse return false;
+        if (dest.size != .one or src.size != .one or
+            !dest.elem_ty.eql(src.elem_ty) or
+            dest.is_allowzero != src.is_allowzero or
+            dest.address_space != src.address_space or
+            dest.alignment != src.alignment or
+            !std.meta.eql(dest.packed_offset, src.packed_offset)) return false;
+        return switch (kind) {
+            .discard_const => !dest.is_const and src.is_const and dest.is_volatile == src.is_volatile,
+            .discard_volatile => !dest.is_volatile and src.is_volatile and dest.is_const == src.is_const,
+        };
+    }
+
     pub fn constAggregatePointerChild(self: Type, analyser: *Analyser) ?Type {
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one or !info.is_const or info.elem_ty.isTupleType(analyser)) return null;
@@ -15348,6 +15404,7 @@ pub const Type = struct {
         address_space: std.builtin.AddressSpace,
         alignment: u32,
         packed_offset: InternPool.Key.Pointer.PackedOffset,
+        sentinel: InternPool.Index,
         elem_ty: Type,
     };
 
@@ -15362,6 +15419,7 @@ pub const Type = struct {
                 .address_space = info.address_space,
                 .alignment = info.alignment,
                 .packed_offset = info.packed_offset,
+                .sentinel = info.sentinel,
                 .elem_ty = info.elem_ty.*,
             },
             .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
@@ -15373,6 +15431,7 @@ pub const Type = struct {
                     .address_space = info.flags.address_space,
                     .alignment = info.flags.alignment,
                     .packed_offset = info.packed_offset,
+                    .sentinel = info.sentinel,
                     .elem_ty = Type.fromIP(analyser, .type_type, info.elem_type),
                 },
                 else => null,

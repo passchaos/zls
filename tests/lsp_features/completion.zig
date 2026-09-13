@@ -15293,6 +15293,37 @@ test "comptime pointer casts preserve address identity" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const static_value: usize = 4;
+        \\fn Select() type {
+        \\    var local: usize = 2;
+        \\    const readonly: *const usize = &local;
+        \\    const writable: *usize = @constCast(readonly);
+        \\    writable.* += 1;
+        \\    const volatile_pointer: *volatile usize = &local;
+        \\    const non_volatile: *usize = @volatileCast(volatile_pointer);
+        \\    non_volatile.* += 1;
+        \\    const static_pointer: *usize = @constCast(&static_value);
+        \\    const local_value = local;
+        \\    const local_same = writable == &local;
+        \\    const volatile_same = non_volatile == &local;
+        \\    const static_same = static_pointer == @constCast(&static_value);
+        \\    return struct {
+        \\        local_items: [local_value]u8,
+        \\        same: [if (local_same) 1 else 2]u8,
+        \\        volatile_same: [if (volatile_same) 3 else 4]u8,
+        \\        static_same: [if (static_same) 3 else 4]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "local_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "volatile_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "static_same", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "type function with comptime early returns" {
