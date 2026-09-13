@@ -13566,6 +13566,51 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\const Values = struct {
+        \\    const one: usize = 1;
+        \\    const four: usize = 4;
+        \\};
+        \\fn value() *const usize {
+        \\    var result: *const usize = &Values.one;
+        \\    result = &Values.four;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [value().*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\const Values = struct {
+        \\    var runtime: usize = undefined;
+        \\    fn one() usize { return 1; }
+        \\    fn four() usize { return 4; }
+        \\};
+        \\fn value() *const usize {
+        \\    var result: *const usize = &Values.runtime;
+        \\    return result;
+        \\}
+        \\fn callback() *const fn () usize {
+        \\    var result: *const fn () usize = &Values.one;
+        \\    result = &Values.four;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        value_items: [value().*]u8,
+        \\        callback_items: [callback()()]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value_items", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "callback_items", .kind = .Field, .detail = "[4]u8" },
+    });
+
+    try testCompletion(
         \\fn one() usize {
         \\    return 1;
         \\}
