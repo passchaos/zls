@@ -15198,21 +15198,43 @@ pub const Type = struct {
     }
 
     pub fn constMaterializedPointerChild(self: Type, analyser: *Analyser) ?Type {
-        if (self.constScalarPointerChild(analyser)) |child| return child;
-        if (self.constAggregatePointerChild(analyser)) |child| return child;
+        return self.constMaterializedPointerChildDepth(analyser, 0);
+    }
+
+    fn constMaterializedPointerChildDepth(self: Type, analyser: *Analyser, depth: u8) ?Type {
+        if (depth == 128) return null;
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one or !info.is_const) return null;
-        if (info.elem_ty.isFunc()) return info.elem_ty;
-        if (info.elem_ty.constMaterializedPointerChild(analyser) != null) return info.elem_ty;
-        return if (info.elem_ty.isTupleType(analyser) or switch (info.elem_ty.data) {
-            .vector => true,
-            .array => true,
-            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
-                .array_type, .vector_type => true,
-                else => false,
+        const child = info.elem_ty;
+        if (child.isFunc() or child.isEnumType(analyser) or child.isErrorSetType(analyser) or
+            child.isOptionalType(analyser) or child.isTupleType(analyser) or
+            child.isStructType(analyser) or child.isUnionType() or child.data == .error_union) return child;
+        return switch (child.data) {
+            .array, .vector => child,
+            .pointer => if (child.constMaterializedPointerChildDepth(analyser, depth + 1) != null) child else null,
+            .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return null) orelse return null) {
+                .array,
+                .vector,
+                .int,
+                .comptime_int,
+                .bool,
+                .float,
+                .comptime_float,
+                .enum_literal,
+                .null,
+                .optional,
+                .error_union,
+                .@"enum",
+                .error_set,
+                .@"struct",
+                .@"union",
+                .@"fn",
+                => child,
+                .pointer => if (child.constMaterializedPointerChildDepth(analyser, depth + 1) != null) child else null,
+                else => null,
             },
-            else => false,
-        }) info.elem_ty else null;
+            else => null,
+        };
     }
 
     const ComptimeCallEvaluation = enum { never, if_needed, eager };
