@@ -11397,14 +11397,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl)
             {
                 const return_type = try func_info.return_value.typeOf(analyser);
-                const return_is_integer = if (return_type.ipIndex()) |index|
-                    if (analyser.ip.zigTypeTag(index)) |tag| switch (tag) {
-                        .int, .comptime_int => true,
-                        else => false,
-                    } else false
+                const return_tag = if (return_type.ipIndex()) |index|
+                    analyser.ip.zigTypeTag(index)
                 else
-                    false;
-                if (return_is_integer) {
+                    null;
+                const body = func_info.handle.tree.nodeData(func_info.fn_node).node_and_node[1];
+                const can_evaluate = switch (return_tag orelse .void) {
+                    .int, .comptime_int => true,
+                    .bool => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
+                    else => false,
+                };
+                if (can_evaluate) {
                     if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
                 }
             }
