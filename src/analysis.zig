@@ -15065,31 +15065,24 @@ pub const Type = struct {
     }
 
     pub fn isConstSequencePointerType(self: Type, analyser: *Analyser) bool {
-        if (!self.is_type_val) return false;
-        const size, const elem_ty = switch (self.data) {
-            .pointer => |info| blk: {
-                if (!info.is_const) return false;
-                break :blk .{ info.size, info.elem_ty.* };
-            },
-            .ip_index => |payload| blk: {
-                const info = switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-                    .pointer_type => |pointer| pointer,
-                    else => return false,
-                };
-                if (!info.flags.is_const) return false;
-                break :blk .{ info.flags.size, Type.fromIP(analyser, .type_type, info.elem_type) };
-            },
-            else => return false,
-        };
-        return switch (size) {
+        const info = self.typePointerInfo(analyser) orelse return false;
+        if (!info.is_const) return false;
+        return switch (info.size) {
             .slice, .many => true,
-            .one => elem_ty.isTupleType(analyser) or switch (elem_ty.data) {
+            .one => info.elem_ty.isTupleType(analyser) or switch (info.elem_ty.data) {
                 .array => true,
                 .ip_index => |payload| analyser.ip.indexToKey(payload.index orelse return false) == .array_type,
                 else => false,
             },
             .c => false,
         };
+    }
+
+    pub fn constStructPointerChild(self: Type, analyser: *Analyser) ?Type {
+        const info = self.typePointerInfo(analyser) orelse return null;
+        if (info.size != .one or !info.is_const or
+            !info.elem_ty.isStructType(analyser) or info.elem_ty.isTupleType(analyser)) return null;
+        return info.elem_ty;
     }
 
     const ComptimeCallEvaluation = enum { never, if_needed, eager };
@@ -15102,7 +15095,8 @@ pub const Type = struct {
                 .keyword_struct, .keyword_union, .keyword_enum => .if_needed,
                 else => .never,
             },
-            .pointer => if (self.isConstSequencePointerType(analyser)) .if_needed else .never,
+            .pointer => if (self.isConstSequencePointerType(analyser) or
+                self.constStructPointerChild(analyser) != null) .if_needed else .never,
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return .never) orelse return .never) {
                 .int, .comptime_int => .eager,
                 .array,
@@ -15118,7 +15112,8 @@ pub const Type = struct {
                 .@"struct",
                 .@"union",
                 => .if_needed,
-                .pointer => if (self.isConstSequencePointerType(analyser)) .if_needed else .never,
+                .pointer => if (self.isConstSequencePointerType(analyser) or
+                    self.constStructPointerChild(analyser) != null) .if_needed else .never,
                 else => .never,
             },
             else => .never,
@@ -15127,23 +15122,40 @@ pub const Type = struct {
 
     pub fn sequencePointerLength(self: Type, analyser: *Analyser) ?usize {
         if (!self.isConstSequencePointerType(analyser)) return null;
-        const elem_ty = switch (self.data) {
-            .pointer => |info| if (info.size == .one) info.elem_ty.* else return null,
-            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
-                .pointer_type => |pointer| if (pointer.flags.size == .one)
-                    Type.fromIP(analyser, .type_type, pointer.elem_type)
-                else
-                    return null,
-                else => return null,
-            },
-            else => return null,
-        };
-        return switch (elem_ty.data) {
+        const info = self.typePointerInfo(analyser) orelse return null;
+        if (info.size != .one) return null;
+        return switch (info.elem_ty.data) {
             .array => |array| std.math.cast(usize, array.elem_count orelse return null),
             .tuple => |tuple| tuple.len,
             .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
                 .array_type => |array| std.math.cast(usize, array.len),
                 .tuple_type => |tuple| tuple.types.len,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    const TypePointerInfo = struct {
+        size: std.builtin.Type.Pointer.Size,
+        is_const: bool,
+        elem_ty: Type,
+    };
+
+    fn typePointerInfo(self: Type, analyser: *Analyser) ?TypePointerInfo {
+        if (!self.is_type_val) return null;
+        return switch (self.data) {
+            .pointer => |info| .{
+                .size = info.size,
+                .is_const = info.is_const,
+                .elem_ty = info.elem_ty.*,
+            },
+            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .pointer_type => |info| .{
+                    .size = info.flags.size,
+                    .is_const = info.flags.is_const,
+                    .elem_ty = Type.fromIP(analyser, .type_type, info.elem_type),
+                },
                 else => null,
             },
             else => null,
