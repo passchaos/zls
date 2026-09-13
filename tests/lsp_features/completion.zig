@@ -15092,6 +15092,30 @@ test "comptime pointer identities distinguish static subobjects" {
     try std.testing.expect(first.hash64() != third.hash64());
 }
 
+test "comptime pointer comparisons preserve address identity" {
+    try testCompletion(
+        \\const values = [_]usize{ 4, 4 };
+        \\fn pointer(comptime index: usize) *const usize {
+        \\    return &values[index];
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(0) == pointer(0)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(0) != pointer(1)) distinct = 3;
+        \\    return struct {
+        \\        same: [same]u8,
+        \\        distinct: [distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

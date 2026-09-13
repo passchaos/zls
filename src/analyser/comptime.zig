@@ -34,6 +34,25 @@ pub const Value = struct {
         source: Analyser.NodeWithHandle,
         container_type: ?Type,
         path: []const Reference.Access,
+
+        fn eql(self: Pointee, other: Pointee) bool {
+            if (!self.source.eql(other.source) or
+                !self.value.eql(other.value) or
+                (self.container_type == null) != (other.container_type == null) or
+                self.path.len != other.path.len) return false;
+            if (self.container_type) |container_type| {
+                if (!container_type.eql(other.container_type.?)) return false;
+            }
+            for (self.path, other.path) |lhs, rhs| {
+                if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+                switch (lhs) {
+                    .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
+                    .index => |index| if (index != rhs.index) return false,
+                    .optional_payload, .error_union_payload => {},
+                }
+            }
+            return true;
+        }
     };
     pub const Reference = struct {
         storage: *Cell,
@@ -148,28 +167,25 @@ pub const Value = struct {
                 };
             },
             .reference => |reference| return reference.eql(other.data.reference.*),
-            .pointee => |pointee| {
-                const other_pointee = other.data.pointee;
-                if (!pointee.source.eql(other_pointee.source) or
-                    !pointee.value.eql(other_pointee.value) or
-                    (pointee.container_type == null) != (other_pointee.container_type == null) or
-                    pointee.path.len != other_pointee.path.len) return false;
-                if (pointee.container_type) |container_type| {
-                    if (!container_type.eql(other_pointee.container_type.?)) return false;
-                }
-                for (pointee.path, other_pointee.path) |lhs, rhs| {
-                    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
-                    switch (lhs) {
-                        .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
-                        .index => |index| if (index != rhs.index) return false,
-                        .optional_payload, .error_union_payload => {},
-                    }
-                }
-                return true;
-            },
+            .pointee => |pointee| return pointee.eql(other.data.pointee),
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
+    }
+
+    pub fn pointerIdentityEql(lhs: Type, rhs: Type) ?bool {
+        if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
+        return switch (lhs.data.comptime_value.data) {
+            .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
+                .reference => |rhs_reference| lhs_reference.eql(rhs_reference.*),
+                else => null,
+            },
+            .pointee => |lhs_pointee| switch (rhs.data.comptime_value.data) {
+                .pointee => |rhs_pointee| lhs_pointee.eql(rhs_pointee),
+                else => null,
+            },
+            else => null,
+        };
     }
 
     pub fn create(analyser: *Analyser, ty: Type, data: @FieldType(Value, "data")) error{OutOfMemory}!Type {
@@ -2925,6 +2941,14 @@ pub const Interpreter = struct {
         };
         child.return_type = return_type;
         const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+        const old_interpreter = analyser.comptime_interpreter;
+        const old_bindings = analyser.generic_bindings;
+        analyser.comptime_interpreter = &child;
+        analyser.generic_bindings = &child.bindings;
+        defer {
+            analyser.comptime_interpreter = old_interpreter;
+            analyser.generic_bindings = old_bindings;
+        }
         return switch (flow) {
             .next => blk: {
                 const coerced = try child.coerceFromSource(

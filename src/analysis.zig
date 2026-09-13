@@ -8472,6 +8472,13 @@ fn resolveComparisonValue(
     const lhs_index = lhs.ipIndex();
     const rhs_index = rhs.ipIndex();
     if (tag == .equal_equal or tag == .bang_equal) {
+        if (comptime_eval.Value.pointerIdentityEql(lhs, rhs)) |equal| {
+            return Type.fromIP(
+                analyser,
+                .bool_type,
+                if (equal == (tag == .equal_equal)) .bool_true else .bool_false,
+            );
+        }
         if (lhs_index != null and rhs_index != null) {
             const lhs_key = analyser.ip.indexToKey(lhs_index.?);
             const rhs_key = analyser.ip.indexToKey(rhs_index.?);
