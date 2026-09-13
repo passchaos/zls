@@ -677,6 +677,47 @@ fn ErrorUnionLoopArray() type {
 const error_union_loop: ErrorUnionLoopArray() = undefined;
 //    ^^^^^^^^^^^^^^^^ ([21]u8)()
 
+fn ExpressionReturnArray(comptime initial: ?usize) type {
+    const Helpers = struct {
+        fn choose(optional: ?usize, trace: *usize) usize {
+            defer trace.* = trace.* * 10 + 1;
+            const value = optional orelse return 7;
+            trace.* = trace.* * 10 + 2;
+            return value;
+        }
+    };
+    var trace: usize = 0;
+    const value = Helpers.choose(initial, &trace);
+    return [value + trace]u8;
+}
+
+const early_expression_return: ExpressionReturnArray(null) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([8]u8)()
+const present_expression_value: ExpressionReturnArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ ([25]u8)()
+
+fn ExpressionBreakArray() type {
+    var total: usize = 0;
+    var trace: usize = 0;
+    for ([_]?usize{ 2, null, 3 }) |optional| {
+        defer trace = trace * 10 + 1;
+        const value = optional orelse continue;
+        total += value;
+    }
+    const result: usize = outer: {
+        defer trace = trace * 10 + 2;
+        const ignored: usize = {
+            defer trace = trace * 10 + 3;
+            break :outer @intCast(total + 2);
+        };
+        break :outer ignored + 99;
+    };
+    return [result + trace]u8;
+}
+
+const nested_expression_break: ExpressionBreakArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([11139]u8)()
+
 comptime {
     if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
     if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");

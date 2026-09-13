@@ -166,7 +166,7 @@ pub const Interpreter = struct {
     cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
     budget: *Budget,
     return_type: ?Type = null,
-    error_return: ?EvaluatedSource = null,
+    pending_flow: ?Flow = null,
     break_context: ?*const BreakContext = null,
 
     const BreakContext = struct {
@@ -210,7 +210,7 @@ pub const Interpreter = struct {
         if (node != .root and ast.isContainer(tree, node)) return false;
         switch (tree.nodeTag(node)) {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
-            .@"comptime", .@"try", .@"catch", .@"errdefer" => return true,
+            .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
             .@"if" => if (ast.fullIf(tree, node).?.error_token != null) return true,
             .@"while" => if (ast.fullWhile(tree, node).?.error_token != null) return true,
             .assign_destructure => {
@@ -289,7 +289,7 @@ pub const Interpreter = struct {
     }
 
     pub fn enterExpression(self: *Interpreter) bool {
-        if (self.budget.expression_depth >= 128 or !self.tick()) return false;
+        if (self.pending_flow != null or self.budget.expression_depth >= 128 or !self.tick()) return false;
         self.budget.expression_depth += 1;
         return true;
     }
@@ -491,18 +491,34 @@ pub const Interpreter = struct {
         return self.statement(handle, body);
     }
 
+    fn expressionResult(self: *Interpreter, flow: Flow) ?EvaluatedSource {
+        return switch (flow) {
+            .next => .{
+                .value = Type.fromIP(self.analyser, .void_type, .void_value),
+                .source_node = null,
+            },
+            .value => |result| result,
+            .returned, .stopped, .continued => {
+                self.pending_flow = flow;
+                return null;
+            },
+            .unknown => null,
+        };
+    }
+
     fn eval(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
-        if (self.error_return != null) return null;
+        if (self.pending_flow != null) return null;
         if (!self.tick()) return null;
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (handle.tree.blockStatements(&block_buffer, node) != null) {
-            return switch (try self.block(handle, node, null)) {
-                .next => Type.fromIP(self.analyser, .void_type, .void_value),
-                .value => |result| result.value,
-                else => null,
-            };
+            const result = self.expressionResult(try self.block(handle, node, null)) orelse return null;
+            return result.value;
         }
         switch (handle.tree.nodeTag(node)) {
+            .@"return", .@"break", .@"continue" => {
+                _ = self.expressionResult(try self.statement(handle, node));
+                return null;
+            },
             .@"comptime", .@"nosuspend" => return self.eval(handle, handle.tree.nodeData(node).node),
             .grouped_expression => return self.eval(handle, handle.tree.nodeData(node).node_and_token[0]),
             .if_simple, .@"if" => {
@@ -513,15 +529,13 @@ pub const Interpreter = struct {
                     .node => |target_node| self.eval(handle, target_node),
                 };
             },
-            .for_simple, .@"for" => return switch (try self.forLoop(handle, handle.tree.fullFor(node).?, true, null)) {
-                .next => Type.fromIP(self.analyser, .void_type, .void_value),
-                .value => |result| result.value,
-                else => null,
+            .for_simple, .@"for" => {
+                const result = self.expressionResult(try self.forLoop(handle, handle.tree.fullFor(node).?, true, null)) orelse return null;
+                return result.value;
             },
-            .while_simple, .while_cont, .@"while" => return switch (try self.whileLoop(handle, ast.fullWhile(&handle.tree, node).?, true, null)) {
-                .next => Type.fromIP(self.analyser, .void_type, .void_value),
-                .value => |result| result.value,
-                else => null,
+            .while_simple, .while_cont, .@"while" => {
+                const result = self.expressionResult(try self.whileLoop(handle, ast.fullWhile(&handle.tree, node).?, true, null)) orelse return null;
+                return result.value;
             },
             .@"switch", .switch_comma => {
                 const target = try self.switchTarget(handle, node) orelse
@@ -531,7 +545,8 @@ pub const Interpreter = struct {
             .@"orelse" => {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
                 const optional = try self.eval(handle, lhs) orelse return null;
-                return switch (try self.optionalValue(optional) orelse return null) {
+                return switch (try self.optionalValue(optional) orelse
+                    return self.analyser.resolveTypeOfNode(.of(node, handle))) {
                     .absent => self.eval(handle, rhs),
                     .payload => |payload| payload,
                 };
@@ -553,7 +568,7 @@ pub const Interpreter = struct {
                 return switch (try self.errorUnionValue(error_union) orelse return null) {
                     .payload => |payload| payload,
                     .failure => |failure| {
-                        self.error_return = .{ .value = failure, .source_node = null };
+                        self.pending_flow = .{ .returned = .{ .value = failure, .source_node = null } };
                         return null;
                     },
                 };
@@ -1043,6 +1058,7 @@ pub const Interpreter = struct {
     }
 
     fn evalSourceWithType(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: ?Type) Error!?EvaluatedSource {
+        if (self.pending_flow != null) return null;
         const tree = &handle.tree;
         if (destination) |ty| if (ast.isBuiltinCall(tree, node)) {
             const name = tree.tokenSlice(tree.nodeMainToken(node));
@@ -1080,14 +1096,7 @@ pub const Interpreter = struct {
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&block_buffer, node) != null) {
             if (!self.tick()) return null;
-            return switch (try self.block(handle, node, destination)) {
-                .next => .{
-                    .value = Type.fromIP(self.analyser, .void_type, .void_value),
-                    .source_node = null,
-                },
-                .value => |result| result,
-                else => null,
-            };
+            return self.expressionResult(try self.block(handle, node, destination));
         }
         return switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => blk: {
@@ -1114,25 +1123,11 @@ pub const Interpreter = struct {
             },
             .for_simple, .@"for" => blk: {
                 if (!self.tick()) return null;
-                break :blk switch (try self.forLoop(handle, tree.fullFor(node).?, true, destination)) {
-                    .next => .{
-                        .value = Type.fromIP(self.analyser, .void_type, .void_value),
-                        .source_node = null,
-                    },
-                    .value => |result| result,
-                    else => null,
-                };
+                break :blk self.expressionResult(try self.forLoop(handle, tree.fullFor(node).?, true, destination));
             },
             .while_simple, .while_cont, .@"while" => blk: {
                 if (!self.tick()) return null;
-                break :blk switch (try self.whileLoop(handle, ast.fullWhile(tree, node).?, true, destination)) {
-                    .next => .{
-                        .value = Type.fromIP(self.analyser, .void_type, .void_value),
-                        .source_node = null,
-                    },
-                    .value => |result| result,
-                    else => null,
-                };
+                break :blk self.expressionResult(try self.whileLoop(handle, ast.fullWhile(tree, node).?, true, destination));
             },
             .@"switch", .switch_comma => blk: {
                 if (!self.tick()) return null;
@@ -1146,7 +1141,10 @@ pub const Interpreter = struct {
                 if (!self.tick()) return null;
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
                 const optional = try self.eval(handle, lhs) orelse return null;
-                break :blk switch (try self.optionalValue(optional) orelse return null) {
+                break :blk switch (try self.optionalValue(optional) orelse break :blk .{
+                    .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
+                    .source_node = null,
+                }) {
                     .absent => self.evalSourceWithType(handle, rhs, destination),
                     .payload => |payload| .{ .value = payload, .source_node = null },
                 };
@@ -2023,11 +2021,7 @@ pub const Interpreter = struct {
                 } else continue,
                 else => continue,
             };
-            const saved_error = self.error_return;
-            self.error_return = null;
-            const defer_flow = try self.statement(handle, deferred);
-            self.error_return = saved_error;
-            if (defer_flow != .next) return .unknown;
+            if (try self.statement(handle, deferred) != .next) return .unknown;
         }
         return block_flow;
     }
@@ -2144,9 +2138,12 @@ pub const Interpreter = struct {
     }
 
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
-        if (self.error_return) |result| return .{ .returned = result };
-        const flow = try self.statementInner(handle, node);
-        return if (self.error_return) |result| .{ .returned = result } else flow;
+        const flow = if (self.pending_flow == null) try self.statementInner(handle, node) else .unknown;
+        if (self.pending_flow) |pending| {
+            self.pending_flow = null;
+            return pending;
+        }
+        return flow;
     }
 
     fn statementInner(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
@@ -2178,7 +2175,7 @@ pub const Interpreter = struct {
                 _ = try self.eval(handle, node) orelse return .unknown;
                 return .next;
             },
-            .@"catch" => {
+            .@"catch", .@"orelse" => {
                 _ = try self.eval(handle, node) orelse return .unknown;
                 return .next;
             },
@@ -2460,7 +2457,8 @@ pub const Interpreter = struct {
                 .unknown => return .unknown,
             }
             if (loop_node.ast.cont_expr.unwrap()) |cont_expr| {
-                if (try self.statement(handle, cont_expr) != .next) return .unknown;
+                const cont_flow = try self.statement(handle, cont_expr);
+                if (cont_flow != .next) return cont_flow;
             }
         }
     }

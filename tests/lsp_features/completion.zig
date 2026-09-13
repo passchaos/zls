@@ -12161,6 +12161,178 @@ test "comptime interpreter propagates known try results" {
     }
 }
 
+test "comptime interpreter propagates early returns from expressions" {
+    for ([_]struct { expression: []const u8, items: []const u8, trace: []const u8 }{
+        .{ .expression = "@as(?usize, null) orelse return 7", .items = "[7]u8", .trace = "[1]u8" },
+        .{ .expression = "@as(?usize, 4) orelse return 7", .items = "[4]u8", .trace = "[21]u8" },
+        .{ .expression = "@as(error{Failure}!usize, error.Failure) catch return 7", .items = "[7]u8", .trace = "[1]u8" },
+        .{ .expression = "@as(error{Failure}!usize, 4) catch return 7", .items = "[4]u8", .trace = "[21]u8" },
+        .{ .expression = "{ defer trace.* = trace.* * 10 + 3; return 7; }", .items = "[7]u8", .trace = "[31]u8" },
+        .{ .expression = "while (true) { return 7; }", .items = "[7]u8", .trace = "[1]u8" },
+        .{ .expression = "for (0..1) |_| { return 7; } else 4", .items = "[7]u8", .trace = "[1]u8" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn choose(trace: *usize) usize {{
+            \\    defer trace.* = trace.* * 10 + 1;
+            \\    const value: usize = {s};
+            \\    trace.* = trace.* * 10 + 2;
+            \\    return value;
+            \\}}
+            \\fn Select() type {{
+            \\    var trace: usize = 0;
+            \\    const value = choose(&trace);
+            \\    return struct {{ items: [value]u8, trace: [trace]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{case.expression});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.items },
+            .{ .label = "trace", .kind = .Field, .detail = case.trace },
+        });
+    }
+}
+
+test "comptime interpreter propagates breaks and continues from expressions" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var total: usize = 0;
+        \\    var trace: usize = 0;
+        \\    for ([_]?usize{ 2, null, 3 }) |optional| {
+        \\        defer trace = trace * 10 + 1;
+        \\        const value = optional orelse continue;
+        \\        total += value;
+        \\    }
+        \\    const result: usize = outer: {
+        \\        defer trace = trace * 10 + 2;
+        \\        const ignored: usize = {
+        \\            defer trace = trace * 10 + 3;
+        \\            break :outer @intCast(total + 2);
+        \\        };
+        \\        break :outer ignored + 99;
+        \\    };
+        \\    return struct { items: [result]u8, trace: [trace]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "trace", .kind = .Field, .detail = "[11132]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var trace: usize = 0;
+        \\    var iterations: usize = 0;
+        \\    const result: usize = outer: while (iterations < 4) : (iterations += 1) {
+        \\        defer trace = trace * 10 + 1;
+        \\        const value: usize = while (true) {
+        \\            if (iterations == 0) continue :outer;
+        \\            const failure: error{Stop}!usize = error.Stop;
+        \\            const ignored = failure catch break :outer 7;
+        \\            break ignored;
+        \\        };
+        \\        trace += value;
+        \\    } else 99;
+        \\    return struct { items: [result]u8, trace: [trace]u8, iterations: [iterations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "trace", .kind = .Field, .detail = "[11]u8" },
+        .{ .label = "iterations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter stops evaluating operands after expression returns" {
+    for ([_][]const u8{
+        "_ = (@as(?usize, null) orelse return 7) + changed(trace);",
+        "_ = if (@as(?bool, null) orelse return 7) changed(trace) else changed(trace);",
+        "_ = switch (@as(?usize, null) orelse return 7) { 0 => changed(trace), else => changed(trace) };",
+        "_ = while (false) {} else return 7;",
+        "_ = for (0..0) |_| {} else return 7;",
+        "while (true) : (return 7) {}",
+        "@as(?void, null) orelse return 7;",
+    }) |statement| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn changed(trace: *usize) usize {{
+            \\    trace.* += 10;
+            \\    return 0;
+            \\}}
+            \\fn choose(trace: *usize) usize {{
+            \\    defer trace.* += 1;
+            \\    {s}
+            \\    return 99;
+            \\}}
+            \\fn Select() type {{
+            \\    var trace: usize = 0;
+            \\    const value = choose(&trace);
+            \\    return struct {{ items: [value]u8, trace: [trace]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{statement});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+            .{ .label = "trace", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter resolves pure optional early returns" {
+    for ([_][]const u8{ "null", "u32" }) |initial| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select(comptime optional: ?type) type {{
+            \\    const T = optional orelse return struct {{ fallback: u8 }};
+            \\    return struct {{ item: T }};
+            \\}}
+            \\const selected: Select({s}) = undefined;
+            \\const field = selected.<cursor>
+        , .{initial});
+        defer allocator.free(source);
+        try testCompletion(source, if (std.mem.eql(u8, initial, "null"))
+            &.{.{ .label = "fallback", .kind = .Field, .detail = "u8" }}
+        else
+            &.{.{ .label = "item", .kind = .Field, .detail = "u32" }});
+    }
+}
+
+test "comptime interpreter unwinds expression error returns once" {
+    for ([_][]const u8{
+        "@as(?usize, null) orelse return error.Failure",
+        "@as(error{Failure}!usize, error.Failure) catch |err| return @as(error{Failure}!usize, err)",
+        "try @as(error{Failure}!usize, error.Failure)",
+    }) |expression| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn choose(trace: *usize) error{{Failure}}!usize {{
+            \\    defer trace.* = trace.* * 10 + 1;
+            \\    errdefer |err| trace.* = trace.* * 10 + if (err == error.Failure) 2 else 9;
+            \\    const value: usize = result: {{
+            \\        defer trace.* = trace.* * 10 + 3;
+            \\        break :result {s};
+            \\    }};
+            \\    trace.* = 99;
+            \\    return value;
+            \\}}
+            \\fn Select() type {{
+            \\    var trace: usize = 0;
+            \\    const value = choose(&trace) catch 7;
+            \\    return struct {{ items: [value]u8, trace: [trace]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{expression});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[7]u8" },
+            .{ .label = "trace", .kind = .Field, .detail = "[321]u8" },
+        });
+    }
+}
+
 test "comptime interpreter runs errdefers on propagated errors" {
     for ([_]struct { mode: []const u8, trace: []const u8 }{
         .{ .mode = "0", .trace = "[413]u8" },
