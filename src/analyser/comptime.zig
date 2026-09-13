@@ -1639,11 +1639,11 @@ pub const Interpreter = struct {
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
-            if (tree.nodeTag(literal_node) == .address_of) struct_pointer: {
-                const pointee = destination.constStructPointerChild(analyser) orelse break :struct_pointer;
+            if (tree.nodeTag(literal_node) == .address_of) aggregate_pointer: {
+                const pointee = destination.constAggregatePointerChild(analyser) orelse break :aggregate_pointer;
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
-                const literal = tree.fullStructInit(&buffer, operand) orelse break :struct_pointer;
-                if (literal.ast.type_expr != .none) break :struct_pointer;
+                const literal = tree.fullStructInit(&buffer, operand) orelse break :aggregate_pointer;
+                if (literal.ast.type_expr != .none) break :aggregate_pointer;
                 const pointee_value = try self.evaluateTypedExpression(handle, operand, pointee) orelse
                     return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                 const fields = Value.fieldEntries(pointee_value) orelse
