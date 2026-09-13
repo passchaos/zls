@@ -2125,6 +2125,7 @@ pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory
                     .is_const = true,
                 };
             },
+            .pointee => |pointee| return .{ .type = pointee.value, .is_const = true },
             else => {},
         }
     }
@@ -15112,6 +15113,17 @@ pub const Type = struct {
         return info.elem_ty;
     }
 
+    pub fn constScalarPointerChild(self: Type, analyser: *Analyser) ?Type {
+        const info = self.typePointerInfo(analyser) orelse return null;
+        if (info.size != .one or !info.is_const) return null;
+        if (info.elem_ty.isEnumType(analyser) or info.elem_ty.isErrorSetType(analyser)) return info.elem_ty;
+        const tag = analyser.ip.zigTypeTag(info.elem_ty.ipIndex() orelse return null) orelse return null;
+        return switch (tag) {
+            .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => info.elem_ty,
+            else => null,
+        };
+    }
+
     const ComptimeCallEvaluation = enum { never, if_needed, eager };
 
     fn comptimeCallEvaluation(self: Type, analyser: *Analyser) ComptimeCallEvaluation {
@@ -15123,7 +15135,8 @@ pub const Type = struct {
                 else => .never,
             },
             .pointer => if (self.isConstSequencePointerType(analyser) or
-                self.constAggregatePointerChild(analyser) != null) .if_needed else .never,
+                self.constAggregatePointerChild(analyser) != null or
+                self.constScalarPointerChild(analyser) != null) .if_needed else .never,
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return .never) orelse return .never) {
                 .int, .comptime_int => .eager,
                 .array,
@@ -15140,7 +15153,8 @@ pub const Type = struct {
                 .@"union",
                 => .if_needed,
                 .pointer => if (self.isConstSequencePointerType(analyser) or
-                    self.constAggregatePointerChild(analyser) != null) .if_needed else .never,
+                    self.constAggregatePointerChild(analyser) != null or
+                    self.constScalarPointerChild(analyser) != null) .if_needed else .never,
                 else => .never,
             },
             else => .never,
@@ -15486,6 +15500,10 @@ pub const Type = struct {
                     }
                     if (fields.len != 0) try writer.writeByte(' ');
                     try writer.writeByte('}');
+                },
+                .pointee => |pointee| {
+                    try writer.writeByte('&');
+                    try pointee.value.rawStringify(writer, analyser, options);
                 },
                 .expression => |node_handle| try writer.writeAll(offsets.nodeToSlice(&node_handle.handle.tree, node_handle.node)),
                 else => try value.ty.rawStringify(writer, analyser, options),

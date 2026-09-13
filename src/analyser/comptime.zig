@@ -17,6 +17,7 @@ pub const Value = struct {
         optional: ?Type,
         error_union: ErrorUnion,
         reference: *Reference,
+        pointee: Pointee,
         /// Source-backed value used when an aggregate element cannot be
         /// materialized by the intern pool but can still be copied at comptime.
         expression: Analyser.NodeWithHandle,
@@ -28,6 +29,10 @@ pub const Value = struct {
         failure: Type,
     };
     pub const Cell = struct { value: Type };
+    pub const Pointee = struct {
+        value: Type,
+        source: Analyser.NodeWithHandle,
+    };
     pub const Reference = struct {
         storage: *Cell,
         path: []const Access,
@@ -92,6 +97,11 @@ pub const Value = struct {
                 }
             },
             .reference => |reference| reference.hash(hasher),
+            .pointee => |pointee| {
+                pointee.value.hashWithHasher(hasher);
+                std.hash.autoHash(hasher, pointee.source.node);
+                hasher.update(pointee.source.handle.uri.raw);
+            },
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
                 hasher.update(node_handle.handle.uri.raw);
@@ -126,6 +136,8 @@ pub const Value = struct {
                 };
             },
             .reference => |reference| return reference.eql(other.data.reference.*),
+            .pointee => |pointee| return pointee.source.eql(other.data.pointee.source) and
+                pointee.value.eql(other.data.pointee.value),
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
@@ -1639,6 +1651,25 @@ pub const Interpreter = struct {
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
+            if (tree.nodeTag(literal_node) == .address_of) scalar_pointer: {
+                const pointee_type = destination.constScalarPointerChild(analyser) orelse break :scalar_pointer;
+                const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
+                if (tree.nodeTag(operand) != .identifier) break :scalar_pointer;
+                const name = offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(operand));
+                const declaration = try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(tree.nodeMainToken(operand))) orelse
+                    break :scalar_pointer;
+                if (!declaration.isConst() or !try declaration.isStatic()) break :scalar_pointer;
+                const declaration_node = switch (declaration.decl) {
+                    .ast_node => |decl_node| decl_node,
+                    else => break :scalar_pointer,
+                };
+                const pointee = try self.evaluateTypedExpression(handle, operand, pointee_type) orelse
+                    return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                return @as(?Type, try Value.create(analyser, destination, .{ .pointee = .{
+                    .value = pointee,
+                    .source = .of(declaration_node, declaration.handle),
+                } }));
+            }
             if (tree.nodeTag(literal_node) == .address_of) aggregate_pointer: {
                 const pointee = destination.constAggregatePointerChild(analyser) orelse break :aggregate_pointer;
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);

@@ -13566,6 +13566,57 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\const one: usize = 1;
+        \\const four: usize = 4;
+        \\fn value() *const usize {
+        \\    var result: *const usize = &one;
+        \\    result = &four;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [value().*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\var runtime_value: usize = undefined;
+        \\const one: usize = 1;
+        \\fn value() *const usize {
+        \\    var result: *const usize = &one;
+        \\    result = &runtime_value;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [value().*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const first: usize = 1;
+        \\const second: usize = 1;
+        \\fn value() *const usize {
+        \\    var result: *const usize = &first;
+        \\    result = &second;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return if (value() == &first)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\const Config = struct { capacity: usize };
         \\fn config() *const Config {
         \\    var result: *const Config = &.{ .capacity = 1 };
