@@ -434,6 +434,29 @@ pub const Interpreter = struct {
         };
     }
 
+    fn sequencePointerLength(self: *Interpreter, ty: Type) ?usize {
+        return switch (ty.data) {
+            .pointer => |info| switch (info.size) {
+                .one => switch (info.elem_ty.data) {
+                    .array => |array| std.math.cast(usize, array.elem_count orelse return null),
+                    else => null,
+                },
+                .many, .slice, .c => null,
+            },
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
+                .pointer_type => |pointer| switch (pointer.flags.size) {
+                    .one => switch (self.analyser.ip.indexToKey(pointer.elem_type)) {
+                        .array_type => |array| std.math.cast(usize, array.len),
+                        else => null,
+                    },
+                    .many, .slice, .c => null,
+                },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     pub fn evaluateStructInit(self: *Interpreter, handle: *Handle, destination: Type, field_nodes: []const Ast.Node.Index) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
@@ -1660,6 +1683,10 @@ pub const Interpreter = struct {
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
                 if (tree.fullArrayInit(&buffer, operand)) |literal| {
                     if (literal.ast.type_expr == .none) {
+                        if (self.sequencePointerLength(destination)) |len| {
+                            if (literal.ast.elements.len != len)
+                                return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                        }
                         if (literal.ast.elements.len > self.budget.steps)
                             return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                         const items = try analyser.arena.alloc(Type, literal.ast.elements.len);
