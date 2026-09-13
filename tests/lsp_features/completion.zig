@@ -15221,6 +15221,44 @@ test "comptime pointer comparisons preserve address identity" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime pointer comparisons preserve wrapped identity" {
+    try testCompletion(
+        \\const values = [_]usize{ 4, 4 };
+        \\fn optional(comptime index: usize) ?*const usize {
+        \\    return &values[index];
+        \\}
+        \\fn fallible(comptime index: usize) error{Failure}!*const usize {
+        \\    return &values[index];
+        \\}
+        \\fn Select() type {
+        \\    var optional_size: usize = 2;
+        \\    if (optional(0).? == &values[0] and optional(0).? != optional(1).?) optional_size = 1;
+        \\    var error_size: usize = 4;
+        \\    if ((fallible(0) catch unreachable) == &values[0]) error_size = 3;
+        \\    return struct { optional_items: [optional_size]u8, error_items: [error_size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional_items", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "error_items", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: usize = undefined;
+        \\fn optional() ?*const usize {
+        \\    return &runtime;
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (optional().? == &runtime) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
