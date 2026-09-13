@@ -831,8 +831,9 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
         }
     }
     if (comptime_eval.Value.field(lhs, field_name)) |value| return .{ .type = value, .is_const = true };
-    if (lhs.data == .comptime_value and lhs.data.comptime_value.data == .fields) {
-        const ty = lhs.data.comptime_value.ty;
+    const dereferenced_lhs = comptime_eval.Value.deref(lhs);
+    if (dereferenced_lhs.data == .comptime_value and dereferenced_lhs.data.comptime_value.data == .fields) {
+        const ty = dereferenced_lhs.data.comptime_value.ty;
         const container_ty = if (ty.data == .container)
             ty
         else
@@ -15123,6 +15124,18 @@ pub const Type = struct {
             .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null, .optional, .error_union => info.elem_ty,
             else => null,
         };
+    }
+
+    pub fn constMaterializedPointerChild(self: Type, analyser: *Analyser) ?Type {
+        if (self.constScalarPointerChild(analyser)) |child| return child;
+        if (self.constAggregatePointerChild(analyser)) |child| return child;
+        const info = self.typePointerInfo(analyser) orelse return null;
+        if (info.size != .one or !info.is_const) return null;
+        return if (info.elem_ty.isTupleType(analyser) or switch (info.elem_ty.data) {
+            .array => true,
+            .ip_index => |payload| analyser.ip.indexToKey(payload.index orelse return null) == .array_type,
+            else => false,
+        }) info.elem_ty else null;
     }
 
     const ComptimeCallEvaluation = enum { never, if_needed, eager };

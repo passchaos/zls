@@ -154,9 +154,12 @@ pub const Value = struct {
     }
 
     pub fn deref(value: Type) Type {
-        if (value.data == .comptime_value and value.data.comptime_value.data == .reference) {
-            const reference = value.data.comptime_value.data.reference;
-            if (reference.path.len == 0) return reference.storage.value;
+        if (value.data == .comptime_value) {
+            return switch (value.data.comptime_value.data) {
+                .reference => |reference| if (reference.path.len == 0) reference.storage.value else value,
+                .pointee => |pointee| pointee.value,
+                else => value,
+            };
         }
         return value;
     }
@@ -1657,20 +1660,20 @@ pub const Interpreter = struct {
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
-            if (tree.nodeTag(literal_node) == .address_of) scalar_pointer: {
-                const pointee_type = destination.constScalarPointerChild(analyser) orelse break :scalar_pointer;
+            if (tree.nodeTag(literal_node) == .address_of) static_pointer: {
+                const pointee_type = destination.constMaterializedPointerChild(analyser) orelse break :static_pointer;
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
-                if (tree.nodeTag(operand) != .identifier) break :scalar_pointer;
+                if (tree.nodeTag(operand) != .identifier) break :static_pointer;
                 const name = offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(operand));
                 const declaration = try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(tree.nodeMainToken(operand))) orelse
-                    break :scalar_pointer;
-                if (!declaration.isConst() or !try declaration.isStatic()) break :scalar_pointer;
+                    break :static_pointer;
+                if (!declaration.isConst() or !try declaration.isStatic()) break :static_pointer;
                 const declaration_node = switch (declaration.decl) {
                     .ast_node => |decl_node| decl_node,
-                    else => break :scalar_pointer,
+                    else => break :static_pointer,
                 };
-                const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse break :scalar_pointer;
-                const initializer = variable.ast.init_node.unwrap() orelse break :scalar_pointer;
+                const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse break :static_pointer;
+                const initializer = variable.ast.init_node.unwrap() orelse break :static_pointer;
                 const pointee = try self.evaluateTypedExpression(declaration.handle, initializer, pointee_type) orelse
                     return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                 return @as(?Type, try Value.create(analyser, destination, .{ .pointee = .{

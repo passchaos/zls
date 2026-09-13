@@ -13566,6 +13566,51 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\const Config = struct { capacity: usize = 4 };
+        \\const small = Config{ .capacity = 1 };
+        \\const large = Config{};
+        \\const low = [_]usize{ 1, 2 };
+        \\const high = [_]usize{ 3, 5 };
+        \\fn config() *const Config {
+        \\    var result = &small;
+        \\    result = &large;
+        \\    return result;
+        \\}
+        \\fn values() *const [2]usize {
+        \\    var result = &low;
+        \\    result = &high;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        config_items: [config().capacity]u8,
+        \\        value_items: [values()[1]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "config_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "value_items", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\const small = Config{ .capacity = 1 };
+        \\var runtime = Config{ .capacity = 4 };
+        \\fn config() *const Config {
+        \\    var result = &small;
+        \\    result = &runtime;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [config().capacity]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\const failure: error{Failure}!usize = error.Failure;
         \\const four: error{Failure}!usize = 4;
         \\fn value() *const error{Failure}!usize {
