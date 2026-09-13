@@ -814,6 +814,32 @@ pub const Interpreter = struct {
                         (pointer.data.comptime_value.data == .reference or
                             pointer.data.comptime_value.data == .pointee)) return pointer;
                 }
+                if (handle.tree.nodeTag(operand) == .array_access) {
+                    const base, const index_node = handle.tree.nodeData(operand).node_and_node;
+                    if (handle.tree.nodeTag(base) == .identifier) {
+                        if (try self.eval(handle, base)) |sequence_value| {
+                            const pointer_size = if (sequence_value.data == .comptime_value)
+                                (try sequence_value.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser)
+                            else
+                                null;
+                            if ((pointer_size == .many or pointer_size == .slice) and
+                                Value.sequence(sequence_value) != null)
+                            {
+                                const sequence = Value.sequence(sequence_value).?;
+                                const index = try self.integer(handle, index_node) orelse return null;
+                                if (index >= sequence.len) return null;
+                                const offset = std.math.add(usize, sequence.offset, index) catch return null;
+                                const pointer = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
+                                return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .sequence = .{
+                                    .backing = sequence.backing,
+                                    .offset = offset,
+                                    .len = 1,
+                                    .elements_valid = sequence.elements_valid,
+                                } }));
+                            }
+                        }
+                    }
+                }
                 if (try self.address(handle, operand)) |value| return value;
                 const pointer = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
                 const destination = try pointer.typeOf(self.analyser);

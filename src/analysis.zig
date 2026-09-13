@@ -2192,6 +2192,13 @@ pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory
                 if (!sequence.elements_valid) return null;
                 const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
                 const pointee = try analyser.resolveDerefType(pointer_instance) orelse return null;
+                if (comptime_value.ty.sequencePointerLength(analyser) == null) {
+                    if (sequence.len != 1) return null;
+                    return .{
+                        .type = sequence.backing[sequence.offset],
+                        .is_const = true,
+                    };
+                }
                 return .{
                     .type = try comptime_eval.Value.create(
                         analyser,
@@ -15273,8 +15280,8 @@ pub const Type = struct {
     pub fn preservesIdentityThroughPtrCast(destination: Type, analyser: *Analyser, source: Type) bool {
         const dest = destination.pointerCastInfo(analyser) orelse return false;
         const src = source.pointerCastInfo(analyser) orelse return false;
-        return dest.pointer.size == src.pointer.size and
-            (dest.pointer.size == .one or dest.pointer.size == .many) and
+        return (dest.pointer.size == .one or dest.pointer.size == .many) and
+            (src.pointer.size == .one or src.pointer.size == .many) and
             dest.pointer.is_const == src.pointer.is_const and
             dest.pointer.is_volatile == src.pointer.is_volatile and
             dest.pointer.is_allowzero == src.pointer.is_allowzero and

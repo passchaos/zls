@@ -15217,6 +15217,30 @@ test "comptime pointer comparisons preserve address identity" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[1]u8" }});
 
     try testCompletion(
+        \\fn values() [*]const usize {
+        \\    var result: [*]const usize = &.{ 2, 3 };
+        \\    result = &.{ 4, 5 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    const pointer = values();
+        \\    const first = &pointer[0];
+        \\    const second = &pointer[1];
+        \\    var distinct: usize = 7;
+        \\    if (first != second) distinct = 6;
+        \\    var offset_same: usize = 9;
+        \\    if (@as([*]const usize, @ptrCast(second)) == pointer + 1) offset_same = 8;
+        \\    return struct { value: [second.*]u8, distinct: [distinct]u8, offset_same: [offset_same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "offset_same", .kind = .Field, .detail = "[8]u8" },
+    });
+
+    try testCompletion(
         \\fn Select() type {
         \\    var count: usize = 0;
         \\    const value: usize = 4;
