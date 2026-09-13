@@ -1274,7 +1274,7 @@ fn resolveReturnValueOfFuncNode(
         const body = tree.nodeData(func_node).node_and_node[1];
         if (analyser.generic_bindings != null) {
             if (comptime_eval.Interpreter.needed(handle, body)) {
-                return try comptime_eval.Interpreter.evaluate(analyser, handle, body) orelse .unknown_type;
+                if (try comptime_eval.Interpreter.evaluate(analyser, handle, body)) |value| return value;
             }
             return switch (try analyser.findKnownReturnExpression(handle, body)) {
                 .expression => |expression| try analyser.resolveTypeOfNodeInternal(.of(expression, handle)) orelse .unknown_type,
@@ -11381,14 +11381,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
             }
 
-            if (analyser.evaluate_comptime_values and
+            const return_type = try func_info.return_value.typeOf(analyser);
+            const return_is_integer = if (return_type.ipIndex()) |index|
+                if (analyser.ip.zigTypeTag(index)) |tag| switch (tag) {
+                    .int, .comptime_int => true,
+                    else => false,
+                } else false
+            else
+                false;
+            if (analyser.resolve_number_literal_values and
                 analyser.comptime_interpreter == null and
-                func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl)
+                func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl and
+                return_is_integer)
             {
-                const body = func_info.handle.tree.nodeData(func_info.fn_node).node_and_node[1];
-                if (comptime_eval.Interpreter.needed(func_info.handle, body)) {
-                    if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
-                }
+                if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
             }
             return func_info.return_value.*;
         },
