@@ -348,6 +348,17 @@ const embedded_file = @embedFile("generics.zig");
 const embedded_file_first = embedded_file[0];
 //    ^^^^^^^^^^^^^^^^^^^ (u8)(102)
 
+fn RaisedQuotaArray() type {
+    @setEvalBranchQuota(1_000_000);
+    @setEvalBranchQuota(0);
+    var i: usize = 0;
+    while (i < 2_000) : (i += 1) {}
+    return [i]u8;
+}
+
+const raised_quota_array: RaisedQuotaArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^ ([2000]u8)()
+
 fn SubobjectArray(comptime small: u8) type {
     const Config = struct { capacity: usize };
     var state: struct { values: [1]usize, config: ?Config } = .{ .values = .{0}, .config = null };

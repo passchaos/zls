@@ -190,7 +190,15 @@ pub const Interpreter = struct {
         value: Type,
         reference: ?*Value.Reference = null,
     };
-    const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
+    const default_step_quota = 8192;
+    /// Keep editor requests bounded even when source code requests an enormous quota.
+    const max_step_quota = 1_000_000;
+    const Budget = struct {
+        steps: usize = default_step_quota,
+        quota: usize = default_step_quota,
+        depth: usize = 0,
+        expression_depth: usize = 0,
+    };
     const Flow = union(enum) {
         next,
         value: EvaluatedSource,
@@ -842,7 +850,12 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 1) return null;
                     const quota = try self.eval(handle, params[0]) orelse return null;
-                    _ = self.analyser.ip.toInt(quota.ipIndex() orelse return null, u32) orelse return null;
+                    const requested = self.analyser.ip.toInt(quota.ipIndex() orelse return null, u32) orelse return null;
+                    const new_quota = @min(@as(usize, requested), max_step_quota);
+                    if (new_quota > self.budget.quota) {
+                        self.budget.steps += new_quota - self.budget.quota;
+                        self.budget.quota = new_quota;
+                    }
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
                 if (std.mem.eql(u8, name, "@setRuntimeSafety")) {
@@ -2286,6 +2299,11 @@ pub const Interpreter = struct {
             },
             .@"catch", .@"orelse" => {
                 _ = try self.eval(handle, node) orelse return .unknown;
+                return .next;
+            },
+            .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
+                const value = try self.eval(handle, node) orelse return .unknown;
+                if (value.ipIndex() != .void_value) return .unknown;
                 return .next;
             },
             .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression| blk: {

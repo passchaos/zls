@@ -7984,6 +7984,33 @@ test "generic function with nested comptime control builtin mutations" {
         .{ .label = "quota_order", .kind = .Field, .detail = "[2]u8" },
         .{ .label = "safety_order", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    @setEvalBranchQuota(1_000_000);
+        \\    @setEvalBranchQuota(0);
+        \\    @setEvalBranchQuota(10);
+        \\    var i: usize = 0;
+        \\    while (i < 2_000) : (i += 1) {}
+        \\    return struct { items: [i]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[2000]u8" }});
+
+    try testCompletion(
+        \\fn advance(value: *usize) void {
+        \\    while (value.* < 2_000) : (value.* += 1) {}
+        \\}
+        \\fn Select() type {
+        \\    @setEvalBranchQuota(1_000_000);
+        \\    var value: usize = 0;
+        \\    advance(&value);
+        \\    return struct { items: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[2000]u8" }});
 }
 
 test "generic function with nested comptime compileLog mutations" {
