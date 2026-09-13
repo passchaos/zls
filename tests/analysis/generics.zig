@@ -320,6 +320,19 @@ fn ZeroParameterArray() type {
 const zero_parameter_array: ZeroParameterArray() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([1]u8)()
 
+fn computedCapacity() usize {
+    var value: usize = 1;
+    value += 2;
+    return value;
+}
+
+fn HelperCallContainer() type {
+    return struct { items: [computedCapacity()]u8 };
+}
+
+const helper_call_container: HelperCallContainer() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^ (HelperCallContainer())()
+
 fn EmbeddedFileArray() type {
     var total: usize = 1;
     const bytes = @embedFile(path: {

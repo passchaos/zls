@@ -11381,6 +11381,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
             }
 
+            if (analyser.evaluate_comptime_values and
+                analyser.comptime_interpreter == null and
+                func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl)
+            {
+                const body = func_info.handle.tree.nodeData(func_info.fn_node).node_and_node[1];
+                if (comptime_eval.Interpreter.needed(func_info.handle, body)) {
+                    if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
+                }
+            }
             return func_info.return_value.*;
         },
         .container_field,
