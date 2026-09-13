@@ -9774,6 +9774,246 @@ test "generic function with comptime while mutation" {
     });
 }
 
+test "comptime interpreter evaluates switch conditions once" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var value: u8 = 4;
+        \\    var evaluations: usize = 0;
+        \\    const selected = switch (condition: {
+        \\        evaluations += 1;
+        \\        break :condition value;
+        \\    }) {
+        \\        1...5 => |captured| result: {
+        \\            value = 9;
+        \\            break :result captured + captured;
+        \\        },
+        \\        else => 99,
+        \\    };
+        \\    return struct { items: [selected]u8, evaluations: [evaluations]u8, changed: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
+test "comptime interpreter snapshots switch union captures" {
+    for ([_]bool{ false, true }) |inline_tag| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const U = union(enum) {{ count: usize, empty }};
+            \\fn Select() type {{
+            \\    var value = U{{ .count = 4 }};
+            \\    var evaluations: usize = 0;
+            \\    const selected = switch (condition: {{
+            \\        evaluations += 1;
+            \\        break :condition value;
+            \\    }}) {{
+            \\        {s}.count => |captured{s}| result: {{
+            \\            value = .{{ .empty = {{}} }};
+            \\            break :result {s}captured + captured{s};
+            \\        }},
+            \\        .empty => 99,
+            \\    }};
+            \\    return struct {{ items: [selected]u8, evaluations: [evaluations]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{
+            if (inline_tag) "inline " else "",
+            if (inline_tag) ", tag" else "",
+            if (inline_tag) "if (tag == .count) " else "",
+            if (inline_tag) " else 99" else "",
+        });
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+            .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter evaluates switch pointer lvalues once" {
+    try testCompletion(
+        \\const U = union(enum) { count: usize, empty };
+        \\fn Select() type {
+        \\    var values: [1][2]U = .{.{ .{ .count = 4 }, .{ .count = 7 } }};
+        \\    var evaluations: usize = 0;
+        \\    switch (values[row: {
+        \\        evaluations += 1;
+        \\        break :row 0;
+        \\    }][column: {
+        \\        evaluations = evaluations * 10 + 2;
+        \\        break :column 0;
+        \\    }]) {
+        \\        .count => |*payload| payload.* += 2,
+        \\        .empty => {},
+        \\    }
+        \\    return struct {
+        \\        changed: [values[0][0].count]u8,
+        \\        sibling: [values[0][1].count]u8,
+        \\        evaluations: [evaluations]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
+test "comptime interpreter snapshots switch type info captures" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var T: type = u8;
+        \\    var evaluations: usize = 0;
+        \\    const bits = switch (condition: {
+        \\        evaluations += 1;
+        \\        break :condition @typeInfo(T);
+        \\    }) {
+        \\        .int => |info| result: {
+        \\            T = u16;
+        \\            break :result info.bits + info.bits;
+        \\        },
+        \\        else => 99,
+        \\    };
+        \\    return struct { items: [bits]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[16]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter preserves switch else capture semantics" {
+    for ([_]bool{ false, true }) |inline_else| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const U = union(enum) {{ count: usize, empty }};
+            \\fn Select() type {{
+            \\    var value = U{{ .count = 4 }};
+            \\    var evaluations: usize = 0;
+            \\    const selected = switch (condition: {{
+            \\        evaluations += 1;
+            \\        break :condition value;
+            \\    }}) {{
+            \\        .empty => 99,
+            \\        {s}else => |captured| result: {{
+            \\            value = .{{ .empty = {{}} }};
+            \\            break :result {s};
+            \\        }},
+            \\    }};
+            \\    return struct {{ items: [selected]u8, evaluations: [evaluations]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{
+            if (inline_else) "inline " else "",
+            if (inline_else) "captured + captured" else "captured.count + captured.count",
+        });
+        defer allocator.free(source);
+        errdefer std.debug.print("switch else source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+            .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+}
+
+test "comptime interpreter snapshots generated switch tags" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const Tag = @Enum(u8, .exhaustive, &.{ "count", "empty" }, &.{ 0, 1 });
+        \\    const U = @Union(.auto, Tag, &.{ "count", "empty" }, &.{ usize, void }, &.{ .{}, .{} });
+        \\    var value = U{ .count = 4 };
+        \\    var evaluations: usize = 0;
+        \\    const selected = switch (condition: {
+        \\        evaluations += 1;
+        \\        break :condition value;
+        \\    }) {
+        \\        inline .count, .empty => |payload, tag| result: {
+        \\            value = .{ .empty = {} };
+        \\            break :result if (tag == .count) payload + payload else 99;
+        \\        },
+        \\    };
+        \\    return struct { items: [selected]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter preserves switch condition uncertainty" {
+    try testCompletion(
+        \\const U = union(enum) { count: usize, empty };
+        \\var runtime: usize = undefined;
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const value = U{ .count = runtime };
+        \\    return switch (condition: {
+        \\        evaluations += 1;
+        \\        break :condition value;
+        \\    }) {
+        \\        .count => |payload| struct { items: [payload]u8, evaluations: [evaluations]u8 },
+        \\        .empty => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    return switch (runtime) {
+        \\        4 => struct { matched: u8 },
+        \\        else => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "comptime interpreter evaluates unknown switch conditions once" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn condition(evaluations: *usize) u8 {
+        \\    evaluations.* += 1;
+        \\    return runtime;
+        \\}
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const selected = switch (condition(&evaluations)) {
+        \\        4 => @as(usize, 4),
+        \\        else => @as(usize, 7),
+        \\    };
+        \\    return struct { items: [selected]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with comptime switch mutation" {
     try testCompletion(
         \\fn Buffer(comptime mode: u8) type {

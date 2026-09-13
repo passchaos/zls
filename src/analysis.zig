@@ -1069,6 +1069,18 @@ pub fn resolveKnownSwitchTarget(
         .node_handle = .of(switch_node.ast.condition, handle),
         .container_type = options.container_type,
     }) orelse return null;
+    return analyser.resolveKnownSwitchTargetFromValue(options, condition);
+}
+
+pub fn resolveKnownSwitchTargetFromValue(
+    analyser: *Analyser,
+    options: ResolveOptions,
+    condition: Type,
+) Error!?Ast.Node.Index {
+    const handle = options.node_handle.handle;
+    const tree = &handle.tree;
+    const switch_node = tree.switchFull(options.node_handle.node);
+    if (switch_node.label_token != null) return null;
     const union_field_name = try analyser.resolveKnownUnionFieldName(condition);
 
     var else_target: ?Ast.Node.Index = null;
@@ -1917,6 +1929,9 @@ fn resolveSwitchUnionPayload(
     selected_case: Ast.full.SwitchCase,
 ) Error!?Type {
     if (try analyser.resolveKnownUnionFieldName(union_type)) |active_field| {
+        if (selected_case.ast.values.len == 0 and selected_case.inline_token != null) {
+            return analyser.resolveFieldAccess(union_type, active_field);
+        }
         for (selected_case.ast.values) |case_value| {
             if (switch_tree.nodeTag(case_value) != .enum_literal) break;
             const case_name = try analyser.identifierTokenName(switch_tree, switch_tree.nodeMainToken(case_value)) orelse break;
@@ -1974,6 +1989,43 @@ fn resolveSwitchUnionPayload(
         try payloads.append(analyser.arena, .{ .type = field_type, .descriptor = name });
     }
     return Type.fromEither(analyser, payloads.items);
+}
+
+pub fn resolveSwitchCaptureValue(
+    analyser: *Analyser,
+    condition: Type,
+    tree: *const Ast,
+    switch_node: Ast.full.Switch,
+    case: Ast.full.SwitchCase,
+    tag_capture: bool,
+) Error!?Type {
+    const condition_type = try condition.typeOf(analyser);
+    if (condition_type.ipIndex()) |type_index| {
+        const type_tag = analyser.ip.zigTypeTag(type_index);
+        if (type_tag == .null or type_tag == .undefined) return null;
+    }
+    if (tag_capture) {
+        const tag_value = try analyser.resolveUnionTag(condition_type) orelse return null;
+        const active_field = try analyser.resolveKnownUnionFieldName(condition) orelse return tag_value;
+        return try analyser.enumValue(try tag_value.typeOf(analyser), active_field);
+    }
+    if (condition.data == .type_info_value and case.ast.values.len == 1) {
+        const case_value = case.ast.values[0];
+        if (tree.nodeTag(case_value) == .enum_literal) {
+            const case_tag_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
+            if (std.mem.eql(u8, case_tag_name, @tagName(condition.data.type_info_value.tag))) {
+                return analyser.resolveTypeInfoFieldAccess(condition.data.type_info_value, case_tag_name);
+            }
+        }
+    }
+    if (condition.isEnumType(analyser)) return condition;
+    if (!condition_type.isUnionType() and
+        if (condition_type.ipIndex()) |index| analyser.ip.zigTypeTag(index) != .@"union" else true)
+    {
+        return condition;
+    }
+    if (case.ast.values.len == 0 and case.inline_token == null) return condition;
+    return analyser.resolveSwitchUnionPayload(condition, tree, switch_node, case);
 }
 
 fn resolveUnionTagAccess(analyser: *Analyser, ty: Type, symbol: []const u8) Error!?Type {
@@ -16664,45 +16716,14 @@ pub const DeclWithHandle = struct {
                 const cond = tree.nodeData(payload.node).node_and_extra[0];
                 const case = payload.getCase(tree);
 
-                const switch_expr_type: Type = (try analyser.resolveTypeOfNodeInternal(.of(cond, self.handle))) orelse return null;
-                const switch_expr_type_type = try switch_expr_type.typeOf(analyser);
-                if (switch_expr_type_type.ipIndex()) |type_index| {
-                    const type_tag = analyser.ip.zigTypeTag(type_index);
-                    if (type_tag == .null or type_tag == .undefined) return null;
-                }
-
-                if (self.decl == .switch_inline_tag_payload) {
-                    const tag_value = try analyser.resolveUnionTag(switch_expr_type_type) orelse return null;
-                    const active_field = try analyser.resolveKnownUnionFieldName(switch_expr_type) orelse return tag_value;
-                    return try analyser.enumValue(try tag_value.typeOf(analyser), active_field);
-                }
-
-                if (switch_expr_type.data == .type_info_value and case.ast.values.len == 1) {
-                    const case_value = case.ast.values[0];
-                    if (tree.nodeTag(case_value) == .enum_literal) {
-                        const case_tag_name = try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null;
-                        if (std.mem.eql(u8, case_tag_name, @tagName(switch_expr_type.data.type_info_value.tag))) {
-                            break :blk try analyser.resolveTypeInfoFieldAccess(
-                                switch_expr_type.data.type_info_value,
-                                case_tag_name,
-                            );
-                        }
-                    }
-                }
-
-                if (switch_expr_type.isEnumType(analyser)) break :blk switch_expr_type;
-                if (!switch_expr_type_type.isUnionType() and
-                    if (switch_expr_type_type.ipIndex()) |index| analyser.ip.zigTypeTag(index) != .@"union" else true)
-                {
-                    return switch_expr_type;
-                }
-
-                if (case.ast.values.len == 0) {
-                    if (case.inline_token == null) {
-                        return switch_expr_type;
-                    }
-                }
-                break :blk try analyser.resolveSwitchUnionPayload(switch_expr_type, tree, tree.switchFull(payload.node), case);
+                const condition = try analyser.resolveTypeOfNodeInternal(.of(cond, self.handle)) orelse return null;
+                break :blk try analyser.resolveSwitchCaptureValue(
+                    condition,
+                    tree,
+                    tree.switchFull(payload.node),
+                    case,
+                    self.decl == .switch_inline_tag_payload,
+                );
             },
             .error_token => return null,
         } orelse return null;

@@ -509,6 +509,28 @@ const first_optional_capture: OptionalCaptureArray(4) = undefined;
 const second_optional_capture: OptionalCaptureArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
 
+fn SwitchCaptureArray(comptime base: usize) type {
+    const U = union(enum) { count: usize, empty };
+    var value = U{ .count = base };
+    var evaluations: usize = 0;
+    const selected = switch (condition: {
+        evaluations += 1;
+        break :condition value;
+    }) {
+        .count => |captured| result: {
+            value = .{ .empty = {} };
+            break :result captured + captured;
+        },
+        .empty => 0,
+    };
+    return [selected + evaluations]u8;
+}
+
+const first_switch_capture: SwitchCaptureArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([9]u8)()
+const second_switch_capture: SwitchCaptureArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
