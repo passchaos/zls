@@ -832,6 +832,201 @@ test "generic function with comptime compound assignments" {
     });
 }
 
+test "comptime interpreter evaluates compound assignment targets once" {
+    const cases = [_]struct { operator: []const u8, initial: u8, operand: u8, expected: []const u8 }{
+        .{ .operator = "+=", .initial = 4, .operand = 2, .expected = "[6]u8" },
+        .{ .operator = "-=", .initial = 4, .operand = 2, .expected = "[2]u8" },
+        .{ .operator = "*=", .initial = 4, .operand = 2, .expected = "[8]u8" },
+        .{ .operator = "/=", .initial = 4, .operand = 2, .expected = "[2]u8" },
+        .{ .operator = "%=", .initial = 5, .operand = 2, .expected = "[1]u8" },
+        .{ .operator = "&=", .initial = 6, .operand = 3, .expected = "[2]u8" },
+        .{ .operator = "|=", .initial = 4, .operand = 2, .expected = "[6]u8" },
+        .{ .operator = "^=", .initial = 6, .operand = 2, .expected = "[4]u8" },
+        .{ .operator = "+%=", .initial = 255, .operand = 2, .expected = "[1]u8" },
+        .{ .operator = "-%=", .initial = 1, .operand = 2, .expected = "[255]u8" },
+        .{ .operator = "*%=", .initial = 128, .operand = 2, .expected = "[0]u8" },
+        .{ .operator = "+|=", .initial = 254, .operand = 2, .expected = "[255]u8" },
+        .{ .operator = "-|=", .initial = 1, .operand = 2, .expected = "[0]u8" },
+        .{ .operator = "*|=", .initial = 128, .operand = 2, .expected = "[255]u8" },
+        .{ .operator = "<<=", .initial = 3, .operand = 1, .expected = "[6]u8" },
+        .{ .operator = ">>=", .initial = 6, .operand = 1, .expected = "[3]u8" },
+        .{ .operator = "<<|=", .initial = 128, .operand = 1, .expected = "[255]u8" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    var values: [1][2]u8 = .{{.{{ {d}, 7 }}}};
+            \\    var order: usize = 0;
+            \\    values[row: {{ order += 1; break :row 0; }}][column: {{
+            \\        order = order * 10 + 2;
+            \\        break :column 0;
+            \\    }}] {s} operand: {{
+            \\        order = order * 10 + 3;
+            \\        break :operand {d};
+            \\    }};
+            \\    return struct {{ items: [values[0][0]]u8, sibling: [values[0][1]]u8, order: [order]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.initial, case.operator, case.operand });
+        defer allocator.free(source);
+        errdefer std.debug.print("compound assignment source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.expected },
+            .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+            .{ .label = "order", .kind = .Field, .detail = "[123]u8" },
+        });
+    }
+}
+
+test "comptime interpreter snapshots compound assignment operands" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [2]u8 = .{ 4, 7 };
+        \\    var index: usize = 0;
+        \\    values[index] += operand: {
+        \\        index = 1;
+        \\        values[0] = 20;
+        \\        break :operand 2;
+        \\    };
+        \\    var pointer = &values[0];
+        \\    pointer.* *= operand: {
+        \\        pointer = &values[1];
+        \\        break :operand 2;
+        \\    };
+        \\    const pointed = pointer.*;
+        \\    return struct { items: [values[0]]u8, sibling: [values[1]]u8, pointer: [pointed]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "pointer", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter propagates compound assignment operand types" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var value: u8 = 4;
+        \\    var order: usize = 0;
+        \\    value += if (true) @intCast(operand: {
+        \\        order += 1;
+        \\        break :operand @as(u16, 2);
+        \\    }) else unreachable;
+        \\    value <<= @intCast(operand: {
+        \\        order = order * 10 + 2;
+        \\        break :operand @as(u8, 1);
+        \\    });
+        \\    var lanes: @Vector(2, u8) = .{ 2, 3 };
+        \\    lanes += @splat(@as(u16, 2));
+        \\    lanes <<= @splat(@as(u8, 1));
+        \\    return struct { items: [value + lanes[0] + lanes[1]]u8, order: [order]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[30]u8" },
+        .{ .label = "order", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
+test "comptime interpreter preserves compound vector lane knowledge" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select() type {
+        \\    var values: @Vector(2, u8) = .{ runtime, 4 };
+        \\    values += .{ 1, 2 };
+        \\    values <<= @splat(@as(u8, 1));
+        \\    var saturated: @Vector(2, u8) = .{ 128, 1 };
+        \\    saturated <<|= @as(@Vector(2, u8), .{ 8, 9 });
+        \\    var flags: @Vector(2, bool) = .{ true, false };
+        \\    flags ^= .{ true, true };
+        \\    var float: f32 = 1.5;
+        \\    float += @floatCast(@as(f64, 2.5));
+        \\    return struct {
+        \\        unknown: [values[0]]u8,
+        \\        known: [values[1]]u8,
+        \\        saturated_first: [saturated[0]]u8,
+        \\        saturated_second: [saturated[1]]u8,
+        \\        flags: [if (!flags[0] and flags[1]) 1 else 99]u8,
+        \\        float: [if (@TypeOf(float) == f32 and float == 4.0) 1 else 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "known", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "saturated_first", .kind = .Field, .detail = "[255]u8" },
+        .{ .label = "saturated_second", .kind = .Field, .detail = "[255]u8" },
+        .{ .label = "flags", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "float", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime interpreter rejects invalid compound operands" {
+    const assignments = [_][]const u8{
+        "value += @intCast(@as(u16, 256));",
+        "value += true;",
+        "value <<= @intCast(@as(u8, 8));",
+        "value >>= @as(u8, 8);",
+        "value <<|= @intCast(@as(u16, 8));",
+    };
+    for (assignments) |assignment| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn invalid() u8 {{
+            \\    var value: u8 = 4;
+            \\    {s}
+            \\    return value;
+            \\}}
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const value = invalid();
+            \\    return struct {{ items: [value]u8, value: @TypeOf(value) }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{assignment});
+        defer allocator.free(source);
+        errdefer std.debug.print("invalid compound assignment: {s}\n", .{assignment});
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "value", .kind = .Field, .detail = "u8" },
+        });
+    }
+}
+
+test "comptime interpreter saturates oversized compound shifts" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var positive: i8 = 1;
+        \\    var negative: i8 = -1;
+        \\    var zero: u8 = 0;
+        \\    var wide: u256 = 1;
+        \\    positive <<|= 8;
+        \\    negative <<|= 9;
+        \\    zero <<|= 100;
+        \\    wide <<|= 256;
+        \\    return struct {
+        \\        positive: [if (positive == 127) 1 else 99]u8,
+        \\        negative: [if (negative == -128) 1 else 99]u8,
+        \\        zero: [zero]u8,
+        \\        wide: [if (wide == ~@as(u256, 0)) 1 else 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "positive", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "negative", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "zero", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "wide", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with partially known array concatenation" {
     try testCompletion(
         \\var runtime: [2]u8 = undefined;
@@ -11898,6 +12093,32 @@ test "cross-file generic function with comptime member reflection" {
         }
     }
     try std.testing.expect(found_enabled);
+}
+
+test "comptime interpreter executes known error catch fallbacks" {
+    for ([_]struct { initial: []const u8, runs: []const u8 }{
+        .{ .initial = "error.Failure", .runs = "[1]u8" },
+        .{ .initial = "4", .runs = "[0]u8" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    var fallback_runs: usize = 0;
+            \\    const value: error{{Failure}}!usize = {s};
+            \\    const selected = value catch |err| fallback: {{
+            \\        fallback_runs += 1;
+            \\        break :fallback if (err == error.Failure) 4 else 99;
+            \\    }};
+            \\    return struct {{ items: [selected]u8, runs: [fallback_runs]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{case.initial});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+            .{ .label = "runs", .kind = .Field, .detail = case.runs },
+        });
+    }
 }
 
 test "comptime interpreter evaluates optional if conditions once" {

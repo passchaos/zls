@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Analyser = @import("../analysis.zig");
 const ast = @import("../ast.zig");
 const offsets = @import("../offsets.zig");
@@ -14,6 +15,7 @@ pub const Value = struct {
         array: []const Type,
         fields: []const Field,
         optional: ?Type,
+        error_union: ErrorUnion,
         reference: *Reference,
         /// Source-backed value used when an aggregate element cannot be
         /// materialized by the intern pool but can still be copied at comptime.
@@ -21,6 +23,10 @@ pub const Value = struct {
     },
 
     pub const Field = struct { name: []const u8, value: Type };
+    pub const ErrorUnion = union(enum) {
+        payload: Type,
+        failure: Type,
+    };
     pub const Cell = struct { value: Type };
     pub const Reference = struct {
         storage: *Cell,
@@ -71,6 +77,12 @@ pub const Value = struct {
                 std.hash.autoHash(hasher, payload != null);
                 if (payload) |value| value.hashWithHasher(hasher);
             },
+            .error_union => |value| {
+                std.hash.autoHash(hasher, std.meta.activeTag(value));
+                switch (value) {
+                    inline else => |item| item.hashWithHasher(hasher),
+                }
+            },
             .reference => |reference| reference.hash(hasher),
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
@@ -95,6 +107,13 @@ pub const Value = struct {
             .optional => |payload| {
                 if ((payload == null) != (other.data.optional == null)) return false;
                 if (payload) |value| if (!value.eql(other.data.optional.?)) return false;
+            },
+            .error_union => |value| {
+                if (std.meta.activeTag(value) != std.meta.activeTag(other.data.error_union)) return false;
+                return switch (value) {
+                    .payload => |item| item.eql(other.data.error_union.payload),
+                    .failure => |item| item.eql(other.data.error_union.failure),
+                };
             },
             .reference => |reference| return reference.eql(other.data.reference.*),
             .expression => |node_handle| return node_handle.eql(other.data.expression),
@@ -219,6 +238,21 @@ pub const Interpreter = struct {
             .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
         };
         return interpreter.callValue(handle, node);
+    }
+
+    pub fn evaluateTyped(
+        analyser: *Analyser,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        destination: Type,
+    ) Error!?Type {
+        var budget: Budget = .{};
+        var interpreter: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
+        };
+        return interpreter.evaluateTypedExpression(handle, node, destination);
     }
 
     pub fn enterExpression(self: *Interpreter) bool {
@@ -466,6 +500,17 @@ pub const Interpreter = struct {
                 return switch (try self.optionalValue(optional) orelse return null) {
                     .absent => self.eval(handle, rhs),
                     .payload => |payload| payload,
+                };
+            },
+            .@"catch" => {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const error_union = try self.eval(handle, lhs) orelse return null;
+                return switch (try self.errorUnionValue(error_union) orelse return null) {
+                    .payload => |payload| payload,
+                    .failure => |failure| {
+                        if (self.catchCaptureToken(handle, node)) |token| try self.bind(handle, token, failure);
+                        return self.eval(handle, rhs);
+                    },
                 };
             },
             .unwrap_optional => {
@@ -1061,6 +1106,18 @@ pub const Interpreter = struct {
                     .payload => |payload| .{ .value = payload, .source_node = null },
                 };
             },
+            .@"catch" => blk: {
+                if (!self.tick()) return null;
+                const lhs, const rhs = tree.nodeData(node).node_and_node;
+                const error_union = try self.eval(handle, lhs) orelse return null;
+                break :blk switch (try self.errorUnionValue(error_union) orelse return null) {
+                    .payload => |payload| .{ .value = payload, .source_node = null },
+                    .failure => |failure| {
+                        if (self.catchCaptureToken(handle, node)) |token| try self.bind(handle, token, failure);
+                        break :blk self.evalSourceWithType(handle, rhs, destination);
+                    },
+                };
+            },
             else => .{
                 .value = try self.eval(handle, node) orelse return null,
                 .source_node = node,
@@ -1268,6 +1325,60 @@ pub const Interpreter = struct {
         };
     }
 
+    const ErrorUnionTypes = struct {
+        error_set: ?Type,
+        payload: Type,
+    };
+
+    fn errorUnionTypes(self: *Interpreter, ty: Type) ?ErrorUnionTypes {
+        if (!ty.is_type_val) return null;
+        return switch (ty.data) {
+            .error_union => |info| .{
+                .error_set = if (info.error_set) |error_set| error_set.* else null,
+                .payload = info.payload.*,
+            },
+            .ip_index => |value| switch (self.analyser.ip.indexToKey(value.index orelse return null)) {
+                .error_union_type => |info| .{
+                    .error_set = if (info.error_set_type != .none)
+                        Type.fromIP(self.analyser, .type_type, info.error_set_type)
+                    else
+                        null,
+                    .payload = Type.fromIP(self.analyser, .type_type, info.payload_type),
+                },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn isErrorValue(self: *Interpreter, value: Type) bool {
+        const index = value.ipIndex() orelse return false;
+        return self.analyser.ip.indexToKey(index) == .error_value;
+    }
+
+    fn isErrorUnionValue(self: *Interpreter, value: Type) Error!bool {
+        if (value.data == .comptime_value and value.data.comptime_value.data == .error_union) return true;
+        return self.errorUnionTypes(try value.typeOf(self.analyser)) != null;
+    }
+
+    fn errorUnionValue(self: *Interpreter, value: Type) Error!?Value.ErrorUnion {
+        const resolved = try self.deref(value) orelse return null;
+        if (resolved.data == .comptime_value and resolved.data.comptime_value.data == .error_union) {
+            return resolved.data.comptime_value.data.error_union;
+        }
+        if (self.isErrorValue(resolved)) return .{ .failure = resolved };
+        return null;
+    }
+
+    fn catchCaptureToken(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) ?Ast.TokenIndex {
+        _ = self;
+        const token = handle.tree.nodeMainToken(node) + 2;
+        if (token >= handle.tree.tokens.len or
+            handle.tree.tokenTag(token - 1) != .pipe or
+            handle.tree.tokenTag(token) != .identifier) return null;
+        return token;
+    }
+
     fn coerceArrayLiteral(
         self: *Interpreter,
         handle: *Handle,
@@ -1382,6 +1493,47 @@ pub const Interpreter = struct {
     ) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
+        if (self.errorUnionTypes(destination)) |types| {
+            if (try self.errorUnionValue(value)) |error_union| {
+                const coerced = switch (error_union) {
+                    .payload => |payload| Value.ErrorUnion{ .payload = try self.coerceFromSource(
+                        handle,
+                        types.payload,
+                        payload,
+                        source_node,
+                        declared_array_len,
+                        allow_invalid,
+                    ) orelse return null },
+                    .failure => |failure| Value.ErrorUnion{ .failure = if (types.error_set) |error_set|
+                        try self.coerce(error_set, failure) orelse return null
+                    else
+                        failure },
+                };
+                return @as(?Type, try Value.create(analyser, destination, .{ .error_union = coerced }));
+            }
+            if (!try self.isErrorUnionValue(value)) {
+                if (self.isErrorValue(value)) {
+                    const failure = if (types.error_set) |error_set|
+                        try self.coerce(error_set, value) orelse return null
+                    else
+                        value;
+                    return @as(?Type, try Value.create(analyser, destination, .{
+                        .error_union = .{ .failure = failure },
+                    }));
+                }
+                const payload = try self.coerceFromSource(
+                    handle,
+                    types.payload,
+                    value,
+                    source_node,
+                    declared_array_len,
+                    allow_invalid,
+                ) orelse return null;
+                return @as(?Type, try Value.create(analyser, destination, .{
+                    .error_union = .{ .payload = payload },
+                }));
+            }
+        }
         if (self.optionalPayloadType(destination)) |payload_type| {
             if (!try self.isOptionalOrNullValue(value)) {
                 const payload = try self.coerceFromSource(
@@ -1836,6 +1988,61 @@ pub const Interpreter = struct {
         return null;
     }
 
+    fn internVectorOperand(self: *Interpreter, value: Type) Error!?Type {
+        if (value.data != .comptime_value) return value;
+        const type_index = value.data.comptime_value.ty.ipIndex() orelse return value;
+        const vector = switch (self.analyser.ip.indexToKey(type_index)) {
+            .vector_type => |vector| vector,
+            else => return value,
+        };
+        const items = Value.elements(value) orelse return null;
+        if (items.len != vector.len) return null;
+        const indices = try self.analyser.arena.alloc(InternPool.Index, items.len);
+        for (items, indices) |item, *index| {
+            index.* = try self.analyser.coerceComptimeIPValue(vector.child, item) orelse return null;
+        }
+        const aggregate = try self.analyser.ip.get(.{ .aggregate = .{
+            .ty = type_index,
+            .values = try self.analyser.ip.getIndexSlice(indices),
+        } });
+        return Type.fromIP(self.analyser, type_index, aggregate);
+    }
+
+    fn compoundOperandType(self: *Interpreter, destination: Type, operation: Ast.Node.Tag) Error!?Type {
+        if (operation == .shl_sat) return null;
+        if (operation == .shl or operation == .shr) {
+            const type_index = destination.ipIndex() orelse return null;
+            if (type_index == .comptime_int_type) return destination;
+            switch (self.analyser.ip.indexToKey(type_index)) {
+                .vector_type => |vector| {
+                    const child = try self.compoundOperandType(Type.fromIP(self.analyser, .type_type, vector.child), operation) orelse return null;
+                    return self.analyser.resolveComptimeVectorType(vector.len, child);
+                },
+                else => {},
+            }
+            if (self.analyser.ip.zigTypeTag(type_index) != .int) return null;
+            const bits = self.analyser.ip.intInfo(type_index, builtin.target).bits;
+            const shift_type = try self.analyser.ip.get(.{ .int_type = .{
+                .signedness = .unsigned,
+                .bits = if (bits == 0) 0 else std.math.log2_int_ceil(u16, bits),
+            } });
+            return Type.fromIP(self.analyser, .type_type, shift_type);
+        }
+        const pointer_size = switch (destination.data) {
+            .pointer => |pointer| pointer.size,
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return destination)) {
+                .pointer_type => |pointer| pointer.flags.size,
+                else => null,
+            },
+            else => null,
+        };
+        if (pointer_size == .many or pointer_size == .c) {
+            if (operation == .add) return Type.fromIP(self.analyser, .type_type, .usize_type);
+            if (operation == .sub) return null;
+        }
+        return destination;
+    }
+
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         if (!self.tick()) return .unknown;
         const analyser = self.analyser;
@@ -1992,10 +2199,22 @@ pub const Interpreter = struct {
                     .assign_sub_sat => .sub_sat,
                     else => unreachable,
                 };
-                const lhs_value = try self.eval(handle, lhs) orelse return .unknown;
-                const rhs_value = try self.eval(handle, rhs) orelse return .unknown;
-                const value = try analyser.resolveComptimeBinaryValue(operation_tag, lhs_value, rhs_value, .{}) orelse return .unknown;
-                if (!try self.write(handle, lhs, value, null)) return .unknown;
+                const target = try self.referenceForNode(handle, lhs) orelse return .unknown;
+                const lhs_value = try self.readReference(target) orelse return .unknown;
+                const destination = try lhs_value.typeOf(analyser);
+                const operand_type = try self.compoundOperandType(destination, operation_tag);
+                const evaluated = try self.evalSourceWithType(handle, rhs, operand_type) orelse return .unknown;
+                const rhs_value = if (operand_type) |ty|
+                    try self.coerceFromSource(handle, ty, evaluated.value, evaluated.source_node, null, false) orelse return .unknown
+                else
+                    evaluated.value;
+                const value = try analyser.resolveComptimeBinaryValue(
+                    operation_tag,
+                    try self.internVectorOperand(lhs_value) orelse return .unknown,
+                    try self.internVectorOperand(rhs_value) orelse return .unknown,
+                    .{},
+                ) orelse return .unknown;
+                if (!try self.writeReference(handle, target, value, null)) return .unknown;
                 return .next;
             },
             .call, .call_comma, .call_one, .call_one_comma => return self.call(handle, node),

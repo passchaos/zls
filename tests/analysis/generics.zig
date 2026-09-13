@@ -551,6 +551,36 @@ const first_local_context: LocalContextArray(4) = undefined;
 const second_local_context: LocalContextArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([8]u8)()
 
+fn CompoundContextArray(comptime base: u8) type {
+    var values: [2]u8 = .{ base, 7 };
+    var index: usize = 0;
+    values[index] += operand: {
+        index = 1;
+        break :operand @intCast(@as(u16, 2));
+    };
+    values[0] <<= @intCast(@as(u8, 1));
+    return [values[0] + values[1]]u8;
+}
+
+const first_compound_context: CompoundContextArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^ ([19]u8)()
+const second_compound_context: CompoundContextArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ ([17]u8)()
+
+fn ErrorCatchArray(comptime initial: error{Failure}!usize) type {
+    var fallback_runs: usize = 0;
+    const selected = initial catch |err| fallback: {
+        fallback_runs += 1;
+        break :fallback if (err == error.Failure) 4 else 99;
+    };
+    return [selected + fallback_runs]u8;
+}
+
+const failed_error_catch: ErrorCatchArray(error.Failure) = undefined;
+//    ^^^^^^^^^^^^^^^^^^ ([5]u8)()
+const successful_error_catch: ErrorCatchArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^ ([4]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

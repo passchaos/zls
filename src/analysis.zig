@@ -2564,6 +2564,7 @@ pub fn coerceComptimeIPValue(
         try analyser.ip.getUnknown(value_payload.type)
     else
         value_index;
+    if (destination_type == value_payload.type) return typed_value_index;
     const source_tag = analyser.ip.zigTypeTag(value_payload.type);
     if (!analyser.ip.isUnknown(typed_value_index) and
         analyser.ip.zigTypeTag(destination_type) == .int and
@@ -6697,8 +6698,7 @@ fn resolveFixedWidthIntegerBinaryValue(
             },
             .shl_sat => {
                 const shift = analyser.ip.toInt(rhs_index, u16) orelse return null;
-                if (shift >= int_info.bits) return null;
-                try result.shiftLeftSat(&lhs_big, shift, int_info.signedness, int_info.bits);
+                try result.shiftLeftSat(&lhs_big, @min(shift, int_info.bits), int_info.signedness, int_info.bits);
             },
             else => return null,
         }
@@ -6729,7 +6729,7 @@ fn resolveFixedWidthIntegerBinaryValue(
                 .sub_sat => if (a_wide >= b_wide) a_wide - b_wide else 0,
                 .mul_sat => @min(a_wide * b_wide, max),
                 .shl_sat => blk: {
-                    if (b_wide >= int_info.bits) return null;
+                    if (b_wide >= int_info.bits) break :blk if (a_wide == 0) 0 else max;
                     break :blk @min(a_wide << @intCast(b_wide), max);
                 },
                 else => return null,
@@ -6748,7 +6748,8 @@ fn resolveFixedWidthIntegerBinaryValue(
                 .sub_wrap, .sub_sat => a_wide - b_wide,
                 .mul_wrap, .mul_sat => a_wide * b_wide,
                 .shl_sat => blk: {
-                    if (b_wide < 0 or b_wide >= int_info.bits) return null;
+                    if (b_wide < 0) return null;
+                    if (b_wide >= int_info.bits) break :blk if (a_wide < 0) min else if (a_wide == 0) 0 else max;
                     break :blk a_wide * (@as(i256, 1) << @intCast(b_wide));
                 },
                 else => return null,
@@ -10619,6 +10620,26 @@ fn resolveFunctionTypeFromCall(
                 try value_params.put(analyser.arena, parameter_token_handle, value);
                 has_callsite_bindings = true;
                 continue;
+            }
+        }
+
+        if (param.modifier == .comptime_param) {
+            const parameter_instance = if (param_type.is_type_val)
+                try param_type.instanceTypeVal(analyser) orelse param_type
+            else
+                param_type;
+            const is_error_union = switch (parameter_instance.data) {
+                .error_union => true,
+                .ip_index => |payload| analyser.ip.zigTypeTag(payload.type) == .error_union,
+                else => false,
+            };
+            if (is_error_union) {
+                if (try comptime_eval.Interpreter.evaluateTyped(analyser, handle, arg, param_type)) |value| {
+                    try meta_params.put(analyser.arena, parameter_token_handle, value);
+                    try value_params.put(analyser.arena, parameter_token_handle, value);
+                    has_callsite_bindings = true;
+                    continue;
+                }
             }
         }
 
