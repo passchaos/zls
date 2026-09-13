@@ -2031,6 +2031,12 @@ pub fn resolveSwitchCaptureValue(
         }
     }
     if (condition.isEnumType(analyser)) return condition;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const aggregate_case = for (case.ast.values) |case_value| {
+        if (tree.fullStructInit(&literal_buffer, case_value) != null or
+            tree.fullArrayInit(&literal_buffer, case_value) != null) break true;
+    } else false;
+    if (aggregate_case) return condition;
     if (!condition_type.isUnionType() and
         if (condition_type.ipIndex()) |index| analyser.ip.zigTypeTag(index) != .@"union" else true)
     {

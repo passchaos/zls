@@ -819,6 +819,18 @@ fn PackedLabeledSwitchArray() type {
 const packed_labeled_switch: PackedLabeledSwitchArray() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^ ([5]u8)()
 
+fn PackedUnionLabeledSwitchArray() type {
+    const State = packed union { unsigned: u8, signed: i8 };
+    const selected = state: switch (State{ .unsigned = 1 }) {
+        .{ .unsigned = 3 } => |value| break :state value.unsigned,
+        else => |value| continue :state .{ .unsigned = value.unsigned + 1 },
+    };
+    return [selected]u8;
+}
+
+const packed_union_labeled_switch: PackedUnionLabeledSwitchArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ([3]u8)()
+
 comptime {
     if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
     if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");
@@ -829,6 +841,7 @@ comptime {
     if (@TypeOf(labeled_error_switch) != [7]u8) @compileError("unexpected labeled error switch result");
     if (!@hasField(@TypeOf(pure_labeled_switch), "resolved")) @compileError("unexpected pure labeled switch result");
     if (@TypeOf(packed_labeled_switch) != [5]u8) @compileError("unexpected packed labeled switch result");
+    if (@TypeOf(packed_union_labeled_switch) != [3]u8) @compileError("unexpected packed union labeled switch result");
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
 }

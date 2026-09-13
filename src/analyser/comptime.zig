@@ -2104,7 +2104,15 @@ pub const Interpreter = struct {
                 const name_token = payload_token + @intFromBool(capture_by_ref);
                 const captured = if (capture_by_ref) captured: {
                     const base = reference orelse return null;
-                    const active_field = try self.analyser.resolveKnownUnionFieldName(condition);
+                    var literal_buffer: [2]Ast.Node.Index = undefined;
+                    const aggregate_case = for (switch_case.ast.values) |case_value| {
+                        if (tree.fullStructInit(&literal_buffer, case_value) != null or
+                            tree.fullArrayInit(&literal_buffer, case_value) != null) break true;
+                    } else false;
+                    const active_field = if (aggregate_case)
+                        null
+                    else
+                        try self.analyser.resolveKnownUnionFieldName(condition);
                     const payload_reference = if (active_field != null and
                         (switch_case.ast.values.len != 0 or switch_case.inline_token != null))
                         try self.extendReference(base, .{ .field = active_field.? })
