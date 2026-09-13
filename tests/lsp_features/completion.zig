@@ -13732,6 +13732,31 @@ test "zero-parameter type function comptime evaluation" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
 
     try testCompletion(
+        \\fn values() [*]const usize {
+        \\    return &.{ 2, 3, 5, 7 };
+        \\}
+        \\fn Select() type {
+        \\    var shifted = values() + 2;
+        \\    shifted -= 1;
+        \\    const sliced = shifted[1..3];
+        \\    const last = values() + 4 - 1;
+        \\    return struct {
+        \\        items: [shifted[0]]u8,
+        \\        slice_first: [sliced[0]]u8,
+        \\        slice_second: [sliced[1]]u8,
+        \\        last: [last[0]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "slice_first", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "slice_second", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "last", .kind = .Field, .detail = "[7]u8" },
+    });
+
+    try testCompletion(
         \\var runtime_offset: usize = undefined;
         \\fn values() [*]const usize {
         \\    var result: [*]const usize = &.{ 1, 2 };

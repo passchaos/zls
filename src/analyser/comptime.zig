@@ -13,6 +13,7 @@ pub const Value = struct {
     ty: Type,
     data: union(enum) {
         array: []const Type,
+        sequence: Sequence,
         fields: []const Field,
         optional: ?Type,
         error_union: ErrorUnion,
@@ -24,6 +25,10 @@ pub const Value = struct {
     },
 
     pub const Field = struct { name: []const u8, value: Type };
+    pub const Sequence = struct {
+        backing: []const Type,
+        offset: usize,
+    };
     pub const ErrorUnion = union(enum) {
         payload: Type,
         failure: Type,
@@ -96,6 +101,10 @@ pub const Value = struct {
         std.hash.autoHash(hasher, std.meta.activeTag(self.data));
         switch (self.data) {
             .array => |items| for (items) |item| item.hashWithHasher(hasher),
+            .sequence => |view| {
+                for (view.backing) |item| item.hashWithHasher(hasher);
+                std.hash.autoHash(hasher, view.offset);
+            },
             .fields => |fields| {
                 var fields_hash: u64 = 0;
                 for (fields) |entry| {
@@ -146,6 +155,12 @@ pub const Value = struct {
             .array => |items| {
                 if (items.len != other.data.array.len) return false;
                 for (items, other.data.array) |a, b| if (!a.eql(b)) return false;
+            },
+            .sequence => |view| {
+                const other_sequence = other.data.sequence;
+                if (view.offset != other_sequence.offset or
+                    view.backing.len != other_sequence.backing.len) return false;
+                for (view.backing, other_sequence.backing) |a, b| if (!a.eql(b)) return false;
             },
             .fields => |fields| {
                 if (fields.len != other.data.fields.len) return false;
@@ -211,8 +226,22 @@ pub const Value = struct {
 
     pub fn elements(value: Type) ?[]const Type {
         const resolved = deref(value);
-        if (resolved.data != .comptime_value or resolved.data.comptime_value.data != .array) return null;
-        return resolved.data.comptime_value.data.array;
+        if (resolved.data != .comptime_value) return null;
+        return switch (resolved.data.comptime_value.data) {
+            .array => |items| items,
+            .sequence => |view| view.backing[view.offset..],
+            else => null,
+        };
+    }
+
+    pub fn sequence(value: Type) ?Sequence {
+        const resolved = deref(value);
+        if (resolved.data != .comptime_value) return null;
+        return switch (resolved.data.comptime_value.data) {
+            .array => |items| .{ .backing = items, .offset = 0 },
+            .sequence => |sequence_value| sequence_value,
+            else => null,
+        };
     }
 
     pub fn fieldEntries(value: Type) ?[]const Field {
@@ -2228,6 +2257,9 @@ pub const Interpreter = struct {
             .array => |items| for (items) |item| {
                 if (self.containsOwnedReference(item, depth + 1)) break true;
             } else false,
+            .sequence => |sequence| for (sequence.backing) |item| {
+                if (self.containsOwnedReference(item, depth + 1)) break true;
+            } else false,
             .fields => |fields| for (fields) |field| {
                 if (self.containsOwnedReference(field.value, depth + 1)) break true;
             } else false,
@@ -2521,8 +2553,7 @@ pub const Interpreter = struct {
             else => null,
         };
         if (pointer_size == .many or pointer_size == .c) {
-            if (operation == .add) return Type.fromIP(self.analyser, .type_type, .usize_type);
-            if (operation == .sub) return null;
+            if (operation == .add or operation == .sub) return Type.fromIP(self.analyser, .type_type, .usize_type);
         }
         return destination;
     }

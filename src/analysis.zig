@@ -6265,21 +6265,26 @@ fn resolveComptimePointerOffset(
     analyser: *Analyser,
     pointer: Type,
     offset: Type,
+    subtract: bool,
 ) error{OutOfMemory}!?Type {
     const pointer_type = if (pointer.data == .comptime_value)
         try pointer.data.comptime_value.ty.instanceUnchecked(analyser)
     else
         pointer.runtimeType(analyser);
     if (pointer_type.pointerSize(analyser) != .many) return null;
-    const items = comptime_eval.Value.elements(pointer) orelse return null;
+    const sequence = comptime_eval.Value.sequence(pointer) orelse return null;
     const offset_index = offset.ipIndex() orelse return null;
     if (analyser.ip.isUndefined(offset_index) or analyser.ip.isUnknown(offset_index)) return null;
     const amount = analyser.ip.toInt(offset_index, usize) orelse return null;
-    if (amount > items.len) return null;
+    const new_offset = if (subtract)
+        std.math.sub(usize, sequence.offset, amount) catch return null
+    else
+        std.math.add(usize, sequence.offset, amount) catch return null;
+    if (new_offset > sequence.backing.len) return null;
     return @as(?Type, try comptime_eval.Value.create(
         analyser,
         try pointer.typeOf(analyser),
-        .{ .array = items[amount..] },
+        .{ .sequence = .{ .backing = sequence.backing, .offset = new_offset } },
     ));
 }
 
@@ -6290,8 +6295,8 @@ pub fn resolveComptimeBinaryValue(
     rhs: Type,
     options: ComptimeBinaryOptions,
 ) error{OutOfMemory}!?Type {
-    if (tag == .add) {
-        if (try analyser.resolveComptimePointerOffset(lhs, rhs)) |value| return value;
+    if (tag == .add or tag == .sub) {
+        if (try analyser.resolveComptimePointerOffset(lhs, rhs, tag == .sub)) |value| return value;
     }
     if (options.complementary_operand) |operand| {
         if (try analyser.resolveComplementaryBinaryValue(
