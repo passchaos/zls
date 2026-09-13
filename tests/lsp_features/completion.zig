@@ -15582,6 +15582,46 @@ test "comptime pointer casts preserve address identity" {
     });
 }
 
+test "comptime sequence pointer parameter values" {
+    try testCompletion(
+        \\fn source() [*]const usize {
+        \\    var result: [*]const usize = &.{ 1, 1 };
+        \\    result = &.{ 2, 3, 5, 7 };
+        \\    return result;
+        \\}
+        \\fn MakeMany(comptime pointer: [*]const usize) type {
+        \\    var value = pointer[0];
+        \\    value += 0;
+        \\    return struct { items: [value]u8 };
+        \\}
+        \\fn MakeSlice(comptime values: []const usize) type {
+        \\    var first = values[0];
+        \\    first += 0;
+        \\    return struct { items: [first]u8, len: [values.len]u8 };
+        \\}
+        \\const many: MakeMany(source() + 2) = undefined;
+        \\const many_field = many.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[5]u8" }});
+
+    try testCompletion(
+        \\fn source() [*]const usize {
+        \\    var result: [*]const usize = &.{ 1, 1 };
+        \\    result = &.{ 2, 3, 5, 7 };
+        \\    return result;
+        \\}
+        \\fn MakeSlice(comptime values: []const usize) type {
+        \\    var first = values[0];
+        \\    first += 0;
+        \\    return struct { items: [first]u8, len: [values.len]u8 };
+        \\}
+        \\const slice: MakeSlice((source() + 1)[0..2]) = undefined;
+        \\const slice_field = slice.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "len", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
