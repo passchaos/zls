@@ -419,12 +419,15 @@ pub const Interpreter = struct {
         return self.analyser.ip.zigTypeTag(index) == .@"union";
     }
 
-    fn isSliceType(self: *Interpreter, ty: Type) bool {
+    fn isSequencePointerType(self: *Interpreter, ty: Type) bool {
         if (!ty.is_type_val) return false;
         return switch (ty.data) {
-            .pointer => |info| info.size == .slice,
+            .pointer => |info| info.size == .slice or
+                (info.size == .one and info.is_const and info.elem_ty.data == .array),
             .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
-                .pointer_type => |info| info.flags.size == .slice,
+                .pointer_type => |info| info.flags.size == .slice or
+                    (info.flags.size == .one and info.flags.is_const and
+                        self.analyser.ip.indexToKey(info.elem_type) == .array_type),
                 else => false,
             },
             else => false,
@@ -1652,7 +1655,7 @@ pub const Interpreter = struct {
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
             if (tree.nodeTag(literal_node) == .address_of and
-                self.isSliceType(destination))
+                self.isSequencePointerType(destination))
             {
                 const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
                 if (tree.fullArrayInit(&buffer, operand)) |literal| {
