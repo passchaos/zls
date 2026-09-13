@@ -11381,20 +11381,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
             }
 
-            const return_type = try func_info.return_value.typeOf(analyser);
-            const return_is_integer = if (return_type.ipIndex()) |index|
-                if (analyser.ip.zigTypeTag(index)) |tag| switch (tag) {
-                    .int, .comptime_int => true,
-                    else => false,
-                } else false
-            else
-                false;
             if (analyser.resolve_number_literal_values and
                 analyser.comptime_interpreter == null and
-                func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl and
-                return_is_integer)
+                func_info.handle.tree.nodeTag(func_info.fn_node) == .fn_decl)
             {
-                if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
+                const return_type = try func_info.return_value.typeOf(analyser);
+                const return_is_integer = if (return_type.ipIndex()) |index|
+                    if (analyser.ip.zigTypeTag(index)) |tag| switch (tag) {
+                        .int, .comptime_int => true,
+                        else => false,
+                    } else false
+                else
+                    false;
+                if (return_is_integer) {
+                    if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
+                }
             }
             return func_info.return_value.*;
         },
