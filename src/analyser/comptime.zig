@@ -1355,7 +1355,13 @@ pub const Interpreter = struct {
         else
             destination.preservesIdentityThroughPtrCast(self.analyser, source_type);
         if (!preserves_identity) return null;
-        if (self.optionalPayloadType(destination)) |destination_payload| {
+        const destination_payload = self.optionalPayloadType(destination);
+        const source_payload = self.optionalPayloadType(source_type);
+        if (destination_payload) |payload_type| {
+            if (source_payload == null) {
+                const casted = try self.pointerCastValue(payload_type, operand, qualifier_cast) orelse return null;
+                return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = casted }));
+            }
             if (operand.ipIndex()) |index| {
                 if (self.analyser.ip.isNull(index))
                     return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = null }));
@@ -1364,8 +1370,17 @@ pub const Interpreter = struct {
             if (operand.data != .comptime_value or operand.data.comptime_value.data != .optional) return null;
             const payload = operand.data.comptime_value.data.optional orelse
                 return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = null }));
-            const casted = try self.pointerCastValue(destination_payload, payload, qualifier_cast) orelse return null;
+            const casted = try self.pointerCastValue(payload_type, payload, qualifier_cast) orelse return null;
             return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = casted }));
+        }
+        if (source_payload != null) {
+            if (operand.ipIndex()) |index| {
+                if (self.analyser.ip.isNull(index) or self.analyser.ip.isUndefined(index) or
+                    self.analyser.ip.isUnknown(index)) return null;
+            }
+            if (operand.data != .comptime_value or operand.data.comptime_value.data != .optional) return null;
+            const payload = operand.data.comptime_value.data.optional orelse return null;
+            return self.pointerCastValue(destination, payload, qualifier_cast);
         }
         return switch (operand.data) {
             .comptime_value => |comptime_value| switch (comptime_value.data) {

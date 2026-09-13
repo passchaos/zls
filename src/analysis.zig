@@ -15219,8 +15219,7 @@ pub const Type = struct {
     pub fn preservesIdentityThroughPtrCast(destination: Type, analyser: *Analyser, source: Type) bool {
         const dest = destination.pointerCastInfo(analyser) orelse return false;
         const src = source.pointerCastInfo(analyser) orelse return false;
-        return dest.is_optional == src.is_optional and
-            dest.pointer.size == .one and src.pointer.size == .one and
+        return dest.pointer.size == .one and src.pointer.size == .one and
             dest.pointer.is_const == src.pointer.is_const and
             dest.pointer.is_volatile == src.pointer.is_volatile and
             dest.pointer.is_allowzero == src.pointer.is_allowzero and

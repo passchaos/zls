@@ -15368,17 +15368,22 @@ test "comptime pointer casts preserve address identity" {
         \\    const source: ?*const usize = &value;
         \\    const writable: ?*usize = @constCast(source);
         \\    const erased: ?*const anyopaque = @ptrCast(source);
+        \\    const wrapped: ?*const anyopaque = @ptrCast(&value);
+        \\    const unwrapped: *const anyopaque = @ptrCast(source);
         \\    const absent: ?*const usize = null;
         \\    const absent_erased: ?*const anyopaque = @ptrCast(absent);
         \\    var writable_same: usize = 2;
         \\    if (writable.? == @constCast(&value)) writable_same = 1;
         \\    var erased_same: usize = 4;
         \\    if (erased.? == @as(*const anyopaque, @ptrCast(&value))) erased_same = 3;
+        \\    var changed: usize = 8;
+        \\    if (wrapped.? == unwrapped) changed = 7;
         \\    var absent_size: usize = 6;
         \\    if (absent_erased == null) absent_size = 5;
         \\    return struct {
         \\        writable_same: [writable_same]u8,
         \\        erased_same: [erased_same]u8,
+        \\        changed: [changed]u8,
         \\        absent: [absent_size]u8,
         \\    };
         \\}
@@ -15387,6 +15392,7 @@ test "comptime pointer casts preserve address identity" {
     , &.{
         .{ .label = "writable_same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "erased_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[7]u8" },
         .{ .label = "absent", .kind = .Field, .detail = "[5]u8" },
     });
 
@@ -15398,6 +15404,20 @@ test "comptime pointer casts preserve address identity" {
         \\fn Select() type {
         \\    var size: usize = 2;
         \\    if (erased() == null) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\var runtime: ?*const usize = undefined;
+        \\fn erased() *const anyopaque {
+        \\    return @ptrCast(runtime);
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (erased() == erased()) size = 1;
         \\    return struct { items: [size]u8 };
         \\}
         \\const selected: Select() = undefined;
