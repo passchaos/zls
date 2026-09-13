@@ -10477,14 +10477,14 @@ test "comptime interpreter evaluates labeled switch loops" {
     });
 
     try testCompletion(
-        \\const State = packed struct { value: u8 };
+        \\const State = packed struct { value: u8, mode: u8 };
         \\fn Select() type {
         \\    var transitions: usize = 0;
-        \\    const selected = state: switch (State{ .value = 1 }) {
-        \\        .{ .value = 3 } => |value| break :state value.value,
+        \\    const selected = state: switch (State{ .value = 1, .mode = 7 }) {
+        \\        .{ .mode = 7, .value = 3 } => |value| break :state value.value,
         \\        else => |value| {
         \\            transitions += 1;
-        \\            continue :state .{ .value = value.value + 1 };
+        \\            continue :state .{ .value = value.value + 1, .mode = value.mode };
         \\        },
         \\    };
         \\    return struct { items: [selected]u8, transitions: [transitions]u8 };

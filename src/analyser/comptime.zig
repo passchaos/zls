@@ -70,9 +70,16 @@ pub const Value = struct {
         std.hash.autoHash(hasher, std.meta.activeTag(self.data));
         switch (self.data) {
             .array => |items| for (items) |item| item.hashWithHasher(hasher),
-            .fields => |fields| for (fields) |entry| {
-                hasher.update(entry.name);
-                entry.value.hashWithHasher(hasher);
+            .fields => |fields| {
+                var fields_hash: u64 = 0;
+                for (fields) |entry| {
+                    var field_hasher: std.hash.Wyhash = .init(0);
+                    field_hasher.update(entry.name);
+                    entry.value.hashWithHasher(&field_hasher);
+                    fields_hash +%= field_hasher.final();
+                }
+                std.hash.autoHash(hasher, fields.len);
+                std.hash.autoHash(hasher, fields_hash);
             },
             .optional => |payload| {
                 std.hash.autoHash(hasher, payload != null);
@@ -101,9 +108,11 @@ pub const Value = struct {
             },
             .fields => |fields| {
                 if (fields.len != other.data.fields.len) return false;
-                for (fields, other.data.fields) |a, b| {
-                    if (!std.mem.eql(u8, a.name, b.name) or !a.value.eql(b.value)) return false;
-                }
+                for (fields) |a| for (other.data.fields) |b| {
+                    if (!std.mem.eql(u8, a.name, b.name)) continue;
+                    if (!a.value.eql(b.value)) return false;
+                    break;
+                } else return false;
             },
             .optional => |payload| {
                 if ((payload == null) != (other.data.optional == null)) return false;

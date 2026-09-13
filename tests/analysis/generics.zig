@@ -804,13 +804,13 @@ const pure_labeled_switch: PureLabeledSwitch(.start) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^ (struct { resolved: u8 })()
 
 fn PackedLabeledSwitchArray() type {
-    const State = packed struct { value: u8 };
+    const State = packed struct { value: u8, mode: u8 };
     var transitions: usize = 0;
-    const selected = state: switch (State{ .value = 1 }) {
-        .{ .value = 3 } => |value| break :state value.value,
+    const selected = state: switch (State{ .value = 1, .mode = 7 }) {
+        .{ .mode = 7, .value = 3 } => |value| break :state value.value,
         else => |value| {
             transitions += 1;
-            continue :state .{ .value = value.value + 1 };
+            continue :state .{ .value = value.value + 1, .mode = value.mode };
         },
     };
     return [selected + transitions]u8;
