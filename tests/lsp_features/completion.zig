@@ -14932,6 +14932,37 @@ test "comptime interpreter eligibility cache" {
     try std.testing.expectEqual(@as(usize, 2), analyser.comptime_interpreter_needed.count());
 }
 
+test "comptime pointer identities isolate generic containers" {
+    const source =
+        \\fn Holder(comptime T: type) type {
+        \\    return struct {
+        \\        const value: usize = 4;
+        \\        const Marker = T;
+        \\    };
+        \\}
+        \\fn pointer(comptime T: type) *const usize {
+        \\    var result: *const usize = &Holder(T).value;
+        \\    return result;
+        \\}
+        \\const first = pointer(u8);
+        \\const second = pointer(u16);
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    analyser.resolve_number_literal_values = true;
+    const first_decl = try analyser.lookupSymbolGlobal(handle, "first", source.len) orelse return error.TestUnexpectedResult;
+    const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
+    const first = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const second = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!first.eql(second));
+    try std.testing.expect(first.hash64() != second.hash64());
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {

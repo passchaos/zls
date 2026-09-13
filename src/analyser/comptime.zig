@@ -32,6 +32,7 @@ pub const Value = struct {
     pub const Pointee = struct {
         value: Type,
         source: Analyser.NodeWithHandle,
+        container_type: ?Type,
     };
     pub const Reference = struct {
         storage: *Cell,
@@ -101,6 +102,8 @@ pub const Value = struct {
                 pointee.value.hashWithHasher(hasher);
                 std.hash.autoHash(hasher, pointee.source.node);
                 hasher.update(pointee.source.handle.uri.raw);
+                std.hash.autoHash(hasher, pointee.container_type != null);
+                if (pointee.container_type) |container_type| container_type.hashWithHasher(hasher);
             },
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
@@ -136,8 +139,16 @@ pub const Value = struct {
                 };
             },
             .reference => |reference| return reference.eql(other.data.reference.*),
-            .pointee => |pointee| return pointee.source.eql(other.data.pointee.source) and
-                pointee.value.eql(other.data.pointee.value),
+            .pointee => |pointee| {
+                const other_pointee = other.data.pointee;
+                if (!pointee.source.eql(other_pointee.source) or
+                    !pointee.value.eql(other_pointee.value) or
+                    (pointee.container_type == null) != (other_pointee.container_type == null)) return false;
+                return if (pointee.container_type) |container_type|
+                    container_type.eql(other_pointee.container_type.?)
+                else
+                    true;
+            },
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
@@ -1751,6 +1762,7 @@ pub const Interpreter = struct {
                 return @as(?Type, try Value.create(analyser, destination, .{ .pointee = .{
                     .value = pointee,
                     .source = .of(declaration_node, declaration.handle),
+                    .container_type = declaration.container_type,
                 } }));
             }
             if (tree.nodeTag(literal_node) == .address_of) aggregate_pointer: {
