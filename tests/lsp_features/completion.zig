@@ -13623,6 +13623,23 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn identity(pointer: *usize) *usize {
+        \\    return pointer;
+        \\}
+        \\fn wrapped(pointer: *usize) ?*usize {
+        \\    return pointer;
+        \\}
+        \\fn Select() type {
+        \\    var value: usize = 2;
+        \\    identity(&value).* += 2;
+        \\    wrapped(&value).?.* += 1;
+        \\    return struct { items: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[5]u8" }});
+
+    try testCompletion(
         \\fn value() *const usize {
         \\    const one: usize = 1;
         \\    const four: usize = 4;
