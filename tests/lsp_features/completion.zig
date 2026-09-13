@@ -13738,12 +13738,15 @@ test "zero-parameter type function comptime evaluation" {
         \\fn Select() type {
         \\    var shifted = values() + 2;
         \\    shifted -= 1;
-        \\    const sliced = shifted[1..3];
+        \\    const sliced: []const usize = shifted[1..3];
+        \\    const recovered = (sliced.ptr - 1)[0];
         \\    const last = values() + 4 - 1;
         \\    return struct {
         \\        items: [shifted[0]]u8,
         \\        slice_first: [sliced[0]]u8,
         \\        slice_second: [sliced[1]]u8,
+        \\        slice_len: [sliced.len]u8,
+        \\        recovered: [recovered]u8,
         \\        last: [last[0]]u8,
         \\    };
         \\}
@@ -13753,6 +13756,8 @@ test "zero-parameter type function comptime evaluation" {
         .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "slice_first", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "slice_second", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "slice_len", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "recovered", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "last", .kind = .Field, .detail = "[7]u8" },
     });
 

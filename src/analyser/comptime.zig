@@ -28,6 +28,7 @@ pub const Value = struct {
     pub const Sequence = struct {
         backing: []const Type,
         offset: usize,
+        len: usize,
     };
     pub const ErrorUnion = union(enum) {
         payload: Type,
@@ -104,6 +105,7 @@ pub const Value = struct {
             .sequence => |view| {
                 for (view.backing) |item| item.hashWithHasher(hasher);
                 std.hash.autoHash(hasher, view.offset);
+                std.hash.autoHash(hasher, view.len);
             },
             .fields => |fields| {
                 var fields_hash: u64 = 0;
@@ -158,7 +160,7 @@ pub const Value = struct {
             },
             .sequence => |view| {
                 const other_sequence = other.data.sequence;
-                if (view.offset != other_sequence.offset or
+                if (view.offset != other_sequence.offset or view.len != other_sequence.len or
                     view.backing.len != other_sequence.backing.len) return false;
                 for (view.backing, other_sequence.backing) |a, b| if (!a.eql(b)) return false;
             },
@@ -229,7 +231,7 @@ pub const Value = struct {
         if (resolved.data != .comptime_value) return null;
         return switch (resolved.data.comptime_value.data) {
             .array => |items| items,
-            .sequence => |view| view.backing[view.offset..],
+            .sequence => |view| view.backing[view.offset..][0..view.len],
             else => null,
         };
     }
@@ -238,7 +240,7 @@ pub const Value = struct {
         const resolved = deref(value);
         if (resolved.data != .comptime_value) return null;
         return switch (resolved.data.comptime_value.data) {
-            .array => |items| .{ .backing = items, .offset = 0 },
+            .array => |items| .{ .backing = items, .offset = 0, .len = items.len },
             .sequence => |sequence_value| sequence_value,
             else => null,
         };
@@ -1951,6 +1953,15 @@ pub const Interpreter = struct {
                 try self.coerce(destination, value) orelse try self.unknownArray(destination, len)
             else
                 try self.unknownArray(destination, len);
+        }
+        if (destination.isConstSequencePointerType(analyser) and
+            !(try value.typeOf(analyser)).eql(destination))
+        {
+            if (Value.sequence(value)) |sequence| {
+                _ = try self.coerce(destination, value) orelse
+                    return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                return @as(?Type, try Value.create(analyser, destination, .{ .sequence = sequence }));
+            }
         }
         return if (allow_invalid) self.coerceAssignmentTo(destination, value) else self.coerce(destination, value);
     }

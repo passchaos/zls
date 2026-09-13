@@ -863,6 +863,14 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
                 lhs;
             if (value_type.pointerSize(analyser) == .slice) {
                 const pointer = try analyser.resolvePropertyType(value_type, field_name) orelse return null;
+                if (comptime_eval.Value.sequence(lhs)) |view| return .{
+                    .type = try comptime_eval.Value.create(analyser, try pointer.typeOf(analyser), .{ .sequence = .{
+                        .backing = view.backing,
+                        .offset = view.offset,
+                        .len = view.backing.len - view.offset,
+                    } }),
+                    .is_const = true,
+                };
                 return .{
                     .type = try comptime_eval.Value.create(analyser, try pointer.typeOf(analyser), .{ .array = items }),
                     .is_const = true,
@@ -2897,6 +2905,14 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                     .type = try value_type.instanceUnchecked(analyser),
                     .is_const = lhs_binding.is_const,
                 }, rhs) orelse return null;
+                if (comptime_eval.Value.sequence(lhs_value)) |view| return .{
+                    .type = try comptime_eval.Value.create(analyser, try sliced.type.typeOf(analyser), .{ .sequence = .{
+                        .backing = view.backing,
+                        .offset = view.offset + start,
+                        .len = items.len - start,
+                    } }),
+                    .is_const = true,
+                };
                 return .{
                     .type = try comptime_eval.Value.create(analyser, try sliced.type.typeOf(analyser), .{ .array = items[start..] }),
                     .is_const = true,
@@ -2910,6 +2926,14 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                     .type = try value_type.instanceUnchecked(analyser),
                     .is_const = lhs_binding.is_const,
                 }, rhs) orelse return null;
+                if (comptime_eval.Value.sequence(lhs_value)) |view| return .{
+                    .type = try comptime_eval.Value.create(analyser, try sliced.type.typeOf(analyser), .{ .sequence = .{
+                        .backing = view.backing,
+                        .offset = view.offset + start,
+                        .len = end - start,
+                    } }),
+                    .is_const = true,
+                };
                 return .{
                     .type = try comptime_eval.Value.create(analyser, try sliced.type.typeOf(analyser), .{ .array = items[start..end] }),
                     .is_const = true,
@@ -6284,7 +6308,11 @@ fn resolveComptimePointerOffset(
     return @as(?Type, try comptime_eval.Value.create(
         analyser,
         try pointer.typeOf(analyser),
-        .{ .sequence = .{ .backing = sequence.backing, .offset = new_offset } },
+        .{ .sequence = .{
+            .backing = sequence.backing,
+            .offset = new_offset,
+            .len = sequence.backing.len - new_offset,
+        } },
     ));
 }
 
