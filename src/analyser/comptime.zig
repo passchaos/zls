@@ -423,11 +423,11 @@ pub const Interpreter = struct {
         if (!ty.is_type_val) return false;
         return switch (ty.data) {
             .pointer => |info| info.is_const and
-                (info.size == .slice or
+                (info.size == .slice or info.size == .many or
                     (info.size == .one and (info.elem_ty.data == .array or info.elem_ty.data == .tuple))),
             .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
                 .pointer_type => |info| info.flags.is_const and
-                    (info.flags.size == .slice or
+                    (info.flags.size == .slice or info.flags.size == .many or
                         (info.flags.size == .one and switch (self.analyser.ip.indexToKey(info.elem_type)) {
                             .array_type, .tuple_type => true,
                             else => false,

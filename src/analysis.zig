@@ -9436,9 +9436,9 @@ fn isStringSliceType(analyser: *Analyser, ty: Type) bool {
 fn isSliceType(analyser: *Analyser, ty: Type) bool {
     if (!ty.is_type_val) return false;
     return switch (ty.data) {
-        .pointer => |info| info.size == .slice,
+        .pointer => |info| info.size == .slice and info.is_const,
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
-            .pointer_type => |info| info.flags.size == .slice,
+            .pointer_type => |info| info.flags.size == .slice and info.flags.is_const,
             else => false,
         },
         else => false,
@@ -9466,6 +9466,18 @@ fn isConstSequencePointerType(analyser: *Analyser, ty: Type) bool {
         .array, .tuple => true,
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
             .array_type, .tuple_type => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn isConstManyPointerType(analyser: *Analyser, ty: Type) bool {
+    if (!ty.is_type_val) return false;
+    return switch (ty.data) {
+        .pointer => |info| info.size == .many and info.is_const,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return false)) {
+            .pointer_type => |info| info.flags.size == .many and info.flags.is_const,
             else => false,
         },
         else => false,
@@ -11453,7 +11465,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     return_type.isOptionalType(analyser) or return_type.isErrorSetType(analyser) or
                     return_is_aggregate or
                     analyser.isSliceType(return_type) or
-                    analyser.isConstSequencePointerType(return_type) or
+                    analyser.isConstSequencePointerType(return_type) or analyser.isConstManyPointerType(return_type) or
                     switch (return_tag orelse .void) {
                         .array, .vector, .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => true,
                         else => false,
