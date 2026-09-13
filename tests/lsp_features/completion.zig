@@ -316,6 +316,42 @@ test "symbol lookup on identifier named after primitive" {
     , &.{
         .{ .label = "Some", .kind = .Constant, .detail = "u32" },
     });
+    try testCompletion(
+        \\const @"true" = struct { const Some = u32; };
+        \\const foo = @"true".<cursor>
+    , &.{
+        .{ .label = "Some", .kind = .Constant, .detail = "u32" },
+    });
+}
+
+test "field access iterator resolves builtin values" {
+    const source =
+        \\const a = true;
+        \\const b = false;
+        \\const c = null;
+        \\const d = undefined;
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+
+    for ([_]struct { name: []const u8, expected: zls.analyser.InternPool.Index }{
+        .{ .name = "true", .expected = .bool_true },
+        .{ .name = "false", .expected = .bool_false },
+        .{ .name = "null", .expected = .null_value },
+        .{ .name = "undefined", .expected = .undefined_value },
+    }) |case| {
+        const start = std.mem.find(u8, source, case.name).?;
+        const value = try analyser.getFieldAccessType(handle, source.len, .{
+            .start = start,
+            .end = start + case.name.len,
+        }) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.expected, value.ipIndex().?);
+    }
 }
 
 test "assign destructure" {

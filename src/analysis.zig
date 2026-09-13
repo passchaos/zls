@@ -15790,6 +15790,9 @@ pub fn getFieldAccessType(
                     source_index,
                 )) |child| {
                     current_type = (try child.resolveType(analyser)) orelse return null;
+                } else if (tokenizer.buffer[tok.loc.start] != '@') {
+                    const value = try analyser.resolvePrimitive(symbol_name) orelse return null;
+                    current_type = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
                 } else return null;
             },
             .period => {
