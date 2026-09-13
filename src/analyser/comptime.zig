@@ -229,6 +229,11 @@ pub const Value = struct {
     }
 
     pub fn pointerIdentityEql(analyser: *Analyser, lhs: Type, rhs: Type) ?bool {
+        return pointerIdentityEqlDepth(analyser, lhs, rhs, 0);
+    }
+
+    fn pointerIdentityEqlDepth(analyser: *Analyser, lhs: Type, rhs: Type, depth: u8) ?bool {
+        if (depth == 128) return null;
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
         return switch (lhs.data.comptime_value.data) {
             .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
@@ -241,6 +246,16 @@ pub const Value = struct {
             },
             .sequence => |lhs_sequence| switch (rhs.data.comptime_value.data) {
                 .sequence => |rhs_sequence| lhs_sequence.sameAddress(rhs_sequence, analyser),
+                else => null,
+            },
+            .optional => |lhs_payload| switch (rhs.data.comptime_value.data) {
+                .optional => |rhs_payload| if (lhs_payload) |lhs_value|
+                    if (rhs_payload) |rhs_value|
+                        pointerIdentityEqlDepth(analyser, lhs_value, rhs_value, depth + 1)
+                    else
+                        false
+                else
+                    rhs_payload == null,
                 else => null,
             },
             else => null,
