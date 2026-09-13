@@ -1639,9 +1639,15 @@ pub const Interpreter = struct {
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
-            if (tree.nodeTag(literal_node) == .enum_literal and destination.isEnumType(analyser)) {
-                const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse return null;
-                return @as(?Type, try analyser.enumValue(destination, tag));
+            if (tree.nodeTag(literal_node) == .enum_literal) {
+                if (destination.isEnumType(analyser)) {
+                    const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse return null;
+                    return @as(?Type, try analyser.enumValue(destination, tag));
+                }
+                if (destination.ipIndex() == .enum_literal_type) {
+                    const tag = try analyser.identifierTokenName(tree, tree.nodeMainToken(literal_node)) orelse return null;
+                    return @as(?Type, try analyser.enumValue(destination, tag));
+                }
             }
             if (tree.fullArrayInit(&buffer, literal_node)) |literal| {
                 if (literal.ast.type_expr == .none) {

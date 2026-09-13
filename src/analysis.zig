@@ -1122,7 +1122,13 @@ pub fn resolveKnownSwitchTargetFromValue(
             }
             if (condition.data == .enum_value) {
                 const enum_type = condition.data.enum_value.enum_type.*;
-                const case_tag = try analyser.resolveEnumValueTag(enum_type, .of(case_value, handle)) orelse return null;
+                const case_tag = if (enum_type.ipIndex() == .enum_literal_type)
+                    if (tree.nodeTag(case_value) == .enum_literal)
+                        try analyser.identifierTokenName(tree, tree.nodeMainToken(case_value)) orelse return null
+                    else
+                        return null
+                else
+                    try analyser.resolveEnumValueTag(enum_type, .of(case_value, handle)) orelse return null;
                 if (std.mem.eql(u8, condition.data.enum_value.tag, case_tag)) return switch_case.ast.target_expr;
                 continue;
             }
@@ -11439,7 +11445,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     try analyser.comptimeInterpreterNeeded(func_info.handle, body)
                 else switch (return_tag orelse .void) {
                     .int, .comptime_int => true,
-                    .array, .vector, .bool, .float, .comptime_float => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
+                    .array, .vector, .bool, .float, .comptime_float, .enum_literal => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
                     else => false,
                 };
                 if (can_evaluate) {
