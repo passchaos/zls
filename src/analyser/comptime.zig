@@ -1594,7 +1594,12 @@ pub const Interpreter = struct {
     ) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
+        const source_is_unknown = if (value.ipIndex()) |index|
+            analyser.ip.isUndefined(index) or analyser.ip.isUnknown(index)
+        else
+            false;
         if (self.errorUnionTypes(destination)) |types| {
+            if (source_is_unknown) return self.coerce(destination, value);
             if (try self.errorUnionValue(value)) |error_union| {
                 const coerced = switch (error_union) {
                     .payload => |payload| Value.ErrorUnion{ .payload = try self.coerceFromSource(
@@ -1636,6 +1641,7 @@ pub const Interpreter = struct {
             }
         }
         if (self.optionalPayloadType(destination)) |payload_type| {
+            if (source_is_unknown) return self.coerce(destination, value);
             if (!try self.isOptionalOrNullValue(value)) {
                 const payload = try self.coerceFromSource(
                     handle,
@@ -1663,7 +1669,9 @@ pub const Interpreter = struct {
                     .ast_node => |decl_node| decl_node,
                     else => break :scalar_pointer,
                 };
-                const pointee = try self.evaluateTypedExpression(handle, operand, pointee_type) orelse
+                const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse break :scalar_pointer;
+                const initializer = variable.ast.init_node.unwrap() orelse break :scalar_pointer;
+                const pointee = try self.evaluateTypedExpression(declaration.handle, initializer, pointee_type) orelse
                     return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                 return @as(?Type, try Value.create(analyser, destination, .{ .pointee = .{
                     .value = pointee,

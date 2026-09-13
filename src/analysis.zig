@@ -15116,10 +15116,11 @@ pub const Type = struct {
     pub fn constScalarPointerChild(self: Type, analyser: *Analyser) ?Type {
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one or !info.is_const) return null;
-        if (info.elem_ty.isEnumType(analyser) or info.elem_ty.isErrorSetType(analyser)) return info.elem_ty;
+        if (info.elem_ty.isEnumType(analyser) or info.elem_ty.isErrorSetType(analyser) or
+            info.elem_ty.isOptionalType(analyser) or info.elem_ty.data == .error_union) return info.elem_ty;
         const tag = analyser.ip.zigTypeTag(info.elem_ty.ipIndex() orelse return null) orelse return null;
         return switch (tag) {
-            .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null => info.elem_ty,
+            .int, .comptime_int, .bool, .float, .comptime_float, .enum_literal, .null, .optional, .error_union => info.elem_ty,
             else => null,
         };
     }

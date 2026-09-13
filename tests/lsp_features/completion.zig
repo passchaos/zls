@@ -13566,6 +13566,75 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\const failure: error{Failure}!usize = error.Failure;
+        \\const four: error{Failure}!usize = 4;
+        \\fn value() *const error{Failure}!usize {
+        \\    var result: *const error{Failure}!usize = &failure;
+        \\    result = &four;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [(value().* catch 7)]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\const absent: ?usize = null;
+        \\const four: ?usize = 4;
+        \\fn value() *const ?usize {
+        \\    var result: *const ?usize = &absent;
+        \\    result = &four;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return if (value().*) |payload|
+        \\        struct { items: [payload]u8 }
+        \\    else
+        \\        struct { absent: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\const absent: ?usize = null;
+        \\const value: ?usize = undefined;
+        \\fn selected() *const ?usize {
+        \\    var result: *const ?usize = &absent;
+        \\    result = &value;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return if (selected().*) |payload|
+        \\        struct { items: [payload]u8 }
+        \\    else
+        \\        struct { absent: u8 };
+        \\}
+        \\const result: Select() = undefined;
+        \\const field = result.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "absent", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const failure: error{Failure}!usize = error.Failure;
+        \\const value: error{Failure}!usize = undefined;
+        \\fn selected() *const error{Failure}!usize {
+        \\    var result: *const error{Failure}!usize = &failure;
+        \\    result = &value;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [(selected().* catch 7)]u8 };
+        \\}
+        \\const result: Select() = undefined;
+        \\const field = result.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\const one: usize = 1;
         \\const four: usize = 4;
         \\fn value() *const usize {
