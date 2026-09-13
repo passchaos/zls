@@ -198,6 +198,13 @@ pub const Interpreter = struct {
         quota: usize = default_step_quota,
         depth: usize = 0,
         expression_depth: usize = 0,
+
+        fn raiseQuota(self: *Budget, requested: u32) void {
+            const new_quota = @min(@as(usize, requested), max_step_quota);
+            if (new_quota <= self.quota) return;
+            self.steps += new_quota - self.quota;
+            self.quota = new_quota;
+        }
     };
     const Flow = union(enum) {
         next,
@@ -851,11 +858,7 @@ pub const Interpreter = struct {
                     if (params.len != 1) return null;
                     const quota = try self.eval(handle, params[0]) orelse return null;
                     const requested = self.analyser.ip.toInt(quota.ipIndex() orelse return null, u32) orelse return null;
-                    const new_quota = @min(@as(usize, requested), max_step_quota);
-                    if (new_quota > self.budget.quota) {
-                        self.budget.steps += new_quota - self.budget.quota;
-                        self.budget.quota = new_quota;
-                    }
+                    self.budget.raiseQuota(requested);
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
                 if (std.mem.eql(u8, name, "@setRuntimeSafety")) {
@@ -2717,3 +2720,21 @@ pub const Interpreter = struct {
         };
     }
 };
+
+test "comptime interpreter evaluation quota remains bounded and monotonic" {
+    var budget: Interpreter.Budget = .{};
+    budget.steps -= 10;
+
+    budget.raiseQuota(0);
+    budget.raiseQuota(10);
+    try std.testing.expectEqual(Interpreter.default_step_quota, budget.quota);
+    try std.testing.expectEqual(Interpreter.default_step_quota - 10, budget.steps);
+
+    budget.raiseQuota(10_000);
+    try std.testing.expectEqual(@as(usize, 10_000), budget.quota);
+    try std.testing.expectEqual(@as(usize, 9_990), budget.steps);
+
+    budget.raiseQuota(std.math.maxInt(u32));
+    try std.testing.expectEqual(Interpreter.max_step_quota, budget.quota);
+    try std.testing.expectEqual(Interpreter.max_step_quota - 10, budget.steps);
+}
