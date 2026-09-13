@@ -11411,7 +11411,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     try analyser.comptimeInterpreterNeeded(func_info.handle, body)
                 else switch (return_tag orelse .void) {
                     .int, .comptime_int => true,
-                    .bool, .float, .comptime_float => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
+                    .array, .vector, .bool, .float, .comptime_float => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
                     else => false,
                 };
                 if (can_evaluate) {

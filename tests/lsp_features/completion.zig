@@ -13566,6 +13566,46 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn values() @Vector(2, usize) {
+        \\    var result: @Vector(2, usize) = .{ 1, 2 };
+        \\    result[0] = 4;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [values()[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\fn values() [2]usize {
+        \\    var result: [2]usize = .{ 1, 2 };
+        \\    result[0] = 4;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [values()[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\var runtime_value: usize = undefined;
+        \\fn values() [2]usize {
+        \\    var result: [2]usize = .{ 1, 2 };
+        \\    result[0] = runtime_value;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [values()[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\const E = error{ First, Second };
         \\fn selectedError() E {
         \\    var result: E = error.First;
