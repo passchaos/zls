@@ -2097,15 +2097,36 @@ pub fn resolveDerefType(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?
 }
 
 pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?Binding {
-    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .reference) {
-        const reference = pointer.data.comptime_value.data.reference;
-        const target = if (analyser.comptime_interpreter) |interpreter|
-            interpreter.readReference(reference) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.Canceled => return null,
-            }
-        else if (reference.path.len == 0) reference.storage.value else null;
-        if (target) |value| return .{ .type = value, .is_const = false };
+    if (pointer.data == .comptime_value) {
+        const comptime_value = pointer.data.comptime_value;
+        switch (comptime_value.data) {
+            .reference => |reference| {
+                const target = if (analyser.comptime_interpreter) |interpreter|
+                    interpreter.readReference(reference) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.Canceled => return null,
+                    }
+                else if (reference.path.len == 0) reference.storage.value else null;
+                if (target) |value| return .{ .type = value, .is_const = false };
+            },
+            .array => |items| {
+                const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
+                const pointee = try analyser.resolveDerefType(pointer_instance) orelse return null;
+                return .{
+                    .type = try comptime_eval.Value.create(analyser, try pointee.typeOf(analyser), .{ .array = items }),
+                    .is_const = true,
+                };
+            },
+            .fields => |fields| {
+                const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
+                const pointee = try analyser.resolveDerefType(pointer_instance) orelse return null;
+                return .{
+                    .type = try comptime_eval.Value.create(analyser, try pointee.typeOf(analyser), .{ .fields = fields }),
+                    .is_const = true,
+                };
+            },
+            else => {},
+        }
     }
     const runtime_pointer = pointer.runtimeType(analyser);
     if (runtime_pointer.is_type_val) return null;

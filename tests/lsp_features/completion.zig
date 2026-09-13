@@ -13566,6 +13566,57 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\const Config = struct { capacity: usize };
+        \\fn config() *const Config {
+        \\    var result: *const Config = &.{ .capacity = 1 };
+        \\    result = &.{ .capacity = 4 };
+        \\    return result;
+        \\}
+        \\fn values() *const [2]usize {
+        \\    var result: *const [2]usize = &.{ 1, 2 };
+        \\    result = &.{ 3, 5 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        config_items: [config().*.capacity]u8,
+        \\        value_items: [values().*[1]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "config_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "value_items", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime_value: usize = undefined;
+        \\const Config = struct { capacity: usize };
+        \\fn config() *const Config {
+        \\    var result: *const Config = &.{ .capacity = 1 };
+        \\    result = &.{ .capacity = runtime_value };
+        \\    return result;
+        \\}
+        \\fn values() *const [2]usize {
+        \\    var result: *const [2]usize = &.{ 1, 2 };
+        \\    result = &.{ 3, runtime_value };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        config_items: [config().*.capacity]u8,
+        \\        value_items: [values().*[1]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "config_items", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "value_items", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\const Config = struct { capacity: usize = 4 };
         \\fn config() *const Config {
         \\    var result: *const Config = &.{};
