@@ -333,6 +333,19 @@ fn HelperCallContainer() type {
 const helper_call_container: HelperCallContainer() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^ (HelperCallContainer())()
 
+fn computedFloatCapacity() f64 {
+    var value: f64 = 1.5;
+    value += 3.0;
+    return value;
+}
+
+fn FloatHelperContainer() type {
+    return struct { items: [@intFromFloat(computedFloatCapacity())]u8 };
+}
+
+const float_helper_container: FloatHelperContainer() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (FloatHelperContainer())()
+
 fn EmbeddedFileArray() type {
     var total: usize = 1;
     const bytes = @embedFile(path: {

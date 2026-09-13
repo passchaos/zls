@@ -11404,7 +11404,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 const body = func_info.handle.tree.nodeData(func_info.fn_node).node_and_node[1];
                 const can_evaluate = switch (return_tag orelse .void) {
                     .int, .comptime_int => true,
-                    .bool => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
+                    .bool, .float, .comptime_float => try analyser.comptimeInterpreterNeeded(func_info.handle, body),
                     else => false,
                 };
                 if (can_evaluate) {
@@ -11566,10 +11566,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         .array_type_sentinel,
         => {
             const array_info = tree.fullArrayType(node).?;
-            const elem_count = try analyser.resolveIntegerLiteral(u64, .{
+            const count_options: ResolveOptions = .{
                 .node_handle = .of(array_info.ast.elem_count, handle),
                 .container_type = options.container_type,
-            });
+            };
+            const elem_count = if (try analyser.resolveCoercedIPValue(.usize_type, count_options)) |value|
+                analyser.ip.toInt(value, u64)
+            else
+                try analyser.resolveIntegerLiteral(u64, count_options);
             const sentinel = try analyser.resolveOptionalIPValue(array_info.ast.sentinel, handle);
 
             const elem_ty = try analyser.resolveTypeOfNodeInternal(.{
