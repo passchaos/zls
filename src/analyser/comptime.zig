@@ -29,6 +29,15 @@ pub const Value = struct {
         backing: []const Type,
         offset: usize,
         len: usize,
+
+        fn sameAddress(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
+            if (self.backing.ptr == other.backing.ptr) return self.offset == other.offset;
+            for (self.backing) |item| if (!isKnown(item, analyser, 0)) return null;
+            for (other.backing) |item| if (!isKnown(item, analyser, 0)) return null;
+            if (self.offset != other.offset or self.backing.len != other.backing.len) return false;
+            for (self.backing, other.backing) |lhs, rhs| if (!lhs.eql(rhs)) return false;
+            return true;
+        }
     };
     pub const ErrorUnion = union(enum) {
         payload: Type,
@@ -190,7 +199,36 @@ pub const Value = struct {
         return true;
     }
 
-    pub fn pointerIdentityEql(lhs: Type, rhs: Type) ?bool {
+    fn isKnown(value: Type, analyser: *Analyser, depth: u8) bool {
+        if (depth == 128) return false;
+        return switch (value.data) {
+            .ip_index => |payload| if (payload.index) |index|
+                !analyser.ip.isUndefined(index) and !analyser.ip.isUnknown(index)
+            else
+                false,
+            .enum_value, .string_value, .type_info_value => true,
+            .comptime_value => |comptime_value| switch (comptime_value.data) {
+                .array => |items| for (items) |item| {
+                    if (!isKnown(item, analyser, depth + 1)) break false;
+                } else true,
+                .sequence => |view| for (view.backing) |item| {
+                    if (!isKnown(item, analyser, depth + 1)) break false;
+                } else true,
+                .fields => |fields| for (fields) |entry| {
+                    if (!isKnown(entry.value, analyser, depth + 1)) break false;
+                } else true,
+                .optional => |payload| if (payload) |item| isKnown(item, analyser, depth + 1) else true,
+                .error_union => |result| switch (result) {
+                    inline else => |item| isKnown(item, analyser, depth + 1),
+                },
+                .reference, .pointee => true,
+                .expression => false,
+            },
+            else => value.is_type_val,
+        };
+    }
+
+    pub fn pointerIdentityEql(analyser: *Analyser, lhs: Type, rhs: Type) ?bool {
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
         return switch (lhs.data.comptime_value.data) {
             .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
@@ -199,6 +237,10 @@ pub const Value = struct {
             },
             .pointee => |lhs_pointee| switch (rhs.data.comptime_value.data) {
                 .pointee => |rhs_pointee| lhs_pointee.eql(rhs_pointee),
+                else => null,
+            },
+            .sequence => |lhs_sequence| switch (rhs.data.comptime_value.data) {
+                .sequence => |rhs_sequence| lhs_sequence.sameAddress(rhs_sequence, analyser),
                 else => null,
             },
             else => null,

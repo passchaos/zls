@@ -8505,7 +8505,7 @@ fn resolveComparisonValue(
     const lhs_index = lhs.ipIndex();
     const rhs_index = rhs.ipIndex();
     if (tag == .equal_equal or tag == .bang_equal) {
-        if (comptime_eval.Value.pointerIdentityEql(lhs, rhs)) |equal| {
+        if (comptime_eval.Value.pointerIdentityEql(analyser, lhs, rhs)) |equal| {
             return Type.fromIP(
                 analyser,
                 .bool_type,

@@ -15163,6 +15163,42 @@ test "comptime pointer comparisons preserve address identity" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\fn pointer(comptime offset: usize) [*]const usize {
+        \\    return @as([*]const usize, &.{ 4, 4 }) + offset;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(0) == pointer(0)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(0) != pointer(1)) distinct = 3;
+        \\    const slice: []const usize = pointer(0)[0..1];
+        \\    var slice_same: usize = 6;
+        \\    if (slice.ptr == pointer(0)) slice_same = 5;
+        \\    return struct { same: [same]u8, distinct: [distinct]u8, slice_same: [slice_same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "slice_same", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: usize = undefined;
+        \\fn pointer() [*]const usize {
+        \\    return &.{runtime};
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (pointer() == pointer()) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
 test "type function with comptime early returns" {
