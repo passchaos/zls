@@ -2150,6 +2150,18 @@ pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory
                     .is_const = true,
                 };
             },
+            .sequence => |sequence| {
+                const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
+                const pointee = try analyser.resolveDerefType(pointer_instance) orelse return null;
+                return .{
+                    .type = try comptime_eval.Value.create(
+                        analyser,
+                        try pointee.typeOf(analyser),
+                        .{ .array = sequence.backing[sequence.offset..][0..sequence.len] },
+                    ),
+                    .is_const = true,
+                };
+            },
             .fields => |fields| {
                 const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
                 const pointee = try analyser.resolveDerefType(pointer_instance) orelse return null;

@@ -13739,6 +13739,7 @@ test "zero-parameter type function comptime evaluation" {
         \\    var shifted = values() + 2;
         \\    shifted -= 1;
         \\    const sliced: []const usize = shifted[1..3];
+        \\    const array_pointer: *const [2]usize = shifted[1..3];
         \\    const recovered = (sliced.ptr - 1)[0];
         \\    const last = values() + 4 - 1;
         \\    return struct {
@@ -13746,6 +13747,8 @@ test "zero-parameter type function comptime evaluation" {
         \\        slice_first: [sliced[0]]u8,
         \\        slice_second: [sliced[1]]u8,
         \\        slice_len: [sliced.len]u8,
+        \\        deref_first: [array_pointer.*[0]]u8,
+        \\        deref_second: [array_pointer.*[1]]u8,
         \\        recovered: [recovered]u8,
         \\        last: [last[0]]u8,
         \\    };
@@ -13757,6 +13760,8 @@ test "zero-parameter type function comptime evaluation" {
         .{ .label = "slice_first", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "slice_second", .kind = .Field, .detail = "[7]u8" },
         .{ .label = "slice_len", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "deref_first", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "deref_second", .kind = .Field, .detail = "[7]u8" },
         .{ .label = "recovered", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "last", .kind = .Field, .detail = "[7]u8" },
     });
