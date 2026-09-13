@@ -13679,6 +13679,8 @@ test "zero-parameter type function comptime evaluation" {
         \\    return result;
         \\}
         \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    state += 0;
         \\    return struct {
         \\        unknown: [values().ptr[1]]u8,
         \\        shifted: [(values().ptr + 1)[0]]u8,
@@ -13765,6 +13767,37 @@ test "zero-parameter type function comptime evaluation" {
         .{ .label = "recovered", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "last", .kind = .Field, .detail = "[7]u8" },
     });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var pointer = "xy".ptr;
+        \\    pointer = "abcd".ptr;
+        \\    const direct = pointer[2];
+        \\    const shifted = (pointer + 1)[0];
+        \\    const end = pointer[4];
+        \\    const past = pointer[5];
+        \\    return struct { direct: [direct]u8, shifted: [shifted]u8, end: [end]u8, past: [past]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "direct", .kind = .Field, .detail = "[99]u8" },
+        .{ .label = "shifted", .kind = .Field, .detail = "[98]u8" },
+        .{ .label = "end", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "past", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var pointer = "xy".ptr;
+        \\    pointer = "abcd".ptr;
+        \\    var same: usize = 8;
+        \\    if (pointer + 1 == "abcd".ptr + 1) same = 7;
+        \\    return struct { items: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[7]u8" }});
 
     try testCompletion(
         \\var runtime_offset: usize = undefined;

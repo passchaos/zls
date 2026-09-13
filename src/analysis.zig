@@ -895,7 +895,44 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
         }
     }
     if (lhs.data == .string_value) {
-        if (try analyser.resolvePropertyType(lhs, field_name)) |t| return .{ .type = t, .is_const = true };
+        if (std.mem.eql(u8, field_name, "ptr")) {
+            const string_type = lhs.data.string_value.string_type.*;
+            const pointer = switch (analyser.ip.indexToKey(string_type.ipIndex() orelse return null)) {
+                .pointer_type => |pointer| pointer,
+                else => return null,
+            };
+            if (pointer.flags.size != .one) return null;
+            const array = switch (analyser.ip.indexToKey(pointer.elem_type)) {
+                .array_type => |array| array,
+                else => return null,
+            };
+            var many_pointer = pointer;
+            many_pointer.flags.size = .many;
+            many_pointer.elem_type = array.child;
+            many_pointer.sentinel = array.sentinel;
+            const pointer_type = try analyser.ip.get(.{ .pointer_type = many_pointer });
+            const bytes = lhs.data.string_value.bytes;
+            const items = try analyser.arena.alloc(Type, bytes.len);
+            for (bytes, items) |byte, *item| {
+                const index = try analyser.ip.get(.{ .int_u64_value = .{
+                    .ty = .u8_type,
+                    .int = byte,
+                } });
+                item.* = Type.fromIP(analyser, .u8_type, index);
+            }
+            return .{
+                .type = try comptime_eval.Value.create(analyser, Type.fromIP(analyser, .type_type, pointer_type), .{ .sequence = .{
+                    .backing = items,
+                    .offset = 0,
+                    .len = items.len,
+                    .elements_valid = true,
+                } }),
+                .is_const = true,
+            };
+        }
+        if (try analyser.resolvePropertyType(lhs, field_name)) |t| {
+            return .{ .type = t, .is_const = true };
+        }
     }
     if (lhs.data == .type_info_value) {
         if (try analyser.resolveTypeInfoFieldAccess(lhs.data.type_info_value, field_name)) |field| {
