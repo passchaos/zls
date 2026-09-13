@@ -13623,6 +13623,41 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn values() []const usize {
+        \\    var result: []const usize = &.{ 1, 2 };
+        \\    result = &.{ 4, 5 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [values().ptr[1]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[5]u8" }});
+
+    try testCompletion(
+        \\var runtime_value: usize = undefined;
+        \\fn values() []const usize {
+        \\    var result: []const usize = &.{ 1, 2 };
+        \\    result = &.{ 4, runtime_value };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        unknown: [values().ptr[1]]u8,
+        \\        shifted: [(values().ptr + 1)[0]]u8,
+        \\        no_length: [values().ptr.len]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "shifted", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "no_length", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\fn value(input: usize) *const usize {
         \\    const local = input;
         \\    return &local;

@@ -853,6 +853,19 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
         }
     }
     if (comptime_eval.Value.elements(lhs)) |items| {
+        if (std.mem.eql(u8, field_name, "ptr")) {
+            const value_type = if (lhs.data == .comptime_value)
+                try lhs.data.comptime_value.ty.instanceUnchecked(analyser)
+            else
+                lhs;
+            if (value_type.pointerSize(analyser) == .slice) {
+                const pointer = try analyser.resolvePropertyType(value_type, field_name) orelse return null;
+                return .{
+                    .type = try comptime_eval.Value.create(analyser, try pointer.typeOf(analyser), .{ .array = items }),
+                    .is_const = true,
+                };
+            }
+        }
         if (std.mem.eql(u8, field_name, "len")) {
             const value_type = if (lhs.data == .comptime_value)
                 try lhs.data.comptime_value.ty.instanceUnchecked(analyser)
