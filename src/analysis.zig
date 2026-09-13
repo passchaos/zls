@@ -6245,6 +6245,28 @@ pub fn resolveComptimeBinaryOptions(
     };
 }
 
+fn resolveComptimePointerOffset(
+    analyser: *Analyser,
+    pointer: Type,
+    offset: Type,
+) error{OutOfMemory}!?Type {
+    const pointer_type = if (pointer.data == .comptime_value)
+        try pointer.data.comptime_value.ty.instanceUnchecked(analyser)
+    else
+        pointer.runtimeType(analyser);
+    if (pointer_type.pointerSize(analyser) != .many) return null;
+    const items = comptime_eval.Value.elements(pointer) orelse return null;
+    const offset_index = offset.ipIndex() orelse return null;
+    if (analyser.ip.isUndefined(offset_index) or analyser.ip.isUnknown(offset_index)) return null;
+    const amount = analyser.ip.toInt(offset_index, usize) orelse return null;
+    if (amount > items.len) return null;
+    return @as(?Type, try comptime_eval.Value.create(
+        analyser,
+        try pointer.typeOf(analyser),
+        .{ .array = items[amount..] },
+    ));
+}
+
 pub fn resolveComptimeBinaryValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
@@ -6252,6 +6274,9 @@ pub fn resolveComptimeBinaryValue(
     rhs: Type,
     options: ComptimeBinaryOptions,
 ) error{OutOfMemory}!?Type {
+    if (tag == .add) {
+        if (try analyser.resolveComptimePointerOffset(lhs, rhs)) |value| return value;
+    }
     if (options.complementary_operand) |operand| {
         if (try analyser.resolveComplementaryBinaryValue(
             tag,

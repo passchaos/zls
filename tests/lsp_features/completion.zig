@@ -13623,6 +13623,43 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn values() [*]const usize {
+        \\    var result: [*]const usize = &.{ 1, 2 };
+        \\    result = &.{ 3, 4 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [(values() + 1)[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\var runtime_offset: usize = undefined;
+        \\fn values() [*]const usize {
+        \\    var result: [*]const usize = &.{ 1, 2 };
+        \\    result = &.{ 3, 4 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct {
+        \\        unknown: [(values() + runtime_offset)[0]]u8,
+        \\        one_past: [(values() + 2)[0]]u8,
+        \\        out_of_bounds: [(values() + 3)[0]]u8,
+        \\        negative: [(values() + -1)[0]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "one_past", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "out_of_bounds", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "negative", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\fn identity(pointer: *usize) *usize {
         \\    return pointer;
         \\}
