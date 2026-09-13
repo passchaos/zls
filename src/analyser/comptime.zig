@@ -1706,17 +1706,18 @@ pub const Interpreter = struct {
         decl: Ast.full.VarDecl,
         initial_value: Type,
         initial_node: ?Ast.Node.Index,
+        declared_type: ?Type,
     ) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
         var value = initial_value;
-        if (decl.ast.type_node.unwrap()) |type_node| {
-            const ty = try self.eval(handle, type_node) orelse return false;
-            if (tree.fullArrayType(type_node)) |array| {
-                const len = try self.integer(handle, array.ast.elem_count) orelse return false;
-                if (len > self.budget.steps) return false;
-                value = try self.coerceAssignmentFromSource(handle, ty, value, initial_node, len) orelse return false;
-            } else value = try self.coerceAssignmentFromSource(handle, ty, value, initial_node, null) orelse return false;
+        if (declared_type) |ty| {
+            const len = if (tree.fullArrayType(decl.ast.type_node.unwrap().?) != null)
+                self.assignmentAggregateLength(ty) orelse return false
+            else
+                null;
+            if (len) |count| if (count > self.budget.steps) return false;
+            value = try self.coerceAssignmentFromSource(handle, ty, value, initial_node, len) orelse return false;
         }
         const token = decl.ast.mut_token + 1;
         if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) {
@@ -1848,10 +1849,14 @@ pub const Interpreter = struct {
         }
         if (tree.fullVarDecl(node)) |decl| {
             const init_node = decl.ast.init_node.unwrap() orelse return .unknown;
-            const evaluated = try self.evalSource(handle, init_node);
+            const declared_type = if (decl.ast.type_node.unwrap()) |type_node|
+                try self.eval(handle, type_node) orelse return .unknown
+            else
+                null;
+            const evaluated = try self.evalSourceWithType(handle, init_node, declared_type);
             const value = if (evaluated) |result| result.value else Type.unknown_type;
             const source_node = if (evaluated) |result| result.source_node else init_node;
-            if (!try self.declare(handle, decl, value, source_node)) return .unknown;
+            if (!try self.declare(handle, decl, value, source_node, declared_type)) return .unknown;
             return .next;
         }
         switch (tree.nodeTag(node)) {
@@ -1912,8 +1917,11 @@ pub const Interpreter = struct {
                     _ = try self.eval(handle, rhs);
                     return .next;
                 }
-                const evaluated = try self.evalSource(handle, rhs) orelse return .unknown;
-                if (!try self.write(handle, lhs, evaluated.value, evaluated.source_node)) return .unknown;
+                const target = try self.referenceForNode(handle, lhs) orelse return .unknown;
+                const current = try self.readReference(target) orelse return .unknown;
+                const destination = try current.typeOf(analyser);
+                const evaluated = try self.evalTypedSource(handle, rhs, destination) orelse return .unknown;
+                if (!try self.writeReference(handle, target, evaluated.value, evaluated.source_node)) return .unknown;
                 return .next;
             },
             .assign_destructure => {
@@ -1933,7 +1941,11 @@ pub const Interpreter = struct {
                 for (assignment.ast.variables, items, 0..) |lhs, item, index| {
                     const item_node = if (literal_elements) |elements| elements[index] else null;
                     if (tree.fullVarDecl(lhs)) |decl| {
-                        if (!try self.declare(handle, decl, item, item_node)) return .unknown;
+                        const declared_type = if (decl.ast.type_node.unwrap()) |type_node|
+                            try self.eval(handle, type_node) orelse return .unknown
+                        else
+                            null;
+                        if (!try self.declare(handle, decl, item, item_node, declared_type)) return .unknown;
                         continue;
                     }
                     if (tree.nodeTag(lhs) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(lhs)), "_")) continue;

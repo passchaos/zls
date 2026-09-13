@@ -531,6 +531,26 @@ const first_switch_capture: SwitchCaptureArray(4) = undefined;
 const second_switch_capture: SwitchCaptureArray(3) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^ ([7]u8)()
 
+fn LocalContextArray(comptime base: u16) type {
+    var executions: usize = 0;
+    const initial: u8 = result: {
+        executions += 1;
+        break :result @intCast(base);
+    };
+    var values: [2]u8 = .{ initial, 7 };
+    var index: usize = 0;
+    values[index] = result: {
+        index = 1;
+        break :result @intCast(base + 1);
+    };
+    return [initial + values[0] + executions]u8;
+}
+
+const first_local_context: LocalContextArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([10]u8)()
+const second_local_context: LocalContextArray(3) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([8]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

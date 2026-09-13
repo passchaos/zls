@@ -3965,6 +3965,167 @@ test "comptime interpreter preserves explicit struct initializer result location
     });
 }
 
+test "comptime interpreter propagates contextual local initializer types" {
+    const cases = [_]struct { type: []const u8, initializer: []const u8, count: []const u8 }{
+        .{ .type = "u8", .initializer = "@intCast(@as(u16, 4))", .count = "value" },
+        .{ .type = "u8", .initializer = "if (true) @truncate(@as(u16, 260)) else unreachable", .count = "value" },
+        .{ .type = "@Vector(2, usize)", .initializer = "@splat(@as(u8, 4))", .count = "value[0]" },
+        .{ .type = "Mode", .initializer = "@enumFromInt(@as(u8, 4))", .count = "@intFromEnum(value)" },
+    };
+    for (cases) |case| {
+        for ([_][]const u8{ "const", "var" }) |modifier| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\const Mode = enum(u8) {{ selected = 4, other = 9 }};
+                \\fn Select() type {{
+                \\    var executions: usize = 0;
+                \\    {s} value: destination: {{
+                \\        executions += 1;
+                \\        break :destination {s};
+                \\    }} = result: {{
+                \\        executions = executions * 10 + 2;
+                \\        break :result {s};
+                \\    }};
+                \\    return struct {{ items: [{s}]u8, executions: [executions]u8 }};
+                \\}}
+                \\const selected: Select() = undefined;
+                \\const field = selected.<cursor>
+            , .{ modifier, case.type, case.initializer, case.count });
+            defer allocator.free(source);
+            errdefer std.debug.print("contextual local initializer:\n{s}\n", .{source});
+            try testCompletion(source, &.{
+                .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+                .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+            });
+        }
+    }
+}
+
+test "comptime interpreter evaluates assignment targets before values" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [1][2]u8 = .{.{ 0, 7 }};
+        \\    var executions: usize = 0;
+        \\    values[row: {
+        \\        executions += 1;
+        \\        break :row 0;
+        \\    }][column: {
+        \\        executions = executions * 10 + 2;
+        \\        break :column 0;
+        \\    }] = result: {
+        \\        executions = executions * 10 + 3;
+        \\        break :result @intCast(@as(u16, 4));
+        \\    };
+        \\    return struct {
+        \\        items: [values[0][0]]u8,
+        \\        sibling: [values[0][1]]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
+test "comptime interpreter preserves assignment target selection" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [2]u8 = .{ 0, 7 };
+        \\    var index: usize = 0;
+        \\    values[index] = result: {
+        \\        index = 1;
+        \\        break :result @intCast(@as(u16, 4));
+        \\    };
+        \\    var pointer = &values[0];
+        \\    pointer.* = result: {
+        \\        pointer = &values[1];
+        \\        break :result @intCast(@as(u16, 6));
+        \\    };
+        \\    const pointed = pointer.*;
+        \\    return struct {
+        \\        selected: [values[0]]u8,
+        \\        sibling: [values[1]]u8,
+        \\        pointer: [pointed]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "selected", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "pointer", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter propagates contextual assignment types" {
+    try testCompletion(
+        \\const State = struct { count: u8, lanes: @Vector(2, usize), optional: ?u8 };
+        \\fn Select() type {
+        \\    var state = State{ .count = 0, .lanes = .{ 0, 0 }, .optional = 0 };
+        \\    var evaluations: usize = 0;
+        \\    state.count = if (true) @intCast(operand: {
+        \\        evaluations += 1;
+        \\        break :operand @as(u16, 4);
+        \\    }) else unreachable;
+        \\    const pointer = &state.lanes;
+        \\    pointer.* = result: {
+        \\        evaluations = evaluations * 10 + 2;
+        \\        break :result @splat(@as(u8, 4));
+        \\    };
+        \\    state.optional.? = @truncate(operand: {
+        \\        evaluations = evaluations * 10 + 3;
+        \\        break :operand @as(u16, 260);
+        \\    });
+        \\    return struct {
+        \\        items: [state.count + state.lanes[0] + state.lanes[1] + state.optional.?]u8,
+        \\        evaluations: [evaluations]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[16]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
+test "comptime interpreter preserves unknown contextual locals" {
+    try testCompletion(
+        \\var runtime: u16 = undefined;
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const declared: u8 = @intCast(operand: {
+        \\        evaluations += 1;
+        \\        break :operand runtime;
+        \\    });
+        \\    var assigned: u8 = 7;
+        \\    assigned = @intCast(operand: {
+        \\        evaluations = evaluations * 10 + 2;
+        \\        break :operand runtime;
+        \\    });
+        \\    const invalid: u8 = @intCast(@as(u16, 256));
+        \\    return struct {
+        \\        declared: @TypeOf(declared),
+        \\        assigned: @TypeOf(assigned),
+        \\        unknown: [declared + assigned]u8,
+        \\        invalid: [invalid]u8,
+        \\        evaluations: [evaluations]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "declared", .kind = .Field, .detail = "u8" },
+        .{ .label = "assigned", .kind = .Field, .detail = "u8" },
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "invalid", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime interpreter coerces explicitly typed local declarations" {
     try testCompletion(
         \\fn Select() type {
