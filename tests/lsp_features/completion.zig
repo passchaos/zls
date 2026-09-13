@@ -12121,6 +12121,46 @@ test "comptime interpreter executes known error catch fallbacks" {
     }
 }
 
+test "comptime interpreter propagates known try results" {
+    for ([_]struct { initial: []const u8, expected: []const Completion }{
+        .{ .initial = "4", .expected = &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }} },
+        .{ .initial = "error.Failure", .expected = &.{.{ .label = "failure", .kind = .Field, .detail = "u8" }} },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn TryArray(comptime initial: error{{Failure}}!usize) error{{Failure}}!type {{
+            \\    const selected = try initial;
+            \\    return struct {{ items: [selected]u8 }};
+            \\}}
+            \\fn Select() type {{
+            \\    return TryArray({s}) catch struct {{ failure: u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{case.initial});
+        defer allocator.free(source);
+        try testCompletion(source, case.expected);
+    }
+
+    for ([_]struct { initial: []const u8, expected: []const Completion }{
+        .{ .initial = "{}", .expected = &.{.{ .label = "success", .kind = .Field, .detail = "u8" }} },
+        .{ .initial = "error.Failure", .expected = &.{.{ .label = "failure", .kind = .Field, .detail = "u8" }} },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn TryStatement(comptime initial: error{{Failure}}!void) error{{Failure}}!type {{
+            \\    try initial;
+            \\    return struct {{ success: u8 }};
+            \\}}
+            \\fn Select() type {{
+            \\    return TryStatement({s}) catch struct {{ failure: u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{case.initial});
+        defer allocator.free(source);
+        try testCompletion(source, case.expected);
+    }
+}
+
 test "comptime interpreter evaluates optional if conditions once" {
     for ([_][]const u8{ "4", "null" }) |initial| {
         const source = try std.fmt.allocPrint(allocator,

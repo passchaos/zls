@@ -581,6 +581,34 @@ const failed_error_catch: ErrorCatchArray(error.Failure) = undefined;
 const successful_error_catch: ErrorCatchArray(4) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^^ ([4]u8)()
 
+fn TryArray(comptime initial: error{Failure}!usize) error{Failure}!type {
+    const selected = try initial;
+    return [selected]u8;
+}
+
+fn ResolveTryArray(comptime initial: error{Failure}!usize) type {
+    return TryArray(initial) catch [9]u8;
+}
+
+const successful_try: ResolveTryArray(4) = undefined;
+//    ^^^^^^^^^^^^^^ ([4]u8)()
+const failed_try: ResolveTryArray(error.Failure) = undefined;
+//    ^^^^^^^^^^ ([9]u8)()
+
+fn TryStatement(comptime initial: error{Failure}!void) error{Failure}!type {
+    try initial;
+    return [4]u8;
+}
+
+fn ResolveTryStatement(comptime initial: error{Failure}!void) type {
+    return TryStatement(initial) catch [9]u8;
+}
+
+const successful_try_statement: ResolveTryStatement({}) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ ([4]u8)()
+const failed_try_statement: ResolveTryStatement(error.Failure) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^ ([9]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

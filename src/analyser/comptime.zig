@@ -165,6 +165,7 @@ pub const Interpreter = struct {
     cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
     budget: *Budget,
     return_type: ?Type = null,
+    error_return: ?EvaluatedSource = null,
     break_context: ?*const BreakContext = null,
 
     const BreakContext = struct {
@@ -200,19 +201,28 @@ pub const Interpreter = struct {
     };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
-        const tree = &handle.tree;
-        var buffer: [2]Ast.Node.Index = undefined;
-        const statements = tree.blockStatements(&buffer, body) orelse return false;
-        for (statements) |node| {
-            if (tree.fullVarDecl(node)) |decl| {
-                if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) return true;
-            }
-            if (tree.nodeTag(node) == .assign_destructure) {
+        return nodeNeedsEvaluation(&handle.tree, body, 0);
+    }
+
+    fn nodeNeedsEvaluation(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+        if (depth == 128) return true;
+        if (node != .root and ast.isContainer(tree, node)) return false;
+        switch (tree.nodeTag(node)) {
+            .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
+            .@"comptime", .@"try", .@"catch" => return true,
+            .assign_destructure => {
                 for (tree.assignDestructure(node).ast.variables) |lhs| {
                     if (tree.fullVarDecl(lhs) != null) return true;
                 }
-            }
-            if (tree.nodeTag(node) == .@"comptime") return true;
+            },
+            else => {},
+        }
+        if (tree.fullVarDecl(node)) |decl| {
+            if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) return true;
+        }
+        var iterator: ast.Iterator = .init(tree, node);
+        while (iterator.next(tree)) |child| {
+            if (nodeNeedsEvaluation(tree, child, depth + 1)) return true;
         }
         return false;
     }
@@ -459,6 +469,7 @@ pub const Interpreter = struct {
     }
 
     fn eval(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        if (self.error_return != null) return null;
         if (!self.tick()) return null;
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (handle.tree.blockStatements(&block_buffer, node) != null) {
@@ -505,11 +516,22 @@ pub const Interpreter = struct {
             .@"catch" => {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
                 const error_union = try self.eval(handle, lhs) orelse return null;
-                return switch (try self.errorUnionValue(error_union) orelse return null) {
+                return switch (try self.errorUnionValue(error_union) orelse
+                    return self.analyser.resolveTypeOfNode(.of(node, handle))) {
                     .payload => |payload| payload,
                     .failure => |failure| {
                         if (self.catchCaptureToken(handle, node)) |token| try self.bind(handle, token, failure);
                         return self.eval(handle, rhs);
+                    },
+                };
+            },
+            .@"try" => {
+                const error_union = try self.eval(handle, handle.tree.nodeData(node).node) orelse return null;
+                return switch (try self.errorUnionValue(error_union) orelse return null) {
+                    .payload => |payload| payload,
+                    .failure => |failure| {
+                        self.error_return = .{ .value = failure, .source_node = null };
+                        return null;
                     },
                 };
             },
@@ -1110,7 +1132,10 @@ pub const Interpreter = struct {
                 if (!self.tick()) return null;
                 const lhs, const rhs = tree.nodeData(node).node_and_node;
                 const error_union = try self.eval(handle, lhs) orelse return null;
-                break :blk switch (try self.errorUnionValue(error_union) orelse return null) {
+                break :blk switch (try self.errorUnionValue(error_union) orelse break :blk .{
+                    .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
+                    .source_node = null,
+                }) {
                     .payload => |payload| .{ .value = payload, .source_node = null },
                     .failure => |failure| {
                         if (self.catchCaptureToken(handle, node)) |token| try self.bind(handle, token, failure);
@@ -2044,6 +2069,12 @@ pub const Interpreter = struct {
     }
 
     fn statement(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
+        if (self.error_return) |result| return .{ .returned = result };
+        const flow = try self.statementInner(handle, node);
+        return if (self.error_return) |result| .{ .returned = result } else flow;
+    }
+
+    fn statementInner(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         if (!self.tick()) return .unknown;
         const analyser = self.analyser;
         const tree = &handle.tree;
@@ -2068,6 +2099,10 @@ pub const Interpreter = struct {
         }
         switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => return self.statement(handle, tree.nodeData(node).node),
+            .@"try" => {
+                _ = try self.eval(handle, node) orelse return .unknown;
+                return .next;
+            },
             .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression| blk: {
                 const result = (if (self.return_type) |destination|
                     try self.evalTypedSource(handle, expression, destination)
