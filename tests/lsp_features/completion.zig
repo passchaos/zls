@@ -15361,6 +15361,48 @@ test "comptime pointer casts preserve address identity" {
         .{ .label = "volatile_same", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "static_same", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const value: usize = 4;
+        \\fn Select() type {
+        \\    const source: ?*const usize = &value;
+        \\    const writable: ?*usize = @constCast(source);
+        \\    const erased: ?*const anyopaque = @ptrCast(source);
+        \\    const absent: ?*const usize = null;
+        \\    const absent_erased: ?*const anyopaque = @ptrCast(absent);
+        \\    var writable_same: usize = 2;
+        \\    if (writable.? == @constCast(&value)) writable_same = 1;
+        \\    var erased_same: usize = 4;
+        \\    if (erased.? == @as(*const anyopaque, @ptrCast(&value))) erased_same = 3;
+        \\    var absent_size: usize = 6;
+        \\    if (absent_erased == null) absent_size = 5;
+        \\    return struct {
+        \\        writable_same: [writable_same]u8,
+        \\        erased_same: [erased_same]u8,
+        \\        absent: [absent_size]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "writable_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "erased_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "absent", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: ?*const usize = undefined;
+        \\fn erased() ?*const anyopaque {
+        \\    return @ptrCast(runtime);
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (erased() == null) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
 test "type function with comptime early returns" {

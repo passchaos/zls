@@ -1355,6 +1355,18 @@ pub const Interpreter = struct {
         else
             destination.preservesIdentityThroughPtrCast(self.analyser, source_type);
         if (!preserves_identity) return null;
+        if (self.optionalPayloadType(destination)) |destination_payload| {
+            if (operand.ipIndex()) |index| {
+                if (self.analyser.ip.isNull(index))
+                    return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = null }));
+                if (self.analyser.ip.isUndefined(index) or self.analyser.ip.isUnknown(index)) return null;
+            }
+            if (operand.data != .comptime_value or operand.data.comptime_value.data != .optional) return null;
+            const payload = operand.data.comptime_value.data.optional orelse
+                return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = null }));
+            const casted = try self.pointerCastValue(destination_payload, payload, qualifier_cast) orelse return null;
+            return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = casted }));
+        }
         return switch (operand.data) {
             .comptime_value => |comptime_value| switch (comptime_value.data) {
                 .reference => |reference| @as(?Type, try Value.create(self.analyser, destination, .{ .reference = reference })),

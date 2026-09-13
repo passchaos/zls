@@ -15217,15 +15217,16 @@ pub const Type = struct {
     }
 
     pub fn preservesIdentityThroughPtrCast(destination: Type, analyser: *Analyser, source: Type) bool {
-        const dest = destination.typePointerInfo(analyser) orelse return false;
-        const src = source.typePointerInfo(analyser) orelse return false;
-        return dest.size == .one and src.size == .one and
-            dest.is_const == src.is_const and
-            dest.is_volatile == src.is_volatile and
-            dest.is_allowzero == src.is_allowzero and
-            dest.address_space == src.address_space and
-            dest.alignment == src.alignment and
-            std.meta.eql(dest.packed_offset, src.packed_offset);
+        const dest = destination.pointerCastInfo(analyser) orelse return false;
+        const src = source.pointerCastInfo(analyser) orelse return false;
+        return dest.is_optional == src.is_optional and
+            dest.pointer.size == .one and src.pointer.size == .one and
+            dest.pointer.is_const == src.pointer.is_const and
+            dest.pointer.is_volatile == src.pointer.is_volatile and
+            dest.pointer.is_allowzero == src.pointer.is_allowzero and
+            dest.pointer.address_space == src.pointer.address_space and
+            dest.pointer.alignment == src.pointer.alignment and
+            std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset);
     }
 
     pub const PointerQualifierCast = enum { discard_const, discard_volatile };
@@ -15235,7 +15236,8 @@ pub const Type = struct {
         analyser: *Analyser,
         kind: PointerQualifierCast,
     ) error{OutOfMemory}!?Type {
-        const info = source.typePointerInfo(analyser) orelse return null;
+        const cast_info = source.pointerCastInfo(analyser) orelse return null;
+        const info = cast_info.pointer;
         if (info.size != .one) return null;
         var flags: InternPool.Key.Pointer.Flags = .{
             .size = info.size,
@@ -15255,13 +15257,17 @@ pub const Type = struct {
                 flags.is_volatile = false;
             },
         }
-        return @as(?Type, try Type.createPointerTypeWithFlags(
+        const pointer = try Type.createPointerTypeWithFlags(
             analyser,
             flags,
             info.packed_offset,
             info.sentinel,
             info.elem_ty,
-        ));
+        );
+        return @as(?Type, if (cast_info.is_optional)
+            try Type.createOptionalType(analyser, pointer)
+        else
+            pointer);
     }
 
     pub fn preservesIdentityThroughQualifierCast(
@@ -15270,17 +15276,20 @@ pub const Type = struct {
         source: Type,
         kind: PointerQualifierCast,
     ) bool {
-        const dest = destination.typePointerInfo(analyser) orelse return false;
-        const src = source.typePointerInfo(analyser) orelse return false;
-        if (dest.size != .one or src.size != .one or
-            !dest.elem_ty.eql(src.elem_ty) or
-            dest.is_allowzero != src.is_allowzero or
-            dest.address_space != src.address_space or
-            dest.alignment != src.alignment or
-            !std.meta.eql(dest.packed_offset, src.packed_offset)) return false;
+        const dest = destination.pointerCastInfo(analyser) orelse return false;
+        const src = source.pointerCastInfo(analyser) orelse return false;
+        if (dest.is_optional != src.is_optional or
+            dest.pointer.size != .one or src.pointer.size != .one or
+            !dest.pointer.elem_ty.eql(src.pointer.elem_ty) or
+            dest.pointer.is_allowzero != src.pointer.is_allowzero or
+            dest.pointer.address_space != src.pointer.address_space or
+            dest.pointer.alignment != src.pointer.alignment or
+            !std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset)) return false;
         return switch (kind) {
-            .discard_const => !dest.is_const and src.is_const and dest.is_volatile == src.is_volatile,
-            .discard_volatile => !dest.is_volatile and src.is_volatile and dest.is_const == src.is_const,
+            .discard_const => !dest.pointer.is_const and src.pointer.is_const and
+                dest.pointer.is_volatile == src.pointer.is_volatile,
+            .discard_volatile => !dest.pointer.is_volatile and src.pointer.is_volatile and
+                dest.pointer.is_const == src.pointer.is_const,
         };
     }
 
@@ -15407,6 +15416,31 @@ pub const Type = struct {
         sentinel: InternPool.Index,
         elem_ty: Type,
     };
+
+    const PointerCastInfo = struct {
+        pointer: TypePointerInfo,
+        is_optional: bool,
+    };
+
+    fn pointerCastInfo(self: Type, analyser: *Analyser) ?PointerCastInfo {
+        if (self.typePointerInfo(analyser)) |pointer| return .{
+            .pointer = pointer,
+            .is_optional = false,
+        };
+        if (!self.is_type_val) return null;
+        const child = switch (self.data) {
+            .optional => |optional| optional.*,
+            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .optional_type => |optional| Type.fromIP(analyser, .type_type, optional.payload_type),
+                else => return null,
+            },
+            else => return null,
+        };
+        return .{
+            .pointer = child.typePointerInfo(analyser) orelse return null,
+            .is_optional = true,
+        };
+    }
 
     fn typePointerInfo(self: Type, analyser: *Analyser) ?TypePointerInfo {
         if (!self.is_type_val) return null;
