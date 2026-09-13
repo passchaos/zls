@@ -633,7 +633,54 @@ const returned_errdefer: ErrorDeferArray(1) = undefined;
 const failed_errdefer: ErrorDeferArray(2) = undefined;
 //    ^^^^^^^^^^^^^^^ ([123]u8)()
 
+fn ErrorUnionBranchArray(comptime initial: error{Failure}!usize) type {
+    var runs: usize = 0;
+    const selected = if (condition: {
+        runs += 1;
+        break :condition initial;
+    }) |payload| payload + 2 else |err| if (err == error.Failure) 7 else 99;
+    var mutable: error{}!usize = 4;
+    if (mutable) |*payload| payload.* += 2 else |_| unreachable;
+    const from_while = while (initial) |payload| {
+        break payload + 1;
+    } else |err| if (err == error.Failure) 3 else 99;
+    return [selected + runs + (mutable catch 99) + from_while]u8;
+}
+
+const successful_error_union_branch: ErrorUnionBranchArray(4) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ([18]u8)()
+const failed_error_union_branch: ErrorUnionBranchArray(error.Failure) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ ([17]u8)()
+
+fn ErrorUnionLoopArray() type {
+    var values: [2]error{Done}!usize = .{ 3, 7 };
+    var evaluations: usize = 0;
+    var iterations: usize = 0;
+    var total: usize = 0;
+    var completed: usize = 0;
+    while (values[
+        index: {
+            evaluations += 1;
+            break :index 0;
+        }
+    ]) |*payload| : (iterations += 1) {
+        total += payload.*;
+        payload.* -= 1;
+        if (payload.* == 0) values[0] = error.Done;
+        continue;
+    } else |err| {
+        completed = if (err == error.Done) 1 else 99;
+    }
+    return [total + evaluations + iterations + completed + (values[1] catch 99)]u8;
+}
+
+const error_union_loop: ErrorUnionLoopArray() = undefined;
+//    ^^^^^^^^^^^^^^^^ ([21]u8)()
+
 comptime {
+    if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
+    if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");
+    if (@TypeOf(error_union_loop) != [21]u8) @compileError("unexpected error union loop");
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
 }

@@ -12190,6 +12190,127 @@ test "comptime interpreter runs errdefers on propagated errors" {
     }
 }
 
+test "comptime interpreter branches on known error unions" {
+    for ([_]struct { initial: []const u8, items: []const u8, runs: []const u8 }{
+        .{ .initial = "4", .items = "[6]u8", .runs = "[1]u8" },
+        .{ .initial = "error.Failure", .items = "[7]u8", .runs = "[1]u8" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select(comptime initial: error{{Failure}}!usize) type {{
+            \\    var runs: usize = 0;
+            \\    const selected = if (condition: {{
+            \\        runs += 1;
+            \\        break :condition initial;
+            \\    }}) |payload| payload + 2 else |err| if (err == error.Failure) 7 else 99;
+            \\    var mutable: error{{}}!usize = 4;
+            \\    if (mutable) |*payload| payload.* += 2 else |_| unreachable;
+            \\    const from_while = while (initial) |payload| {{
+            \\        break payload + 1;
+            \\    }} else |err| if (err == error.Failure) 3 else 99;
+            \\    return struct {{
+            \\        items: [selected]u8,
+            \\        runs: [runs]u8,
+            \\        mutable: [mutable catch 99]u8,
+            \\        loop: [from_while]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select({s}) = undefined;
+            \\const field = selected.<cursor>
+        , .{case.initial});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = case.items },
+            .{ .label = "runs", .kind = .Field, .detail = case.runs },
+            .{ .label = "mutable", .kind = .Field, .detail = "[6]u8" },
+            .{ .label = "loop", .kind = .Field, .detail = if (std.mem.eql(u8, case.initial, "4")) "[5]u8" else "[3]u8" },
+        });
+    }
+}
+
+test "comptime interpreter snapshots error union if captures" {
+    for ([_][]const u8{ "4", "error.Failure" }) |initial| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    var value: error{{Failure}}!usize = {s};
+            \\    const selected = if (value) |payload| result: {{
+            \\        value = 9;
+            \\        break :result payload + payload;
+            \\    }} else |err| result: {{
+            \\        value = 9;
+            \\        break :result if (err == error.Failure) 7 else 99;
+            \\    }};
+            \\    return struct {{ items: [selected]u8, changed: [value catch 99]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{initial});
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = if (std.mem.eql(u8, initial, "4")) "[8]u8" else "[7]u8" },
+            .{ .label = "changed", .kind = .Field, .detail = "[9]u8" },
+        });
+    }
+}
+
+test "comptime interpreter evaluates error union pointer capture lvalues once" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [2]error{Done}!usize = .{ 3, 7 };
+        \\    var evaluations: usize = 0;
+        \\    var iterations: usize = 0;
+        \\    var total: usize = 0;
+        \\    var completed: usize = 0;
+        \\    while (values[index: {
+        \\        evaluations += 1;
+        \\        break :index 0;
+        \\    }]) |*payload| : (iterations += 1) {
+        \\        total += payload.*;
+        \\        payload.* -= 1;
+        \\        if (payload.* == 0) values[0] = error.Done;
+        \\        continue;
+        \\    } else |err| {
+        \\        completed = if (err == error.Done) 1 else 99;
+        \\    }
+        \\    return struct {
+        \\        items: [total]u8,
+        \\        evaluations: [evaluations]u8,
+        \\        iterations: [iterations]u8,
+        \\        completed: [completed]u8,
+        \\        sibling: [values[1] catch 99]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "iterations", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "completed", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "sibling", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
+test "comptime interpreter branches on error unions without payload captures" {
+    for ([_][]const u8{ "if", "while" }) |branch| {
+        for ([_][]const u8{ "{}", "error.Failure" }) |initial| {
+            const source = try std.fmt.allocPrint(allocator,
+                \\fn Select(comptime initial: error{{Failure}}!void) type {{
+                \\    return {s} (initial) {s}struct {{ success: u8 }}{s} else |err|
+                \\        if (err == error.Failure) struct {{ failure: u8 }} else struct {{ unexpected: u8 }};
+                \\}}
+                \\const selected: Select({s}) = undefined;
+                \\const field = selected.<cursor>
+            , .{ branch, if (std.mem.eql(u8, branch, "while")) "{ break " else "", if (std.mem.eql(u8, branch, "while")) "; }" else "", initial });
+            defer allocator.free(source);
+            try testCompletion(source, &.{.{
+                .label = if (std.mem.eql(u8, initial, "{}")) "success" else "failure",
+                .kind = .Field,
+                .detail = "u8",
+            }});
+        }
+    }
+}
+
 test "comptime interpreter evaluates optional if conditions once" {
     for ([_][]const u8{ "4", "null" }) |initial| {
         const source = try std.fmt.allocPrint(allocator,

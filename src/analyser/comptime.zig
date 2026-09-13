@@ -36,6 +36,7 @@ pub const Value = struct {
             field: []const u8,
             index: usize,
             optional_payload,
+            error_union_payload,
         };
 
         fn hash(self: Reference, hasher: anytype) void {
@@ -45,7 +46,7 @@ pub const Value = struct {
                 switch (access) {
                     .field => |name| hasher.update(name),
                     .index => |index| std.hash.autoHash(hasher, index),
-                    .optional_payload => {},
+                    .optional_payload, .error_union_payload => {},
                 }
             }
         }
@@ -57,7 +58,7 @@ pub const Value = struct {
                 switch (lhs) {
                     .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
                     .index => |index| if (index != rhs.index) return false,
-                    .optional_payload => {},
+                    .optional_payload, .error_union_payload => {},
                 }
             }
             return true;
@@ -210,6 +211,8 @@ pub const Interpreter = struct {
         switch (tree.nodeTag(node)) {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
             .@"comptime", .@"try", .@"catch", .@"errdefer" => return true,
+            .@"if" => if (ast.fullIf(tree, node).?.error_token != null) return true,
+            .@"while" => if (ast.fullWhile(tree, node).?.error_token != null) return true,
             .assign_destructure => {
                 for (tree.assignDestructure(node).ast.variables) |lhs| {
                     if (tree.fullVarDecl(lhs) != null) return true;
@@ -256,12 +259,32 @@ pub const Interpreter = struct {
         node: Ast.Node.Index,
         destination: Type,
     ) Error!?Type {
+        if (analyser.comptime_interpreter) |interpreter|
+            return interpreter.evaluateTypedExpression(handle, node, destination);
         var budget: Budget = .{};
         var interpreter: Interpreter = .{
             .analyser = analyser,
             .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
-            .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
+            .budget = &budget,
         };
+        if (!interpreter.enterExpression()) return null;
+        defer interpreter.leaveExpression();
+        const old_bindings = analyser.generic_bindings;
+        const old_values = analyser.evaluate_comptime_values;
+        const old_numbers = analyser.resolve_number_literal_values;
+        const old_flow = analyser.evaluate_comptime_control_flow;
+        analyser.comptime_interpreter = &interpreter;
+        analyser.generic_bindings = &interpreter.bindings;
+        analyser.evaluate_comptime_values = true;
+        analyser.resolve_number_literal_values = true;
+        analyser.evaluate_comptime_control_flow = true;
+        defer {
+            analyser.comptime_interpreter = null;
+            analyser.generic_bindings = old_bindings;
+            analyser.evaluate_comptime_values = old_values;
+            analyser.resolve_number_literal_values = old_numbers;
+            analyser.evaluate_comptime_control_flow = old_flow;
+        }
         return interpreter.evaluateTypedExpression(handle, node, destination);
     }
 
@@ -1301,6 +1324,10 @@ pub const Interpreter = struct {
                 },
                 .field => |name| try self.analyser.resolveFieldAccess(current, name) orelse return null,
                 .optional_payload => try self.analyser.resolveOptionalUnwrap(current) orelse return null,
+                .error_union_payload => switch (try self.errorUnionValue(current) orelse return null) {
+                    .payload => |payload| payload,
+                    .failure => return null,
+                },
             };
         }
         return current;
@@ -1321,6 +1348,7 @@ pub const Interpreter = struct {
             .index => |index| try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null,
             .field => |name| try self.analyser.resolveFieldAccess(aggregate, name) orelse return null,
             .optional_payload => try self.analyser.resolveOptionalUnwrap(aggregate) orelse return null,
+            .error_union_payload => try self.analyser.resolveUnwrapErrorUnionType(aggregate, .payload) orelse return null,
         };
         return @as(?Type, try child.typeOf(self.analyser));
     }
@@ -1668,6 +1696,14 @@ pub const Interpreter = struct {
                 const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
                 return try Value.create(analyser, destination, .{ .optional = new_value });
             },
+            .error_union_payload => {
+                const old_value = switch (try self.errorUnionValue(current) orelse return null) {
+                    .payload => |payload| payload,
+                    .failure => return null,
+                };
+                const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
+                return try Value.create(analyser, destination, .{ .error_union = .{ .payload = new_value } });
+            },
         }
     }
 
@@ -1676,9 +1712,11 @@ pub const Interpreter = struct {
         handle: *Handle,
         condition: Ast.Node.Index,
         payload_token: ?Ast.TokenIndex,
+        error_token: ?Ast.TokenIndex,
     ) Error!?bool {
-        const token = payload_token orelse return self.boolValue(try self.eval(handle, condition) orelse return null);
-        const capture_by_ref = handle.tree.tokenTag(token) == .asterisk;
+        if (payload_token == null and error_token == null)
+            return self.boolValue(try self.eval(handle, condition) orelse return null);
+        const capture_by_ref = if (payload_token) |token| handle.tree.tokenTag(token) == .asterisk else false;
         const reference = if (capture_by_ref)
             try self.referenceForNode(handle, condition) orelse return null
         else
@@ -1687,6 +1725,24 @@ pub const Interpreter = struct {
             try self.readReference(target) orelse return null
         else
             try self.eval(handle, condition) orelse return null;
+        if (error_token) |failure_token| {
+            return switch (try self.errorUnionValue(value) orelse return null) {
+                .failure => |failure| failure: {
+                    try self.bind(handle, failure_token, failure);
+                    break :failure false;
+                },
+                .payload => |payload| success: {
+                    if (payload_token) |payload_capture| {
+                        const captured = if (reference) |target|
+                            try self.referenceValue(try self.extendReference(target, .error_union_payload)) orelse return null
+                        else
+                            payload;
+                        try self.bind(handle, payload_capture + @intFromBool(capture_by_ref), captured);
+                    }
+                    break :success true;
+                },
+            };
+        }
         const payload = switch (try self.optionalValue(value) orelse return null) {
             .absent => return false,
             .payload => |payload| payload,
@@ -1695,6 +1751,7 @@ pub const Interpreter = struct {
             try self.referenceValue(try self.extendReference(target, .optional_payload)) orelse return null
         else
             payload;
+        const token = payload_token.?;
         try self.bind(handle, token + @intFromBool(capture_by_ref), captured);
         return true;
     }
@@ -1977,8 +2034,7 @@ pub const Interpreter = struct {
 
     fn ifTarget(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?BranchTarget {
         const branch = ast.fullIf(&handle.tree, node).?;
-        if (branch.error_token != null) return null;
-        const known = try self.conditionValue(handle, branch.ast.cond_expr, branch.payload_token) orelse return null;
+        const known = try self.conditionValue(handle, branch.ast.cond_expr, branch.payload_token, branch.error_token) orelse return null;
         return if (known)
             .{ .node = branch.ast.then_expr }
         else if (branch.ast.else_expr.unwrap()) |else_node|
@@ -2381,9 +2437,8 @@ pub const Interpreter = struct {
         };
         self.break_context = &context;
         defer self.break_context = context.parent;
-        if (loop_node.error_token != null) return .unknown;
         while (true) {
-            const condition = try self.conditionValue(handle, loop_node.ast.cond_expr, loop_node.payload_token) orelse return .unknown;
+            const condition = try self.conditionValue(handle, loop_node.ast.cond_expr, loop_node.payload_token, loop_node.error_token) orelse return .unknown;
             if (!condition) {
                 if (loop_node.ast.else_expr.unwrap()) |else_node| {
                     if (expression) return .{ .value = try self.evalSourceWithType(handle, else_node, destination) orelse return .unknown };

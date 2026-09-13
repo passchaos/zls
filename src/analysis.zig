@@ -1376,6 +1376,14 @@ pub fn resolveUnwrapErrorUnionType(analyser: *Analyser, ty: Type, side: ErrorUni
     if (ty.is_type_val) return null;
 
     return switch (ty.data) {
+        .comptime_value => |value| blk: {
+            if (value.data != .error_union) break :blk null;
+            if (analyser.evaluate_comptime_values) switch (value.data.error_union) {
+                .payload => |payload| if (side == .payload) break :blk payload,
+                .failure => |failure| if (side == .error_set) break :blk failure,
+            };
+            break :blk try analyser.resolveUnwrapErrorUnionType(ty.runtimeType(analyser), side);
+        },
         .error_union => |info| switch (side) {
             .error_set => try (info.error_set orelse return null).instanceTypeVal(analyser),
             .payload => try info.payload.instanceTypeVal(analyser),
@@ -1397,15 +1405,8 @@ pub fn resolveUnwrapErrorUnionType(analyser: *Analyser, ty: Type, side: ErrorUni
 pub fn resolveCatchType(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMemory}!?Type {
     if (lhs.is_type_val or rhs.is_type_val) return null;
 
-    const payload = switch (lhs.data) {
-        .error_union => |info| try info.payload.instanceTypeVal(analyser) orelse return null,
-        .ip_index => |lhs_payload| switch (analyser.ip.indexToKey(lhs_payload.type)) {
-            .error_union_type => |info| Type.fromIP(analyser, info.payload_type, null),
-            .error_set_type => return rhs,
-            else => return null,
-        },
-        else => return null,
-    };
+    if (lhs.data == .ip_index and analyser.ip.indexToKey(lhs.data.ip_index.type) == .error_set_type) return rhs;
+    const payload = try analyser.resolveUnwrapErrorUnionType(lhs, .payload) orelse return null;
     return try analyser.resolvePeerTypes(payload, rhs) orelse payload;
 }
 
@@ -11436,6 +11437,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             const lhs = try analyser.resolveTypeOfNodeInternal(.of(lhs_node, handle)) orelse return null;
             if (analyser.evaluate_comptime_values) {
+                if (lhs.data == .comptime_value and lhs.data.comptime_value.data == .error_union) {
+                    switch (lhs.data.comptime_value.data.error_union) {
+                        .payload => |payload| return payload,
+                        .failure => return try analyser.resolveTypeOfNodeInternal(.of(rhs_node, handle)),
+                    }
+                }
                 if (lhs.ipIndex()) |index| switch (analyser.ip.indexToKey(index)) {
                     .error_value => return try analyser.resolveTypeOfNodeInternal(.of(rhs_node, handle)),
                     else => {},
