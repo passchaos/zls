@@ -10409,6 +10409,44 @@ test "comptime interpreter evaluates unknown switch conditions once" {
 test "comptime interpreter evaluates labeled switch loops" {
     try testCompletion(
         \\fn Select() type {
+        \\    var iterations: usize = 0;
+        \\    const selected: u128 = state: switch (@as(u128, 170141183460469231731687303715884105728)) {
+        \\        0...2 => |value| break :state value,
+        \\        else => |value| {
+        \\            iterations += 1;
+        \\            continue :state value / 2;
+        \\        },
+        \\    };
+        \\    return struct { items: [selected]u8, iterations: [iterations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "iterations", .kind = .Field, .detail = "[126]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var iterations: usize = 0;
+        \\    const selected: i256 = state: switch (@as(i256, -1606938044258990275541962092341162602522202993782792835301376)) {
+        \\        -1 => break :state 3,
+        \\        else => |value| {
+        \\            iterations += 1;
+        \\            continue :state value >> 1;
+        \\        },
+        \\    };
+        \\    return struct { items: [selected]u8, iterations: [iterations]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "iterations", .kind = .Field, .detail = "[200]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
         \\    var trace: usize = 0;
         \\    state: switch (@as(u8, 0)) {
         \\        0 => {
