@@ -13566,6 +13566,38 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn enabled() bool {
+        \\    return true;
+        \\}
+        \\fn Select() type {
+        \\    return if (enabled())
+        \\        struct { enabled: u8 }
+        \\    else
+        \\        struct { disabled: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "enabled", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\var runtime_enabled: bool = undefined;
+        \\fn enabled() bool {
+        \\    return runtime_enabled;
+        \\}
+        \\fn Select() type {
+        \\    return if (enabled())
+        \\        struct { enabled: u8 }
+        \\    else
+        \\        struct { disabled: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "enabled", .kind = .Field, .detail = "u8" },
+        .{ .label = "disabled", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
         \\fn values() *const [2]usize {
         \\    var result: *const [2]usize = &.{ 1, 2 };
         \\    result = &.{ 4, 5 };
