@@ -14993,6 +14993,37 @@ test "comptime pointer identities preserve distinct aliases" {
     try std.testing.expect(first.hash64() != second.hash64());
 }
 
+test "comptime pointer identities merge equal local constants" {
+    const source =
+        \\fn pointer(comptime value: usize) *const usize {
+        \\    var reduced = value;
+        \\    reduced %= 2;
+        \\    const local = reduced;
+        \\    return &local;
+        \\}
+        \\const first = pointer(2);
+        \\const second = pointer(4);
+        \\const third = pointer(3);
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    analyser.resolve_number_literal_values = true;
+    const first_decl = try analyser.lookupSymbolGlobal(handle, "first", source.len) orelse return error.TestUnexpectedResult;
+    const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
+    const third_decl = try analyser.lookupSymbolGlobal(handle, "third", source.len) orelse return error.TestUnexpectedResult;
+    const first = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const second = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const third = try third_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first.eql(second));
+    try std.testing.expectEqual(first.hash64(), second.hash64());
+    try std.testing.expect(!first.eql(third));
+}
+
 test "type function with comptime early returns" {
     try testCompletion(
         \\fn Select(comptime enabled: bool) type {
