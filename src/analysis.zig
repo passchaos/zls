@@ -15161,6 +15161,7 @@ pub const Type = struct {
         if (self.constAggregatePointerChild(analyser)) |child| return child;
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one or !info.is_const) return null;
+        if (info.elem_ty.isFunc()) return info.elem_ty;
         return if (info.elem_ty.isTupleType(analyser) or switch (info.elem_ty.data) {
             .array => true,
             .ip_index => |payload| analyser.ip.indexToKey(payload.index orelse return null) == .array_type,
@@ -15179,8 +15180,7 @@ pub const Type = struct {
                 else => .never,
             },
             .pointer => if (self.isConstSequencePointerType(analyser) or
-                self.constAggregatePointerChild(analyser) != null or
-                self.constScalarPointerChild(analyser) != null) .if_needed else .never,
+                self.constMaterializedPointerChild(analyser) != null) .if_needed else .never,
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return .never) orelse return .never) {
                 .int, .comptime_int => .eager,
                 .array,
@@ -15197,8 +15197,7 @@ pub const Type = struct {
                 .@"union",
                 => .if_needed,
                 .pointer => if (self.isConstSequencePointerType(analyser) or
-                    self.constAggregatePointerChild(analyser) != null or
-                    self.constScalarPointerChild(analyser) != null) .if_needed else .never,
+                    self.constMaterializedPointerChild(analyser) != null) .if_needed else .never,
                 else => .never,
             },
             else => .never,

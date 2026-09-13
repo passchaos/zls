@@ -13566,6 +13566,42 @@ test "generic function with comptime boolean short circuit mutations" {
 
 test "zero-parameter type function comptime evaluation" {
     try testCompletion(
+        \\fn one() usize {
+        \\    return 1;
+        \\}
+        \\fn four() usize {
+        \\    return 4;
+        \\}
+        \\fn callback() *const fn () usize {
+        \\    var result: *const fn () usize = &one;
+        \\    result = &four;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [callback()()]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\var runtime_callback: *const fn () usize = undefined;
+        \\fn one() usize {
+        \\    return 1;
+        \\}
+        \\fn callback() *const fn () usize {
+        \\    var result: *const fn () usize = &one;
+        \\    result = runtime_callback;
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    return struct { items: [callback()()]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
         \\fn values() [*]const usize {
         \\    var result: [*]const usize = &.{ 1, 2 };
         \\    result = &.{ 4, 5 };

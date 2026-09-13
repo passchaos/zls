@@ -1667,15 +1667,22 @@ pub const Interpreter = struct {
                 const name = offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(operand));
                 const declaration = try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(tree.nodeMainToken(operand))) orelse
                     break :static_pointer;
-                if (!declaration.isConst() or !try declaration.isStatic()) break :static_pointer;
                 const declaration_node = switch (declaration.decl) {
                     .ast_node => |decl_node| decl_node,
                     else => break :static_pointer,
                 };
-                const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse break :static_pointer;
-                const initializer = variable.ast.init_node.unwrap() orelse break :static_pointer;
-                const pointee = try self.evaluateTypedExpression(declaration.handle, initializer, pointee_type) orelse
-                    return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                const pointee = switch (declaration.handle.tree.nodeTag(declaration_node)) {
+                    .fn_decl => try self.evaluateTypedExpression(handle, operand, pointee_type) orelse
+                        return if (allow_invalid) destination.instanceTypeVal(analyser) else null,
+                    .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => blk: {
+                        if (!declaration.isConst() or !try declaration.isStatic()) break :static_pointer;
+                        const variable = declaration.handle.tree.fullVarDecl(declaration_node).?;
+                        const initializer = variable.ast.init_node.unwrap() orelse break :static_pointer;
+                        break :blk try self.evaluateTypedExpression(declaration.handle, initializer, pointee_type) orelse
+                            return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                    },
+                    else => break :static_pointer,
+                };
                 return @as(?Type, try Value.create(analyser, destination, .{ .pointee = .{
                     .value = pointee,
                     .source = .of(declaration_node, declaration.handle),
