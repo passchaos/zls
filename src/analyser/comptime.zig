@@ -2295,7 +2295,22 @@ pub const Interpreter = struct {
                             target.continue_destination != null) break target;
                     } else return .unknown;
                     if (target.continue_by_ref) {
-                        const reference = try self.referenceForNode(handle, expression) orelse return .unknown;
+                        const reference = try self.referenceForNode(handle, expression) orelse temporary: {
+                            const evaluated = try self.evalTypedSource(handle, expression, target.continue_destination.?) orelse return .unknown;
+                            const value = try self.coerceFromSource(
+                                handle,
+                                target.continue_destination.?,
+                                evaluated.value,
+                                evaluated.source_node,
+                                null,
+                                false,
+                            ) orelse return .unknown;
+                            const storage = try analyser.arena.create(Value.Cell);
+                            storage.* = .{ .value = value };
+                            const temporary = try analyser.arena.create(Value.Reference);
+                            temporary.* = .{ .storage = storage, .path = &.{} };
+                            break :temporary temporary;
+                        };
                         const value = try self.readReference(reference) orelse return .unknown;
                         _ = try self.coerce(target.continue_destination.?, value) orelse return .unknown;
                         break :blk .{

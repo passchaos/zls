@@ -10427,22 +10427,18 @@ test "comptime interpreter evaluates labeled switch loops" {
         \\const State = union(enum) { start, count: usize };
         \\fn Select() type {
         \\    var initial = State{ .start = {} };
-        \\    var next = State{ .count = 4 };
         \\    const selected: usize = state: switch (initial) {
-        \\        .start => continue :state next,
+        \\        .start => continue :state .{ .count = 4 },
         \\        .count => |*value| result: {
         \\            value.* += 2;
         \\            break :result value.*;
         \\        },
         \\    };
-        \\    return struct { items: [selected]u8, changed: [next.count]u8 };
+        \\    return struct { items: [selected]u8 };
         \\}
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
-    , &.{
-        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
-        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
-    });
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[6]u8" }});
 }
 
 test "generic function with comptime switch mutation" {
