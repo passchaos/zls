@@ -209,7 +209,7 @@ pub const Interpreter = struct {
         if (node != .root and ast.isContainer(tree, node)) return false;
         switch (tree.nodeTag(node)) {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
-            .@"comptime", .@"try", .@"catch" => return true,
+            .@"comptime", .@"try", .@"catch", .@"errdefer" => return true,
             .assign_destructure => {
                 for (tree.assignDestructure(node).ast.variables) |lhs| {
                     if (tree.fullVarDecl(lhs) != null) return true;
@@ -1922,7 +1922,7 @@ pub const Interpreter = struct {
         var block_flow: Flow = .next;
         for (statements) |child| {
             executed_count += 1;
-            if (tree.nodeTag(child) == .@"defer") continue;
+            if (tree.nodeTag(child) == .@"defer" or tree.nodeTag(child) == .@"errdefer") continue;
             const flow = try self.statement(handle, child);
             switch (flow) {
                 .next => {},
@@ -1947,11 +1947,30 @@ pub const Interpreter = struct {
                 },
             }
         }
+        const failure = switch (block_flow) {
+            .returned => |result| if (try self.errorUnionValue(result.value)) |error_union| switch (error_union) {
+                .failure => |value| value,
+                .payload => null,
+            } else null,
+            else => null,
+        };
         while (executed_count > 0) {
             executed_count -= 1;
             const child = statements[executed_count];
-            if (tree.nodeTag(child) != .@"defer") continue;
-            if (try self.statement(handle, tree.nodeData(child).node) != .next) return .unknown;
+            const deferred = switch (tree.nodeTag(child)) {
+                .@"defer" => tree.nodeData(child).node,
+                .@"errdefer" => if (failure) |value| blk: {
+                    const payload, const expression = tree.nodeData(child).opt_token_and_node;
+                    if (payload.unwrap()) |token| try self.bind(handle, token, value);
+                    break :blk expression;
+                } else continue,
+                else => continue,
+            };
+            const saved_error = self.error_return;
+            self.error_return = null;
+            const defer_flow = try self.statement(handle, deferred);
+            self.error_return = saved_error;
+            if (defer_flow != .next) return .unknown;
         }
         return block_flow;
     }
@@ -2100,6 +2119,10 @@ pub const Interpreter = struct {
         switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => return self.statement(handle, tree.nodeData(node).node),
             .@"try" => {
+                _ = try self.eval(handle, node) orelse return .unknown;
+                return .next;
+            },
+            .@"catch" => {
                 _ = try self.eval(handle, node) orelse return .unknown;
                 return .next;
             },
@@ -2442,6 +2465,17 @@ pub const Interpreter = struct {
         child.return_type = return_type;
         const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
         return switch (flow) {
+            .next => blk: {
+                const coerced = try child.coerceFromSource(
+                    info.handle,
+                    return_type,
+                    Type.fromIP(analyser, .void_type, .void_value),
+                    null,
+                    null,
+                    child.optionalPayloadType(return_type) != null,
+                ) orelse return .unknown;
+                break :blk .{ .returned = .{ .value = coerced, .source_node = null } };
+            },
             .returned => |result| blk: {
                 const coerced = try child.coerceFromSource(
                     info.handle,

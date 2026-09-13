@@ -609,6 +609,30 @@ const successful_try_statement: ResolveTryStatement({}) = undefined;
 const failed_try_statement: ResolveTryStatement(error.Failure) = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^ ([9]u8)()
 
+fn ErrorDeferArray(comptime mode: u8) type {
+    const Helpers = struct {
+        fn update(comptime selected: u8, trace: *usize) error{Failure}!void {
+            defer trace.* = trace.* * 10 + 3;
+            errdefer |err| trace.* = trace.* * 10 + if (err == error.Failure) 2 else 9;
+            defer trace.* = trace.* * 10 + 1;
+            if (selected == 1) return error.Failure;
+            const initial: error{Failure}!void = if (selected == 2) error.Failure else {};
+            try initial;
+            trace.* = trace.* * 10 + 4;
+        }
+    };
+    var trace: usize = 0;
+    Helpers.update(mode, &trace) catch {};
+    return [trace]u8;
+}
+
+const successful_errdefer: ErrorDeferArray(0) = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([413]u8)()
+const returned_errdefer: ErrorDeferArray(1) = undefined;
+//    ^^^^^^^^^^^^^^^^^ ([123]u8)()
+const failed_errdefer: ErrorDeferArray(2) = undefined;
+//    ^^^^^^^^^^^^^^^ ([123]u8)()
+
 comptime {
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);

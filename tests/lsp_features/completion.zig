@@ -12161,6 +12161,35 @@ test "comptime interpreter propagates known try results" {
     }
 }
 
+test "comptime interpreter runs errdefers on propagated errors" {
+    for ([_]struct { mode: []const u8, trace: []const u8 }{
+        .{ .mode = "0", .trace = "[413]u8" },
+        .{ .mode = "1", .trace = "[123]u8" },
+        .{ .mode = "2", .trace = "[123]u8" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn update(comptime mode: u8, trace: *usize) error{{Failure}}!void {{
+            \\    defer trace.* = trace.* * 10 + 3;
+            \\    errdefer |err| trace.* = trace.* * 10 + if (err == error.Failure) 2 else 9;
+            \\    defer trace.* = trace.* * 10 + 1;
+            \\    if (mode == 1) return error.Failure;
+            \\    const initial: error{{Failure}}!void = if (mode == 2) error.Failure else {{}};
+            \\    try initial;
+            \\    trace.* = trace.* * 10 + 4;
+            \\}}
+            \\fn Select() type {{
+            \\    var trace: usize = 0;
+            \\    update({s}, &trace) catch {{}};
+            \\    return struct {{ trace: [trace]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{case.mode});
+        defer allocator.free(source);
+        try testCompletion(source, &.{.{ .label = "trace", .kind = .Field, .detail = case.trace }});
+    }
+}
+
 test "comptime interpreter evaluates optional if conditions once" {
     for ([_][]const u8{ "4", "null" }) |initial| {
         const source = try std.fmt.allocPrint(allocator,
