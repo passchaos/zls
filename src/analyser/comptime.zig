@@ -174,13 +174,19 @@ pub const Interpreter = struct {
         label: ?Ast.TokenIndex,
         destination: ?Type,
         is_loop: bool,
+        continue_destination: ?Type = null,
+        continue_by_ref: bool = false,
+    };
+    const ContinueResult = struct {
+        value: Type,
+        reference: ?*Value.Reference = null,
     };
     const Budget = struct { steps: usize = 8192, depth: usize = 0, expression_depth: usize = 0 };
     const Flow = union(enum) {
         next,
         value: EvaluatedSource,
         returned: EvaluatedSource,
-        continued: ?Ast.TokenIndex,
+        continued: struct { target: ?Ast.TokenIndex, result: ?ContinueResult },
         stopped: struct { target: ?Ast.TokenIndex, result: ?EvaluatedSource },
         unknown,
     };
@@ -538,6 +544,10 @@ pub const Interpreter = struct {
                 return result.value;
             },
             .@"switch", .switch_comma => {
+                if (handle.tree.switchFull(node).label_token != null) {
+                    const result = self.expressionResult(try self.switchLoop(handle, node, true, null)) orelse return null;
+                    return result.value;
+                }
                 const target = try self.switchTarget(handle, node) orelse
                     return self.analyser.resolveTypeOfNode(.of(node, handle));
                 return self.eval(handle, target);
@@ -1131,6 +1141,8 @@ pub const Interpreter = struct {
             },
             .@"switch", .switch_comma => blk: {
                 if (!self.tick()) return null;
+                if (tree.switchFull(node).label_token != null)
+                    break :blk self.expressionResult(try self.switchLoop(handle, node, true, destination));
                 const target = try self.switchTarget(handle, node) orelse break :blk .{
                     .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
                     .source_node = null,
@@ -1601,6 +1613,10 @@ pub const Interpreter = struct {
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
             const literal_node = unwrapGroupedSource(tree, node);
+            if (tree.nodeTag(literal_node) == .enum_literal and destination.isEnumType(analyser)) {
+                const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse return null;
+                return @as(?Type, try analyser.enumValue(destination, tag));
+            }
             if (tree.fullArrayInit(&buffer, literal_node)) |literal| {
                 if (literal.ast.type_expr == .none) {
                     if (declared_array_len orelse self.assignmentAggregateLength(destination)) |len| {
@@ -2040,12 +2056,7 @@ pub const Interpreter = struct {
     fn switchTarget(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Ast.Node.Index {
         const tree = &handle.tree;
         const switch_node = tree.switchFull(node);
-        if (switch_node.label_token != null) return null;
-        const has_pointer_capture = for (switch_node.ast.cases) |case| {
-            if (tree.fullSwitchCase(case).?.payload_token) |token| {
-                if (tree.tokenTag(token) == .asterisk) break true;
-            }
-        } else false;
+        const has_pointer_capture = switchHasPointerCapture(tree, switch_node);
         const reference = if (has_pointer_capture)
             try self.referenceForNode(handle, switch_node.ast.condition) orelse return null
         else
@@ -2054,6 +2065,26 @@ pub const Interpreter = struct {
             try self.readReference(target) orelse return null
         else
             try self.eval(handle, switch_node.ast.condition) orelse return null;
+        return self.switchTargetForCondition(handle, node, condition, reference);
+    }
+
+    fn switchHasPointerCapture(tree: *const Ast, switch_node: Ast.full.Switch) bool {
+        return for (switch_node.ast.cases) |case| {
+            if (tree.fullSwitchCase(case).?.payload_token) |token| {
+                if (tree.tokenTag(token) == .asterisk) break true;
+            }
+        } else false;
+    }
+
+    fn switchTargetForCondition(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        condition: Type,
+        reference: ?*Value.Reference,
+    ) Error!?Ast.Node.Index {
+        const tree = &handle.tree;
+        const switch_node = tree.switchFull(node);
         const target = try self.analyser.resolveKnownSwitchTargetFromValue(.of(node, handle), condition) orelse return null;
         for (switch_node.ast.cases) |case| {
             const switch_case = tree.fullSwitchCase(case).?;
@@ -2080,6 +2111,66 @@ pub const Interpreter = struct {
             return target;
         }
         return null;
+    }
+
+    fn switchLoop(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        expression: bool,
+        destination: ?Type,
+    ) Error!Flow {
+        const tree = &handle.tree;
+        const switch_node = tree.switchFull(node);
+        const label_token = switch_node.label_token orelse return .unknown;
+        const continue_by_ref = switchHasPointerCapture(tree, switch_node);
+        var reference = if (continue_by_ref)
+            try self.referenceForNode(handle, switch_node.ast.condition) orelse return .unknown
+        else
+            null;
+        var condition = if (reference) |target|
+            try self.readReference(target) orelse return .unknown
+        else
+            try self.eval(handle, switch_node.ast.condition) orelse return .unknown;
+        const condition_type = try condition.typeOf(self.analyser);
+        const context: BreakContext = .{
+            .parent = self.break_context,
+            .label = label_token,
+            .destination = destination,
+            .is_loop = false,
+            .continue_destination = condition_type,
+            .continue_by_ref = continue_by_ref,
+        };
+        self.break_context = &context;
+        defer self.break_context = context.parent;
+
+        while (true) {
+            const target = try self.switchTargetForCondition(handle, node, condition, reference) orelse return .unknown;
+            const flow: Flow = if (expression) expression_flow: {
+                const result = try self.evalSourceWithType(handle, target, destination);
+                if (self.pending_flow) |pending| {
+                    self.pending_flow = null;
+                    break :expression_flow pending;
+                }
+                break :expression_flow if (result) |value| .{ .value = value } else .unknown;
+            } else try self.statement(handle, target);
+            switch (flow) {
+                .continued => |continued| {
+                    const target_label = continued.target orelse return flow;
+                    if (!std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_label))) return flow;
+                    const next = continued.result orelse return .unknown;
+                    condition = next.value;
+                    reference = next.reference;
+                },
+                .stopped => |stopped| {
+                    const target_label = stopped.target orelse return flow;
+                    if (!std.mem.eql(u8, tree.tokenSlice(label_token), tree.tokenSlice(target_label))) return flow;
+                    if (stopped.result) |result| return if (expression) .{ .value = result } else .unknown;
+                    return .next;
+                },
+                else => return flow,
+            }
+        }
     }
 
     fn internVectorOperand(self: *Interpreter, value: Type) Error!?Type {
@@ -2194,8 +2285,36 @@ pub const Interpreter = struct {
             } },
             .@"continue" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
-                if (operand != .none) return .unknown;
-                return .{ .continued = label.unwrap() };
+                const target_label = label.unwrap();
+                const result: ?ContinueResult = if (operand.unwrap()) |expression| blk: {
+                    var context = self.break_context;
+                    const target: *const BreakContext = while (context) |target| : (context = target.parent) {
+                        const continue_label = target_label orelse continue;
+                        const context_label = target.label orelse continue;
+                        if (std.mem.eql(u8, tree.tokenSlice(continue_label), tree.tokenSlice(context_label)) and
+                            target.continue_destination != null) break target;
+                    } else return .unknown;
+                    if (target.continue_by_ref) {
+                        const reference = try self.referenceForNode(handle, expression) orelse return .unknown;
+                        const value = try self.readReference(reference) orelse return .unknown;
+                        _ = try self.coerce(target.continue_destination.?, value) orelse return .unknown;
+                        break :blk .{
+                            .value = value,
+                            .reference = reference,
+                        };
+                    }
+                    const evaluated = try self.evalTypedSource(handle, expression, target.continue_destination.?) orelse return .unknown;
+                    const value = try self.coerceFromSource(
+                        handle,
+                        target.continue_destination.?,
+                        evaluated.value,
+                        evaluated.source_node,
+                        null,
+                        self.optionalPayloadType(target.continue_destination.?) != null,
+                    ) orelse return .unknown;
+                    break :blk .{ .value = value };
+                } else null;
+                return .{ .continued = .{ .target = target_label, .result = result } };
             },
             .@"break" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
@@ -2226,6 +2345,7 @@ pub const Interpreter = struct {
             .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?, false, null),
             .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?, false, null),
             .@"switch", .switch_comma => {
+                if (tree.switchFull(node).label_token != null) return self.switchLoop(handle, node, false, null);
                 const target = try self.switchTarget(handle, node) orelse return .unknown;
                 return self.statement(handle, target);
             },
@@ -2409,7 +2529,7 @@ pub const Interpreter = struct {
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
                 .next => {},
-                .continued => |target| if (!targetsLoop(tree, loop_node.label_token, target)) return flow,
+                .continued => |continued| if (!targetsLoop(tree, loop_node.label_token, continued.target) or continued.result != null) return flow,
                 .stopped => |stopped| {
                     if (!targetsLoop(tree, loop_node.label_token, stopped.target)) return flow;
                     if (stopped.result) |result| return if (expression) .{ .value = result } else .unknown;
@@ -2446,7 +2566,7 @@ pub const Interpreter = struct {
             const flow = try self.statement(handle, loop_node.ast.then_expr);
             switch (flow) {
                 .next => {},
-                .continued => |target| if (!targetsLoop(&handle.tree, loop_node.label_token, target)) return flow,
+                .continued => |continued| if (!targetsLoop(&handle.tree, loop_node.label_token, continued.target) or continued.result != null) return flow,
                 .stopped => |stopped| {
                     if (!targetsLoop(&handle.tree, loop_node.label_token, stopped.target)) return flow;
                     if (stopped.result) |result| return if (expression) .{ .value = result } else .unknown;

@@ -718,10 +718,51 @@ fn ExpressionBreakArray() type {
 const nested_expression_break: ExpressionBreakArray() = undefined;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ ([11139]u8)()
 
+fn LabeledSwitchArray() type {
+    var evaluations: usize = 0;
+    var trace: usize = 0;
+    const selected: usize = state: switch (condition: {
+        evaluations += 1;
+        break :condition @as(usize, 8);
+    }) {
+        0...2 => |value| break :state value + trace,
+        else => |value| {
+            defer trace += 1;
+            continue :state value / 2;
+        },
+    };
+    return [selected + evaluations + trace]u8;
+}
+
+const labeled_switch: LabeledSwitchArray() = undefined;
+//    ^^^^^^^^^^^^^^ ([7]u8)()
+
+fn LabeledEnumSwitchArray() type {
+    const State = enum { start, middle, done };
+    var transitions: usize = 0;
+    const selected: usize = state: switch (@as(State, .start)) {
+        .start => {
+            transitions += 1;
+            continue :state .middle;
+        },
+        .middle => {
+            transitions += 1;
+            continue :state .done;
+        },
+        .done => 5,
+    };
+    return [selected + transitions]u8;
+}
+
+const labeled_enum_switch: LabeledEnumSwitchArray() = undefined;
+//    ^^^^^^^^^^^^^^^^^^^ ([7]u8)()
+
 comptime {
     if (@TypeOf(successful_error_union_branch) != [18]u8) @compileError("unexpected successful error union branch");
     if (@TypeOf(failed_error_union_branch) != [17]u8) @compileError("unexpected failed error union branch");
     if (@TypeOf(error_union_loop) != [21]u8) @compileError("unexpected error union loop");
+    if (@TypeOf(labeled_switch) != [7]u8) @compileError("unexpected labeled switch result");
+    if (@TypeOf(labeled_enum_switch) != [7]u8) @compileError("unexpected labeled enum switch result");
     // Use @compileLog to verify the expected type with the compiler:
     // @compileLog(anytype_2_i8_i16);
 }

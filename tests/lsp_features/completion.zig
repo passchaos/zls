@@ -10370,6 +10370,81 @@ test "comptime interpreter evaluates unknown switch conditions once" {
     });
 }
 
+test "comptime interpreter evaluates labeled switch loops" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    var trace: usize = 0;
+        \\    const selected: usize = state: switch (condition: {
+        \\        evaluations += 1;
+        \\        break :condition @as(usize, 8);
+        \\    }) {
+        \\        0...2 => |value| break :state value + trace,
+        \\        else => |value| {
+        \\            defer trace += 1;
+        \\            continue :state value / 2;
+        \\        },
+        \\    };
+        \\    return struct {
+        \\        items: [selected]u8,
+        \\        evaluations: [evaluations]u8,
+        \\        trace: [trace]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "trace", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
+        \\const State = enum { start, middle, done };
+        \\fn Select() type {
+        \\    var transitions: usize = 0;
+        \\    const selected: usize = state: switch (@as(State, .start)) {
+        \\        .start => {
+        \\            transitions += 1;
+        \\            continue :state .middle;
+        \\        },
+        \\        .middle => {
+        \\            transitions += 1;
+        \\            continue :state .done;
+        \\        },
+        \\        .done => 5,
+        \\    };
+        \\    return struct { items: [selected]u8, transitions: [transitions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "transitions", .kind = .Field, .detail = "[2]u8" },
+    });
+
+    try testCompletion(
+        \\const State = union(enum) { start, count: usize };
+        \\fn Select() type {
+        \\    var initial = State{ .start = {} };
+        \\    var next = State{ .count = 4 };
+        \\    const selected: usize = state: switch (initial) {
+        \\        .start => continue :state next,
+        \\        .count => |*value| result: {
+        \\            value.* += 2;
+        \\            break :result value.*;
+        \\        },
+        \\    };
+        \\    return struct { items: [selected]u8, changed: [next.count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[6]u8" },
+    });
+}
+
 test "generic function with comptime switch mutation" {
     try testCompletion(
         \\fn Buffer(comptime mode: u8) type {

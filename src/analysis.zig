@@ -1080,7 +1080,6 @@ pub fn resolveKnownSwitchTargetFromValue(
     const handle = options.node_handle.handle;
     const tree = &handle.tree;
     const switch_node = tree.switchFull(options.node_handle.node);
-    if (switch_node.label_token != null) return null;
     const union_field_name = try analyser.resolveKnownUnionFieldName(condition);
 
     var else_target: ?Ast.Node.Index = null;
@@ -5245,7 +5244,7 @@ fn astEnumTagType(analyser: *Analyser, enum_type: Type, declaration: Ast.full.Co
     return Type.fromIP(analyser, .type_type, tag_type);
 }
 
-fn resolveEnumValueTag(
+pub fn resolveEnumValueTag(
     analyser: *Analyser,
     enum_type: Type,
     node_handle: NodeWithHandle,
@@ -5283,7 +5282,7 @@ fn resolveEnumValueTag(
     return tag;
 }
 
-fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) Error!Type {
+pub fn enumValue(analyser: *Analyser, enum_type: Type, tag: []const u8) Error!Type {
     return .{
         .data = .{ .enum_value = .{
             .enum_type = try analyser.allocType(enum_type),
