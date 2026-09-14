@@ -20262,6 +20262,27 @@ test "comptime field parent pointers preserve identity" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime wrapped field parent pointers preserve identity" {
+    try testCompletion(
+        \\const Record = struct { first: usize, second: usize };
+        \\fn Select() type {
+        \\    var record: Record = .{ .first = 3, .second = 5 };
+        \\    const optional: ?*Record = @fieldParentPtr("second", &record.second);
+        \\    const wrapped: error{Failure}!?*Record = @fieldParentPtr("second", &record.second);
+        \\    var optional_same: usize = 2;
+        \\    if (optional.? == &record) optional_same = 1;
+        \\    var wrapped_same: usize = 4;
+        \\    if ((wrapped catch null).? == &record) wrapped_same = 3;
+        \\    return struct { optional: [optional_same]u8, wrapped: [wrapped_same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "wrapped", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "comptime sequence pointer parameter values" {
     try testCompletion(
         \\fn source() [*]const usize {

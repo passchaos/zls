@@ -2520,13 +2520,15 @@ pub const Interpreter = struct {
         field_name: []const u8,
         field_pointer: Type,
     ) Error!?Type {
-        const pointer_instance = try destination.instanceTypeVal(self.analyser) orelse return null;
+        const optional_payload = self.optionalPayloadType(destination);
+        const parent_pointer_type = optional_payload orelse destination;
+        const pointer_instance = try parent_pointer_type.instanceTypeVal(self.analyser) orelse return null;
         if (pointer_instance.pointerSize(self.analyser) != .one) return null;
         const expected_parent = try self.analyser.resolveDerefType(pointer_instance) orelse return null;
         const expected_parent_type = try expected_parent.typeOf(self.analyser);
         if (field_pointer.data != .comptime_value) return null;
 
-        return switch (field_pointer.data.comptime_value.data) {
+        const parent_pointer: Type = switch (field_pointer.data.comptime_value.data) {
             .reference => |reference| blk: {
                 if (!parentFieldPathMatches(reference.path, field_name)) return null;
                 const parent_path = reference.path[0 .. reference.path.len - 1];
@@ -2534,7 +2536,7 @@ pub const Interpreter = struct {
                 if (!(try parent.typeOf(self.analyser)).eql(expected_parent_type)) return null;
                 const result = try self.analyser.arena.create(Value.Reference);
                 result.* = .{ .storage = reference.storage, .path = parent_path };
-                break :blk @as(?Type, try Value.create(self.analyser, destination, .{ .reference = result }));
+                break :blk try Value.create(self.analyser, parent_pointer_type, .{ .reference = result });
             },
             .pointee => |pointee| blk: {
                 if (!parentFieldPathMatches(pointee.path, field_name)) return null;
@@ -2546,10 +2548,14 @@ pub const Interpreter = struct {
                 var result = pointee;
                 result.value = parent;
                 result.path = parent_path;
-                break :blk @as(?Type, try Value.create(self.analyser, destination, .{ .pointee = result }));
+                break :blk try Value.create(self.analyser, parent_pointer_type, .{ .pointee = result });
             },
-            else => null,
+            else => return null,
         };
+        return if (optional_payload != null)
+            @as(?Type, try Value.create(self.analyser, destination, .{ .optional = parent_pointer }))
+        else
+            parent_pointer;
     }
 
     fn parentFieldPathMatches(path: []const Value.Reference.Access, field_name: []const u8) bool {
@@ -2639,9 +2645,10 @@ pub const Interpreter = struct {
                 const name_value = try self.eval(handle, params[0]) orelse return null;
                 if (name_value.data != .string_value) return null;
                 const field_pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                const result_type = if (self.errorUnionTypes(ty)) |types| types.payload else ty;
                 return .{
                     .value = try self.fieldParentPointerValue(
-                        ty,
+                        result_type,
                         name_value.data.string_value.bytes,
                         field_pointer,
                     ) orelse return null,
