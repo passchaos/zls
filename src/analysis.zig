@@ -8178,12 +8178,12 @@ fn floatReduceValue(
     comptime T: type,
     analyser: *Analyser,
     operation: std.builtin.ReduceOp,
-    values: InternPool.Index.Slice,
+    values: []const Type,
 ) ?f128 {
-    var result: T = @floatCast(analyser.floatValue(values.at(0, analyser.ip)) orelse return null);
+    var result: T = @floatCast(analyser.floatValue(values[0].ipIndex() orelse return null) orelse return null);
     if (!std.math.isFinite(result)) return null;
     for (1..values.len) |i| {
-        const value: T = @floatCast(analyser.floatValue(values.at(@intCast(i), analyser.ip)) orelse return null);
+        const value: T = @floatCast(analyser.floatValue(values[i].ipIndex() orelse return null) orelse return null);
         if (!std.math.isFinite(value)) return null;
         result = switch (operation) {
             .Min => @min(result, value),
@@ -8201,23 +8201,21 @@ fn resolveReduceValue(
     analyser: *Analyser,
     operation: std.builtin.ReduceOp,
     operand: Type,
-) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+) Error!?Type {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (vector.len == 0) return null;
-    const values = analyser.aggregateValues(operand) orelse return null;
+    const values = try analyser.comptimeArrayElements(operand) orelse return null;
     if (values.len != vector.len) return null;
 
     if (vector.child == .bool_type) {
         if (operation != .And and operation != .Or and operation != .Xor) return null;
-        for (0..values.len) |i| {
-            if (analyser.ip.isUndefined(values.at(@intCast(i), analyser.ip))) return null;
+        for (values) |value| {
+            const index = value.ipIndex() orelse return null;
+            if (analyser.ip.isUndefined(index)) return null;
         }
         var result = switch (operation) {
             .And => true,
@@ -8225,8 +8223,8 @@ fn resolveReduceValue(
             else => unreachable,
         };
         var has_unknown = false;
-        for (0..values.len) |i| {
-            const value = switch (values.at(@intCast(i), analyser.ip)) {
+        for (values) |item| {
+            const value = switch (item.ipIndex() orelse return null) {
                 .bool_true => true,
                 .bool_false => false,
                 else => {
@@ -8261,8 +8259,9 @@ fn resolveReduceValue(
     }
 
     if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
-    for (0..values.len) |i| {
-        if (analyser.ip.isUndefined(values.at(@intCast(i), analyser.ip))) return null;
+    for (values) |value| {
+        const index = value.ipIndex() orelse return null;
+        if (analyser.ip.isUndefined(index)) return null;
     }
     if (analyser.fixedWidthIntegerBounds(vector.child)) |bounds| {
         const absorbing_value: ?i256 = switch (operation) {
@@ -8273,17 +8272,16 @@ fn resolveReduceValue(
             else => null,
         };
         if (absorbing_value) |absorbing| {
-            for (0..values.len) |i| {
-                const value = values.at(@intCast(i), analyser.ip);
-                if (analyser.ip.toInt(value, i256)) |int| {
+            for (values) |value| {
+                if (analyser.ip.toInt(value.ipIndex() orelse continue, i256)) |int| {
                     if (int == absorbing) return analyser.intValueWithType(vector.child, absorbing);
                 }
             }
         }
     }
-    var result = Type.fromIP(analyser, vector.child, values.at(0, analyser.ip));
+    var result = values[0];
     for (1..values.len) |i| {
-        const candidate = Type.fromIP(analyser, vector.child, values.at(@intCast(i), analyser.ip));
+        const candidate = values[i];
         result = switch (operation) {
             .Add => try analyser.resolveFixedWidthIntegerBinaryValue(.add_wrap, result, candidate, vector.child),
             .Mul => try analyser.resolveFixedWidthIntegerBinaryValue(.mul_wrap, result, candidate, vector.child),
@@ -12444,11 +12442,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 .reduce => {
                     if (params.len != 2) return null;
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
-                    const payload = switch (operand.data) {
-                        .ip_index => |payload| payload,
-                        else => return null,
-                    };
-                    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+                    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+                    const vector = switch (analyser.ip.indexToKey(operand_type)) {
                         .vector_type => |vector| vector,
                         else => return null,
                     };

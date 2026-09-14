@@ -4561,6 +4561,42 @@ test "comptime bit builtins accept structured vectors" {
     });
 }
 
+test "comptime reduce accepts structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const integers = @as(@Vector(4, u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ 1, 2, 3, 4 };
+        \\    });
+        \\    const booleans = @as(@Vector(3, bool), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ true, true, false };
+        \\    });
+        \\    const floats = @as(@Vector(2, f32), operand: {
+        \\        executions = executions * 10 + 3;
+        \\        break :operand .{ 1.5, 2.5 };
+        \\    });
+        \\    return struct {
+        \\        integers: [if (@reduce(.Add, integers) == 10 and
+        \\            @reduce(.Mul, integers) == 24 and @reduce(.Min, integers) == 1 and
+        \\            @reduce(.Max, integers) == 4) 1 else 99]u8,
+        \\        booleans: [if (!@reduce(.And, booleans) and
+        \\            @reduce(.Or, booleans) and !@reduce(.Xor, booleans)) 1 else 99]u8,
+        \\        floats: [@intFromFloat(@reduce(.Add, floats))]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "integers", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "booleans", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "floats", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
