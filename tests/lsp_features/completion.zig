@@ -4493,6 +4493,38 @@ test "comptime division builtins accept structured vectors" {
     });
 }
 
+test "comptime shifts accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const values = @as(@Vector(2, u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ 3, 12 };
+        \\    });
+        \\    const shifts = @as(@Vector(2, u3), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ 2, 2 };
+        \\    });
+        \\    const exact_values: @Vector(2, u8) = .{ 4, 12 };
+        \\    const left = values << shifts;
+        \\    const right = values >> shifts;
+        \\    const exact_left = @shlExact(exact_values, shifts);
+        \\    const exact_right = @shrExact(exact_values, shifts);
+        \\    return struct {
+        \\        values: [if (left[0] == 12 and right[1] == 3 and
+        \\            exact_left[0] == 16 and exact_left[1] == 48 and
+        \\            exact_right[0] == 1 and exact_right[1] == 3) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

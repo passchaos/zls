@@ -10268,41 +10268,43 @@ fn resolveVectorShiftValue(
     operand: Type,
     shift_operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const shift_payload = switch (shift_operand.data) {
-        .ip_index => |shift_value| shift_value,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const shift_type = (try shift_operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const shift_vector = switch (analyser.ip.indexToKey(shift_payload.type)) {
+    const shift_vector = switch (analyser.ip.indexToKey(shift_type)) {
         .vector_type => |shift_vector| shift_vector,
         else => return null,
     };
     if (vector.len != shift_vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const shift_items = comptime_eval.Value.elements(shift_operand);
+    const source_values = analyser.aggregateValues(operand);
+    const shift_values = analyser.aggregateValues(shift_operand);
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (shift_items != null and shift_items.?.len != shift_vector.len) or
+        (source_values != null and source_values.?.len != vector.len) or
+        (shift_values != null and shift_values.?.len != shift_vector.len)) return null;
     if (operation == .shl_exact or operation == .shr_exact) {
         if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
         const operand_bits = analyser.ip.intInfo(vector.child, builtin.target).bits;
         if (operand_bits == 0 or analyser.ip.zigTypeTag(shift_vector.child) != .int) return null;
-        if (payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
-        if (shift_payload.index) |index| if (analyser.ip.isUndefined(index)) return null;
+        if (operand.ipIndex()) |index| if (analyser.ip.isUndefined(index)) return null;
+        if (shift_operand.ipIndex()) |index| if (analyser.ip.isUndefined(index)) return null;
         if (!analyser.isValidRuntimeShiftType(shift_vector.child, operand_bits)) {
-            const shift_values = analyser.aggregateValues(shift_operand) orelse return null;
             for (0..shift_vector.len) |i| {
-                const shift_index = shift_values.at(@intCast(i), analyser.ip);
-                if (analyser.ip.isUnknown(shift_index)) return null;
+                const shift_index = if (shift_items) |items|
+                    items[i].ipIndex() orelse return null
+                else if (shift_values) |values|
+                    values.at(@intCast(i), analyser.ip)
+                else
+                    return null;
+                if (analyser.ip.isUndefined(shift_index) or analyser.ip.isUnknown(shift_index)) return null;
             }
         }
     }
-    const source_values = analyser.aggregateValues(operand);
-    const shift_values = analyser.aggregateValues(shift_operand);
-    if ((source_values != null and source_values.?.len != vector.len) or
-        (shift_values != null and shift_values.?.len != shift_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
@@ -10310,16 +10312,14 @@ fn resolveVectorShiftValue(
     const unknown_shift = try analyser.ip.getUnknown(shift_vector.child);
     for (values, 0..) |*value, i| {
         const index: u32 = @intCast(i);
-        const element = Type.fromIP(
-            analyser,
-            vector.child,
-            if (source_values) |slice| slice.at(index, analyser.ip) else unknown_operand,
-        );
-        const shift_element = Type.fromIP(
-            analyser,
-            shift_vector.child,
-            if (shift_values) |slice| slice.at(index, analyser.ip) else unknown_shift,
-        );
+        const element = if (source_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, vector.child, if (source_values) |slice| slice.at(index, analyser.ip) else unknown_operand);
+        const shift_element = if (shift_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, shift_vector.child, if (shift_values) |slice| slice.at(index, analyser.ip) else unknown_shift);
         const resolved = switch (operation) {
             .shl => try analyser.resolveIntegerBinaryValue(.shl, element, shift_element),
             .shr => try analyser.resolveIntegerBinaryValue(.shr, element, shift_element),
@@ -10333,7 +10333,7 @@ fn resolveVectorShiftValue(
             .shl_exact, .shr_exact => return null,
         };
     }
-    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+    return analyser.aggregateValue(Type.fromIP(analyser, operand_type, null), values);
 }
 
 pub const ComptimeExactShiftKind = enum { shl_exact, shr_exact };
@@ -10348,11 +10348,8 @@ pub fn resolveComptimeExactShiftValue(
         .shl_exact => .shl_exact,
         .shr_exact => .shr_exact,
     };
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(operand_type) == .vector) {
         const operation: VectorShiftOperation = switch (kind) {
             .shl_exact => .shl_exact,
             .shr_exact => .shr_exact,
