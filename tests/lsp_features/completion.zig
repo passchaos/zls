@@ -4389,6 +4389,46 @@ test "comptime numeric casts accept structured vectors" {
     });
 }
 
+test "comptime overflow builtins accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const lhs = @as(@Vector(2, u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ 250, 2 };
+        \\    });
+        \\    const rhs = @as(@Vector(2, u8), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ 10, 3 };
+        \\    });
+        \\    const shifts = @as(@Vector(2, u3), operand: {
+        \\        executions = executions * 10 + 3;
+        \\        break :operand .{ 2, 1 };
+        \\    });
+        \\    const added = @addWithOverflow(lhs, rhs);
+        \\    const subtracted = @subWithOverflow(lhs, rhs);
+        \\    const multiplied = @mulWithOverflow(lhs, rhs);
+        \\    const shifted = @shlWithOverflow(lhs, shifts);
+        \\    return struct {
+        \\        values: [if (added[0][0] == 4 and added[0][1] == 5 and
+        \\            added[1][0] == 1 and added[1][1] == 0 and
+        \\            subtracted[0][0] == 240 and subtracted[0][1] == 255 and
+        \\            subtracted[1][0] == 0 and subtracted[1][1] == 1 and
+        \\            multiplied[0][0] == 196 and multiplied[0][1] == 6 and
+        \\            multiplied[1][0] == 1 and multiplied[1][1] == 0 and
+        \\            shifted[0][0] == 232 and shifted[0][1] == 4 and
+        \\            shifted[1][0] == 1 and shifted[1][1] == 0) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
 test "comptime unary float builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {

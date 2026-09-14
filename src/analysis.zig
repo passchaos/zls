@@ -7208,6 +7208,36 @@ fn overflowTupleValue(
     return Type.fromIP(analyser, tuple_type, aggregate);
 }
 
+fn vectorOverflowTupleValue(
+    analyser: *Analyser,
+    result_type: InternPool.Index,
+    result_values: []const InternPool.Index,
+    overflow_values: []const InternPool.Index,
+) error{OutOfMemory}!Type {
+    const vector = analyser.ip.indexToKey(result_type).vector_type;
+    const overflow_type = try analyser.ip.get(.{ .vector_type = .{
+        .len = vector.len,
+        .child = .u1_type,
+    } });
+    const tuple_type = try analyser.ip.get(.{ .tuple_type = .{
+        .types = try analyser.ip.getIndexSlice(&.{ result_type, overflow_type }),
+        .values = try analyser.ip.getIndexSlice(&.{ .none, .none }),
+    } });
+    const result = try analyser.ip.get(.{ .aggregate = .{
+        .ty = result_type,
+        .values = try analyser.ip.getIndexSlice(result_values),
+    } });
+    const overflow = try analyser.ip.get(.{ .aggregate = .{
+        .ty = overflow_type,
+        .values = try analyser.ip.getIndexSlice(overflow_values),
+    } });
+    const aggregate = try analyser.ip.get(.{ .aggregate = .{
+        .ty = tuple_type,
+        .values = try analyser.ip.getIndexSlice(&.{ result, overflow }),
+    } });
+    return Type.fromIP(analyser, tuple_type, aggregate);
+}
+
 fn coerceKnownIntegerValue(
     analyser: *Analyser,
     result_type: InternPool.Index,
@@ -7345,6 +7375,53 @@ fn resolveOverflowValue(
     return try analyser.overflowTupleValue(result_type, result_value, overflowed);
 }
 
+fn resolveVectorOverflowValue(
+    analyser: *Analyser,
+    tag: std.zig.BuiltinFn.Tag,
+    lhs: Type,
+    rhs: Type,
+    result_type: InternPool.Index,
+    options: ComptimeOverflowOptions,
+) Error!?Type {
+    const result_vector = switch (analyser.ip.indexToKey(result_type)) {
+        .vector_type => |vector| vector,
+        else => return null,
+    };
+    if (analyser.ip.zigTypeTag(result_vector.child) != .int) return null;
+    const lhs_values = try analyser.comptimeArrayElements(lhs) orelse return null;
+    const rhs_values = try analyser.comptimeArrayElements(rhs) orelse return null;
+    if (lhs_values.len != result_vector.len or rhs_values.len != result_vector.len) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+    defer analyser.gpa.free(values);
+    const overflows = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+    defer analyser.gpa.free(overflows);
+    const unknown_value = try analyser.ip.getUnknown(result_vector.child);
+    const unknown_overflow = try analyser.ip.getUnknown(.u1_type);
+    for (values, overflows, lhs_values, rhs_values) |*value, *overflow, lhs_value, rhs_value| {
+        const lane = try analyser.resolveOverflowValue(
+            tag,
+            lhs_value,
+            rhs_value,
+            options.same_operand,
+            options.complementary_operands,
+        ) orelse {
+            value.* = unknown_value;
+            overflow.* = unknown_overflow;
+            continue;
+        };
+        const lane_values = analyser.aggregateValues(lane) orelse {
+            value.* = unknown_value;
+            overflow.* = unknown_overflow;
+            continue;
+        };
+        if (lane_values.len != 2) return null;
+        value.* = lane_values.at(0, analyser.ip);
+        overflow.* = lane_values.at(1, analyser.ip);
+    }
+    return @as(?Type, try analyser.vectorOverflowTupleValue(result_type, values, overflows));
+}
+
 pub const ComptimeOverflowKind = enum { add, sub, mul, shl };
 
 pub const ComptimeOverflowOptions = struct {
@@ -7376,7 +7453,7 @@ pub fn resolveComptimeOverflowValue(
     rhs: Type,
     kind: ComptimeOverflowKind,
     options: ComptimeOverflowOptions,
-) error{OutOfMemory}!?Type {
+) Error!?Type {
     const tag: std.zig.BuiltinFn.Tag = switch (kind) {
         .add => .add_with_overflow,
         .sub => .sub_with_overflow,
@@ -7389,6 +7466,19 @@ pub fn resolveComptimeOverflowValue(
         lhs_type
     else
         try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
+    if (analyser.ip.zigTypeTag(result_type) == .vector) {
+        const result_vector = analyser.ip.indexToKey(result_type).vector_type;
+        if (!options.evaluate_values) {
+            const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+            defer analyser.gpa.free(values);
+            const overflows = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
+            defer analyser.gpa.free(overflows);
+            @memset(values, try analyser.ip.getUnknown(result_vector.child));
+            @memset(overflows, try analyser.ip.getUnknown(.u1_type));
+            return @as(?Type, try analyser.vectorOverflowTupleValue(result_type, values, overflows));
+        }
+        return analyser.resolveVectorOverflowValue(tag, lhs, rhs, result_type, options);
+    }
     if (analyser.ip.zigTypeTag(result_type) != .int) return null;
     if (options.evaluate_values) {
         if (try analyser.resolveOverflowValue(
