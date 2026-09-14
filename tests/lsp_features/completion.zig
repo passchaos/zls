@@ -15848,6 +15848,38 @@ test "comptime nested alias optional payload pointers" {
         .{ .label = "error_same", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "error_distinct", .kind = .Field, .detail = "[7]u8" },
     });
+
+    try testCompletion(
+        \\const present: ?usize = 4;
+        \\const success: error{Failure}!usize = 5;
+        \\const optional_pointer = &present;
+        \\const error_pointer = &success;
+        \\fn optionalPayload() *const usize {
+        \\    if (optional_pointer.*) |*payload| return payload else unreachable;
+        \\}
+        \\fn errorPayload() *const usize {
+        \\    if (error_pointer.*) |*payload| return payload else |_| unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var optional_same: usize = 2;
+        \\    if (optionalPayload() == &present.?) optional_same = 1;
+        \\    var error_same: usize = 4;
+        \\    if (errorPayload() == errorPayload()) error_same = 3;
+        \\    return struct {
+        \\        optional_value: [optionalPayload().*]u8,
+        \\        error_value: [errorPayload().*]u8,
+        \\        optional_same: [optional_same]u8,
+        \\        error_same: [error_same]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "error_value", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "optional_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "error_same", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static switch pointer captures" {
@@ -15964,6 +15996,25 @@ test "comptime static switch pointer captures" {
         .{ .label = "field_distinct", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "element_same", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "element_distinct", .kind = .Field, .detail = "[7]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize };
+        \\const value: Value = .{ .count = 4 };
+        \\const value_pointer = &value;
+        \\fn pointer() *const usize {
+        \\    return switch (value_pointer.*) { .count => |*payload| payload };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &value.count) same = 1;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
     });
 }
 

@@ -706,6 +706,25 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) == .deref) {
+            const pointer_node = tree.nodeData(unwrapped).node;
+            const evaluated = try self.eval(handle, pointer_node);
+            const pointer = if (evaluated != null and evaluated.?.data == .comptime_value and
+                evaluated.?.data.comptime_value.data == .pointee)
+                evaluated.?
+            else
+                try self.staticCaptureValue(handle, pointer_node) orelse return null;
+            if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .pointee) return null;
+            const pointee = pointer.data.comptime_value.data.pointee;
+            return .{
+                .declaration = .{
+                    .decl = .{ .ast_node = pointee.source.node },
+                    .handle = pointee.source.handle,
+                    .container_type = pointee.container_type,
+                },
+                .path = pointee.path,
+            };
+        }
         if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |resolved| {
             var declaration = resolved;
             if (declaration.container_type == null and self.container_type != null and
