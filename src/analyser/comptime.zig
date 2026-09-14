@@ -492,6 +492,7 @@ pub const Interpreter = struct {
         label: ?Ast.TokenIndex,
         destination: ?Type,
         is_loop: bool,
+        preserve_capture_target: bool = false,
         continue_destination: ?Type = null,
         continue_by_ref: bool = false,
     };
@@ -538,6 +539,7 @@ pub const Interpreter = struct {
     const EvaluatedSource = struct {
         value: Type,
         source_node: ?Ast.Node.Index,
+        capture_target: ?CaptureTarget = null,
     };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
@@ -714,6 +716,12 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
+        var block_buffer: [2]Ast.Node.Index = undefined;
+        if (tree.blockStatements(&block_buffer, unwrapped) != null) {
+            if (!self.tick()) return null;
+            const result = self.expressionResult(try self.block(handle, unwrapped, null, true)) orelse return null;
+            return .{ .value = result.value, .target = result.capture_target };
+        }
         if (tree.nodeTag(unwrapped) == .if_simple or tree.nodeTag(unwrapped) == .@"if") {
             return switch (try self.ifTarget(handle, unwrapped) orelse return null) {
                 .node => |target| self.captureOperand(handle, target, depth + 1),
@@ -1416,7 +1424,7 @@ pub const Interpreter = struct {
         if (!self.tick()) return null;
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (handle.tree.blockStatements(&block_buffer, node) != null) {
-            const result = self.expressionResult(try self.block(handle, node, null)) orelse return null;
+            const result = self.expressionResult(try self.block(handle, node, null, false)) orelse return null;
             return result.value;
         }
         switch (handle.tree.nodeTag(node)) {
@@ -2137,7 +2145,7 @@ pub const Interpreter = struct {
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&block_buffer, node) != null) {
             if (!self.tick()) return null;
-            return self.expressionResult(try self.block(handle, node, destination));
+            return self.expressionResult(try self.block(handle, node, destination, false));
         }
         return switch (tree.nodeTag(node)) {
             .@"comptime", .@"nosuspend" => blk: {
@@ -3265,13 +3273,20 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn block(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: ?Type) Error!Flow {
+    fn block(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        destination: ?Type,
+        preserve_capture_target: bool,
+    ) Error!Flow {
         const tree = &handle.tree;
         const context: BreakContext = .{
             .parent = self.break_context,
             .label = ast.blockLabel(tree, node),
             .destination = destination,
             .is_loop = false,
+            .preserve_capture_target = preserve_capture_target,
         };
         self.break_context = &context;
         defer self.break_context = context.parent;
@@ -3546,7 +3561,7 @@ pub const Interpreter = struct {
         const tree = &handle.tree;
         var buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&buffer, node) != null) {
-            return switch (try self.block(handle, node, null)) {
+            return switch (try self.block(handle, node, null, false)) {
                 .value => .next,
                 else => |flow| flow,
             };
@@ -3635,6 +3650,16 @@ pub const Interpreter = struct {
                         } else if (!target.is_loop) continue;
                         break target.destination;
                     } else null;
+                    if (self.break_context) |target| {
+                        if (target.preserve_capture_target) {
+                            const captured = try self.captureOperand(handle, expression, 0) orelse return .unknown;
+                            break :blk .{
+                                .value = try self.captureBindings(captured.value),
+                                .source_node = expression,
+                                .capture_target = captured.target,
+                            };
+                        }
+                    }
                     const evaluated = try self.evalSourceWithType(handle, expression, destination) orelse return .unknown;
                     break :blk .{
                         .value = try self.captureBindings(evaluated.value),

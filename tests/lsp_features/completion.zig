@@ -16705,6 +16705,62 @@ test "comptime static switch pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const value: Value = .{ .b = 4 };
+        \\fn pointer(evaluations: *usize) *const usize {
+        \\    return switch (blk: {
+        \\        evaluations.* += 1;
+        \\        break :blk value;
+        \\    }) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const captured = pointer(&evaluations);
+        \\    var same: usize = 2;
+        \\    if (captured == &value.b) same = 1;
+        \\    return struct { value: [captured.*]u8, same: [same]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const failure: error{Failure}!Value = error.Failure;
+        \\const fallback: Value = .{ .b = 4 };
+        \\fn pointer(evaluations: *usize) *const usize {
+        \\    return switch (failure catch |err| blk: {
+        \\        if (err != error.Failure) unreachable;
+        \\        evaluations.* += 1;
+        \\        break :blk fallback;
+        \\    }) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const captured = pointer(&evaluations);
+        \\    var same: usize = 2;
+        \\    if (captured == &fallback.b) same = 1;
+        \\    return struct { value: [captured.*]u8, same: [same]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
