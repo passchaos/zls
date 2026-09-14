@@ -15915,6 +15915,44 @@ test "comptime static pointer aliases preserve sequence reads" {
     });
 }
 
+test "comptime sequence element addresses evaluate operands once" {
+    try testCompletion(
+        \\fn select(values: *[3]usize, evaluations: *usize) *[3]usize {
+        \\    evaluations.* += 1;
+        \\    return values;
+        \\}
+        \\fn index(evaluations: *usize) usize {
+        \\    evaluations.* += 1;
+        \\    return 1;
+        \\}
+        \\fn Select() type {
+        \\    var values = [_]usize{ 3, 5, 7 };
+        \\    var base_evaluations: usize = 0;
+        \\    var index_evaluations: usize = 0;
+        \\    const pointer = &select(&values, &base_evaluations)[index(&index_evaluations)];
+        \\    var same: usize = 2;
+        \\    if (pointer == &values[1]) same = 1;
+        \\    pointer.* += 2;
+        \\    const value = values[1];
+        \\    const base_count = base_evaluations;
+        \\    const index_count = index_evaluations;
+        \\    return struct {
+        \\        value: [value]u8,
+        \\        same: [same]u8,
+        \\        base_evaluations: [base_count]u8,
+        \\        index_evaluations: [index_count]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "base_evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "index_evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime local tuple pointers preserve field identity" {
     try testCompletion(
         \\fn fieldName(evaluations: *usize) []const u8 {

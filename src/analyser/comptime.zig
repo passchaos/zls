@@ -1820,14 +1820,28 @@ pub const Interpreter = struct {
                             (try captured.value.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser)
                         else
                             null;
-                        if ((pointer_size == .one or pointer_size == .many or pointer_size == .slice) and
-                            try self.analyser.resolveBracketAccessType(captured.value, .{ .single = 0 }) != null and
-                            Value.sequence(captured.value) != null)
-                        {
-                            const sequence = Value.sequence(captured.value).?;
+                        if (pointer_size == .one or pointer_size == .many or pointer_size == .slice) {
                             const index = try self.integer(handle, index_node) orelse return null;
-                            if (index >= sequence.len) return null;
-                            return self.sequenceElementPointer(captured.value, index);
+                            if (try Value.sequenceAlloc(self.analyser, captured.value)) |sequence| {
+                                if (index >= sequence.len) return null;
+                                return self.sequenceElementPointer(captured.value, index);
+                            }
+                            if (try self.captureTargetFromPointer(
+                                captured.value,
+                                try self.captureAggregateValue(captured.value),
+                            )) |target| {
+                                const current = switch (target) {
+                                    .reference => |reference| try self.readReference(reference) orelse return null,
+                                    .pointee => |pointee| pointee.value,
+                                };
+                                const items = try self.mutableElements(current) orelse return null;
+                                if (index >= items.len) return null;
+                                return self.captureTargetPointer(
+                                    target,
+                                    items[index],
+                                    try self.aggregateIndexAccess(current, index),
+                                );
+                            }
                         }
                     }
                 }
