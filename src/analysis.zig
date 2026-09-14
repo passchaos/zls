@@ -8650,6 +8650,39 @@ fn resolveShuffleValue(
         (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len) or
         (mask_values != null and mask_values.?.len != mask_vector.len)) return null;
+    if (lhs_items != null or rhs_items != null or mask_items != null) {
+        const shuffled = try analyser.arena.alloc(Type, mask_vector.len);
+        const unknown = Type.fromIP(analyser, element_type, null);
+        for (shuffled, 0..) |*value, i| {
+            const mask_index = if (mask_items) |items|
+                items[i].ipIndex() orelse .unknown_unknown
+            else
+                mask_values.?.at(@intCast(i), analyser.ip);
+            const mask_value = analyser.ip.toInt(mask_index, i64) orelse {
+                value.* = unknown;
+                continue;
+            };
+            const source_items, const source_values, const source_len, const source_index = if (mask_value >= 0)
+                .{ lhs_items, lhs_values, lhs_vector.len, @as(u64, @intCast(mask_value)) }
+            else
+                .{ rhs_items, rhs_values, rhs_vector.len, @as(u64, @intCast(~mask_value)) };
+            if (source_index >= source_len) {
+                value.* = unknown;
+                continue;
+            }
+            value.* = if (source_items) |items|
+                items[@intCast(source_index)]
+            else if (source_values) |source|
+                Type.fromIP(analyser, element_type, source.at(@intCast(source_index), analyser.ip))
+            else
+                unknown;
+        }
+        return @as(?Type, try comptime_eval.Value.create(
+            analyser,
+            Type.fromIP(analyser, .type_type, result_type),
+            .{ .array = shuffled },
+        ));
+    }
 
     const values = try analyser.gpa.alloc(InternPool.Index, mask_vector.len);
     defer analyser.gpa.free(values);

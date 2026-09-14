@@ -4946,6 +4946,47 @@ test "comptime shuffle accepts structured vectors" {
     });
 }
 
+test "comptime shuffle preserves structured pointer vectors" {
+    try testCompletion(
+        \\const values = [_]u8{ 1, 2, 3, 4 };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const lhs = @as(@Vector(2, *const u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ &values[0], &values[1] };
+        \\    });
+        \\    const rhs = @as(@Vector(2, *const u8), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ &values[2], &values[3] };
+        \\    });
+        \\    const shuffled = @shuffle(
+        \\        element: {
+        \\            executions = executions * 10 + 3;
+        \\            break :element *const u8;
+        \\        },
+        \\        lhs,
+        \\        rhs,
+        \\        mask: {
+        \\            executions = executions * 10 + 4;
+        \\            break :mask @as(@Vector(3, i32), .{ 1, -1, -2 });
+        \\        },
+        \\    );
+        \\    return struct {
+        \\        identity: [if (shuffled[0] == lhs[1] and
+        \\            shuffled[1] == rhs[0] and shuffled[2] == rhs[1]) 1 else 99]u8,
+        \\        values: [shuffled[0].* + shuffled[1].* + shuffled[2].*]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identity", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "values", .kind = .Field, .detail = "[9]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime min max accept structured vectors" {
     try testCompletion(
         \\fn Select() type {
