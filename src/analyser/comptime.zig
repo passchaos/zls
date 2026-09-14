@@ -778,6 +778,24 @@ pub const Interpreter = struct {
                     null,
             };
         }
+        if (tree.nodeTag(unwrapped) == .@"orelse") {
+            const lhs, const rhs = tree.nodeData(unwrapped).node_and_node;
+            const base_result = try self.captureOperand(handle, lhs, depth + 1);
+            const base_operand = base_result orelse return null;
+            return switch (try self.optionalValue(base_operand.value) orelse return null) {
+                .payload => |value| .{
+                    .value = value,
+                    .target = if (base_operand.target) |target|
+                        try self.extendCaptureTarget(target, value, .optional_payload)
+                    else
+                        null,
+                },
+                .absent => blk: {
+                    const result = try self.captureOperand(handle, rhs, depth + 1);
+                    break :blk result;
+                },
+            };
+        }
         if (tree.nodeTag(unwrapped) == .@"try") {
             const base_operand = try self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1) orelse return null;
             return switch (try self.errorUnionValue(base_operand.value) orelse return null) {
@@ -994,6 +1012,20 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) == .@"orelse") {
+            const lhs, const rhs = tree.nodeData(unwrapped).node_and_node;
+            const value = try self.staticCaptureValue(handle, lhs) orelse return null;
+            return switch (try self.optionalValue(value) orelse return null) {
+                .payload => {
+                    const parent = try self.staticPointeeTarget(handle, lhs, depth + 1) orelse return null;
+                    const path = try self.analyser.arena.alloc(Value.Reference.Access, parent.path.len + 1);
+                    @memcpy(path[0..parent.path.len], parent.path);
+                    path[parent.path.len] = .optional_payload;
+                    return .{ .declaration = parent.declaration, .path = path };
+                },
+                .absent => self.staticPointeeTarget(handle, rhs, depth + 1),
+            };
+        }
         if (tree.nodeTag(unwrapped) == .@"try" or tree.nodeTag(unwrapped) == .@"catch") {
             const base = switch (tree.nodeTag(unwrapped)) {
                 .@"try" => tree.nodeData(unwrapped).node,
@@ -3001,6 +3033,7 @@ pub const Interpreter = struct {
         const index = payload.index orelse return null;
         return switch (self.analyser.ip.indexToKey(index)) {
             .null_value => .absent,
+            .simple_value => |simple| if (simple == .null_value) .absent else null,
             .optional_value => |optional| .{
                 .payload = Type.fromIP(self.analyser, self.analyser.ip.typeOf(optional.val), optional.val),
             },

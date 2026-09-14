@@ -16481,6 +16481,130 @@ test "comptime static switch pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const optional: ?Value = .{ .b = 4 };
+        \\const fallback: Value = .{ .b = 2 };
+        \\fn presentPointer() *const usize {
+        \\    return switch (optional orelse fallback) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (presentPointer() == &optional.?.b) same = 1;
+        \\    return struct { value: [presentPointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const optional: ?Value = null;
+        \\const fallback: Value = .{ .b = 2 };
+        \\fn fallbackPointer() *const usize {
+        \\    return switch (optional orelse fallback) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 4;
+        \\    if (fallbackPointer() == &fallback.b) same = 3;
+        \\    return struct { value: [fallbackPointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const optional: ?Value = .{ .b = 4 };
+        \\const fallback: Value = .{ .b = 2 };
+        \\fn selected(evaluations: *usize) *const ?Value {
+        \\    evaluations.* += 1;
+        \\    return &optional;
+        \\}
+        \\fn alternate(evaluations: *usize) *const Value {
+        \\    evaluations.* += 1;
+        \\    return &fallback;
+        \\}
+        \\fn pointer(lhs_evaluations: *usize, rhs_evaluations: *usize) *const usize {
+        \\    return switch (selected(lhs_evaluations).* orelse alternate(rhs_evaluations).*) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var lhs_evaluations: usize = 0;
+        \\    var rhs_evaluations: usize = 0;
+        \\    const captured = pointer(&lhs_evaluations, &rhs_evaluations);
+        \\    var same: usize = 2;
+        \\    if (captured == &optional.?.b) same = 1;
+        \\    return struct {
+        \\        value: [captured.*]u8,
+        \\        same: [same]u8,
+        \\        lhs_evaluations: [lhs_evaluations]u8,
+        \\        rhs_evaluations: [rhs_evaluations]u8,
+        \\    };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "lhs_evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "rhs_evaluations", .kind = .Field, .detail = "[0]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const optional: ?Value = null;
+        \\const fallback: Value = .{ .b = 2 };
+        \\fn selected(evaluations: *usize) *const ?Value {
+        \\    evaluations.* += 1;
+        \\    return &optional;
+        \\}
+        \\fn alternate(evaluations: *usize) *const Value {
+        \\    evaluations.* += 1;
+        \\    return &fallback;
+        \\}
+        \\fn pointer(lhs_evaluations: *usize, rhs_evaluations: *usize) *const usize {
+        \\    return switch (selected(lhs_evaluations).* orelse alternate(rhs_evaluations).*) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var lhs_evaluations: usize = 0;
+        \\    var rhs_evaluations: usize = 0;
+        \\    const captured = pointer(&lhs_evaluations, &rhs_evaluations);
+        \\    var same: usize = 4;
+        \\    if (captured == &fallback.b) same = 3;
+        \\    return struct {
+        \\        value: [captured.*]u8,
+        \\        same: [same]u8,
+        \\        lhs_evaluations: [lhs_evaluations]u8,
+        \\        rhs_evaluations: [rhs_evaluations]u8,
+        \\    };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "lhs_evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "rhs_evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
