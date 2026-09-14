@@ -13307,6 +13307,60 @@ test "generic function with nested comptime errorName mutation" {
     });
 }
 
+test "generic function with comptime error casts" {
+    try testCompletion(
+        \\fn Select(comptime err: error{ Bad, Other }) type {
+        \\    var executions: usize = 1;
+        \\    const narrowed: error{Bad} = @errorCast(value: {
+        \\        executions *= 2;
+        \\        defer executions += 1;
+        \\        break :value err;
+        \\    });
+        \\    const optional: ?error{Bad} = @errorCast(narrowed);
+        \\    const wrapped: error{Bad}!u8 = @errorCast(narrowed);
+        \\    return if (@errorName(optional.?)[0] == 'B' and (wrapped catch 11) == 11 and executions == 3)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(error.Bad) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime fail: bool) type {
+        \\    const source: error{ Bad, Other }!u8 = if (fail) error.Bad else 7;
+        \\    const casted: error{Bad}!u8 = @errorCast(source);
+        \\    const value = casted catch |err| if (@errorName(err)[0] == 'B') 9 else 0;
+        \\    return if (value == if (fail) 9 else 7)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime fail: bool) type {
+        \\    const source: error{ Bad, Other }!u8 = if (fail) error.Bad else 7;
+        \\    const casted: error{Bad}!u8 = @errorCast(source);
+        \\    return if ((casted catch 0) == 7)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(false) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime catch" {
     try testCompletion(
         \\var runtime_error_union: error{Failure}!u8 = undefined;

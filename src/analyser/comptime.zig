@@ -2545,6 +2545,7 @@ pub const Interpreter = struct {
                 null;
             const is_splat = std.mem.eql(u8, name, "@splat");
             const is_enum = std.mem.eql(u8, name, "@enumFromInt");
+            const is_error = std.mem.eql(u8, name, "@errorCast");
             const is_pointer = std.mem.eql(u8, name, "@ptrCast");
             const qualifier_cast: ?Type.PointerQualifierCast = if (std.mem.eql(u8, name, "@constCast"))
                 .discard_const
@@ -2554,7 +2555,7 @@ pub const Interpreter = struct {
                 .increase_alignment
             else
                 null;
-            if (kind != null or is_splat or is_enum or is_pointer or qualifier_cast != null) {
+            if (kind != null or is_splat or is_enum or is_error or is_pointer or qualifier_cast != null) {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
@@ -2562,6 +2563,8 @@ pub const Interpreter = struct {
                 const operand = try self.eval(handle, params[0]) orelse return null;
                 const result_type = if (kind != null or is_splat or is_enum)
                     self.payloadResultLocationType(ty)
+                else if (is_error)
+                    self.optionalPayloadType(ty) orelse ty
                 else
                     ty;
                 const value: ?Type = if (kind) |cast_kind|
@@ -2570,6 +2573,8 @@ pub const Interpreter = struct {
                     try self.analyser.resolveComptimeSplatValue(result_type, operand)
                 else if (is_enum)
                     try self.analyser.resolveComptimeEnumFromIntValue(result_type, operand)
+                else if (is_error)
+                    try self.errorCastValue(result_type, operand)
                 else
                     try self.pointerCastValue(ty, operand, qualifier_cast);
                 return .{ .value = value orelse return null, .source_node = null };
@@ -2953,6 +2958,58 @@ pub const Interpreter = struct {
         }
         if (self.isErrorValue(resolved)) return .{ .failure = resolved };
         return null;
+    }
+
+    fn errorSetCastValue(self: *Interpreter, destination: Type, value: Type) Error!?Type {
+        if (!destination.isErrorSetType(self.analyser)) return null;
+        const destination_type = destination.ipIndex() orelse return null;
+        const source_type = try value.typeOf(self.analyser);
+        if (!source_type.isErrorSetType(self.analyser)) return null;
+
+        const value_index = value.ipIndex() orelse return destination.instanceTypeVal(self.analyser);
+        if (self.analyser.ip.isUndefined(value_index)) return null;
+        if (self.analyser.ip.isUnknown(value_index)) return destination.instanceTypeVal(self.analyser);
+        const error_value = switch (self.analyser.ip.indexToKey(value_index)) {
+            .error_value => |error_value| error_value,
+            else => return null,
+        };
+        if (destination_type != .anyerror_type) {
+            const error_set = switch (self.analyser.ip.indexToKey(destination_type)) {
+                .error_set_type => |error_set| error_set,
+                else => return null,
+            };
+            for (0..error_set.names.len) |index| {
+                if (error_set.names.at(@intCast(index), self.analyser.ip) == error_value.error_tag_name) break;
+            } else return null;
+        }
+        const casted = try self.analyser.ip.get(.{ .error_value = .{
+            .ty = destination_type,
+            .error_tag_name = error_value.error_tag_name,
+        } });
+        return Type.fromIP(self.analyser, destination_type, casted);
+    }
+
+    fn errorCastValue(self: *Interpreter, destination: Type, value: Type) Error!?Type {
+        const source_type = try value.typeOf(self.analyser);
+        const source_error_union = self.errorUnionTypes(source_type);
+        if (self.errorUnionTypes(destination)) |destination_types| {
+            if (source_error_union) |source_types| {
+                if (!source_types.payload.eql(destination_types.payload)) return null;
+            } else if (!source_type.isErrorSetType(self.analyser)) return null;
+
+            const resolved = try self.errorUnionValue(value) orelse
+                return destination.instanceTypeVal(self.analyser);
+            const casted: Value.ErrorUnion = switch (resolved) {
+                .payload => |payload| .{ .payload = payload },
+                .failure => |failure| .{ .failure = if (destination_types.error_set) |error_set|
+                    try self.errorSetCastValue(error_set, failure) orelse return null
+                else
+                    failure },
+            };
+            return @as(?Type, try Value.create(self.analyser, destination, .{ .error_union = casted }));
+        }
+        if (source_error_union != null) return null;
+        return self.errorSetCastValue(destination, value);
     }
 
     fn catchCaptureToken(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) ?Ast.TokenIndex {
