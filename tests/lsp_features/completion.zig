@@ -4346,6 +4346,48 @@ test "comptime unary float builtins accept structured vectors" {
     });
 }
 
+test "comptime unary operators accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const signed = @as(@Vector(2, i8), values: {
+        \\        executions += 1;
+        \\        break :values .{ -4, -128 };
+        \\    });
+        \\    const unsigned = @as(@Vector(2, u8), values: {
+        \\        executions = executions * 10 + 2;
+        \\        break :values .{ 1, 2 };
+        \\    });
+        \\    const floats = @as(@Vector(2, f32), values: {
+        \\        executions = executions * 10 + 3;
+        \\        break :values .{ 2.5, -4.5 };
+        \\    });
+        \\    const booleans = @as(@Vector(2, bool), values: {
+        \\        executions = executions * 10 + 4;
+        \\        break :values .{ true, false };
+        \\    });
+        \\    const magnitude = @abs(signed);
+        \\    const negated = -signed;
+        \\    const wrapped = -%signed;
+        \\    const inverted = ~unsigned;
+        \\    const negative_floats = -floats;
+        \\    const toggled = !booleans;
+        \\    return struct {
+        \\        items: [if (magnitude[0] == 4 and magnitude[1] == 128 and
+        \\            negated[0] == 4 and wrapped[1] == -128 and
+        \\            inverted[0] == 254 and negative_floats[1] == 4.5 and
+        \\            !toggled[0] and toggled[1]) 13 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[13]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

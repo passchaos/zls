@@ -4266,11 +4266,8 @@ fn resolveVectorUnaryValue(
     operation: VectorUnaryOperation,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -4284,20 +4281,26 @@ fn resolveVectorUnaryValue(
     }
     const result_type = if (operation == .abs and analyser.ip.zigTypeTag(vector.child) == .int and
         analyser.ip.isSignedInt(vector.child, builtin.target))
-        try analyser.ip.toUnsigned(payload.type, builtin.target)
+        try analyser.ip.toUnsigned(operand_type, builtin.target)
     else
-        payload.type;
+        operand_type;
     const result_vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |result_vector| result_vector,
         else => return null,
     };
-    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, result_type, null);
-    if (source_values.len != vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const source_values = analyser.aggregateValues(operand);
+    if (source_items == null and source_values == null) return Type.fromIP(analyser, result_type, null);
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const element = if (source_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, vector.child, source_values.?.at(@intCast(i), analyser.ip));
         const resolved = switch (operation) {
             .bit_not => try analyser.resolveBitNotValue(element),
             .negate => try analyser.resolveNegationValue(element, false),
@@ -4310,22 +4313,19 @@ fn resolveVectorUnaryValue(
 }
 
 pub fn resolveComptimeAbsValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const scalar_type = analyser.ip.scalarType(payload.type);
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const scalar_type = analyser.ip.scalarType(operand_type);
     const scalar_tag = analyser.ip.zigTypeTag(scalar_type) orelse return null;
     const result_type = switch (scalar_tag) {
-        .comptime_float, .float, .comptime_int => payload.type,
+        .comptime_float, .float, .comptime_int => operand_type,
         .int => if (analyser.ip.isSignedInt(scalar_type, builtin.target))
-            try analyser.ip.toUnsigned(payload.type, builtin.target)
+            try analyser.ip.toUnsigned(operand_type, builtin.target)
         else
-            payload.type,
+            operand_type,
         else => return null,
     };
     const fallback = Type.fromIP(analyser, result_type, null);
-    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+    if (analyser.ip.zigTypeTag(operand_type) == .vector) {
         return try analyser.resolveVectorUnaryValue(.abs, operand) orelse fallback;
     }
     return try analyser.resolveAbsValue(operand) orelse fallback;
@@ -6778,28 +6778,32 @@ fn resolveVectorBoolBinaryValue(
 }
 
 fn resolveVectorBoolNotValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (vector.child != .bool_type) return null;
-    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
-    if (source_values.len != vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const source_values = analyser.aggregateValues(operand);
+    if (source_items == null and source_values == null) return Type.fromIP(analyser, operand_type, null);
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        value.* = switch (source_values.at(@intCast(i), analyser.ip)) {
+        const source = if (source_items) |items|
+            items[i].ipIndex() orelse .unknown_unknown
+        else
+            source_values.?.at(@intCast(i), analyser.ip);
+        value.* = switch (source) {
             .bool_true => .bool_false,
             .bool_false => .bool_true,
             else => try analyser.ip.getUnknown(.bool_type),
         };
     }
-    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+    return analyser.aggregateValue(Type.fromIP(analyser, operand_type, null), values);
 }
 
 fn resolveVectorFixedWidthIntegerBinaryValue(
@@ -9406,21 +9410,23 @@ pub fn resolveComptimeUnaryValue(
             },
             else => null,
         },
-        .bit_not => switch (operand.data) {
+        .bit_not => if (analyser.ip.zigTypeTag((try operand.typeOf(analyser)).ipIndex() orelse return null) == .vector)
+            analyser.resolveVectorUnaryValue(.bit_not, operand)
+        else switch (operand.data) {
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.type) orelse return null) {
-                .vector => analyser.resolveVectorUnaryValue(.bit_not, operand),
                 .int, .comptime_int => try analyser.resolveBitNotValue(operand) orelse
                     Type.fromIP(analyser, payload.type, null),
                 else => null,
             },
             else => null,
         },
-        .negation, .negation_wrap => switch (operand.data) {
+        .negation, .negation_wrap => if (analyser.ip.zigTypeTag((try operand.typeOf(analyser)).ipIndex() orelse return null) == .vector)
+            analyser.resolveVectorUnaryValue(
+                if (tag == .negation_wrap) .negate_wrap else .negate,
+                operand,
+            )
+        else switch (operand.data) {
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.type) orelse return null) {
-                .vector => analyser.resolveVectorUnaryValue(
-                    if (tag == .negation_wrap) .negate_wrap else .negate,
-                    operand,
-                ),
                 .float, .comptime_float => if (tag == .negation_wrap)
                     null
                 else
