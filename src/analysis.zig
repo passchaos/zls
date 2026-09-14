@@ -3114,6 +3114,18 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
             if (analyser.resolveAggregateValueAt(lhs_binding.type, index)) |value| {
                 return .{ .type = value, .is_const = true };
             }
+            if (analyser.evaluate_comptime_values) {
+                const lhs = lhs_binding.type.runtimeType(analyser);
+                if (lhs.arrayInfo(analyser)) |array_info| {
+                    if (array_info[0] == index) {
+                        const sentinel = analyser.sequenceSentinel(lhs_binding.type) orelse return null;
+                        return .{
+                            .type = Type.fromIP(analyser, analyser.ip.typeOf(sentinel), sentinel),
+                            .is_const = true,
+                        };
+                    }
+                }
+            }
         }
     }
 

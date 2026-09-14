@@ -15955,6 +15955,48 @@ test "comptime nonzero sentinel fixed array boundary" {
     , &.{.{ .label = "value", .kind = .Field, .detail = "[11]u8" }});
 }
 
+test "comptime static sentinel array boundary" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    const value = values[3];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    const value = values[values.len];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    const value = values[3];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    const value = values[4];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime nonzero sentinel dynamic array boundary" {
     try testCompletion(
         \\const values = [_:9]usize{ 3, 5, 7 };
