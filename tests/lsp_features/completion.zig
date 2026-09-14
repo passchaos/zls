@@ -16383,6 +16383,43 @@ test "comptime static switch pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const Holder = struct { value: Value };
+        \\const holder: Holder = .{ .value = .{ .b = 4 } };
+        \\fn selected(base_evaluations: *usize) *const Holder {
+        \\    base_evaluations.* += 1;
+        \\    return &holder;
+        \\}
+        \\fn name(name_evaluations: *usize) []const u8 {
+        \\    name_evaluations.* += 1;
+        \\    return "value";
+        \\}
+        \\fn Select() type {
+        \\    var base_evaluations: usize = 0;
+        \\    var name_evaluations: usize = 0;
+        \\    const pointer = switch (@field(selected(&base_evaluations).*, name(&name_evaluations))) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\    var same: usize = 2;
+        \\    if (pointer == &holder.value.b) same = 1;
+        \\    return struct {
+        \\        value: [pointer.*]u8,
+        \\        same: [same]u8,
+        \\        base_evaluations: [base_evaluations]u8,
+        \\        name_evaluations: [name_evaluations]u8,
+        \\    };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "base_evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "name_evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
