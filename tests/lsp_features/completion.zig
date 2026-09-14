@@ -16875,6 +16875,125 @@ test "comptime static switch pointer captures" {
     });
 }
 
+test "comptime temporary switch pointer captures" {
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const Other = union(enum) { a: usize, b: usize };
+        \\fn makeValue() Value {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn makeSame() Value {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn makeOther() Value {
+        \\    return .{ .b = 5 };
+        \\}
+        \\fn makeOtherTag() Value {
+        \\    return .{ .a = 4 };
+        \\}
+        \\fn makeOtherType() Other {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn pointer() *const usize {
+        \\    return switch (makeValue()) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn samePointer() *const usize {
+        \\    return switch (makeSame()) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn otherPointer() *const usize {
+        \\    return switch (makeOther()) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn otherTagPointer() *const usize {
+        \\    return switch (makeOtherTag()) {
+        \\        .a => |*payload| payload,
+        \\        .b => unreachable,
+        \\    };
+        \\}
+        \\fn otherTypePointer() *const usize {
+        \\    return switch (makeOtherType()) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == samePointer()) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer() != otherPointer()) distinct = 3;
+        \\    var tag_distinct: usize = 6;
+        \\    if (pointer() != otherTagPointer()) tag_distinct = 5;
+        \\    var type_distinct: usize = 8;
+        \\    if (pointer() != otherTypePointer()) type_distinct = 7;
+        \\    return struct {
+        \\        value: [pointer().*]u8,
+        \\        same: [same]u8,
+        \\        distinct: [distinct]u8,
+        \\        tag_distinct: [tag_distinct]u8,
+        \\        type_distinct: [type_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "tag_distinct", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "type_distinct", .kind = .Field, .detail = "[7]u8" },
+    });
+
+    try testCompletion(
+        \\fn makeOptional(value: usize) ?usize {
+        \\    return value;
+        \\}
+        \\fn optionalPointer(value: usize) *const usize {
+        \\    if (makeOptional(value)) |*payload| return payload else unreachable;
+        \\}
+        \\fn makeResult(value: usize) error{Failure}!usize {
+        \\    return value;
+        \\}
+        \\fn errorPointer(value: usize) *const usize {
+        \\    if (makeResult(value)) |*payload| return payload else |_| unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var optional_same: usize = 2;
+        \\    if (optionalPointer(4) == optionalPointer(4)) optional_same = 1;
+        \\    var optional_distinct: usize = 4;
+        \\    if (optionalPointer(4) != optionalPointer(5)) optional_distinct = 3;
+        \\    var error_same: usize = 6;
+        \\    if (errorPointer(4) == errorPointer(4)) error_same = 5;
+        \\    var error_distinct: usize = 8;
+        \\    if (errorPointer(4) != errorPointer(5)) error_distinct = 7;
+        \\    return struct {
+        \\        optional_value: [optionalPointer(4).*]u8,
+        \\        error_value: [errorPointer(4).*]u8,
+        \\        optional_same: [optional_same]u8,
+        \\        optional_distinct: [optional_distinct]u8,
+        \\        error_same: [error_same]u8,
+        \\        error_distinct: [error_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "error_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "optional_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "optional_distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "error_same", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "error_distinct", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
 test "comptime static for pointer captures" {
     try testCompletion(
         \\const values = [_]usize{ 2, 4 };

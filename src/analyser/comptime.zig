@@ -60,8 +60,15 @@ pub const Value = struct {
         container_type: ?Type,
         path: []const Reference.Access,
         is_static: bool,
+        temporary_value: ?Type = null,
 
         fn hash(self: Pointee, hasher: anytype) void {
+            std.hash.autoHash(hasher, self.temporary_value != null);
+            if (self.temporary_value) |value| {
+                value.hashWithHasher(hasher);
+                hashPath(self.path, hasher);
+                return;
+            }
             std.hash.autoHash(hasher, self.is_static);
             if (!self.is_static) self.value.hashWithHasher(hasher);
             std.hash.autoHash(hasher, self.source.node);
@@ -72,6 +79,11 @@ pub const Value = struct {
         }
 
         fn eql(self: Pointee, other: Pointee) bool {
+            if ((self.temporary_value == null) != (other.temporary_value == null)) return false;
+            if (self.temporary_value) |value| {
+                if (!value.eql(other.temporary_value.?) or self.path.len != other.path.len) return false;
+                return pathEql(self.path, other.path);
+            }
             if (!self.source.eql(other.source) or
                 self.is_static != other.is_static or
                 (self.container_type == null) != (other.container_type == null) or
@@ -1051,6 +1063,22 @@ pub const Interpreter = struct {
                 ));
             },
         };
+    }
+
+    fn temporaryCaptureTarget(
+        _: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        value: Type,
+    ) CaptureTarget {
+        return .{ .pointee = .{
+            .value = value,
+            .source = .of(node, handle),
+            .container_type = null,
+            .path = &.{},
+            .is_static = false,
+            .temporary_value = value,
+        } };
     }
 
     fn staticPointeeTarget(
@@ -2912,6 +2940,11 @@ pub const Interpreter = struct {
         else
             .{ .value = try self.eval(handle, condition) orelse return null, .target = null };
         const value = operand.value;
+        const capture_target = operand.target orelse
+            if (capture_by_ref and Value.isKnown(value, self.analyser, 0))
+                self.temporaryCaptureTarget(handle, condition, value)
+            else
+                null;
         if (error_token) |failure_token| {
             return switch (try self.errorUnionValue(value) orelse return null) {
                 .failure => |failure| failure: {
@@ -2922,7 +2955,7 @@ pub const Interpreter = struct {
                     if (payload_token) |payload_capture| {
                         const captured = if (capture_by_ref)
                             try self.captureTargetPointer(
-                                operand.target orelse return null,
+                                capture_target orelse return null,
                                 payload,
                                 .error_union_payload,
                             ) orelse return null
@@ -2940,7 +2973,7 @@ pub const Interpreter = struct {
         };
         const captured = if (capture_by_ref)
             try self.captureTargetPointer(
-                operand.target orelse return null,
+                capture_target orelse return null,
                 payload,
                 .optional_payload,
             ) orelse return null
@@ -3391,7 +3424,12 @@ pub const Interpreter = struct {
             try self.captureOperand(handle, switch_node.ast.condition, 0) orelse return null
         else
             .{ .value = try self.eval(handle, switch_node.ast.condition) orelse return null, .target = null };
-        return self.switchTargetForCondition(handle, node, operand.value, operand.target);
+        const capture_target = operand.target orelse
+            if (has_pointer_capture and Value.isKnown(operand.value, self.analyser, 0))
+                self.temporaryCaptureTarget(handle, switch_node.ast.condition, operand.value)
+            else
+                null;
+        return self.switchTargetForCondition(handle, node, operand.value, capture_target);
     }
 
     fn switchHasPointerCapture(tree: *const Ast, switch_node: Ast.full.Switch) bool {
