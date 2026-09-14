@@ -6105,15 +6105,12 @@ fn resolveComplementaryBinaryValue(
     tag: Ast.Node.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    if (payload.index) |index| {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    if (operand.ipIndex()) |index| {
         if (analyser.ip.isUndefined(index)) return operand.withoutIPIndex(analyser);
     }
 
-    const scalar_tag = analyser.ip.zigTypeTag(payload.type);
+    const scalar_tag = analyser.ip.zigTypeTag(operand_type);
     if (scalar_tag == .bool) {
         const value: InternPool.Index = switch (tag) {
             .bool_and, .bit_and => .bool_false,
@@ -6122,16 +6119,16 @@ fn resolveComplementaryBinaryValue(
         };
         return Type.fromIP(analyser, .bool_type, value);
     }
-    if (analyser.fixedWidthIntegerBounds(payload.type)) |bounds| {
+    if (analyser.fixedWidthIntegerBounds(operand_type)) |bounds| {
         const value: i256 = switch (tag) {
             .bit_and => 0,
             .add, .add_wrap, .add_sat, .bit_or, .bit_xor => if (bounds.min < 0) -1 else bounds.max,
             else => return null,
         };
-        return analyser.intValueWithType(payload.type, value);
+        return analyser.intValueWithType(operand_type, value);
     }
 
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -6150,18 +6147,26 @@ fn resolveComplementaryBinaryValue(
     else
         return null;
 
+    const source_items = comptime_eval.Value.elements(operand);
     const source_values = analyser.aggregateValues(operand);
-    if (source_values) |values| if (values.len != vector.len) return null;
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
     const unknown = try analyser.ip.getUnknown(vector.child);
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        value.* = if (source_values) |source|
-            if (analyser.ip.isUndefined(source.at(@intCast(i), analyser.ip))) unknown else known
+        const source = if (source_items) |items|
+            items[i].ipIndex()
+        else if (source_values) |source|
+            source.at(@intCast(i), analyser.ip)
+        else
+            null;
+        value.* = if (source) |index|
+            if (analyser.ip.isUndefined(index)) unknown else known
         else
             known;
     }
-    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+    return analyser.aggregateValue(Type.fromIP(analyser, operand_type, null), values);
 }
 
 const IntegerBounds = struct {
