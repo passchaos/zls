@@ -738,6 +738,26 @@ pub const Interpreter = struct {
                 .target = null,
             };
         }
+        if (ast.isBuiltinCall(tree, unwrapped) and
+            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(unwrapped)), "@as"))
+        {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const params = tree.builtinCallParams(&buffer, unwrapped).?;
+            if (params.len != 2) return null;
+            const destination = try self.eval(handle, params[0]) orelse return null;
+            if (!destination.is_type_val) return null;
+            const operand = try self.captureOperand(handle, params[1], depth + 1) orelse return null;
+            return .{
+                .value = try self.coerceAssignmentFromSource(
+                    handle,
+                    destination,
+                    operand.value,
+                    params[1],
+                    null,
+                ) orelse return null,
+                .target = null,
+            };
+        }
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&block_buffer, unwrapped) != null) {
             if (!self.tick()) return null;

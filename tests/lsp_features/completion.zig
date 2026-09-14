@@ -17091,6 +17091,54 @@ test "comptime temporary switch pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "declaration_distinct", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const value: Value = .{ .b = 4 };
+        \\fn pointer() *const usize {
+        \\    return switch (@as(Value, value)) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == pointer()) same = 1;
+        \\    var declaration_distinct: usize = 4;
+        \\    if (pointer() != &value.b) declaration_distinct = 3;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8, declaration_distinct: [declaration_distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "declaration_distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const value: Value = .{ .b = 4 };
+        \\fn pointer() *const usize {
+        \\    return switch (@as(?Value, value) orelse unreachable) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == pointer()) same = 1;
+        \\    var declaration_distinct: usize = 4;
+        \\    if (pointer() != &value.b) declaration_distinct = 3;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8, declaration_distinct: [declaration_distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "declaration_distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
