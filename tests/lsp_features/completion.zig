@@ -15166,6 +15166,46 @@ test "comptime pointer identities isolate generic containers" {
     try std.testing.expect(first.hash64() != second.hash64());
 }
 
+test "comptime static capture aliases isolate generic containers" {
+    try testCompletion(
+        \\fn Holder(comptime n: usize) type {
+        \\    return struct {
+        \\        const Value = union(enum) { count: usize };
+        \\        const original: Value = .{ .count = n };
+        \\        const alias = original;
+        \\        fn pointer() *const usize {
+        \\            return switch (alias) { .count => |*payload| payload };
+        \\        }
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const A = Holder(4);
+        \\    const B = Holder(5);
+        \\    var a_same: usize = 2;
+        \\    if (A.pointer() == &A.alias.count) a_same = 1;
+        \\    var a_original_distinct: usize = 4;
+        \\    if (A.pointer() != &A.original.count) a_original_distinct = 3;
+        \\    var specialization_distinct: usize = 6;
+        \\    if (A.pointer() != B.pointer()) specialization_distinct = 5;
+        \\    return struct {
+        \\        a_value: [A.pointer().*]u8,
+        \\        b_value: [B.pointer().*]u8,
+        \\        a_same: [a_same]u8,
+        \\        a_original_distinct: [a_original_distinct]u8,
+        \\        specialization_distinct: [specialization_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "a_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "b_value", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "a_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "a_original_distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "specialization_distinct", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "comptime pointer identities preserve distinct aliases" {
     const source =
         \\const Namespace = struct {

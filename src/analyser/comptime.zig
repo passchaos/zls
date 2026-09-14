@@ -480,6 +480,7 @@ pub const Value = struct {
 pub const Interpreter = struct {
     analyser: *Analyser,
     bindings: Analyser.TokenToTypeMap,
+    container_type: ?Type = null,
     cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
     budget: *Budget,
     return_type: ?Type = null,
@@ -657,6 +658,7 @@ pub const Interpreter = struct {
         var child: Interpreter = .{
             .analyser = analyser,
             .bindings = try self.bindings.clone(analyser.arena),
+            .container_type = container_type orelse self.container_type,
             .budget = self.budget,
         };
         var display_bindings = if (analyser.display_bindings) |bindings|
@@ -704,7 +706,16 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
-        if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |declaration| {
+        if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |resolved| {
+            var declaration = resolved;
+            if (declaration.container_type == null and self.container_type != null and
+                tree.nodeTag(unwrapped) == .identifier)
+            {
+                const name = try self.analyser.identifierTokenName(tree, tree.nodeMainToken(unwrapped)) orelse return null;
+                if (try self.container_type.?.lookupSymbol(self.analyser, name)) |specialized| {
+                    if (declaration.eql(specialized)) declaration = specialized;
+                }
+            }
             return .{ .declaration = declaration, .path = &.{} };
         }
         const base, const access: Value.Reference.Access = switch (tree.nodeTag(unwrapped)) {
@@ -752,6 +763,7 @@ pub const Interpreter = struct {
         var child: Interpreter = .{
             .analyser = analyser,
             .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .container_type = decl.container_type,
             .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
         };
         var display_bindings = if (analyser.display_bindings) |bindings| try bindings.clone(analyser.arena) else Analyser.TokenToNodeMap.empty;
@@ -3458,6 +3470,11 @@ pub const Interpreter = struct {
                 try info.container_type.data.container.bound_params.clone(analyser.arena)
             else
                 .empty,
+            .container_type = if (info.container_type.data == .container and
+                info.container_type.data.container.scope_handle.scope != .root)
+                info.container_type.*
+            else
+                null,
             .budget = self.budget,
         };
         if (info.container_type.data == .container) {
