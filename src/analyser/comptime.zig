@@ -1298,8 +1298,10 @@ pub const Interpreter = struct {
             const evaluated = try self.eval(handle, base) orelse break :sequence_origin;
             const base_type = try (try evaluated.typeOf(self.analyser)).instanceUnchecked(self.analyser);
             const pointer_size = base_type.pointerSize(self.analyser) orelse break :sequence_origin;
-            if (pointer_size != .many and pointer_size != .slice) break :sequence_origin;
+            if (pointer_size != .one and pointer_size != .many and pointer_size != .slice) break :sequence_origin;
             const index = try self.staticIndex(handle, index_node) orelse break :sequence_origin;
+            if (try self.analyser.resolveBracketAccessType(evaluated, .{ .single = index }) == null)
+                break :sequence_origin;
             const value = if (try Value.sequenceAlloc(self.analyser, evaluated) != null)
                 evaluated
             else
@@ -1310,7 +1312,7 @@ pub const Interpreter = struct {
                 const offset = std.math.add(usize, sequence.offset, index) catch break :sequence_origin;
                 const path = try self.analyser.arena.alloc(Value.Reference.Access, origin.path.len + 1);
                 @memcpy(path[0..origin.path.len], origin.path);
-                path[origin.path.len] = .{ .index = offset };
+                path[origin.path.len] = try self.aggregateIndexAccess(origin.value, offset);
                 return .{
                     .declaration = .{
                         .decl = .{ .ast_node = origin.source.node },

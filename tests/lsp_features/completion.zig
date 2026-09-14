@@ -15474,6 +15474,52 @@ test "comptime pointer comparisons preserve address identity" {
     });
 
     try testCompletion(
+        \\const values = [_]usize{ 4, 5 };
+        \\const pointer = &values;
+        \\fn Select() type {
+        \\    var first_same: usize = 2;
+        \\    if (&pointer[0] == &values[0]) first_same = 1;
+        \\    var second_same: usize = 4;
+        \\    if (&pointer[1] == &values[1]) second_same = 3;
+        \\    const distance = &pointer[1] - &values[0];
+        \\    return struct {
+        \\        first_same: [first_same]u8,
+        \\        second_same: [second_same]u8,
+        \\        distance: [distance]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "second_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "distance", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const tuple = .{ @as(usize, 4), @as(usize, 5) };
+        \\const pointer = &tuple;
+        \\fn Select() type {
+        \\    var first_same: usize = 2;
+        \\    if (&pointer[0] == &tuple.@"0") first_same = 1;
+        \\    var second_same: usize = 4;
+        \\    if (&pointer[1] == &@field(tuple, "1")) second_same = 3;
+        \\    const unsupported_distance = &pointer[1] - &tuple[0];
+        \\    return struct {
+        \\        first_same: [first_same]u8,
+        \\        second_same: [second_same]u8,
+        \\        unsupported_distance: [unsupported_distance]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "second_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "unsupported_distance", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\var runtime: usize = undefined;
         \\const value: usize = 4;
         \\fn pointer() *const usize {
