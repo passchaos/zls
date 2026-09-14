@@ -17220,6 +17220,29 @@ test "comptime static for pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\fn values(other: bool) [3]usize {
+        \\    return if (other) .{ 9, 4, 5 } else .{ 8, 4, 5 };
+        \\}
+        \\fn pointer(other: bool) *const usize {
+        \\    for (values(other)[1..]) |*item| return item;
+        \\    unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(false) == pointer(false)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(false) != pointer(true)) distinct = 3;
+        \\    return struct { value: [pointer(false).*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime pointer casts preserve address identity" {
