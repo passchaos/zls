@@ -15667,6 +15667,28 @@ test "comptime static for pointer captures" {
         .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const source = [_]usize{ 2, 4 };
+        \\fn Select() type {
+        \\    var target = [_]usize{ 1, 1 };
+        \\    var captured: *const usize = &source[0];
+        \\    for (&target, &source) |*dst, *src| {
+        \\        dst.* += src.*;
+        \\        captured = src;
+        \\    }
+        \\    const first = target[0];
+        \\    const second = target[1];
+        \\    const final = captured.*;
+        \\    return struct { first: [first]u8, second: [second]u8, final: [final]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "final", .kind = .Field, .detail = "[4]u8" },
+    });
 }
 
 test "comptime pointer casts preserve address identity" {
