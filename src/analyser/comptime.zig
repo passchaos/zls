@@ -559,6 +559,14 @@ pub const Interpreter = struct {
                 if (loop.error_token != null or
                     if (loop.payload_token) |token| tree.tokenTag(token) == .asterisk else false) return true;
             },
+            .@"for", .for_simple => {
+                const loop = ast.fullFor(tree, node).?;
+                var token = loop.payload_token;
+                for (loop.ast.inputs) |_| {
+                    if (tree.tokenTag(token) == .asterisk) return true;
+                    token += 2;
+                }
+            },
             .@"switch", .switch_comma => {
                 const switch_node = tree.switchFull(node);
                 if (switch_node.label_token != null or switchHasPointerCapture(tree, switch_node)) return true;
@@ -2502,6 +2510,32 @@ pub const Interpreter = struct {
         } }));
     }
 
+    fn sequenceElementPointer(self: *Interpreter, value: Type, index: usize) Error!?Type {
+        const sequence = try Value.sequenceAlloc(self.analyser, value) orelse return null;
+        if (index >= sequence.len or !sequence.elements_valid) return null;
+        const offset = std.math.add(usize, sequence.offset, index) catch return null;
+        const item = sequence.backing[offset];
+        const pointer = try self.analyser.resolveAddressOf(true, item);
+        if (sequence.origin) |origin| {
+            const path = try self.analyser.arena.alloc(Value.Reference.Access, origin.path.len + 1);
+            @memcpy(path[0..origin.path.len], origin.path);
+            path[origin.path.len] = .{ .index = index };
+            return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = .{
+                .value = item,
+                .source = origin.source,
+                .container_type = origin.container_type,
+                .path = path,
+                .is_static = origin.is_static,
+            } }));
+        }
+        return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .sequence = .{
+            .backing = sequence.backing,
+            .offset = offset,
+            .len = 1,
+            .elements_valid = true,
+        } }));
+    }
+
     fn deref(self: *Interpreter, value: Type) Error!?Type {
         if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
             return self.readReference(value.data.comptime_value.data.reference);
@@ -3284,8 +3318,12 @@ pub const Interpreter = struct {
                     null;
                 const sequence = if (reference) |target| try self.readReference(target) orelse return .unknown else evaluated;
                 resolved.* = .{ .sequence = .{ .value = sequence, .reference = reference } };
-                const length = try analyser.resolveFieldAccess(sequence, "len") orelse return .unknown;
-                count = analyser.ip.toInt(length.ipIndex() orelse return .unknown, usize) orelse return .unknown;
+                if (try Value.sequenceAlloc(analyser, sequence)) |view| {
+                    count = view.len;
+                } else {
+                    const length = try analyser.resolveFieldAccess(sequence, "len") orelse return .unknown;
+                    count = analyser.ip.toInt(length.ipIndex() orelse return .unknown, usize) orelse return .unknown;
+                }
             }
             if (count) |n| {
                 if (len != null and len.? != n) return .unknown;
@@ -3301,9 +3339,11 @@ pub const Interpreter = struct {
                 const name_token = token + @intFromBool(capture_by_ref);
                 const value = switch (input) {
                     .sequence => |sequence| if (capture_by_ref) blk: {
-                        const reference = sequence.reference orelse return .unknown;
-                        const element = try self.extendReference(reference, .{ .index = index });
-                        break :blk try self.referenceValue(element) orelse return .unknown;
+                        if (sequence.reference) |reference| {
+                            const element = try self.extendReference(reference, .{ .index = index });
+                            break :blk try self.referenceValue(element) orelse return .unknown;
+                        }
+                        break :blk try self.sequenceElementPointer(sequence.value, index) orelse return .unknown;
                     } else try analyser.resolveBracketAccessType(sequence.value, .{ .single = index }) orelse return .unknown,
                     .range => |start| if (capture_by_ref) return .unknown else Type.fromIP(analyser, .comptime_int_type, try analyser.ip.get(.{ .int_u64_value = .{
                         .ty = .comptime_int_type,
