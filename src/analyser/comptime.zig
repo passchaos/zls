@@ -1823,8 +1823,8 @@ pub const Interpreter = struct {
                         if (pointer_size == .one or pointer_size == .many or pointer_size == .slice) {
                             const index = try self.integer(handle, index_node) orelse return null;
                             if (try Value.sequenceAlloc(self.analyser, captured.value)) |sequence| {
-                                if (index >= sequence.len) return null;
-                                return self.sequenceElementPointer(captured.value, index);
+                                if (index > sequence.len) return null;
+                                if (try self.sequenceElementPointer(captured.value, index)) |pointer| return pointer;
                             }
                             if (try self.captureTargetFromPointer(
                                 captured.value,
@@ -2758,7 +2758,9 @@ pub const Interpreter = struct {
                 const current = try self.readReference(parent) orelse return null;
                 const items = try self.mutableElements(current) orelse return null;
                 const index = try self.integer(handle, index_node) orelse return null;
-                if (index >= items.len) return null;
+                if (index > items.len or
+                    (index == items.len and
+                        try self.analyser.resolveBracketAccessType(current, .{ .single = index }) == null)) return null;
                 return self.extendReference(parent, try self.aggregateIndexAccess(current, index));
             },
             .field_access => {
@@ -3256,8 +3258,12 @@ pub const Interpreter = struct {
             !(try value.typeOf(analyser)).eql(destination))
         {
             if (try Value.sequenceAlloc(analyser, value)) |sequence| {
-                _ = try self.coerce(destination, value) orelse
+                const coerced = try self.coerce(destination, value) orelse
                     return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
+                if (value.data == .comptime_value and
+                    value.data.comptime_value.data == .reference and
+                    try analyser.resolveBracketAccessType(value, .{ .single = sequence.len }) != null)
+                    return coerced;
                 return @as(?Type, try Value.create(analyser, destination, .{ .sequence = sequence }));
             }
         }
@@ -3470,7 +3476,13 @@ pub const Interpreter = struct {
         var current = value;
         for (path) |access| {
             current = switch (access) {
-                .index, .tuple_index => |index| blk: {
+                .index => |index| blk: {
+                    const items = try self.mutableElements(current) orelse return null;
+                    if (index < items.len) break :blk items[index];
+                    if (index > items.len) return null;
+                    break :blk try self.analyser.resolveBracketAccessType(current, .{ .single = index }) orelse return null;
+                },
+                .tuple_index => |index| blk: {
                     const items = try self.mutableElements(current) orelse return null;
                     if (index >= items.len) return null;
                     break :blk items[index];
@@ -3488,10 +3500,27 @@ pub const Interpreter = struct {
 
     fn sequenceElementPointer(self: *Interpreter, value: Type, index: usize) Error!?Type {
         const sequence = try Value.sequenceAlloc(self.analyser, value) orelse return null;
-        if (index >= sequence.len or !sequence.elements_valid) return null;
+        if (index > sequence.len or !sequence.elements_valid) return null;
         const offset = std.math.add(usize, sequence.offset, index) catch return null;
-        const item = sequence.backing[offset];
+        const item = if (index < sequence.len)
+            sequence.backing[offset]
+        else
+            try self.analyser.resolveBracketAccessType(value, .{ .single = index }) orelse return null;
         const pointer = try self.analyser.resolveAddressOf(true, item);
+        if (index == sequence.len and
+            value.data == .comptime_value and
+            value.data.comptime_value.data == .reference)
+        {
+            const reference = try self.extendReference(
+                value.data.comptime_value.data.reference,
+                .{ .index = offset },
+            );
+            return @as(?Type, try Value.create(
+                self.analyser,
+                try pointer.typeOf(self.analyser),
+                .{ .reference = reference },
+            ));
+        }
         if (sequence.origin) |origin| {
             const path = try self.analyser.arena.alloc(Value.Reference.Access, origin.path.len + 1);
             @memcpy(path[0..origin.path.len], origin.path);
@@ -3506,6 +3535,7 @@ pub const Interpreter = struct {
                 .temporary_value = origin.temporary_value,
             } }));
         }
+        if (index == sequence.len) return null;
         return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .sequence = .{
             .backing = sequence.backing,
             .offset = offset,

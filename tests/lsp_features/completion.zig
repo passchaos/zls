@@ -15816,6 +15816,132 @@ test "comptime aggregate pointer slices preserve origin" {
     });
 }
 
+test "comptime sentinel array boundary element" {
+    try testCompletion(
+        \\const values = [_:0]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    var size: usize = values[3];
+        \\    size += 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[2]u8" }});
+}
+
+test "comptime sentinel slice boundary element" {
+    try testCompletion(
+        \\const values = [_:0]usize{ 3, 5, 7 };
+        \\const slice: [:0]const usize = &values;
+        \\fn Select() type {
+        \\    var size: usize = slice[3];
+        \\    size += 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[2]u8" }});
+}
+
+test "comptime sentinel element pointers preserve identity" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [3:0]usize = .{ 3, 5, 7 };
+        \\    const slice: [:0]const usize = &values;
+        \\    var same: usize = 2;
+        \\    if (&slice[3] == &values[3]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[1]u8" }});
+}
+
+test "comptime sentinel element pointers preserve distance" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [3:0]usize = .{ 3, 5, 7 };
+        \\    const slice: [:0]const usize = &values;
+        \\    var state: usize = 0;
+        \\    const distance = &slice[3] - &values[0];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[3]u8" }});
+}
+
+test "comptime sentinel element boundaries reject invalid indices" {
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    var size: usize = values[3];
+        \\    size += 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const values = [_:0]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    var size: usize = values[4];
+        \\    size += 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\const slice: []const usize = &values;
+        \\fn Select() type {
+        \\    var size: usize = slice[3];
+        \\    size += 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const values = [_:0]usize{ 3, 5, 7 };
+        \\const slice: [:0]const usize = &values;
+        \\fn Select() type {
+        \\    var size: usize = slice[4];
+        \\    size += 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values = [_]usize{ 3, 5, 7 };
+        \\    var same: usize = 2;
+        \\    if (&values[3] == &values[3]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values: [3:0]usize = .{ 3, 5, 7 };
+        \\    var same: usize = 2;
+        \\    if (&values[4] == &values[4]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime aggregate slices preserve mixed pointer offsets" {
     try testCompletion(
         \\const values = [_]usize{ 3, 5, 7 };
