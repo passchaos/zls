@@ -4325,6 +4325,27 @@ test "comptime exact integer to float coercions" {
     });
 }
 
+test "comptime unary float builtins accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const vector: @Vector(2, f64) = @sqrt(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(@Vector(2, f64), .{ 81, 16 });
+        \\    });
+        \\    return struct {
+        \\        items: [if (vector[0] == 9 and vector[1] == 4) 13 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[13]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

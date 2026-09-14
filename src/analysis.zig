@@ -4137,30 +4137,32 @@ fn resolveFloatVectorUnaryValue(
     tag: std.zig.BuiltinFn.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (analyser.ip.zigTypeTag(vector.child) != .float) return null;
-    const source_values = analyser.aggregateValues(operand) orelse return null;
-    if (source_values.len != vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const source_values = analyser.aggregateValues(operand);
+    if (source_items == null and source_values == null) return null;
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const source = source_values.at(@intCast(i), analyser.ip);
-        const element = Type.fromIP(analyser, vector.child, source);
+        const element = if (source_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, vector.child, source_values.?.at(@intCast(i), analyser.ip));
         const result = switch (tag) {
             .floor, .ceil, .trunc, .round => try analyser.resolveFloatRoundingValue(tag, element),
             else => try analyser.resolveFloatUnaryBuiltinValue(tag, element),
         };
         value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
     }
-    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+    return analyser.aggregateValue(Type.fromIP(analyser, operand_type, null), values);
 }
 
 pub const ComptimeFloatUnaryKind = enum { sin, cos, tan, exp, exp2, log, log2, log10, sqrt, floor, ceil, trunc, round };
@@ -4170,11 +4172,8 @@ pub fn resolveComptimeFloatUnaryValue(
     operand: Type,
     kind: ComptimeFloatUnaryKind,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    if (!analyser.ip.isFloat(analyser.ip.scalarType(payload.type))) return null;
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    if (!analyser.ip.isFloat(analyser.ip.scalarType(operand_type))) return null;
     const tag: std.zig.BuiltinFn.Tag = switch (kind) {
         .sin => .sin,
         .cos => .cos,
@@ -4190,8 +4189,8 @@ pub fn resolveComptimeFloatUnaryValue(
         .trunc => .trunc,
         .round => .round,
     };
-    const fallback = Type.fromIP(analyser, payload.type, null);
-    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+    const fallback = Type.fromIP(analyser, operand_type, null);
+    if (analyser.ip.zigTypeTag(operand_type) == .vector) {
         return try analyser.resolveFloatVectorUnaryValue(tag, operand) orelse fallback;
     }
     return switch (kind) {
