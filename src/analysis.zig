@@ -2483,11 +2483,8 @@ pub fn resolveComptimeSplatValue(
 }
 
 fn resolveVectorIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -2498,13 +2495,20 @@ fn resolveVectorIntFromBoolValue(analyser: *Analyser, operand: Type) error{OutOf
         .child = .u1_type,
     } });
     const result = Type.fromIP(analyser, result_type, null);
-    const source_values = analyser.aggregateValues(operand) orelse return result;
-    if (source_values.len != vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const source_values = analyser.aggregateValues(operand);
+    if (source_items == null and source_values == null) return result;
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        value.* = switch (source_values.at(@intCast(i), analyser.ip)) {
+        const source = if (source_items) |items|
+            items[i].ipIndex() orelse .unknown_unknown
+        else
+            source_values.?.at(@intCast(i), analyser.ip);
+        value.* = switch (source) {
             .bool_true => .one_u1,
             .bool_false => .zero_u1,
             else => try analyser.ip.getUnknown(.u1_type),

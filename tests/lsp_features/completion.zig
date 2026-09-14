@@ -4325,6 +4325,28 @@ test "comptime exact integer to float coercions" {
     });
 }
 
+test "comptime intFromBool accepts structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const bits = @intFromBool(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(@Vector(3, bool), .{ true, false, true });
+        \\    });
+        \\    return struct {
+        \\        values: [if (@TypeOf(bits) == @Vector(3, u1) and
+        \\            bits[0] == 1 and bits[1] == 0 and bits[2] == 1) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime unary float builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {
