@@ -16109,6 +16109,49 @@ test "comptime sentinel many pointer boundaries" {
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[4]u8" }});
 }
 
+test "comptime sentinel pointer tail boundaries" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*:9]const usize = &values;
+        \\const end = pointer + values.len;
+        \\fn Select() type {
+        \\    var sentinel = end[0];
+        \\    sentinel += 2;
+        \\    return struct { sentinel: [sentinel]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "sentinel", .kind = .Field, .detail = "[11]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*:9]const usize = &values;
+        \\const end = pointer + values.len;
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const distance = &end[0] - &pointer[values.len];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[0]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*:9]const usize = &values;
+        \\const end = pointer + values.len;
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const distance = &pointer[values.len] - end;
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[0]u8" }});
+}
+
 test "comptime aggregate slices preserve mixed pointer offsets" {
     try testCompletion(
         \\const values = [_]usize{ 3, 5, 7 };
