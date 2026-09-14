@@ -2557,7 +2557,7 @@ test "generic function with comptime size builtins" {
     });
 }
 
-test "generic function with comptime packed field offsets" {
+test "generic function with comptime field offsets" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
         \\    const Ast = packed struct { low: u3, flag: bool, high: T, tail: u1 };
@@ -2597,6 +2597,26 @@ test "generic function with comptime packed field offsets" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u5" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Ast = extern struct { first: u8, second: u32, third: T };
+        \\    const Aligned = extern struct { first: u8, second: u8 align(4), third: T };
+        \\    const Generated = @Struct(.@"extern", null, &.{ "first", "second", "third" },
+        \\        &.{ u8, u8, T }, &.{ .{}, .{ .@"align" = 4 }, .{} });
+        \\    return if (@offsetOf(Ast, "second") == 4 and @bitOffsetOf(Ast, "second") == 32 and
+        \\        @offsetOf(Ast, "third") == 8 and @offsetOf(Aligned, "second") == 4 and
+        \\        @offsetOf(Aligned, "third") == 5 and @bitOffsetOf(Aligned, "third") == 40 and
+        \\        @offsetOf(Generated, "second") == 4 and @offsetOf(Generated, "third") == 5)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
     });
 }
 

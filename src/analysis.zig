@@ -9988,6 +9988,12 @@ pub fn resolveComptimeTypeSizeValue(
 
 pub const ComptimeFieldOffsetKind = enum { bit_offset, byte_offset };
 
+fn alignForwardFieldOffset(offset: u64, alignment: u64) ?u64 {
+    if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) return null;
+    const with_padding = std.math.add(u64, offset, alignment - 1) catch return null;
+    return with_padding & ~(alignment - 1);
+}
+
 pub fn resolveComptimeFieldOffsetValue(
     analyser: *Analyser,
     container_type: Type,
@@ -10000,22 +10006,41 @@ pub fn resolveComptimeFieldOffsetValue(
         .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
-            if (container_type.getContainerKind() != .keyword_struct or info.layout != .@"packed") return null;
+            if (container_type.getContainerKind() != .keyword_struct or info.layout == .auto) return null;
 
             var offset: u64 = 0;
             for (info.declaration.ast.members) |member| {
                 const field = info.handle.tree.fullContainerField(member) orelse continue;
                 if (field.ast.tuple_like or field.comptime_token != null) return null;
                 const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse return null;
-                if (std.mem.eql(u8, name, field_name)) break :blk offset;
-
                 const field_type_node = field.ast.type_expr.unwrap() orelse return null;
                 const field_type = try analyser.resolveTypeOfNodeInternal(.{
                     .node_handle = .of(field_type_node, info.handle),
                     .container_type = container_type,
                 }) orelse return null;
-                const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
-                offset = std.math.add(u64, offset, field_bits) catch return null;
+                switch (info.layout) {
+                    .@"packed" => {
+                        if (std.mem.eql(u8, name, field_name)) break :blk offset;
+                        const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
+                        offset = std.math.add(u64, offset, field_bits) catch return null;
+                    },
+                    .@"extern" => {
+                        const alignment = if (field.ast.align_expr.unwrap()) |align_expr|
+                            try analyser.resolveIntegerLiteral(u64, .{
+                                .node_handle = .of(align_expr, info.handle),
+                                .container_type = container_type,
+                            }) orelse return null
+                        else
+                            try analyser.resolveTypeAlignment(field_type) orelse return null;
+                        offset = alignForwardFieldOffset(offset, alignment) orelse return null;
+                        if (std.mem.eql(u8, name, field_name)) {
+                            break :blk std.math.mul(u64, offset, 8) catch return null;
+                        }
+                        const field_bytes = analyser.resolveTypeByteSize(field_type) orelse return null;
+                        offset = std.math.add(u64, offset, field_bytes) catch return null;
+                    },
+                    .auto => unreachable,
+                }
             }
             return null;
         },
@@ -10025,23 +10050,39 @@ pub fn resolveComptimeFieldOffsetValue(
                 .struct_type => |struct_index| analyser.ip.getStruct(struct_index),
                 else => return null,
             };
-            if (struct_info.layout != .@"packed") return null;
+            if (struct_info.layout == .auto) return null;
             const name_index = analyser.ip.string_pool.getString(analyser.store.io, field_name) orelse return null;
             const field_index = struct_info.fields.getIndex(name_index) orelse return null;
             if (struct_info.fields.values()[field_index].is_comptime) return null;
 
             const generated_fields = analyser.generated_struct_fields.get(type_index);
             var offset: u64 = 0;
-            for (struct_info.fields.values()[0..field_index], 0..) |field, index| {
+            for (struct_info.fields.values()[0 .. field_index + 1], 0..) |field, index| {
                 if (field.is_comptime) return null;
                 const field_type = if (generated_fields) |fields|
                     fields[index].ty
                 else
                     Type.fromIP(analyser, .type_type, field.ty);
-                const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
-                offset = std.math.add(u64, offset, field_bits) catch return null;
+                switch (struct_info.layout) {
+                    .@"packed" => {
+                        if (index == field_index) break :blk offset;
+                        const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
+                        offset = std.math.add(u64, offset, field_bits) catch return null;
+                    },
+                    .@"extern" => {
+                        const alignment = if (field.alignment != 0)
+                            field.alignment
+                        else
+                            try analyser.resolveTypeAlignment(field_type) orelse return null;
+                        offset = alignForwardFieldOffset(offset, alignment) orelse return null;
+                        if (index == field_index) break :blk std.math.mul(u64, offset, 8) catch return null;
+                        const field_bytes = analyser.resolveTypeByteSize(field_type) orelse return null;
+                        offset = std.math.add(u64, offset, field_bytes) catch return null;
+                    },
+                    .auto => unreachable,
+                }
             }
-            break :blk offset;
+            unreachable;
         },
         else => return null,
     };
