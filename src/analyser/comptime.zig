@@ -2135,6 +2135,12 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeTypeInfoValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@src")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 0) return null;
+                    return self.analyser.resolveComptimeSourceLocationValue(handle, node);
+                }
                 if (std.mem.eql(u8, name, "@min") or std.mem.eql(u8, name, "@max")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

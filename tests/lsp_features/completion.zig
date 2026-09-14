@@ -13381,6 +13381,36 @@ test "generic function with comptime error casts" {
     });
 }
 
+test "generic function with comptime source location coordinates" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const location = @src();
+        \\    return struct { line: [location.line]T, column: [location.column]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "line", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "column", .kind = .Field, .detail = "[22]u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var executions: usize = 0;
+        \\    executions += 1;
+        \\    const location = @src();
+        \\    return if (location.line == 4 and location.column == 22 and executions == 1)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u32) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u32" },
+    });
+}
+
 test "generic function with comptime catch" {
     try testCompletion(
         \\var runtime_error_union: error{Failure}!u8 = undefined;

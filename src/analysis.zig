@@ -10273,6 +10273,30 @@ pub fn resolveComptimeTypeNameValue(analyser: *Analyser, operand: Type) error{Ou
     return try analyser.stringValue(try analyser.resolveTypeNameValue(operand));
 }
 
+pub fn resolveComptimeSourceLocationValue(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) Error!?Type {
+    const result_type = try analyser.resolveLangrefType(
+        version_data.builtins.get("@src").?.return_type,
+    ) orelse return null;
+    const source_index = handle.tree.tokenStart(handle.tree.firstToken(node));
+    const position = offsets.indexToPosition(handle.tree.source, source_index, .@"utf-8");
+    const line = std.math.add(u32, position.line, 1) catch return null;
+    const column = std.math.add(u32, position.character, 1) catch return null;
+    const fields = try analyser.arena.alloc(comptime_eval.Value.Field, 2);
+    fields[0] = .{
+        .name = "line",
+        .value = try analyser.intValueWithType(.u32_type, line) orelse return null,
+    };
+    fields[1] = .{
+        .name = "column",
+        .value = try analyser.intValueWithType(.u32_type, column) orelse return null,
+    };
+    return @as(?Type, try comptime_eval.Value.create(analyser, result_type, .{ .fields = fields }));
+}
+
 fn canonicalErrorSetTypeName(analyser: *Analyser, type_index: InternPool.Index) error{OutOfMemory}![]const u8 {
     const error_set = analyser.ip.indexToKey(type_index).error_set_type;
     const names = try error_set.names.dupe(analyser.arena, analyser.ip);
@@ -12708,6 +12732,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
                     const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return fallback;
                     return try analyser.resolveComptimeTypeNameValue(operand) orelse fallback;
+                },
+                .src => {
+                    if (params.len != 0) return null;
+                    if (analyser.evaluate_comptime_values) {
+                        if (try analyser.resolveComptimeSourceLocationValue(handle, node)) |value| return value;
+                    }
+                    return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
                 },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
