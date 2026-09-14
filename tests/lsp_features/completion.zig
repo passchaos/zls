@@ -17243,6 +17243,81 @@ test "comptime static for pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\fn first() error{First}!Value {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn second() error{Second}!Value {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn firstPointer() error{First}!*const usize {
+        \\    return switch (try first()) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn secondPointer() error{Second}!*const usize {
+        \\    return switch (try second()) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const first_pointer = firstPointer() catch unreachable;
+        \\    const second_pointer = secondPointer() catch unreachable;
+        \\    var same: usize = 2;
+        \\    if (first_pointer == (firstPointer() catch unreachable)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (first_pointer != second_pointer) distinct = 3;
+        \\    return struct { value: [first_pointer.*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const Other = union(enum) { a: usize, b: usize };
+        \\fn first() ?Value {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn second() ?Other {
+        \\    return .{ .b = 4 };
+        \\}
+        \\fn firstPointer() *const usize {
+        \\    return switch (first() orelse unreachable) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn secondPointer() *const usize {
+        \\    return switch (second() orelse unreachable) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const first_pointer = firstPointer();
+        \\    const second_pointer = secondPointer();
+        \\    var same: usize = 2;
+        \\    if (first_pointer == firstPointer()) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (first_pointer != second_pointer) distinct = 3;
+        \\    return struct { value: [first_pointer.*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime pointer casts preserve address identity" {

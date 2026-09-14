@@ -852,10 +852,11 @@ pub const Interpreter = struct {
             const lhs, const rhs = tree.nodeData(unwrapped).node_and_node;
             const base_result = try self.captureOperand(handle, lhs, depth + 1);
             const base_operand = base_result orelse return null;
+            const base_target = self.captureTargetOrTemporary(handle, lhs, base_operand);
             return switch (try self.optionalValue(base_operand.value) orelse return null) {
                 .payload => |value| .{
                     .value = value,
-                    .target = if (base_operand.target) |target|
+                    .target = if (base_target) |target|
                         try self.extendCaptureTarget(target, value, .optional_payload)
                     else
                         null,
@@ -867,11 +868,13 @@ pub const Interpreter = struct {
             };
         }
         if (tree.nodeTag(unwrapped) == .@"try") {
-            const base_operand = try self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1) orelse return null;
+            const base = tree.nodeData(unwrapped).node;
+            const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
+            const base_target = self.captureTargetOrTemporary(handle, base, base_operand);
             return switch (try self.errorUnionValue(base_operand.value) orelse return null) {
                 .payload => |value| .{
                     .value = value,
-                    .target = if (base_operand.target) |target|
+                    .target = if (base_target) |target|
                         try self.extendCaptureTarget(target, value, .error_union_payload)
                     else
                         null,
@@ -885,10 +888,11 @@ pub const Interpreter = struct {
         if (tree.nodeTag(unwrapped) == .@"catch") {
             const lhs, const rhs = tree.nodeData(unwrapped).node_and_node;
             const base_operand = try self.captureOperand(handle, lhs, depth + 1) orelse return null;
+            const base_target = self.captureTargetOrTemporary(handle, lhs, base_operand);
             return switch (try self.errorUnionValue(base_operand.value) orelse return null) {
                 .payload => |value| .{
                     .value = value,
-                    .target = if (base_operand.target) |target|
+                    .target = if (base_target) |target|
                         try self.extendCaptureTarget(target, value, .error_union_payload)
                     else
                         null,
