@@ -16825,6 +16825,54 @@ test "comptime static switch pointer captures" {
         .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const value: Value = .{ .b = 4 };
+        \\fn forPointer(iterations: *usize) *const usize {
+        \\    return switch (for (0..1) |_| {
+        \\        iterations.* += 1;
+        \\        break value;
+        \\    } else unreachable) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn whilePointer(iterations: *usize) *const usize {
+        \\    return switch (while (iterations.* == 0) {
+        \\        iterations.* += 1;
+        \\        break value;
+        \\    } else unreachable) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var for_iterations: usize = 0;
+        \\    const for_captured = forPointer(&for_iterations);
+        \\    var while_iterations: usize = 0;
+        \\    const while_captured = whilePointer(&while_iterations);
+        \\    var for_same: usize = 2;
+        \\    if (for_captured == &value.b) for_same = 1;
+        \\    var while_same: usize = 4;
+        \\    if (while_captured == &value.b) while_same = 3;
+        \\    return struct {
+        \\        value: [for_captured.*]u8,
+        \\        for_same: [for_same]u8,
+        \\        while_same: [while_same]u8,
+        \\        for_iterations: [for_iterations]u8,
+        \\        while_iterations: [while_iterations]u8,
+        \\    };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "for_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "while_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "for_iterations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "while_iterations", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
