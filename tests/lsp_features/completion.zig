@@ -15725,6 +15725,45 @@ test "comptime static switch pointer captures" {
         .{ .label = "alias_same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "original_distinct", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize };
+        \\const Holder = struct { value: Value, values: [1]Value };
+        \\const original: Holder = .{
+        \\    .value = .{ .count = 4 },
+        \\    .values = .{.{ .count = 5 }},
+        \\};
+        \\const alias = original;
+        \\fn fieldPointer() *const usize {
+        \\    return switch (alias.value) { .count => |*payload| payload };
+        \\}
+        \\fn elementPointer() *const usize {
+        \\    return switch (alias.values[0]) { .count => |*payload| payload };
+        \\}
+        \\fn Select() type {
+        \\    var field_same: usize = 2;
+        \\    if (fieldPointer() == &alias.value.count) field_same = 1;
+        \\    var field_distinct: usize = 4;
+        \\    if (fieldPointer() != &original.value.count) field_distinct = 3;
+        \\    var element_same: usize = 6;
+        \\    if (elementPointer() == &alias.values[0].count) element_same = 5;
+        \\    var element_distinct: usize = 8;
+        \\    if (elementPointer() != &original.values[0].count) element_distinct = 7;
+        \\    return struct {
+        \\        field_same: [field_same]u8,
+        \\        field_distinct: [field_distinct]u8,
+        \\        element_same: [element_same]u8,
+        \\        element_distinct: [element_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "field_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "field_distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "element_same", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "element_distinct", .kind = .Field, .detail = "[7]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

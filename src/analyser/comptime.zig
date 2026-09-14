@@ -1895,23 +1895,7 @@ pub const Interpreter = struct {
     }
 
     pub fn readReference(self: *Interpreter, target: *Value.Reference) Error!?Type {
-        var current = target.storage.value;
-        for (target.path) |access| {
-            current = switch (access) {
-                .index => |index| blk: {
-                    const items = try self.mutableElements(current) orelse return null;
-                    if (index >= items.len) return null;
-                    break :blk items[index];
-                },
-                .field => |name| try self.analyser.resolveFieldAccess(current, name) orelse return null,
-                .optional_payload => try self.analyser.resolveOptionalUnwrap(current) orelse return null,
-                .error_union_payload => switch (try self.errorUnionValue(current) orelse return null) {
-                    .payload => |payload| payload,
-                    .failure => return null,
-                },
-            };
-        }
-        return current;
+        return self.readValuePath(target.storage.value, target.path);
     }
 
     fn coerceAssignmentTo(self: *Interpreter, destination: Type, value: Type) Error!?Type {
@@ -2470,8 +2454,7 @@ pub const Interpreter = struct {
     ) Error!?Type {
         if (depth == 128) return null;
         const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
-        if (target.path.len != 0 or !target.declaration.isConst() or
-            !try target.declaration.isStatic()) return null;
+        if (!target.declaration.isConst() or !try target.declaration.isStatic()) return null;
         const declaration_node = switch (target.declaration.decl) {
             .ast_node => |node| node,
             else => return null,
@@ -2480,21 +2463,46 @@ pub const Interpreter = struct {
         const initializer = variable.ast.init_node.unwrap() orelse return null;
         const declaration_value = try target.declaration.resolveType(self.analyser) orelse return null;
         const destination = try declaration_value.typeOf(self.analyser);
-        if (try self.staticCaptureValueDepth(target.declaration.handle, initializer, depth + 1)) |value| {
-            return self.coerceAssignmentFromSource(
+        const root_value = if (try self.staticCaptureValueDepth(target.declaration.handle, initializer, depth + 1)) |value|
+            try self.coerceAssignmentFromSource(
                 target.declaration.handle,
                 destination,
                 value,
                 initializer,
                 null,
-            );
+            ) orelse return null
+        else
+            try self.evaluateTypedWithContainer(
+                target.declaration.handle,
+                initializer,
+                destination,
+                target.declaration.container_type,
+            ) orelse return null;
+        return self.readValuePath(root_value, target.path);
+    }
+
+    fn readValuePath(
+        self: *Interpreter,
+        value: Type,
+        path: []const Value.Reference.Access,
+    ) Error!?Type {
+        var current = value;
+        for (path) |access| {
+            current = switch (access) {
+                .index => |index| blk: {
+                    const items = try self.mutableElements(current) orelse return null;
+                    if (index >= items.len) return null;
+                    break :blk items[index];
+                },
+                .field => |name| try self.analyser.resolveFieldAccess(current, name) orelse return null,
+                .optional_payload => try self.analyser.resolveOptionalUnwrap(current) orelse return null,
+                .error_union_payload => switch (try self.errorUnionValue(current) orelse return null) {
+                    .payload => |payload| payload,
+                    .failure => return null,
+                },
+            };
         }
-        return self.evaluateTypedWithContainer(
-            target.declaration.handle,
-            initializer,
-            destination,
-            target.declaration.container_type,
-        );
+        return current;
     }
 
     fn staticPayloadPointer(
