@@ -16088,6 +16088,25 @@ test "comptime static switch pointer captures" {
         .{ .label = "pointer_same", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "distance", .kind = .Field, .detail = "[0]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize };
+        \\const values = [_]Value{ .{ .count = 2 }, .{ .count = 4 } };
+        \\const base: usize = 0;
+        \\fn pointer() *const usize {
+        \\    return switch (values[base + 1]) { .count => |*payload| payload };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &values[1].count) same = 1;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

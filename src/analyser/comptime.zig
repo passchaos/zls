@@ -732,10 +732,7 @@ pub const Interpreter = struct {
             const base_type = try (try evaluated.typeOf(self.analyser)).instanceUnchecked(self.analyser);
             const pointer_size = base_type.pointerSize(self.analyser) orelse break :sequence_origin;
             if (pointer_size != .many and pointer_size != .slice) break :sequence_origin;
-            const index = switch (tree.nodeTag(unwrapGroupedSource(tree, index_node))) {
-                .number_literal, .identifier => try self.integer(handle, index_node) orelse break :sequence_origin,
-                else => break :sequence_origin,
-            };
+            const index = try self.staticIndex(handle, index_node) orelse break :sequence_origin;
             const value = if (try Value.sequenceAlloc(self.analyser, evaluated) != null)
                 evaluated
             else
@@ -777,10 +774,7 @@ pub const Interpreter = struct {
             },
             .array_access => blk: {
                 const base, const index_node = tree.nodeData(unwrapped).node_and_node;
-                const index = switch (tree.nodeTag(unwrapGroupedSource(tree, index_node))) {
-                    .number_literal, .identifier => try self.integer(handle, index_node) orelse return null,
-                    else => return null,
-                };
+                const index = try self.staticIndex(handle, index_node) orelse return null;
                 break :blk .{ base, .{ .index = index } };
             },
             .unwrap_optional => .{ tree.nodeData(unwrapped).node_and_token[0], .optional_payload },
@@ -791,6 +785,43 @@ pub const Interpreter = struct {
         @memcpy(path[0..parent.path.len], parent.path);
         path[parent.path.len] = access;
         return .{ .declaration = parent.declaration, .path = path };
+    }
+
+    fn staticIndex(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?usize {
+        if (!isPureStaticIntegerExpression(&handle.tree, node, 0)) return null;
+        return self.integer(handle, node);
+    }
+
+    fn isPureStaticIntegerExpression(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+        if (depth == 128) return false;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        return switch (tree.nodeTag(unwrapped)) {
+            .number_literal, .identifier => true,
+            .negation, .negation_wrap, .bit_not => isPureStaticIntegerExpression(tree, tree.nodeData(unwrapped).node, depth + 1),
+            .mul,
+            .div,
+            .mod,
+            .mul_wrap,
+            .mul_sat,
+            .add,
+            .sub,
+            .add_wrap,
+            .sub_wrap,
+            .add_sat,
+            .sub_sat,
+            .shl,
+            .shl_sat,
+            .shr,
+            .bit_and,
+            .bit_xor,
+            .bit_or,
+            => blk: {
+                const lhs, const rhs = tree.nodeData(unwrapped).node_and_node;
+                break :blk isPureStaticIntegerExpression(tree, lhs, depth + 1) and
+                    isPureStaticIntegerExpression(tree, rhs, depth + 1);
+            },
+            else => false,
+        };
     }
 
     pub fn enterExpression(self: *Interpreter) bool {
