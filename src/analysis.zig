@@ -4369,30 +4369,34 @@ fn resolveFloatMulAddValue(
 fn resolveFloatVectorMulAddValue(
     analyser: *Analyser,
     result_type: InternPool.Index,
-    a: InternPool.Index,
-    b: InternPool.Index,
-    c: InternPool.Index,
-) error{OutOfMemory}!?Type {
+    a: Type,
+    b: Type,
+    c: Type,
+) Error!?Type {
     const vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (analyser.ip.zigTypeTag(vector.child) != .float) return null;
-    const a_values = analyser.aggregateValues(Type.fromIP(analyser, result_type, a)) orelse return null;
-    const b_values = analyser.aggregateValues(Type.fromIP(analyser, result_type, b)) orelse return null;
-    const c_values = analyser.aggregateValues(Type.fromIP(analyser, result_type, c)) orelse return null;
+    const a_values = try analyser.comptimeArrayElements(a) orelse return null;
+    const b_values = try analyser.comptimeArrayElements(b) orelse return null;
+    const c_values = try analyser.comptimeArrayElements(c) orelse return null;
     if (a_values.len != vector.len or b_values.len != vector.len or c_values.len != vector.len) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
+        const unknown = try analyser.ip.getUnknown(vector.child);
+        const a_value = try analyser.coerceComptimeIPValue(vector.child, a_values[i]) orelse unknown;
+        const b_value = try analyser.coerceComptimeIPValue(vector.child, b_values[i]) orelse unknown;
+        const c_value = try analyser.coerceComptimeIPValue(vector.child, c_values[i]) orelse unknown;
         const result = try analyser.resolveFloatMulAddValue(
             vector.child,
-            a_values.at(@intCast(i), analyser.ip),
-            b_values.at(@intCast(i), analyser.ip),
-            c_values.at(@intCast(i), analyser.ip),
+            a_value,
+            b_value,
+            c_value,
         );
-        value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
+        value.* = if (result) |resolved| resolved.ipIndex() orelse unknown else unknown;
     }
     return analyser.aggregateValue(Type.fromIP(analyser, result_type, null), values);
 }
@@ -4403,9 +4407,14 @@ fn resolveComptimeMulAddCoercedValue(
     a: InternPool.Index,
     b: InternPool.Index,
     c: InternPool.Index,
-) error{OutOfMemory}!?Type {
+) Error!?Type {
     if (analyser.ip.zigTypeTag(result_type) == .vector) {
-        return analyser.resolveFloatVectorMulAddValue(result_type, a, b, c);
+        return analyser.resolveFloatVectorMulAddValue(
+            result_type,
+            Type.fromIP(analyser, result_type, a),
+            Type.fromIP(analyser, result_type, b),
+            Type.fromIP(analyser, result_type, c),
+        );
     }
     return analyser.resolveFloatMulAddValue(result_type, a, b, c);
 }
@@ -4416,10 +4425,13 @@ pub fn resolveComptimeMulAddValue(
     a: Type,
     b: Type,
     c: Type,
-) error{OutOfMemory}!?Type {
+) Error!?Type {
     if (!result_type_value.is_type_val) return null;
     const result_type = result_type_value.ipIndex() orelse return null;
     const fallback = try result_type_value.instanceTypeVal(analyser) orelse return null;
+    if (analyser.ip.zigTypeTag(result_type) == .vector) {
+        return try analyser.resolveFloatVectorMulAddValue(result_type, a, b, c) orelse fallback;
+    }
     const a_index = try analyser.coerceIP(result_type, a.ipIndex() orelse return fallback) orelse return fallback;
     const b_index = try analyser.coerceIP(result_type, b.ipIndex() orelse return fallback) orelse return fallback;
     const c_index = try analyser.coerceIP(result_type, c.ipIndex() orelse return fallback) orelse return fallback;

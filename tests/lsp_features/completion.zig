@@ -4712,6 +4712,41 @@ test "comptime min max accept structured vectors" {
     });
 }
 
+test "comptime mulAdd accepts structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const result = @mulAdd(
+        \\        result_type: {
+        \\            executions += 1;
+        \\            break :result_type @Vector(2, f32);
+        \\        },
+        \\        lhs: {
+        \\            executions = executions * 10 + 2;
+        \\            break :lhs @as(@Vector(2, f32), .{ 2.5, 3.0 });
+        \\        },
+        \\        rhs: {
+        \\            executions = executions * 10 + 3;
+        \\            break :rhs @as(@Vector(2, f32), .{ 4.0, 5.0 });
+        \\        },
+        \\        addend: {
+        \\            executions = executions * 10 + 4;
+        \\            break :addend @as(@Vector(2, f32), .{ -1.0, 2.0 });
+        \\        },
+        \\    );
+        \\    return struct {
+        \\        values: [if (result[0] == 9 and result[1] == 17) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
