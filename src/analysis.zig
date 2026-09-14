@@ -1022,7 +1022,8 @@ fn resolveStaticConstValue(
     options: ResolveOptions,
     destination: Type,
 ) Error!?Type {
-    const declaration = try analyser.resolveDeclarationOfNode(options) orelse return null;
+    var declaration = try analyser.resolveDeclarationOfNode(options) orelse return null;
+    declaration = try analyser.resolveVarDeclAlias(declaration) orelse declaration;
     if (!declaration.isConst() or !try declaration.isStatic()) return null;
     const declaration_node = switch (declaration.decl) {
         .ast_node => |node| node,

@@ -16127,6 +16127,72 @@ test "comptime static sentinel slice pointer identity" {
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[3]u8" }});
 }
 
+test "comptime static sentinel slice aliases" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const alias = slice;
+        \\fn Select() type {
+        \\    const value = alias[1];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[3]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const alias = slice;
+        \\fn Select() type {
+        \\    const value = alias[alias.len];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const alias = slice;
+        \\fn Select() type {
+        \\    const value = alias.ptr[alias.len];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+}
+
+test "comptime static sentinel open subslices" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const tail = slice[1..];
+        \\fn Select() type {
+        \\    const value = tail[tail.len];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const tail = slice[1..];
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const distance = &tail[tail.len] - &values[0];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[4]u8" }});
+}
+
 test "comptime nonzero sentinel dynamic array boundary" {
     try testCompletion(
         \\const values = [_:9]usize{ 3, 5, 7 };
