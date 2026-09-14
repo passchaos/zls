@@ -15421,17 +15421,27 @@ pub const Type = struct {
         return self.constMaterializedPointerChildDepth(analyser, 0);
     }
 
+    fn materializedPointerChild(self: Type, analyser: *Analyser) ?Type {
+        return self.materializedPointerChildDepth(analyser, 0);
+    }
+
     fn constMaterializedPointerChildDepth(self: Type, analyser: *Analyser, depth: u8) ?Type {
+        const info = self.typePointerInfo(analyser) orelse return null;
+        if (!info.is_const) return null;
+        return self.materializedPointerChildDepth(analyser, depth);
+    }
+
+    fn materializedPointerChildDepth(self: Type, analyser: *Analyser, depth: u8) ?Type {
         if (depth == 128) return null;
         const info = self.typePointerInfo(analyser) orelse return null;
-        if (info.size != .one or !info.is_const) return null;
+        if (info.size != .one) return null;
         const child = info.elem_ty;
         if (child.isFunc() or child.isEnumType(analyser) or child.isErrorSetType(analyser) or
             child.isOptionalType(analyser) or child.isTupleType(analyser) or
             child.isStructType(analyser) or child.isUnionType() or child.data == .error_union) return child;
         return switch (child.data) {
             .array, .vector => child,
-            .pointer => if (child.constMaterializedPointerChildDepth(analyser, depth + 1) != null) child else null,
+            .pointer => if (child.materializedPointerChildDepth(analyser, depth + 1) != null) child else null,
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return null) orelse return null) {
                 .array,
                 .vector,
@@ -15450,7 +15460,7 @@ pub const Type = struct {
                 .@"union",
                 .@"fn",
                 => child,
-                .pointer => if (child.constMaterializedPointerChildDepth(analyser, depth + 1) != null) child else null,
+                .pointer => if (child.materializedPointerChildDepth(analyser, depth + 1) != null) child else null,
                 else => null,
             },
             else => null,
@@ -15468,7 +15478,7 @@ pub const Type = struct {
                 else => .never,
             },
             .pointer => if (self.isConstSequencePointerType(analyser) or
-                self.constMaterializedPointerChild(analyser) != null) .if_needed else .never,
+                self.materializedPointerChild(analyser) != null) .if_needed else .never,
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return .never) orelse return .never) {
                 .int, .comptime_int => .eager,
                 .array,
@@ -15485,7 +15495,7 @@ pub const Type = struct {
                 .@"union",
                 => .if_needed,
                 .pointer => if (self.isConstSequencePointerType(analyser) or
-                    self.constMaterializedPointerChild(analyser) != null) .if_needed else .never,
+                    self.materializedPointerChild(analyser) != null) .if_needed else .never,
                 else => .never,
             },
             else => .never,

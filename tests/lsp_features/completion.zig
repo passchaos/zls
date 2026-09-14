@@ -17620,6 +17620,84 @@ test "comptime pointer casts preserve address identity" {
         .{ .label = "slice", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "len", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\fn makeValue(value: usize) Value {
+        \\    return .{ .b = value };
+        \\}
+        \\fn pointer(value: usize) *const usize {
+        \\    return switch (makeValue(value)) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn erased(value: usize) *const anyopaque {
+        \\    return @ptrCast(pointer(value));
+        \\}
+        \\fn Select() type {
+        \\    var erased_same: usize = 2;
+        \\    if (erased(4) == erased(4)) erased_same = 1;
+        \\    var erased_distinct: usize = 4;
+        \\    if (erased(4) != erased(5)) erased_distinct = 3;
+        \\    return struct {
+        \\        erased_same: [erased_same]u8,
+        \\        erased_distinct: [erased_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "erased_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "erased_distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\fn makeValue(value: usize) Value {
+        \\    return .{ .b = value };
+        \\}
+        \\fn pointer(value: usize) *const usize {
+        \\    return switch (makeValue(value)) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn writable(value: usize) *usize {
+        \\    return @constCast(pointer(value));
+        \\}
+        \\fn Select() type {
+        \\    return struct { value: [writable(4).*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\fn makeValue(value: usize) Value {
+        \\    return .{ .b = value };
+        \\}
+        \\fn pointer(value: usize) *const usize {
+        \\    return switch (makeValue(value)) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn writable(value: usize) *usize {
+        \\    return @constCast(pointer(value));
+        \\}
+        \\fn Select() type {
+        \\    const distance = writable(4) - writable(4);
+        \\    const unrelated = writable(4) - writable(5);
+        \\    return struct { distance: [distance]u8, unrelated: [unrelated]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "distance", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "unrelated", .kind = .Field, .detail = "[?]u8" },
+    });
 }
 
 test "comptime sequence pointer parameter values" {
