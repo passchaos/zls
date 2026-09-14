@@ -15884,6 +15884,37 @@ test "comptime aggregate slices preserve mixed pointer offsets" {
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[2]u8" }});
 }
 
+test "comptime static pointer aliases preserve sequence reads" {
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\const first: [*]const usize = @ptrCast(&values[0]);
+        \\const second = first + 1;
+        \\const tail = second[0..2];
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const first_value = first[2];
+        \\    const second_value = second[1];
+        \\    const tail_value = tail[1];
+        \\    var same: usize = 2;
+        \\    if (&tail[1] == &values[2]) same = 1;
+        \\    state += 0;
+        \\    return struct {
+        \\        first: [first_value]u8,
+        \\        second: [second_value]u8,
+        \\        tail: [tail_value]u8,
+        \\        same: [same]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "tail", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime local tuple pointers preserve field identity" {
     try testCompletion(
         \\fn fieldName(evaluations: *usize) []const u8 {

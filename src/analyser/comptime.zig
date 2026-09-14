@@ -357,33 +357,98 @@ pub const Value = struct {
     pub fn sequenceAlloc(analyser: *Analyser, value: Type) error{OutOfMemory}!?Sequence {
         if (value.data == .comptime_value and value.data.comptime_value.data == .pointee) {
             const pointee = value.data.comptime_value.data.pointee;
-            const items = elements(pointee.value) orelse interned: {
-                const payload = switch (pointee.value.data) {
-                    .ip_index => |payload| payload,
-                    else => return null,
-                };
-                const value_index = payload.index orelse return null;
-                const aggregate = switch (analyser.ip.indexToKey(value_index)) {
-                    .aggregate => |aggregate| aggregate,
-                    else => return null,
-                };
-                const indices = try aggregate.values.dupe(analyser.arena, analyser.ip);
-                const result = try analyser.arena.alloc(Type, indices.len);
-                for (indices, result) |index, *item| {
-                    item.* = Type.fromIP(analyser, analyser.ip.typeOf(index), index);
-                }
-                break :interned result;
-            };
-            return .{
+            if (try aggregateElementsAlloc(analyser, pointee.value)) |items| return .{
                 .backing = items,
                 .offset = 0,
                 .len = items.len,
                 .elements_valid = true,
                 .origin = pointee,
             };
+            const root_value = pointee.root_value orelse pointee.temporary_value orelse root: {
+                if (!pointee.is_static) return null;
+                const declaration: Analyser.DeclWithHandle = .{
+                    .decl = .{ .ast_node = pointee.source.node },
+                    .handle = pointee.source.handle,
+                    .container_type = pointee.container_type,
+                };
+                break :root declaration.resolveType(analyser) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.Canceled => return null,
+                } orelse return null;
+            };
+            if (pointee.path.len == 0) return null;
+            const last_access = pointee.path[pointee.path.len - 1];
+            const offset = switch (last_access) {
+                .index => |index| index,
+                else => return null,
+            };
+            const parent = valueAtPath(analyser, root_value, pointee.path[0 .. pointee.path.len - 1]) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Canceled => return null,
+            } orelse return null;
+            const items = try aggregateElementsAlloc(analyser, parent) orelse return null;
+            if (offset >= items.len) return null;
+            var origin = pointee;
+            origin.value = parent;
+            origin.path = pointee.path[0 .. pointee.path.len - 1];
+            return .{
+                .backing = items,
+                .offset = offset,
+                .len = items.len - offset,
+                .elements_valid = true,
+                .origin = origin,
+            };
         }
         if (sequence(value)) |sequence_value| return sequence_value;
         return null;
+    }
+
+    fn aggregateElementsAlloc(analyser: *Analyser, value: Type) error{OutOfMemory}!?[]const Type {
+        if (elements(value)) |items| return items;
+        const payload = switch (value.data) {
+            .ip_index => |payload| payload,
+            else => return null,
+        };
+        const value_index = payload.index orelse return null;
+        const aggregate = switch (analyser.ip.indexToKey(value_index)) {
+            .aggregate => |aggregate| aggregate,
+            else => return null,
+        };
+        const indices = try aggregate.values.dupe(analyser.arena, analyser.ip);
+        const result = try analyser.arena.alloc(Type, indices.len);
+        for (indices, result) |index, *item| {
+            item.* = Type.fromIP(analyser, analyser.ip.typeOf(index), index);
+        }
+        return result;
+    }
+
+    fn valueAtPath(
+        analyser: *Analyser,
+        root: Type,
+        path: []const Reference.Access,
+    ) Analyser.Error!?Type {
+        var current = root;
+        for (path) |access| {
+            current = switch (access) {
+                .index, .tuple_index => |index| blk: {
+                    const items = try aggregateElementsAlloc(analyser, current) orelse return null;
+                    if (index >= items.len) return null;
+                    break :blk items[index];
+                },
+                .field => |name| try analyser.resolveFieldAccess(current, name) orelse return null,
+                .optional_payload => try analyser.resolveOptionalUnwrap(current) orelse return null,
+                .error_union_payload => blk: {
+                    const resolved = deref(current);
+                    if (resolved.data != .comptime_value or resolved.data.comptime_value.data != .error_union)
+                        return null;
+                    break :blk switch (resolved.data.comptime_value.data.error_union) {
+                        .payload => |payload| payload,
+                        .failure => return null,
+                    };
+                },
+            };
+        }
+        return current;
     }
 
     pub fn sequenceOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMemory}!?usize {
@@ -1926,7 +1991,22 @@ pub const Interpreter = struct {
             },
             .array_access => {
                 const base, const index_node = handle.tree.nodeData(node).node_and_node;
-                const value = try self.eval(handle, base) orelse return null;
+                var value = try self.evalPreservingPointerIdentity(handle, base) orelse return null;
+                const value_type = if (value.data == .comptime_value)
+                    try value.data.comptime_value.ty.instanceUnchecked(self.analyser)
+                else
+                    value;
+                if (value_type.pointerSize(self.analyser) == .many or
+                    value_type.pointerSize(self.analyser) == .slice)
+                {
+                    if (try Value.sequenceAlloc(self.analyser, value)) |sequence| {
+                        value = try Value.create(
+                            self.analyser,
+                            try value.typeOf(self.analyser),
+                            .{ .sequence = sequence },
+                        );
+                    }
+                }
                 const index = switch (try self.integerValue(handle, index_node) orelse return null) {
                     .known => |known| known,
                     .unknown => null,
