@@ -17698,6 +17698,43 @@ test "comptime pointer casts preserve address identity" {
         .{ .label = "distance", .kind = .Field, .detail = "[0]u8" },
         .{ .label = "unrelated", .kind = .Field, .detail = "[?]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\fn makeValue(value: usize) Value {
+        \\    return .{ .b = value };
+        \\}
+        \\fn pointer(value: usize) *const usize {
+        \\    return switch (makeValue(value)) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn erased(value: usize) *const anyopaque {
+        \\    return @ptrCast(pointer(value));
+        \\}
+        \\fn aligned(value: usize) *align(8) const anyopaque {
+        \\    return @alignCast(erased(value));
+        \\}
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    state += 0;
+        \\    var same: usize = 2;
+        \\    if (aligned(4) == aligned(4)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (aligned(4) != aligned(5)) distinct = 3;
+        \\    const restored: *const usize = @ptrCast(aligned(4));
+        \\    const distance = restored - pointer(4);
+        \\    return struct { value: [restored.* + state]u8, same: [same]u8, distinct: [distinct]u8, distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "distance", .kind = .Field, .detail = "[0]u8" },
+    });
 }
 
 test "comptime sequence pointer parameter values" {

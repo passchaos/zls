@@ -555,6 +555,9 @@ pub const Interpreter = struct {
         switch (tree.nodeTag(node)) {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
             .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
+            .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
+                if (std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@alignCast")) return true;
+            },
             .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
                 if (branch.error_token != null or
@@ -1866,14 +1869,21 @@ pub const Interpreter = struct {
                     .discard_volatile
                 else
                     null;
-                if (qualifier_cast) |kind| {
+                const is_align_cast = std.mem.eql(u8, name, "@alignCast");
+                if (qualifier_cast != null or is_align_cast) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 1) return null;
                     const operand = try self.eval(handle, params[0]) orelse return null;
-                    const source_type = try operand.typeOf(self.analyser);
-                    const destination = try source_type.qualifierCastType(self.analyser, kind) orelse return null;
-                    return self.pointerCastValue(destination, operand, kind);
+                    const destination = if (qualifier_cast) |kind| destination: {
+                        const source_type = try operand.typeOf(self.analyser);
+                        break :destination try source_type.qualifierCastType(self.analyser, kind) orelse return null;
+                    } else try (try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null).typeOf(self.analyser);
+                    return self.pointerCastValue(
+                        destination,
+                        operand,
+                        qualifier_cast orelse .increase_alignment,
+                    );
                 }
                 if (std.mem.eql(u8, name, "@as")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -2318,6 +2328,8 @@ pub const Interpreter = struct {
                 .discard_const
             else if (std.mem.eql(u8, name, "@volatileCast"))
                 .discard_volatile
+            else if (std.mem.eql(u8, name, "@alignCast"))
+                .increase_alignment
             else
                 null;
             if (kind != null or is_splat or is_enum or is_pointer or qualifier_cast != null) {

@@ -15296,7 +15296,6 @@ pub const Type = struct {
             dest.pointer.is_volatile == src.pointer.is_volatile and
             dest.pointer.is_allowzero == src.pointer.is_allowzero and
             dest.pointer.address_space == src.pointer.address_space and
-            dest.pointer.alignment == src.pointer.alignment and
             std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset);
     }
 
@@ -15325,7 +15324,7 @@ pub const Type = struct {
         return !info.is_optional and info.pointer.size == .many;
     }
 
-    pub const PointerQualifierCast = enum { discard_const, discard_volatile };
+    pub const PointerQualifierCast = enum { discard_const, discard_volatile, increase_alignment };
 
     pub fn qualifierCastType(
         source: Type,
@@ -15355,6 +15354,7 @@ pub const Type = struct {
                 if (!flags.is_volatile) return null;
                 flags.is_volatile = false;
             },
+            .increase_alignment => return null,
         }
         const pointer = try Type.createPointerTypeWithFlags(
             analyser,
@@ -15382,7 +15382,6 @@ pub const Type = struct {
             !dest.pointer.elem_ty.eql(src.pointer.elem_ty) or
             dest.pointer.is_allowzero != src.pointer.is_allowzero or
             dest.pointer.address_space != src.pointer.address_space or
-            dest.pointer.alignment != src.pointer.alignment or
             !std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset)) return false;
         switch (dest.pointer.size) {
             .one, .many, .slice => {},
@@ -15390,9 +15389,14 @@ pub const Type = struct {
         }
         return switch (kind) {
             .discard_const => !dest.pointer.is_const and src.pointer.is_const and
-                dest.pointer.is_volatile == src.pointer.is_volatile,
+                dest.pointer.is_volatile == src.pointer.is_volatile and
+                dest.pointer.alignment == src.pointer.alignment,
             .discard_volatile => !dest.pointer.is_volatile and src.pointer.is_volatile and
-                dest.pointer.is_const == src.pointer.is_const,
+                dest.pointer.is_const == src.pointer.is_const and
+                dest.pointer.alignment == src.pointer.alignment,
+            .increase_alignment => dest.pointer.is_const == src.pointer.is_const and
+                dest.pointer.is_volatile == src.pointer.is_volatile and
+                dest.pointer.alignment >= src.pointer.alignment,
         };
     }
 
@@ -15423,6 +15427,11 @@ pub const Type = struct {
 
     fn materializedPointerChild(self: Type, analyser: *Analyser) ?Type {
         return self.materializedPointerChildDepth(analyser, 0);
+    }
+
+    fn isSinglePointerType(self: Type, analyser: *Analyser) bool {
+        const info = self.pointerCastInfo(analyser) orelse return false;
+        return !info.is_optional and info.pointer.size == .one;
     }
 
     fn constMaterializedPointerChildDepth(self: Type, analyser: *Analyser, depth: u8) ?Type {
@@ -15478,6 +15487,7 @@ pub const Type = struct {
                 else => .never,
             },
             .pointer => if (self.isConstSequencePointerType(analyser) or
+                self.isSinglePointerType(analyser) or
                 self.materializedPointerChild(analyser) != null) .if_needed else .never,
             .ip_index => |payload| switch (analyser.ip.zigTypeTag(payload.index orelse return .never) orelse return .never) {
                 .int, .comptime_int => .eager,
@@ -15495,6 +15505,7 @@ pub const Type = struct {
                 .@"union",
                 => .if_needed,
                 .pointer => if (self.isConstSequencePointerType(analyser) or
+                    self.isSinglePointerType(analyser) or
                     self.materializedPointerChild(analyser) != null) .if_needed else .never,
                 else => .never,
             },
