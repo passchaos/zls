@@ -696,6 +696,160 @@ pub const Interpreter = struct {
         declaration: Analyser.DeclWithHandle,
         path: []const Value.Reference.Access,
     };
+    const CaptureTarget = union(enum) {
+        reference: *Value.Reference,
+        pointee: Value.Pointee,
+    };
+    const CaptureOperand = struct {
+        value: Type,
+        target: ?CaptureTarget,
+    };
+
+    fn captureOperand(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        depth: u8,
+    ) Error!?CaptureOperand {
+        if (depth == 128) return null;
+        const tree = &handle.tree;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) == .array_access) {
+            const base, const index_node = tree.nodeData(unwrapped).node_and_node;
+            const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
+            const index = try self.integer(handle, index_node) orelse return null;
+            const value = try self.analyser.resolveBracketAccessType(base_operand.value, .{ .single = index }) orelse return null;
+            if (try Value.sequenceAlloc(self.analyser, base_operand.value)) |sequence| {
+                if (index >= sequence.len) return null;
+                if (sequence.origin) |origin| {
+                    const offset = std.math.add(usize, sequence.offset, index) catch return null;
+                    return .{
+                        .value = value,
+                        .target = .{ .pointee = try self.extendPointee(origin, value, .{ .index = offset }) },
+                    };
+                }
+            }
+            const base_type = try base_operand.value.typeOf(self.analyser);
+            const pointer_size = (try base_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser);
+            if (pointer_size == null) {
+                return .{
+                    .value = value,
+                    .target = if (base_operand.target) |target|
+                        try self.extendCaptureTarget(target, value, .{ .index = index })
+                    else
+                        null,
+                };
+            }
+            return .{ .value = value, .target = null };
+        }
+        return self.captureOperandFallback(handle, unwrapped, depth);
+    }
+
+    fn captureOperandFallback(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        depth: u8,
+    ) Error!?CaptureOperand {
+        if (try self.referenceForNode(handle, node)) |reference| {
+            return .{
+                .value = try self.readReference(reference) orelse return null,
+                .target = .{ .reference = reference },
+            };
+        }
+        if (try self.staticPointeeTarget(handle, node, depth)) |target| {
+            const value = try self.staticCaptureValue(handle, node) orelse
+                try self.eval(handle, node) orelse return null;
+            if (try self.pointeeForTarget(target, value)) |pointee| {
+                return .{ .value = value, .target = .{ .pointee = pointee } };
+            }
+            return .{ .value = value, .target = null };
+        }
+        return .{ .value = try self.eval(handle, node) orelse return null, .target = null };
+    }
+
+    fn extendPointee(
+        self: *Interpreter,
+        pointee: Value.Pointee,
+        value: Type,
+        access: Value.Reference.Access,
+    ) Error!Value.Pointee {
+        const path = try self.analyser.arena.alloc(Value.Reference.Access, pointee.path.len + 1);
+        @memcpy(path[0..pointee.path.len], pointee.path);
+        path[pointee.path.len] = access;
+        var result = pointee;
+        result.value = value;
+        result.path = path;
+        return result;
+    }
+
+    fn extendCaptureTarget(
+        self: *Interpreter,
+        target: CaptureTarget,
+        value: Type,
+        access: Value.Reference.Access,
+    ) Error!CaptureTarget {
+        return switch (target) {
+            .reference => |reference| .{ .reference = try self.extendReference(reference, access) },
+            .pointee => |pointee| .{ .pointee = try self.extendPointee(pointee, value, access) },
+        };
+    }
+
+    fn pointeeForTarget(
+        self: *Interpreter,
+        target: StaticPointeeTarget,
+        value: Type,
+    ) Error!?Value.Pointee {
+        if (!target.declaration.isConst()) return null;
+        const is_static = try target.declaration.isStatic();
+        if (!is_static) {
+            const key: Analyser.TokenWithHandle = .{
+                .handle = target.declaration.handle,
+                .token = target.declaration.nameToken(),
+            };
+            if (!self.bindings.contains(key)) return null;
+        }
+        const declaration_node = switch (target.declaration.decl) {
+            .ast_node => |node| node,
+            else => return null,
+        };
+        return .{
+            .value = value,
+            .source = .of(declaration_node, target.declaration.handle),
+            .container_type = target.declaration.container_type,
+            .path = target.path,
+            .is_static = is_static,
+        };
+    }
+
+    fn captureTargetPointer(
+        self: *Interpreter,
+        target: CaptureTarget,
+        payload: Type,
+        access: ?Value.Reference.Access,
+    ) Error!?Type {
+        return switch (target) {
+            .reference => |reference| self.referenceValue(if (access) |payload_access|
+                try self.extendReference(reference, payload_access)
+            else
+                reference),
+            .pointee => |pointee| blk: {
+                const result = if (access) |payload_access|
+                    try self.extendPointee(pointee, payload, payload_access)
+                else result: {
+                    var updated = pointee;
+                    updated.value = payload;
+                    break :result updated;
+                };
+                const pointer = try self.analyser.resolveAddressOf(true, payload);
+                break :blk @as(?Type, try Value.create(
+                    self.analyser,
+                    try pointer.typeOf(self.analyser),
+                    .{ .pointee = result },
+                ));
+            },
+        };
+    }
 
     fn staticPointeeTarget(
         self: *Interpreter,
@@ -2514,16 +2668,11 @@ pub const Interpreter = struct {
         if (payload_token == null and error_token == null)
             return self.boolValue(try self.eval(handle, condition) orelse return null);
         const capture_by_ref = if (payload_token) |token| handle.tree.tokenTag(token) == .asterisk else false;
-        const reference = if (capture_by_ref)
-            try self.referenceForNode(handle, condition)
+        const operand: CaptureOperand = if (capture_by_ref)
+            try self.captureOperand(handle, condition, 0) orelse return null
         else
-            null;
-        const value = if (reference) |target|
-            try self.readReference(target) orelse return null
-        else if (capture_by_ref)
-            try self.staticCaptureValue(handle, condition) orelse try self.eval(handle, condition) orelse return null
-        else
-            try self.eval(handle, condition) orelse return null;
+            .{ .value = try self.eval(handle, condition) orelse return null, .target = null };
+        const value = operand.value;
         if (error_token) |failure_token| {
             return switch (try self.errorUnionValue(value) orelse return null) {
                 .failure => |failure| failure: {
@@ -2532,10 +2681,12 @@ pub const Interpreter = struct {
                 },
                 .payload => |payload| success: {
                     if (payload_token) |payload_capture| {
-                        const captured = if (reference) |target|
-                            try self.referenceValue(try self.extendReference(target, .error_union_payload)) orelse return null
-                        else if (capture_by_ref)
-                            try self.staticPayloadPointer(handle, condition, payload, .error_union_payload) orelse return null
+                        const captured = if (capture_by_ref)
+                            try self.captureTargetPointer(
+                                operand.target orelse return null,
+                                payload,
+                                .error_union_payload,
+                            ) orelse return null
                         else
                             payload;
                         try self.bind(handle, payload_capture + @intFromBool(capture_by_ref), captured);
@@ -2548,10 +2699,12 @@ pub const Interpreter = struct {
             .absent => return false,
             .payload => |payload| payload,
         };
-        const captured = if (reference) |target|
-            try self.referenceValue(try self.extendReference(target, .optional_payload)) orelse return null
-        else if (capture_by_ref)
-            try self.staticPayloadPointer(handle, condition, payload, .optional_payload) orelse return null
+        const captured = if (capture_by_ref)
+            try self.captureTargetPointer(
+                operand.target orelse return null,
+                payload,
+                .optional_payload,
+            ) orelse return null
         else
             payload;
         const token = payload_token.?;
@@ -2648,40 +2801,6 @@ pub const Interpreter = struct {
             };
         }
         return current;
-    }
-
-    fn staticPayloadPointer(
-        self: *Interpreter,
-        handle: *Handle,
-        condition: Ast.Node.Index,
-        payload: Type,
-        access: ?Value.Reference.Access,
-    ) Error!?Type {
-        const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
-        if (!target.declaration.isConst()) return null;
-        const is_static = try target.declaration.isStatic();
-        if (!is_static) {
-            const key: Analyser.TokenWithHandle = .{
-                .handle = target.declaration.handle,
-                .token = target.declaration.nameToken(),
-            };
-            if (!self.bindings.contains(key)) return null;
-        }
-        const declaration_node = switch (target.declaration.decl) {
-            .ast_node => |node| node,
-            else => return null,
-        };
-        const path = try self.analyser.arena.alloc(Value.Reference.Access, target.path.len + @intFromBool(access != null));
-        @memcpy(path[0..target.path.len], target.path);
-        if (access) |payload_access| path[target.path.len] = payload_access;
-        const pointer = try self.analyser.resolveAddressOf(true, payload);
-        return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = .{
-            .value = payload,
-            .source = .of(declaration_node, target.declaration.handle),
-            .container_type = target.declaration.container_type,
-            .path = path,
-            .is_static = is_static,
-        } }));
     }
 
     fn sequenceElementPointer(self: *Interpreter, value: Type, index: usize) Error!?Type {
@@ -3021,18 +3140,11 @@ pub const Interpreter = struct {
         const tree = &handle.tree;
         const switch_node = tree.switchFull(node);
         const has_pointer_capture = switchHasPointerCapture(tree, switch_node);
-        const reference = if (has_pointer_capture)
-            try self.referenceForNode(handle, switch_node.ast.condition)
+        const operand: CaptureOperand = if (has_pointer_capture)
+            try self.captureOperand(handle, switch_node.ast.condition, 0) orelse return null
         else
-            null;
-        const condition = if (reference) |target|
-            try self.readReference(target) orelse return null
-        else if (has_pointer_capture)
-            try self.staticCaptureValue(handle, switch_node.ast.condition) orelse
-                try self.eval(handle, switch_node.ast.condition) orelse return null
-        else
-            try self.eval(handle, switch_node.ast.condition) orelse return null;
-        return self.switchTargetForCondition(handle, node, condition, reference);
+            .{ .value = try self.eval(handle, switch_node.ast.condition) orelse return null, .target = null };
+        return self.switchTargetForCondition(handle, node, operand.value, operand.target);
     }
 
     fn switchHasPointerCapture(tree: *const Ast, switch_node: Ast.full.Switch) bool {
@@ -3048,7 +3160,7 @@ pub const Interpreter = struct {
         handle: *Handle,
         node: Ast.Node.Index,
         condition: Type,
-        reference: ?*Value.Reference,
+        capture_target: ?CaptureTarget,
     ) Error!?Ast.Node.Index {
         const tree = &handle.tree;
         const switch_node = tree.switchFull(node);
@@ -3071,13 +3183,6 @@ pub const Interpreter = struct {
                         try self.analyser.resolveKnownUnionFieldName(condition);
                     const has_payload_field = active_field != null and
                         (switch_case.ast.values.len != 0 or switch_case.inline_token != null);
-                    if (reference) |base| {
-                        const payload_reference = if (has_payload_field)
-                            try self.extendReference(base, .{ .field = active_field.? })
-                        else
-                            base;
-                        break :captured try self.referenceValue(payload_reference) orelse return null;
-                    }
                     const payload = try self.analyser.resolveSwitchCaptureValue(
                         condition,
                         tree,
@@ -3085,9 +3190,8 @@ pub const Interpreter = struct {
                         switch_case,
                         false,
                     ) orelse return null;
-                    break :captured try self.staticPayloadPointer(
-                        handle,
-                        switch_node.ast.condition,
+                    break :captured try self.captureTargetPointer(
+                        capture_target orelse return null,
                         payload,
                         if (has_payload_field) .{ .field = active_field.? } else null,
                     ) orelse return null;
@@ -3135,7 +3239,12 @@ pub const Interpreter = struct {
         defer self.break_context = context.parent;
 
         while (true) {
-            const target = try self.switchTargetForCondition(handle, node, condition, reference) orelse return .unknown;
+            const target = try self.switchTargetForCondition(
+                handle,
+                node,
+                condition,
+                if (reference) |value| .{ .reference = value } else null,
+            ) orelse return .unknown;
             const flow: Flow = if (expression) expression_flow: {
                 const result = try self.evalSourceWithType(handle, target, destination);
                 if (self.pending_flow) |pending| {
