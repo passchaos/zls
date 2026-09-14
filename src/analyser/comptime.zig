@@ -1369,6 +1369,41 @@ pub const Interpreter = struct {
         };
     }
 
+    fn isTemporaryAddressOperand(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+        if (depth == 128) return false;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        return switch (tree.nodeTag(unwrapped)) {
+            .@"comptime",
+            .call,
+            .call_comma,
+            .call_one,
+            .call_one_comma,
+            .if_simple,
+            .@"if",
+            .@"switch",
+            .switch_comma,
+            .@"for",
+            .for_simple,
+            .@"while",
+            .while_simple,
+            .while_cont,
+            .block,
+            .block_semicolon,
+            .block_two,
+            .block_two_semicolon,
+            .@"orelse",
+            .@"catch",
+            .@"try",
+            => true,
+            .field_access => isTemporaryAddressOperand(tree, tree.nodeData(unwrapped).node_and_token[0], depth + 1),
+            .array_access => isTemporaryAddressOperand(tree, tree.nodeData(unwrapped).node_and_node[0], depth + 1),
+            .unwrap_optional => isTemporaryAddressOperand(tree, tree.nodeData(unwrapped).node_and_token[0], depth + 1),
+            .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => ast.isBuiltinCall(tree, unwrapped) and
+                std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(unwrapped)), "@as"),
+            else => false,
+        };
+    }
+
     pub fn enterExpression(self: *Interpreter) bool {
         if (self.pending_flow != null or self.budget.expression_depth >= 128 or !self.tick()) return false;
         self.budget.expression_depth += 1;
@@ -2915,6 +2950,22 @@ pub const Interpreter = struct {
                         return @as(?Type, try Value.create(analyser, destination, .{ .array = items }));
                     }
                 }
+            }
+            if (tree.nodeTag(literal_node) == .address_of) temporary_pointer: {
+                const pointer_type = try destination.instanceTypeVal(analyser) orelse break :temporary_pointer;
+                if (pointer_type.pointerSize(analyser) != .one) break :temporary_pointer;
+                const operand = unwrapGroupedSource(tree, tree.nodeData(literal_node).node);
+                const captured = try self.captureOperand(handle, operand, 0) orelse break :temporary_pointer;
+                const target = captured.target orelse
+                    if (Value.isKnown(captured.value, analyser, 0) and
+                        isTemporaryAddressOperand(tree, operand, 0))
+                        self.temporaryCaptureTarget(handle, operand, captured.value)
+                    else
+                        break :temporary_pointer;
+                return @as(?Type, try Value.create(analyser, destination, switch (target) {
+                    .reference => |reference| .{ .reference = reference },
+                    .pointee => |pointee| .{ .pointee = pointee },
+                }));
             }
             if (tree.nodeTag(literal_node) == .enum_literal) {
                 if (destination.isEnumType(analyser)) {
