@@ -8353,27 +8353,18 @@ fn resolveSelectValue(
     lhs: Type,
     rhs: Type,
 ) error{OutOfMemory}!?Type {
-    const predicate_payload = switch (predicate.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const lhs_payload = switch (lhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const rhs_payload = switch (rhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const predicate_vector = switch (analyser.ip.indexToKey(predicate_payload.type)) {
+    const predicate_type = (try predicate.typeOf(analyser)).ipIndex() orelse return null;
+    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
+    const predicate_vector = switch (analyser.ip.indexToKey(predicate_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -8383,18 +8374,42 @@ fn resolveSelectValue(
         lhs_vector.child != element_type or
         rhs_vector.child != element_type) return null;
 
-    const result_type = lhs_payload.type;
+    const result_type = lhs_type;
+    const predicate_items = comptime_eval.Value.elements(predicate);
+    const lhs_items = comptime_eval.Value.elements(lhs);
+    const rhs_items = comptime_eval.Value.elements(rhs);
     const predicate_values = analyser.aggregateValues(predicate);
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
+    if ((predicate_items != null and predicate_items.?.len != predicate_vector.len) or
+        (lhs_items != null and lhs_items.?.len != lhs_vector.len) or
+        (rhs_items != null and rhs_items.?.len != rhs_vector.len) or
+        (predicate_values != null and predicate_values.?.len != predicate_vector.len) or
+        (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+        (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
         const index: u32 = @intCast(i);
-        const predicate_value = if (predicate_values) |slice| slice.at(index, analyser.ip) else .unknown_unknown;
-        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else null;
-        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else null;
+        const predicate_value = if (predicate_items) |items|
+            items[i].ipIndex() orelse .unknown_unknown
+        else if (predicate_values) |slice|
+            slice.at(index, analyser.ip)
+        else
+            .unknown_unknown;
+        const lhs_value = if (lhs_items) |items|
+            items[i].ipIndex()
+        else if (lhs_values) |slice|
+            slice.at(index, analyser.ip)
+        else
+            null;
+        const rhs_value = if (rhs_items) |items|
+            items[i].ipIndex()
+        else if (rhs_values) |slice|
+            slice.at(index, analyser.ip)
+        else
+            null;
         value.* = switch (predicate_value) {
             .bool_true => lhs_value orelse try analyser.ip.getUnknown(element_type),
             .bool_false => rhs_value orelse try analyser.ip.getUnknown(element_type),

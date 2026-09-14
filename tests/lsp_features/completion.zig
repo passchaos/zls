@@ -4597,6 +4597,41 @@ test "comptime reduce accepts structured vectors" {
     });
 }
 
+test "comptime select accepts structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const selected = @select(
+        \\        element: {
+        \\            executions += 1;
+        \\            break :element u8;
+        \\        },
+        \\        predicate: {
+        \\            executions = executions * 10 + 2;
+        \\            break :predicate @as(@Vector(2, bool), .{ true, false });
+        \\        },
+        \\        lhs: {
+        \\            executions = executions * 10 + 3;
+        \\            break :lhs @as(@Vector(2, u8), .{ 4, 5 });
+        \\        },
+        \\        rhs: {
+        \\            executions = executions * 10 + 4;
+        \\            break :rhs @as(@Vector(2, u8), .{ 6, 7 });
+        \\        },
+        \\    );
+        \\    return struct {
+        \\        values: [selected[0] + selected[1]]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[11]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
