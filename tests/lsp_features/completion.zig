@@ -4417,6 +4417,48 @@ test "comptime binary operators accept structured vectors" {
     });
 }
 
+test "comptime fixed width and boolean operators accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const bool_lhs = @as(@Vector(2, bool), values: {
+        \\        executions += 1;
+        \\        break :values .{ true, false };
+        \\    });
+        \\    const bool_rhs = @as(@Vector(2, bool), values: {
+        \\        executions = executions * 10 + 2;
+        \\        break :values .{ false, true };
+        \\    });
+        \\    const int_lhs = @as(@Vector(2, u8), values: {
+        \\        executions = executions * 10 + 3;
+        \\        break :values .{ 255, 1 };
+        \\    });
+        \\    const int_rhs = @as(@Vector(2, u8), values: {
+        \\        executions = executions * 10 + 4;
+        \\        break :values .{ 1, 2 };
+        \\    });
+        \\    const both = bool_lhs & bool_rhs;
+        \\    const either = bool_lhs | bool_rhs;
+        \\    const different = bool_lhs ^ bool_rhs;
+        \\    const wrapped = int_lhs +% int_rhs;
+        \\    const saturated = int_lhs +| int_rhs;
+        \\    return struct {
+        \\        booleans: [if (!both[0] and !both[1] and
+        \\            either[0] and either[1] and different[0] and different[1]) 1 else 99]u8,
+        \\        integers: [if (wrapped[0] == 0 and wrapped[1] == 3 and
+        \\            saturated[0] == 255 and saturated[1] == 3) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "booleans", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "integers", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
