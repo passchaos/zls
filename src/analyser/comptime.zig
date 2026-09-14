@@ -3445,6 +3445,12 @@ pub const Interpreter = struct {
     ) Error!bool {
         const analyser = self.analyser;
         const tree = &handle.tree;
+        if (ast.isBuiltinCall(tree, node) and
+            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@field"))
+        {
+            const target = try self.referenceForNode(handle, node) orelse return false;
+            return self.writeReference(handle, target, value, source_node);
+        }
         if (tree.nodeTag(node) == .array_access) {
             const base, const index_node = tree.nodeData(node).node_and_node;
             const base_value = try self.eval(handle, base) orelse return false;
