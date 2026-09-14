@@ -861,10 +861,34 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
                 try lhs.data.comptime_value.ty.instanceUnchecked(analyser)
             else
                 lhs;
-            if (value_type.pointerSize(analyser) == .slice) {
-                const pointer = try analyser.resolvePropertyType(value_type, field_name) orelse return null;
+            const pointer = try analyser.resolvePropertyType(value_type, field_name) orelse pointer: {
+                const pointer_type = try value_type.typeOf(analyser);
+                const pointer_info = pointer_type.typePointerInfo(analyser) orelse break :pointer null;
+                if (pointer_info.size != .one) break :pointer null;
+                const array = try pointer_info.elem_ty.instanceUnchecked(analyser);
+                const array_info = array.arrayInfo(analyser) orelse
+                    break :pointer null;
+                const sentinel = array_info[1];
+                const elem_type = array_info[2];
+                const many_pointer = try Type.createPointerTypeWithFlags(
+                    analyser,
+                    .{
+                        .size = .many,
+                        .is_const = pointer_info.is_const,
+                        .is_volatile = pointer_info.is_volatile,
+                        .is_allowzero = pointer_info.is_allowzero,
+                        .address_space = pointer_info.address_space,
+                        .alignment = @intCast(pointer_info.alignment),
+                    },
+                    pointer_info.packed_offset,
+                    sentinel,
+                    elem_type,
+                );
+                break :pointer try many_pointer.instanceUnchecked(analyser);
+            };
+            if (pointer != null) {
                 if (comptime_eval.Value.sequence(lhs)) |view| return .{
-                    .type = try comptime_eval.Value.create(analyser, try pointer.typeOf(analyser), .{ .sequence = .{
+                    .type = try comptime_eval.Value.create(analyser, try pointer.?.typeOf(analyser), .{ .sequence = .{
                         .backing = view.backing,
                         .offset = view.offset,
                         .len = view.backing.len - view.offset,
@@ -874,7 +898,7 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
                     .is_const = true,
                 };
                 return .{
-                    .type = try comptime_eval.Value.create(analyser, try pointer.typeOf(analyser), .{ .array = items }),
+                    .type = try comptime_eval.Value.create(analyser, try pointer.?.typeOf(analyser), .{ .array = items }),
                     .is_const = true,
                 };
             }

@@ -15738,6 +15738,48 @@ test "comptime pointer comparisons preserve address identity" {
     });
 }
 
+test "comptime aggregate pointer slices preserve origin" {
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\const pointer = &values;
+        \\const tail = pointer[1..];
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (&tail.ptr[0] == &values[1]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\const pointer = &values;
+        \\const tail = pointer[1..];
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (&tail[1] == &values[2]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\const values = [_]usize{ 3, 5, 7 };
+        \\const pointer = &values;
+        \\const tail = pointer[1..];
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const distance = &tail[1] - &values[0];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[2]u8" }});
+}
+
 test "comptime local tuple pointers preserve field identity" {
     try testCompletion(
         \\fn fieldName(evaluations: *usize) []const u8 {

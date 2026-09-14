@@ -833,9 +833,22 @@ pub const Interpreter = struct {
                 .known => |known| std.math.cast(usize, known) orelse return null,
                 .unknown => return .{ .value = value, .target = null },
             };
-            if (try Value.sequenceAlloc(self.analyser, base_operand.value)) |base_sequence| {
+            const base_sequence = try Value.sequenceAlloc(self.analyser, base_operand.value) orelse sequence: {
+                const origin = if (base_operand.target) |target| switch (target) {
+                    .pointee => |pointee| pointee,
+                    .reference => break :sequence null,
+                } else break :sequence null;
+                const pointer = try self.analyser.resolveAddressOf(true, base_operand.value);
+                const pointee = try Value.create(
+                    self.analyser,
+                    try pointer.typeOf(self.analyser),
+                    .{ .pointee = origin },
+                );
+                break :sequence try Value.sequenceAlloc(self.analyser, pointee);
+            };
+            if (base_sequence) |captured_sequence| {
                 const sliced_sequence = try Value.sequenceAlloc(self.analyser, value) orelse return null;
-                var sequence = base_sequence;
+                var sequence = captured_sequence;
                 sequence.offset = std.math.add(usize, sequence.offset, start) catch return null;
                 sequence.len = sliced_sequence.len;
                 if (sequence.origin == null) {
@@ -1707,28 +1720,20 @@ pub const Interpreter = struct {
                 }
                 if (handle.tree.nodeTag(operand) == .array_access) {
                     const base, const index_node = handle.tree.nodeData(operand).node_and_node;
-                    if (handle.tree.nodeTag(base) == .identifier) {
-                        if (try self.eval(handle, base)) |sequence_value| {
-                            const pointer_size = if (sequence_value.data == .comptime_value)
-                                (try sequence_value.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser)
-                            else
-                                null;
-                            if ((pointer_size == .many or pointer_size == .slice) and
-                                Value.sequence(sequence_value) != null)
-                            {
-                                const sequence = Value.sequence(sequence_value).?;
-                                const index = try self.integer(handle, index_node) orelse return null;
-                                if (index >= sequence.len) return null;
-                                const offset = std.math.add(usize, sequence.offset, index) catch return null;
-                                const pointer = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
-                                return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .sequence = .{
-                                    .backing = sequence.backing,
-                                    .offset = offset,
-                                    .len = 1,
-                                    .elements_valid = sequence.elements_valid,
-                                    .origin = sequence.origin,
-                                } }));
-                            }
+                    const base_operand = try self.captureOperand(handle, base, 0);
+                    if (base_operand) |captured| {
+                        const pointer_size = if (captured.value.data == .comptime_value)
+                            (try captured.value.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser)
+                        else
+                            null;
+                        if ((pointer_size == .one or pointer_size == .many or pointer_size == .slice) and
+                            try self.analyser.resolveBracketAccessType(captured.value, .{ .single = 0 }) != null and
+                            Value.sequence(captured.value) != null)
+                        {
+                            const sequence = Value.sequence(captured.value).?;
+                            const index = try self.integer(handle, index_node) orelse return null;
+                            if (index >= sequence.len) return null;
+                            return self.sequenceElementPointer(captured.value, index);
                         }
                     }
                 }
@@ -3250,9 +3255,8 @@ pub const Interpreter = struct {
         const target = try self.staticPointeeTarget(handle, node, 0) orelse return null;
         if (!target.declaration.isConst() or !try target.declaration.isStatic()) return null;
         const value = try self.staticCaptureValue(handle, node) orelse return null;
-        if (try Value.sequenceAlloc(self.analyser, value)) |sequence| {
+        if (try Value.sequenceAlloc(self.analyser, value)) |sequence|
             if (sequence.origin != null) return value;
-        }
         const declaration_node = switch (target.declaration.decl) {
             .ast_node => |declaration| declaration,
             else => return null,
@@ -3281,6 +3285,14 @@ pub const Interpreter = struct {
         depth: u8,
     ) Error!?Type {
         if (depth == 128) return null;
+        const unwrapped = unwrapGroupedSource(&handle.tree, condition);
+        if (handle.tree.nodeTag(unwrapped) == .slice or
+            handle.tree.nodeTag(unwrapped) == .slice_open or
+            handle.tree.nodeTag(unwrapped) == .slice_sentinel)
+        {
+            const operand = try self.captureOperand(handle, unwrapped, depth + 1) orelse return null;
+            return operand.value;
+        }
         const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
         if (!target.declaration.isConst() or !try target.declaration.isStatic()) return null;
         const declaration_node = switch (target.declaration.decl) {
