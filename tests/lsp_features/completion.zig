@@ -4388,6 +4388,35 @@ test "comptime unary operators accept structured vectors" {
     });
 }
 
+test "comptime binary operators accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const lhs = @as(@Vector(2, u8), values: {
+        \\        executions += 1;
+        \\        break :values .{ 1, 3 };
+        \\    });
+        \\    const rhs = @as(@Vector(2, u8), values: {
+        \\        executions = executions * 10 + 2;
+        \\        break :values .{ 4, 4 };
+        \\    });
+        \\    const sum = lhs + rhs;
+        \\    const ordered = lhs < rhs;
+        \\    return struct {
+        \\        sum: [sum[0] + sum[1]]u8,
+        \\        ordered: [if (@reduce(.And, ordered)) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "sum", .kind = .Field, .detail = "[12]u8" },
+        .{ .label = "ordered", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

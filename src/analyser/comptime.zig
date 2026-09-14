@@ -1974,7 +1974,7 @@ pub const Interpreter = struct {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
                 const lhs_value = try self.evalPreservingPointerIdentity(handle, lhs) orelse return null;
                 const rhs_value = try self.evalPreservingPointerIdentity(handle, rhs) orelse return null;
-                return self.analyser.resolveComptimeComparisonValue(tag, lhs_value, rhs_value) orelse
+                return try self.analyser.resolveComptimeComparisonValue(tag, lhs_value, rhs_value) orelse
                     self.analyser.resolveTypeOfNode(.of(node, handle));
             },
             .bool_not, .bit_not, .negation, .negation_wrap => |tag| {

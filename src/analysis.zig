@@ -6609,31 +6609,29 @@ fn resolveVectorBinaryValue(
     lhs: Type,
     rhs: Type,
 ) error{OutOfMemory}!?Type {
-    const lhs_payload = switch (lhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const rhs_payload = switch (rhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (lhs_vector.len != rhs_vector.len) return null;
-    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
     const result_vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
+    const lhs_items = comptime_eval.Value.elements(lhs);
+    const rhs_items = comptime_eval.Value.elements(rhs);
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
-    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+    if ((lhs_items != null and lhs_items.?.len != lhs_vector.len) or
+        (rhs_items != null and rhs_items.?.len != rhs_vector.len) or
+        (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
     const absorbing_value: ?i256 = if (analyser.fixedWidthIntegerBounds(result_vector.child)) |bounds|
         switch (tag) {
@@ -6649,8 +6647,16 @@ fn resolveVectorBinaryValue(
     const unknown_rhs = try analyser.ip.getUnknown(rhs_vector.child);
     for (values, 0..) |*value, i| {
         const index: u32 = @intCast(i);
-        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs;
-        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs;
+        const lhs_element = if (lhs_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, lhs_vector.child, if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs);
+        const rhs_element = if (rhs_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, rhs_vector.child, if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs);
+        const lhs_value = lhs_element.ipIndex() orelse unknown_lhs;
+        const rhs_value = rhs_element.ipIndex() orelse unknown_rhs;
         if (!analyser.ip.isUndefined(lhs_value) and !analyser.ip.isUndefined(rhs_value)) {
             if (absorbing_value) |absorbing| {
                 const lhs_int = analyser.ip.toInt(lhs_value, i256);
@@ -6661,8 +6667,6 @@ fn resolveVectorBinaryValue(
                 }
             }
         }
-        const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_value);
-        const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_value);
         const result = try analyser.resolveIntegerBinaryValue(tag, lhs_element, rhs_element) orelse
             try analyser.resolveFloatBinaryValue(tag, lhs_element, rhs_element);
         value.* = if (result) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(result_vector.child) else try analyser.ip.getUnknown(result_vector.child);
@@ -8821,8 +8825,9 @@ pub fn resolveComptimeComparisonValue(
     tag: Ast.Node.Tag,
     lhs: Type,
     rhs: Type,
-) ?Type {
-    return analyser.resolveComparisonValue(tag, lhs, rhs);
+) error{OutOfMemory}!?Type {
+    return try analyser.resolveVectorComparisonValue(tag, lhs, rhs) orelse
+        analyser.resolveComparisonValue(tag, lhs, rhs);
 }
 
 fn isIntegerValue(analyser: *Analyser, index: InternPool.Index) bool {
@@ -8981,19 +8986,13 @@ fn resolveVectorComparisonValue(
     lhs: Type,
     rhs: Type,
 ) error{OutOfMemory}!?Type {
-    const lhs_payload = switch (lhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const rhs_payload = switch (rhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -9004,9 +9003,13 @@ fn resolveVectorComparisonValue(
         .len = lhs_vector.len,
         .child = .bool_type,
     } });
+    const lhs_items = comptime_eval.Value.elements(lhs);
+    const rhs_items = comptime_eval.Value.elements(rhs);
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
-    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+    if ((lhs_items != null and lhs_items.?.len != lhs_vector.len) or
+        (rhs_items != null and rhs_items.?.len != rhs_vector.len) or
+        (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
@@ -9015,10 +9018,14 @@ fn resolveVectorComparisonValue(
     const unknown_rhs = try analyser.ip.getUnknown(rhs_vector.child);
     for (values, 0..) |*value, i| {
         const index: u32 = @intCast(i);
-        const lhs_value = if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs;
-        const rhs_value = if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs;
-        const lhs_element = Type.fromIP(analyser, lhs_vector.child, lhs_value);
-        const rhs_element = Type.fromIP(analyser, rhs_vector.child, rhs_value);
+        const lhs_element = if (lhs_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, lhs_vector.child, if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs);
+        const rhs_element = if (rhs_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, rhs_vector.child, if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs);
         const comparison = analyser.resolveComparisonValue(tag, lhs_element, rhs_element);
         value.* = if (comparison) |resolved| resolved.ipIndex() orelse try analyser.ip.getUnknown(.bool_type) else try analyser.ip.getUnknown(.bool_type);
     }
