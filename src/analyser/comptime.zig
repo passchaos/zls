@@ -273,6 +273,9 @@ pub const Value = struct {
 
     fn pointerIdentityEqlDepth(analyser: *Analyser, lhs: Type, rhs: Type, depth: u8) ?bool {
         if (depth == 128) return null;
+        const lhs_type = lhs.typeOf(analyser) catch return null;
+        const rhs_type = rhs.typeOf(analyser) catch return null;
+        if (!lhs_type.hasComparablePointerIdentity(analyser, rhs_type)) return null;
         if (lhs.ipIndex()) |index| {
             if (analyser.ip.isNull(index) and hasPointerIdentity(rhs, depth + 1)) return false;
         }

@@ -15305,6 +15305,20 @@ pub const Type = struct {
         return lhs_info.pointer.elem_ty.eql(rhs_info.pointer.elem_ty);
     }
 
+    pub fn hasComparablePointerIdentity(lhs: Type, analyser: *Analyser, rhs: Type) bool {
+        const lhs_info = lhs.pointerCastInfo(analyser) orelse return false;
+        const rhs_info = rhs.pointerCastInfo(analyser) orelse return false;
+        if (lhs_info.pointer.size != rhs_info.pointer.size or
+            !lhs_info.pointer.elem_ty.eql(rhs_info.pointer.elem_ty) or
+            lhs_info.pointer.is_volatile != rhs_info.pointer.is_volatile or
+            lhs_info.pointer.is_allowzero != rhs_info.pointer.is_allowzero or
+            lhs_info.pointer.address_space != rhs_info.pointer.address_space or
+            lhs_info.pointer.alignment != rhs_info.pointer.alignment or
+            !std.meta.eql(lhs_info.pointer.packed_offset, rhs_info.pointer.packed_offset) or
+            lhs_info.pointer.sentinel != rhs_info.pointer.sentinel) return false;
+        return lhs_info.pointer.size == .one or lhs_info.pointer.size == .many;
+    }
+
     pub fn isManyPointerType(self: Type, analyser: *Analyser) bool {
         const info = self.pointerCastInfo(analyser) orelse return false;
         return !info.is_optional and info.pointer.size == .many;

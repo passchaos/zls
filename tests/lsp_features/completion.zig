@@ -15790,6 +15790,23 @@ test "comptime slice values are not pointer comparable" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\fn source() [*]const usize {
+        \\    var result: [*]const usize = &.{ 1, 1 };
+        \\    result = &.{ 2, 3 };
+        \\    return result;
+        \\}
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    const first: []const usize = source()[0..2];
+        \\    const second: []const usize = source()[0..2];
+        \\    if (first == second) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
 }
 
 test "type function with comptime early returns" {
