@@ -15683,6 +15683,27 @@ test "comptime static switch pointer captures" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "fallback", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize, other: bool };
+        \\const holder = struct { value: Value }{ .value = .{ .count = 4 } };
+        \\fn pointer() *const usize {
+        \\    return switch (holder.value) {
+        \\        .count => |*payload| payload,
+        \\        .other => unreachable,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &holder.value.count) same = 1;
+        \\    return struct { items: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
