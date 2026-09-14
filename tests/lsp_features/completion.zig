@@ -15649,6 +15649,63 @@ test "comptime static optional payload pointers" {
     });
 }
 
+test "comptime nested alias optional payload pointers" {
+    try testCompletion(
+        \\const Holder = struct { optional: ?usize };
+        \\const original: Holder = .{ .optional = 4 };
+        \\const alias = original;
+        \\fn optionalPointer() *const usize {
+        \\    if (alias.optional) |*payload| return payload else unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var optional_same: usize = 2;
+        \\    if (optionalPointer() == &alias.optional.?) optional_same = 1;
+        \\    var optional_distinct: usize = 4;
+        \\    if (optionalPointer() != &original.optional.?) optional_distinct = 3;
+        \\    return struct {
+        \\        optional_value: [optionalPointer().*]u8,
+        \\        optional_same: [optional_same]u8,
+        \\        optional_distinct: [optional_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "optional_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "optional_distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Holder = struct { result: error{Failure}!usize };
+        \\const original: Holder = .{ .result = 5 };
+        \\const alias = original;
+        \\fn errorPointer() *const usize {
+        \\    if (alias.result) |*payload| return payload else |_| unreachable;
+        \\}
+        \\fn originalErrorPointer() *const usize {
+        \\    if (original.result) |*payload| return payload else |_| unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var error_same: usize = 6;
+        \\    if (errorPointer() == errorPointer()) error_same = 5;
+        \\    var error_distinct: usize = 8;
+        \\    if (errorPointer() != originalErrorPointer()) error_distinct = 7;
+        \\    return struct {
+        \\        error_value: [errorPointer().*]u8,
+        \\        error_same: [error_same]u8,
+        \\        error_distinct: [error_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "error_value", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "error_same", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "error_distinct", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
 test "comptime static switch pointer captures" {
     try testCompletion(
         \\const Value = union(enum) { count: usize, other: bool };

@@ -2184,7 +2184,10 @@ pub const Interpreter = struct {
                     else => break :static_pointer,
                 };
                 const is_static = try declaration.isStatic();
-                const pointee = if (target.path.len != 0)
+                const pointee = if (is_static and declaration.isConst())
+                    try self.staticCaptureValue(handle, operand) orelse
+                        return if (allow_invalid) destination.instanceTypeVal(analyser) else null
+                else if (target.path.len != 0)
                     try self.evaluateTypedWithContainer(
                         handle,
                         operand,
