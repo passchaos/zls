@@ -4632,6 +4632,41 @@ test "comptime select accepts structured vectors" {
     });
 }
 
+test "comptime shuffle accepts structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const shuffled = @shuffle(
+        \\        element: {
+        \\            executions += 1;
+        \\            break :element u8;
+        \\        },
+        \\        lhs: {
+        \\            executions = executions * 10 + 2;
+        \\            break :lhs @as(@Vector(2, u8), .{ 1, 2 });
+        \\        },
+        \\        rhs: {
+        \\            executions = executions * 10 + 3;
+        \\            break :rhs @as(@Vector(2, u8), .{ 3, 4 });
+        \\        },
+        \\        mask: {
+        \\            executions = executions * 10 + 4;
+        \\            break :mask @as(@Vector(3, i32), .{ 1, -1, -2 });
+        \\        },
+        \\    );
+        \\    return struct {
+        \\        values: [shuffled[0] + shuffled[1] + shuffled[2]]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[9]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

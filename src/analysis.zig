@@ -8446,27 +8446,18 @@ fn resolveShuffleValue(
     rhs: Type,
     mask: Type,
 ) error{OutOfMemory}!?Type {
-    const lhs_payload = switch (lhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const rhs_payload = switch (rhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const mask_payload = switch (mask.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
+    const mask_type = (try mask.typeOf(analyser)).ipIndex() orelse return null;
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const mask_vector = switch (analyser.ip.indexToKey(mask_payload.type)) {
+    const mask_vector = switch (analyser.ip.indexToKey(mask_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -8478,28 +8469,53 @@ fn resolveShuffleValue(
         .len = mask_vector.len,
         .child = element_type,
     } });
+    const lhs_items = comptime_eval.Value.elements(lhs);
+    const rhs_items = comptime_eval.Value.elements(rhs);
+    const mask_items = comptime_eval.Value.elements(mask);
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
     const mask_values = analyser.aggregateValues(mask);
-    if (mask_values == null) return Type.fromIP(analyser, result_type, null);
+    if (mask_items == null and mask_values == null) return Type.fromIP(analyser, result_type, null);
+    if ((lhs_items != null and lhs_items.?.len != lhs_vector.len) or
+        (rhs_items != null and rhs_items.?.len != rhs_vector.len) or
+        (mask_items != null and mask_items.?.len != mask_vector.len) or
+        (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+        (rhs_values != null and rhs_values.?.len != rhs_vector.len) or
+        (mask_values != null and mask_values.?.len != mask_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, mask_vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const mask_value = analyser.ip.toInt(mask_values.?.at(@intCast(i), analyser.ip), i64) orelse {
+        const mask_index = if (mask_items) |items|
+            items[i].ipIndex() orelse .unknown_unknown
+        else
+            mask_values.?.at(@intCast(i), analyser.ip);
+        const mask_value = analyser.ip.toInt(mask_index, i64) orelse {
             value.* = try analyser.ip.getUnknown(element_type);
             continue;
         };
         if (mask_value >= 0) {
             const index: u64 = @intCast(mask_value);
-            value.* = if (index < lhs_vector.len and lhs_values != null)
-                lhs_values.?.at(@intCast(index), analyser.ip)
+            if (index >= lhs_vector.len) {
+                value.* = try analyser.ip.getUnknown(element_type);
+                continue;
+            }
+            value.* = if (lhs_items) |items|
+                items[@intCast(index)].ipIndex() orelse try analyser.ip.getUnknown(element_type)
+            else if (lhs_values) |source|
+                source.at(@intCast(index), analyser.ip)
             else
                 try analyser.ip.getUnknown(element_type);
         } else {
             const index: u64 = @intCast(~mask_value);
-            value.* = if (index < rhs_vector.len and rhs_values != null)
-                rhs_values.?.at(@intCast(index), analyser.ip)
+            if (index >= rhs_vector.len) {
+                value.* = try analyser.ip.getUnknown(element_type);
+                continue;
+            }
+            value.* = if (rhs_items) |items|
+                items[@intCast(index)].ipIndex() orelse try analyser.ip.getUnknown(element_type)
+            else if (rhs_values) |source|
+                source.at(@intCast(index), analyser.ip)
             else
                 try analyser.ip.getUnknown(element_type);
         }
