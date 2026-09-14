@@ -16146,6 +16146,51 @@ test "comptime static switch pointer captures" {
         .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const value: u8 = 4;
+        \\fn pointer() *const u8 {
+        \\    return switch (value) {
+        \\        0 => unreachable,
+        \\        else => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &value) same = 1;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Holder = struct { value: u8 };
+        \\const original: Holder = .{ .value = 4 };
+        \\const alias = original;
+        \\fn pointer() *const u8 {
+        \\    return switch (alias.value) {
+        \\        0 => unreachable,
+        \\        else => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &alias.value) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer() != &original.value) distinct = 3;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

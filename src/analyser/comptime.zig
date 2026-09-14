@@ -2639,7 +2639,7 @@ pub const Interpreter = struct {
         handle: *Handle,
         condition: Ast.Node.Index,
         payload: Type,
-        access: Value.Reference.Access,
+        access: ?Value.Reference.Access,
     ) Error!?Type {
         const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
         if (!target.declaration.isConst()) return null;
@@ -2655,9 +2655,9 @@ pub const Interpreter = struct {
             .ast_node => |node| node,
             else => return null,
         };
-        const path = try self.analyser.arena.alloc(Value.Reference.Access, target.path.len + 1);
+        const path = try self.analyser.arena.alloc(Value.Reference.Access, target.path.len + @intFromBool(access != null));
         @memcpy(path[0..target.path.len], target.path);
-        path[target.path.len] = access;
+        if (access) |payload_access| path[target.path.len] = payload_access;
         const pointer = try self.analyser.resolveAddressOf(true, payload);
         return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = .{
             .value = payload,
@@ -3062,7 +3062,6 @@ pub const Interpreter = struct {
                             base;
                         break :captured try self.referenceValue(payload_reference) orelse return null;
                     }
-                    if (!has_payload_field) return null;
                     const payload = try self.analyser.resolveSwitchCaptureValue(
                         condition,
                         tree,
@@ -3074,7 +3073,7 @@ pub const Interpreter = struct {
                         handle,
                         switch_node.ast.condition,
                         payload,
-                        .{ .field = active_field.? },
+                        if (has_payload_field) .{ .field = active_field.? } else null,
                     ) orelse return null;
                 } else try self.analyser.resolveSwitchCaptureValue(condition, tree, switch_node, switch_case, false) orelse return null;
                 try self.bind(handle, name_token, captured);
