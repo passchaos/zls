@@ -1997,7 +1997,7 @@ pub const Interpreter = struct {
             .field_access => {
                 const base, const field_token = handle.tree.nodeData(node).node_and_token;
                 const field_name = offsets.identifierTokenToNameSlice(&handle.tree, field_token);
-                const value = if (std.mem.eql(u8, field_name, "ptr"))
+                const value = if (std.mem.eql(u8, field_name, "ptr") or std.mem.eql(u8, field_name, "len"))
                     try self.staticSequenceValue(handle, base) orelse try self.eval(handle, base) orelse return null
                 else
                     try self.eval(handle, base) orelse return null;

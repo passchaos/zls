@@ -15942,6 +15942,75 @@ test "comptime sentinel element boundaries reject invalid indices" {
     , &.{.{ .label = "same", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime nonzero sentinel fixed array boundary" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    var value: usize = values[3];
+        \\    value += 2;
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[11]u8" }});
+}
+
+test "comptime nonzero sentinel dynamic array boundary" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\fn Select() type {
+        \\    var value: usize = values[values.len];
+        \\    value += 2;
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[11]u8" }});
+}
+
+test "comptime nonzero sentinel dynamic slice boundary" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\fn Select() type {
+        \\    var value: usize = slice[slice.len];
+        \\    value += 2;
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[11]u8" }});
+}
+
+test "comptime global sentinel boundary pointer identity" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (&slice[slice.len] == &values[values.len]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[1]u8" }});
+}
+
+test "comptime global sentinel boundary pointer distance" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const distance = &slice[slice.len] - &values[0];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[3]u8" }});
+}
+
 test "comptime aggregate slices preserve mixed pointer offsets" {
     try testCompletion(
         \\const values = [_]usize{ 3, 5, 7 };
