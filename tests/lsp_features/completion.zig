@@ -15778,6 +15778,42 @@ test "comptime aggregate pointer slices preserve origin" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[2]u8" }});
+
+    try testCompletion(
+        \\const values = [_:0]usize{ 3, 5, 7 };
+        \\const pointer = &values;
+        \\const range = pointer[1..3];
+        \\fn Select() type {
+        \\    var ptr_same: usize = 2;
+        \\    if (&range.ptr[0] == &values[1]) ptr_same = 1;
+        \\    var element_same: usize = 4;
+        \\    if (&range[1] == &values[2]) element_same = 3;
+        \\    return struct { ptr_same: [ptr_same]u8, element_same: [element_same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "ptr_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "element_same", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const values = [_:0]usize{ 3, 5, 7 };
+        \\const pointer = &values;
+        \\const range = pointer[1..3 :0];
+        \\fn Select() type {
+        \\    var ptr_same: usize = 2;
+        \\    if (&range.ptr[0] == &values[1]) ptr_same = 1;
+        \\    var element_same: usize = 4;
+        \\    if (&range[1] == &values[2]) element_same = 3;
+        \\    return struct { ptr_same: [ptr_same]u8, element_same: [element_same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "ptr_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "element_same", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime local tuple pointers preserve field identity" {
