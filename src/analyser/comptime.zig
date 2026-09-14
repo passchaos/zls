@@ -2586,6 +2586,23 @@ pub const Interpreter = struct {
             return result;
         }
         const tree = &handle.tree;
+        if (ast.isBuiltinCall(tree, node) and
+            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@field"))
+        {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const params = tree.builtinCallParams(&buffer, node).?;
+            if (params.len != 2) return null;
+            const parent = try self.aggregateReference(handle, params[0]) orelse return null;
+            const current = try self.readReference(parent) orelse return null;
+            const name_value = try self.eval(handle, params[1]) orelse return null;
+            if (name_value.data != .string_value) return null;
+            const field_name = name_value.data.string_value.bytes;
+            if (try self.analyser.resolveComptimeFieldValue(current, field_name) == null) return null;
+            return self.extendReference(
+                parent,
+                try self.aggregateFieldAccess(current, field_name),
+            );
+        }
         switch (tree.nodeTag(node)) {
             .array_access => {
                 const base, const index_node = tree.nodeData(node).node_and_node;

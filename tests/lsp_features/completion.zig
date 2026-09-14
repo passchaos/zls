@@ -15692,6 +15692,48 @@ test "comptime pointer comparisons preserve address identity" {
     });
 }
 
+test "comptime local tuple pointers preserve field identity" {
+    try testCompletion(
+        \\fn fieldName(evaluations: *usize) []const u8 {
+        \\    evaluations.* += 1;
+        \\    return "0";
+        \\}
+        \\const Tuple = struct { usize, usize };
+        \\fn selectTuple(tuple: *Tuple, evaluations: *usize) *Tuple {
+        \\    evaluations.* += 1;
+        \\    return tuple;
+        \\}
+        \\fn Select() type {
+        \\    var tuple: Tuple = .{ 4, 5 };
+        \\    var base_evaluations: usize = 0;
+        \\    var name_evaluations: usize = 0;
+        \\    const pointer = &@field(
+        \\        selectTuple(&tuple, &base_evaluations).*,
+        \\        fieldName(&name_evaluations),
+        \\    );
+        \\    var same: usize = 2;
+        \\    if (pointer == &tuple[0] and pointer == &tuple.@"0") same = 1;
+        \\    pointer.* += 2;
+        \\    const value = tuple[0];
+        \\    const base_count = base_evaluations;
+        \\    const name_count = name_evaluations;
+        \\    return struct {
+        \\        value: [value]u8,
+        \\        same: [same]u8,
+        \\        base_evaluations: [base_count]u8,
+        \\        name_evaluations: [name_count]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "base_evaluations", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "name_evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime pointer comparisons preserve wrapped identity" {
     try testCompletion(
         \\const values = [_]usize{ 4, 4 };
