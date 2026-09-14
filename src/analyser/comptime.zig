@@ -301,10 +301,12 @@ pub const Value = struct {
             },
             .pointee => |lhs_pointee| switch (rhs.data.comptime_value.data) {
                 .pointee => |rhs_pointee| lhs_pointee.eql(rhs_pointee),
+                .sequence => |rhs_sequence| sequencePointeeEql(rhs_sequence, lhs_pointee),
                 else => null,
             },
             .sequence => |lhs_sequence| switch (rhs.data.comptime_value.data) {
                 .sequence => |rhs_sequence| lhs_sequence.sameAddress(rhs_sequence, analyser),
+                .pointee => |rhs_pointee| sequencePointeeEql(lhs_sequence, rhs_pointee),
                 else => null,
             },
             else => null,
@@ -418,8 +420,35 @@ pub const Value = struct {
                     pathOffsetDifference(lhs_pointee.path, rhs_pointee.path)
                 else
                     null,
+                .sequence => |rhs_sequence| if (sequencePointeeIndex(rhs_sequence, lhs_pointee)) |lhs_index|
+                    std.math.sub(usize, lhs_index, rhs_sequence.offset) catch null
+                else
+                    null,
                 else => null,
             },
+            .sequence => |lhs_sequence| switch (rhs.data.comptime_value.data) {
+                .pointee => |rhs_pointee| if (sequencePointeeIndex(lhs_sequence, rhs_pointee)) |rhs_index|
+                    std.math.sub(usize, lhs_sequence.offset, rhs_index) catch null
+                else
+                    null,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn sequencePointeeEql(sequence_value: Sequence, pointee: Pointee) ?bool {
+        const index = sequencePointeeIndex(sequence_value, pointee) orelse return null;
+        return sequence_value.offset == index;
+    }
+
+    fn sequencePointeeIndex(sequence_value: Sequence, pointee: Pointee) ?usize {
+        const origin = sequence_value.origin orelse return null;
+        if (!origin.sameRoot(pointee)) return null;
+        if (pointee.path.len != origin.path.len + 1 or
+            !pathEql(origin.path, pointee.path[0..origin.path.len])) return null;
+        return switch (pointee.path[origin.path.len]) {
+            .index => |index| index,
             else => null,
         };
     }
@@ -1839,8 +1868,14 @@ pub const Interpreter = struct {
             .bit_or,
             => |tag| {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
-                const lhs_value = try self.eval(handle, lhs) orelse return null;
-                const rhs_value = try self.eval(handle, rhs) orelse return null;
+                const lhs_value = if (tag == .add or tag == .sub)
+                    try self.evalPreservingPointerIdentity(handle, lhs) orelse return null
+                else
+                    try self.eval(handle, lhs) orelse return null;
+                const rhs_value = if (tag == .add or tag == .sub)
+                    try self.evalPreservingPointerIdentity(handle, rhs) orelse return null
+                else
+                    try self.eval(handle, rhs) orelse return null;
                 const options = try self.analyser.resolveComptimeBinaryOptions(
                     &handle.tree,
                     lhs,
@@ -1858,8 +1893,8 @@ pub const Interpreter = struct {
             .greater_or_equal,
             => |tag| {
                 const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
-                const lhs_value = try self.eval(handle, lhs) orelse return null;
-                const rhs_value = try self.eval(handle, rhs) orelse return null;
+                const lhs_value = try self.evalPreservingPointerIdentity(handle, lhs) orelse return null;
+                const rhs_value = try self.evalPreservingPointerIdentity(handle, rhs) orelse return null;
                 return self.analyser.resolveComptimeComparisonValue(tag, lhs_value, rhs_value) orelse
                     self.analyser.resolveTypeOfNode(.of(node, handle));
             },
@@ -2305,6 +2340,18 @@ pub const Interpreter = struct {
             else => {},
         }
         return self.analyser.resolveTypeOfNode(.of(node, handle));
+    }
+
+    fn evalPreservingPointerIdentity(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?Type {
+        const value = try self.eval(handle, node) orelse return null;
+        if (Value.hasPointerIdentity(value, 0) or value.pointerSize(self.analyser) == null) return value;
+        const unwrapped = unwrapGroupedSource(&handle.tree, node);
+        if (handle.tree.nodeTag(unwrapped) != .identifier) return value;
+        return try self.staticCaptureValue(handle, unwrapped) orelse value;
     }
 
     fn evalTypedSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?EvaluatedSource {
