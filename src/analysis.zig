@@ -9072,7 +9072,7 @@ fn resolveVectorMinMaxValue(
     tag: std.zig.BuiltinFn.Tag,
     operands: []const Type,
     result_type: InternPool.Index,
-) error{OutOfMemory}!?Type {
+) Error!?Type {
     const result_vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |vector| vector,
         else => return null,
@@ -9094,21 +9094,21 @@ fn resolveVectorMinMaxValue(
         var has_unknown = false;
         var has_undefined = false;
         for (operands) |operand| {
-            const payload = switch (operand.data) {
-                .ip_index => |payload| payload,
-                else => return null,
-            };
-            const vector = switch (analyser.ip.indexToKey(payload.type)) {
+            const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+            const vector = switch (analyser.ip.indexToKey(operand_type)) {
                 .vector_type => |vector| vector,
                 else => return null,
             };
             if (vector.len != result_vector.len) return null;
-            const values = analyser.aggregateValues(operand) orelse {
+            const values = try analyser.comptimeArrayElements(operand) orelse {
                 has_unknown = true;
                 continue;
             };
             if (values.len != vector.len) return null;
-            const candidate_index = values.at(@intCast(i), analyser.ip);
+            const candidate_index = values[i].ipIndex() orelse {
+                has_unknown = true;
+                continue;
+            };
             if (analyser.ip.isUndefined(candidate_index)) {
                 has_undefined = true;
                 continue;
@@ -9117,7 +9117,7 @@ fn resolveVectorMinMaxValue(
                 has_unknown = true;
                 continue;
             }
-            const candidate = Type.fromIP(analyser, vector.child, candidate_index);
+            const candidate = values[i];
             if (selected == null) {
                 selected = candidate;
                 continue;
@@ -9169,7 +9169,7 @@ pub fn resolveComptimeMinMaxValue(
     analyser: *Analyser,
     operands: []const Type,
     kind: ComptimeMinMaxKind,
-) error{OutOfMemory}!?Type {
+) Error!?Type {
     if (operands.len < 2) return null;
 
     const tag: std.zig.BuiltinFn.Tag = switch (kind) {

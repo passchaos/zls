@@ -4667,6 +4667,51 @@ test "comptime shuffle accepts structured vectors" {
     });
 }
 
+test "comptime min max accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const a = @as(@Vector(2, i8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ 4, -2 };
+        \\    });
+        \\    const b = @as(@Vector(2, i8), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ 3, 7 };
+        \\    });
+        \\    const c = @as(@Vector(2, i8), operand: {
+        \\        executions = executions * 10 + 3;
+        \\        break :operand .{ 5, 1 };
+        \\    });
+        \\    const low = @as(@Vector(2, f32), operand: {
+        \\        executions = executions * 10 + 4;
+        \\        break :operand .{ 0.0, 2.0 };
+        \\    });
+        \\    const high = @as(@Vector(2, f32), operand: {
+        \\        executions = executions * 10 + 5;
+        \\        break :operand .{ -0.0, 3.0 };
+        \\    });
+        \\    const minimum = @min(a, b, c);
+        \\    const maximum = @max(a, b, c);
+        \\    const min_float = @min(low, high);
+        \\    const max_float = @max(low, high);
+        \\    return struct {
+        \\        integers: [if (minimum[0] == 3 and minimum[1] == -2 and
+        \\            maximum[0] == 5 and maximum[1] == 7) 1 else 99]u8,
+        \\        floats: [if (min_float[0] == -0.0 and min_float[1] == 2.0 and
+        \\            max_float[0] == 0.0 and max_float[1] == 3.0) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "integers", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "floats", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12345]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
