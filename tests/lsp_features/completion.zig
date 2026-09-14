@@ -4525,6 +4525,42 @@ test "comptime shifts accept structured vectors" {
     });
 }
 
+test "comptime bit builtins accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const values = @as(@Vector(2, u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ 0b00110000, 1 };
+        \\    });
+        \\    const signed = @as(@Vector(2, i8), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ -16, 1 };
+        \\    });
+        \\    const words = @as(@Vector(2, u16), operand: {
+        \\        executions = executions * 10 + 3;
+        \\        break :operand .{ 0x1234, 0xabcd };
+        \\    });
+        \\    const leading = @clz(values);
+        \\    const trailing = @ctz(values);
+        \\    const population = @popCount(signed);
+        \\    const reversed = @bitReverse(values);
+        \\    const swapped = @byteSwap(words);
+        \\    return struct {
+        \\        values: [if (leading[0] == 2 and trailing[1] == 0 and
+        \\            population[0] == 4 and reversed[1] == 128 and
+        \\            swapped[0] == 0x3412) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[123]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

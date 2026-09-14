@@ -9991,11 +9991,8 @@ fn resolveVectorBitCountValue(
     tag: std.zig.BuiltinFn.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -10011,13 +10008,19 @@ fn resolveVectorBitCountValue(
         .len = vector.len,
         .child = result_child,
     } });
-    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, result_type, null);
-    if (source_values.len != vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const source_values = analyser.aggregateValues(operand);
+    if (source_items == null and source_values == null) return Type.fromIP(analyser, result_type, null);
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const element = if (source_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, vector.child, source_values.?.at(@intCast(i), analyser.ip));
         const resolved = try analyser.resolveBitCountValue(tag, element);
         value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(result_child) else try analyser.ip.getUnknown(result_child);
     }
@@ -10036,11 +10039,8 @@ pub fn resolveComptimeBitCountValue(
         .ctz => .ctz,
         .pop_count => .pop_count,
     };
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(operand_type) == .vector) {
         return analyser.resolveVectorBitCountValue(tag, operand);
     }
     return analyser.resolveBitCountValue(tag, operand);
@@ -10121,28 +10121,31 @@ fn resolveVectorBitPermutationValue(
     tag: std.zig.BuiltinFn.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (analyser.ip.zigTypeTag(vector.child) != .int) return null;
     const int_info = analyser.ip.intInfo(vector.child, builtin.target);
     if (tag == .byte_swap and int_info.bits % 8 != 0) return null;
-    const source_values = analyser.aggregateValues(operand) orelse return Type.fromIP(analyser, payload.type, null);
-    if (source_values.len != vector.len) return null;
+    const source_items = comptime_eval.Value.elements(operand);
+    const source_values = analyser.aggregateValues(operand);
+    if (source_items == null and source_values == null) return Type.fromIP(analyser, operand_type, null);
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const element = Type.fromIP(analyser, vector.child, source_values.at(@intCast(i), analyser.ip));
+        const element = if (source_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, vector.child, source_values.?.at(@intCast(i), analyser.ip));
         const resolved = try analyser.resolveBitPermutationValue(tag, element);
         value.* = if (resolved) |result| result.ipIndex() orelse try analyser.ip.getUnknown(vector.child) else try analyser.ip.getUnknown(vector.child);
     }
-    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+    return analyser.aggregateValue(Type.fromIP(analyser, operand_type, null), values);
 }
 
 pub const ComptimeBitPermutationKind = enum { bit_reverse, byte_swap };
@@ -10156,11 +10159,8 @@ pub fn resolveComptimeBitPermutationValue(
         .bit_reverse => .bit_reverse,
         .byte_swap => .byte_swap,
     };
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    if (analyser.ip.zigTypeTag(payload.type) == .vector) {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(operand_type) == .vector) {
         return analyser.resolveVectorBitPermutationValue(tag, operand);
     }
     return analyser.resolveBitPermutationValue(tag, operand);
