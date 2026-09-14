@@ -2536,25 +2536,31 @@ fn resolveVectorCastValue(
     analyser: *Analyser,
     tag: std.zig.BuiltinFn.Tag,
     dest_type: InternPool.Index,
-    source: InternPool.Index,
+    source: Type,
 ) error{OutOfMemory}!?InternPool.Index {
     const dest_vector = switch (analyser.ip.indexToKey(dest_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const source_type = analyser.ip.typeOf(source);
+    const source_type = (try source.typeOf(analyser)).ipIndex() orelse return null;
     const source_vector = switch (analyser.ip.indexToKey(source_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (dest_vector.len != source_vector.len) return null;
-    const source_values = analyser.aggregateValues(Type.fromIP(analyser, source_type, source)) orelse return null;
-    if (source_values.len != source_vector.len) return null;
+    const source_items = comptime_eval.Value.elements(source);
+    const source_values = analyser.aggregateValues(source);
+    if (source_items == null and source_values == null) return null;
+    if ((source_items != null and source_items.?.len != source_vector.len) or
+        (source_values != null and source_values.?.len != source_vector.len)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, dest_vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        const source_value = source_values.at(@intCast(i), analyser.ip);
+        const source_value = if (source_items) |items|
+            items[i].ipIndex() orelse try analyser.ip.getUnknown(source_vector.child)
+        else
+            source_values.?.at(@intCast(i), analyser.ip);
         value.* = switch (tag) {
             .int_from_float => try analyser.intFromFloatValue(dest_vector.child, source_value),
             .float_from_int => try analyser.floatFromIntValue(dest_vector.child, source_value),
@@ -3809,7 +3815,11 @@ fn resolveCoercedIPValueFromIndex(
     const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
     if (cast) |tag| {
         if (analyser.ip.zigTypeTag(ip_ty) == .vector and source_tag == .vector) {
-            return try analyser.resolveVectorCastValue(tag, ip_ty, ip_index);
+            return try analyser.resolveVectorCastValue(
+                tag,
+                ip_ty,
+                Type.fromIP(analyser, analyser.ip.typeOf(ip_index), ip_index),
+            );
         }
         if (tag == .int_from_float) {
             if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
@@ -3958,10 +3968,7 @@ pub fn resolveComptimeCastValue(
 ) error{OutOfMemory}!?Type {
     if (!destination.is_type_val) return null;
     const destination_type = destination.ipIndex() orelse return null;
-    const source_payload = switch (source.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
+    const source_type = (try source.typeOf(analyser)).ipIndex() orelse return null;
     const tag: std.zig.BuiltinFn.Tag = switch (kind) {
         .int_cast => .int_cast,
         .truncate => .truncate,
@@ -3969,6 +3976,17 @@ pub fn resolveComptimeCastValue(
         .int_from_float => .int_from_float,
         .float_from_int => .float_from_int,
         .float_cast => .float_cast,
+    };
+    if (analyser.ip.zigTypeTag(destination_type) == .vector and
+        analyser.ip.zigTypeTag(source_type) == .vector and
+        comptime_eval.Value.elements(source) != null)
+    {
+        const value = try analyser.resolveVectorCastValue(tag, destination_type, source) orelse return null;
+        return Type.fromIP(analyser, destination_type, value);
+    }
+    const source_payload = switch (source.data) {
+        .ip_index => |payload| payload,
+        else => return null,
     };
     const source_index = source_payload.index orelse {
         if (!analyser.isValidRuntimeCast(destination_type, source_payload.type, kind)) return null;

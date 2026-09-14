@@ -4347,6 +4347,48 @@ test "comptime intFromBool accepts structured vectors" {
     });
 }
 
+test "comptime numeric casts accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const floats = @as(@Vector(2, f32), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ -2.75, 4.5 };
+        \\    });
+        \\    const integers = @as(@Vector(2, i16), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ -3, 5 };
+        \\    });
+        \\    const wide_floats = @as(@Vector(2, f32), operand: {
+        \\        executions = executions * 10 + 3;
+        \\        break :operand .{ 2.5, 4.5 };
+        \\    });
+        \\    const wide_ints = @as(@Vector(2, u16), operand: {
+        \\        executions = executions * 10 + 4;
+        \\        break :operand .{ 0x104, 0x107 };
+        \\    });
+        \\    const ints: @Vector(2, i8) = @intFromFloat(floats);
+        \\    const converted: @Vector(2, f32) = @floatFromInt(integers);
+        \\    const narrowed: @Vector(2, f16) = @floatCast(wide_floats);
+        \\    const casted: @Vector(2, u8) = @intCast(wide_ints - @as(@Vector(2, u16), .{ 256, 256 }));
+        \\    const truncated: @Vector(2, u8) = @truncate(wide_ints);
+        \\    return struct {
+        \\        values: [if (ints[0] == -2 and ints[1] == 4 and
+        \\            converted[0] == -3 and converted[1] == 5 and
+        \\            narrowed[0] == 2.5 and narrowed[1] == 4.5 and
+        \\            casted[0] == 4 and casted[1] == 7 and
+        \\            truncated[0] == 4 and truncated[1] == 7) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime unary float builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {
