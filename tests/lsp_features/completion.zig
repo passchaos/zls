@@ -15371,6 +15371,13 @@ test "comptime pointer comparisons preserve address identity" {
         \\    if (pointer(false) != pointer(true)) distinct = 1;
         \\    var shifted_distinct: usize = 6;
         \\    if (pointer(false) + 1 != pointer(true) + 1) shifted_distinct = 5;
+        \\    var zero_same: usize = 8;
+        \\    var unchanged = pointer(false);
+        \\    unchanged += 0;
+        \\    unchanged -= 0;
+        \\    if (pointer(false) + 0 == pointer(false) and
+        \\        pointer(false) - 0 == pointer(false) and
+        \\        unchanged == pointer(false)) zero_same = 7;
         \\    const window: []const usize = (pointer(false) + 1)[0..1];
         \\    var slice_same: usize = 8;
         \\    if (window.ptr == pointer(false) + 1) slice_same = 7;
@@ -15380,6 +15387,7 @@ test "comptime pointer comparisons preserve address identity" {
         \\        same: [same]u8,
         \\        distinct: [distinct]u8,
         \\        shifted_distinct: [shifted_distinct]u8,
+        \\        zero_same: [zero_same]u8,
         \\        slice_same: [slice_same]u8,
         \\        slice_distinct: [slice_distinct]u8,
         \\    };
@@ -15390,6 +15398,7 @@ test "comptime pointer comparisons preserve address identity" {
         .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "distinct", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "shifted_distinct", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "zero_same", .kind = .Field, .detail = "[7]u8" },
         .{ .label = "slice_same", .kind = .Field, .detail = "[7]u8" },
         .{ .label = "slice_distinct", .kind = .Field, .detail = "[9]u8" },
     });

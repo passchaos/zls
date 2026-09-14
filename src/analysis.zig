@@ -6359,10 +6359,11 @@ fn resolveComptimePointerOffset(
     else
         pointer.runtimeType(analyser);
     if (pointer_type.pointerSize(analyser) != .many) return null;
-    const sequence = try comptime_eval.Value.sequenceAlloc(analyser, pointer) orelse return null;
     const offset_index = offset.ipIndex() orelse return null;
     if (analyser.ip.isUndefined(offset_index) or analyser.ip.isUnknown(offset_index)) return null;
     const amount = analyser.ip.toInt(offset_index, usize) orelse return null;
+    if (amount == 0) return pointer;
+    const sequence = try comptime_eval.Value.sequenceAlloc(analyser, pointer) orelse return null;
     const new_offset = if (subtract)
         std.math.sub(usize, sequence.offset, amount) catch return null
     else
