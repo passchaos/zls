@@ -9102,25 +9102,22 @@ fn resolveComplementaryComparisonValue(
     tag: Ast.Node.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
     const result = switch (tag) {
         .equal_equal => false,
         .bang_equal => true,
         else => return null,
     };
-    if (payload.index) |index| {
+    if (operand.ipIndex()) |index| {
         if (analyser.ip.isUndefined(index)) return null;
     }
 
-    const type_tag = analyser.ip.zigTypeTag(payload.type);
-    if (type_tag == .bool or analyser.fixedWidthIntegerBounds(payload.type) != null) {
+    const type_tag = analyser.ip.zigTypeTag(operand_type);
+    if (type_tag == .bool or analyser.fixedWidthIntegerBounds(operand_type) != null) {
         return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
     }
 
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -9130,15 +9127,23 @@ fn resolveComplementaryComparisonValue(
         .len = vector.len,
         .child = .bool_type,
     } });
+    const source_items = comptime_eval.Value.elements(operand);
     const source_values = analyser.aggregateValues(operand);
-    if (source_values) |values| if (values.len != vector.len) return null;
+    if ((source_items != null and source_items.?.len != vector.len) or
+        (source_values != null and source_values.?.len != vector.len)) return null;
     const known = if (result) InternPool.Index.bool_true else .bool_false;
     const unknown = try analyser.ip.getUnknown(.bool_type);
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     for (values, 0..) |*value, i| {
-        value.* = if (source_values) |source|
-            if (analyser.ip.isUndefined(source.at(@intCast(i), analyser.ip))) unknown else known
+        const source = if (source_items) |items|
+            items[i].ipIndex()
+        else if (source_values) |items|
+            items.at(@intCast(i), analyser.ip)
+        else
+            null;
+        value.* = if (source) |index|
+            if (analyser.ip.isUndefined(index)) unknown else known
         else
             known;
     }
