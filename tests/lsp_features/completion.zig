@@ -13861,6 +13861,47 @@ test "zero-parameter type function comptime evaluation" {
     });
 
     try testCompletion(
+        \\fn pointer(comptime seed: usize, comptime index: usize) *const usize {
+        \\    const values = [_]usize{ seed, 3, 5 };
+        \\    return &values[index];
+        \\}
+        \\fn Select() type {
+        \\    const distance = pointer(2, 2) - pointer(2, 0);
+        \\    var same: usize = 2;
+        \\    if (pointer(2, 0) == pointer(2, 0)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(2, 1) != pointer(4, 1)) distinct = 3;
+        \\    return struct { distance: [distance]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "distance", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn pointer(comptime marker: usize) *const usize {
+        \\    const value = struct { marker: usize, payload: usize }{ .marker = marker, .payload = 4 };
+        \\    return &value.payload;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(1) == pointer(1)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(1) != pointer(2)) distinct = 3;
+        \\    return struct { value: [pointer(1).*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
         \\const value: u32 = 4;
         \\fn Select() type {
         \\    var state: usize = 0;

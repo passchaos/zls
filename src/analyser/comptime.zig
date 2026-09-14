@@ -60,6 +60,7 @@ pub const Value = struct {
         container_type: ?Type,
         path: []const Reference.Access,
         is_static: bool,
+        root_value: ?Type = null,
         temporary_value: ?Type = null,
 
         fn hash(self: Pointee, hasher: anytype) void {
@@ -70,7 +71,7 @@ pub const Value = struct {
                 return;
             }
             std.hash.autoHash(hasher, self.is_static);
-            if (!self.is_static) self.value.hashWithHasher(hasher);
+            if (!self.is_static) (self.root_value orelse self.value).hashWithHasher(hasher);
             std.hash.autoHash(hasher, self.source.node);
             hasher.update(self.source.handle.uri.raw);
             std.hash.autoHash(hasher, self.container_type != null);
@@ -88,7 +89,7 @@ pub const Value = struct {
             if (!self.source.eql(other.source) or
                 self.is_static != other.is_static or
                 (self.container_type == null) != (other.container_type == null)) return false;
-            if (!self.is_static and !self.value.eql(other.value)) return false;
+            if (!self.is_static and !(self.root_value orelse self.value).eql(other.root_value orelse other.value)) return false;
             if (self.container_type) |container_type| {
                 if (!container_type.eql(other.container_type.?)) return false;
             }
@@ -1128,6 +1129,10 @@ pub const Interpreter = struct {
             .container_type = target.declaration.container_type,
             .path = target.path,
             .is_static = is_static,
+            .root_value = if (is_static) null else self.bindings.get(.{
+                .handle = target.declaration.handle,
+                .token = target.declaration.nameToken(),
+            }),
         };
     }
 
@@ -2915,6 +2920,10 @@ pub const Interpreter = struct {
                     .container_type = declaration.container_type,
                     .path = target.path,
                     .is_static = is_static,
+                    .root_value = if (is_static) null else self.bindings.get(.{
+                        .handle = declaration.handle,
+                        .token = declaration.nameToken(),
+                    }),
                 } }));
             }
             if (tree.nodeTag(literal_node) == .address_of) aggregate_pointer: {
@@ -3259,6 +3268,8 @@ pub const Interpreter = struct {
                 .container_type = origin.container_type,
                 .path = path,
                 .is_static = origin.is_static,
+                .root_value = origin.root_value,
+                .temporary_value = origin.temporary_value,
             } }));
         }
         return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .sequence = .{
