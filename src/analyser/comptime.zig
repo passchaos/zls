@@ -731,6 +731,11 @@ pub const Interpreter = struct {
                 },
             };
         }
+        if (tree.nodeTag(unwrapped) == .@"switch" or tree.nodeTag(unwrapped) == .switch_comma) {
+            if (tree.switchFull(unwrapped).label_token != null) return null;
+            const target = try self.switchTarget(handle, unwrapped) orelse return null;
+            return self.captureOperand(handle, target, depth + 1);
+        }
         if (tree.nodeTag(unwrapped) == .array_access) {
             const base, const index_node = tree.nodeData(unwrapped).node_and_node;
             const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
