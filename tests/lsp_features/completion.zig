@@ -16647,6 +16647,64 @@ test "comptime static switch pointer captures" {
         .{ .label = "lhs_evaluations", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "rhs_evaluations", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const first: Value = .{ .b = 4 };
+        \\const second: Value = .{ .b = 2 };
+        \\fn condition(evaluations: *usize) bool {
+        \\    evaluations.* += 1;
+        \\    return true;
+        \\}
+        \\fn pointer(evaluations: *usize) *const usize {
+        \\    return switch (if (condition(evaluations)) first else second) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const captured = pointer(&evaluations);
+        \\    var same: usize = 2;
+        \\    if (captured == &first.b) same = 1;
+        \\    return struct { value: [captured.*]u8, same: [same]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const first: Value = .{ .b = 4 };
+        \\const second: Value = .{ .b = 2 };
+        \\fn condition(evaluations: *usize) bool {
+        \\    evaluations.* += 1;
+        \\    return false;
+        \\}
+        \\fn pointer(evaluations: *usize) *const usize {
+        \\    return switch (if (condition(evaluations)) first else second) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const captured = pointer(&evaluations);
+        \\    var same: usize = 4;
+        \\    if (captured == &second.b) same = 3;
+        \\    return struct { value: [captured.*]u8, same: [same]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

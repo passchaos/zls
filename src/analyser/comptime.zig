@@ -714,6 +714,15 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) == .if_simple or tree.nodeTag(unwrapped) == .@"if") {
+            return switch (try self.ifTarget(handle, unwrapped) orelse return null) {
+                .node => |target| self.captureOperand(handle, target, depth + 1),
+                .none => .{
+                    .value = Type.fromIP(self.analyser, .void_type, .void_value),
+                    .target = null,
+                },
+            };
+        }
         if (tree.nodeTag(unwrapped) == .array_access) {
             const base, const index_node = tree.nodeData(unwrapped).node_and_node;
             const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
