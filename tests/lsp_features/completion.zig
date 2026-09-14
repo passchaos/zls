@@ -15902,6 +15902,31 @@ test "comptime static for pointer captures" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "count", .kind = .Field, .detail = "[0]u8" }});
+
+    try testCompletion(
+        \\const Holder = struct { values: [2]usize };
+        \\const original: Holder = .{ .values = .{ 2, 4 } };
+        \\const alias = original;
+        \\fn pointer() *const usize {
+        \\    for (&alias.values) |*item| {
+        \\        if (item.* == 4) return item;
+        \\    }
+        \\    unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &alias.values[1]) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer() != &original.values[1]) distinct = 3;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime pointer casts preserve address identity" {
