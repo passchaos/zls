@@ -6967,31 +6967,29 @@ fn resolveVectorDivisionValue(
     lhs: Type,
     rhs: Type,
 ) error{OutOfMemory}!?Type {
-    const lhs_payload = switch (lhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const rhs_payload = switch (rhs.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    const lhs_vector = switch (analyser.ip.indexToKey(lhs_payload.type)) {
+    const lhs_type = (try lhs.typeOf(analyser)).ipIndex() orelse return null;
+    const rhs_type = (try rhs.typeOf(analyser)).ipIndex() orelse return null;
+    const lhs_vector = switch (analyser.ip.indexToKey(lhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
-    const rhs_vector = switch (analyser.ip.indexToKey(rhs_payload.type)) {
+    const rhs_vector = switch (analyser.ip.indexToKey(rhs_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
     if (lhs_vector.len != rhs_vector.len) return null;
-    const result_type = try analyser.resolvePeerTypesIP(lhs_payload.type, rhs_payload.type) orelse return null;
+    const result_type = try analyser.resolvePeerTypesIP(lhs_type, rhs_type) orelse return null;
     const result_vector = switch (analyser.ip.indexToKey(result_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
+    const lhs_items = comptime_eval.Value.elements(lhs);
+    const rhs_items = comptime_eval.Value.elements(rhs);
     const lhs_values = analyser.aggregateValues(lhs);
     const rhs_values = analyser.aggregateValues(rhs);
-    if ((lhs_values != null and lhs_values.?.len != lhs_vector.len) or
+    if ((lhs_items != null and lhs_items.?.len != lhs_vector.len) or
+        (rhs_items != null and rhs_items.?.len != rhs_vector.len) or
+        (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
     const values = try analyser.gpa.alloc(InternPool.Index, result_vector.len);
     defer analyser.gpa.free(values);
@@ -6999,16 +6997,14 @@ fn resolveVectorDivisionValue(
     const unknown_rhs = try analyser.ip.getUnknown(rhs_vector.child);
     for (values, 0..) |*value, i| {
         const index: u32 = @intCast(i);
-        const lhs_element = Type.fromIP(
-            analyser,
-            lhs_vector.child,
-            if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs,
-        );
-        const rhs_element = Type.fromIP(
-            analyser,
-            rhs_vector.child,
-            if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs,
-        );
+        const lhs_element = if (lhs_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, lhs_vector.child, if (lhs_values) |slice| slice.at(index, analyser.ip) else unknown_lhs);
+        const rhs_element = if (rhs_items) |items|
+            items[i]
+        else
+            Type.fromIP(analyser, rhs_vector.child, if (rhs_values) |slice| slice.at(index, analyser.ip) else unknown_rhs);
         const result = try analyser.resolveIntegerDivisionValue(tag, lhs_element, rhs_element) orelse
             try analyser.resolveFloatDivisionValue(tag, lhs_element, rhs_element) orelse
             try analyser.resolveFloatRemainderValue(tag, lhs_element, rhs_element);

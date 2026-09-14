@@ -4459,6 +4459,40 @@ test "comptime fixed width and boolean operators accept structured vectors" {
     });
 }
 
+test "comptime division builtins accept structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const lhs = @as(@Vector(2, i8), values: {
+        \\        executions += 1;
+        \\        break :values .{ 9, -9 };
+        \\    });
+        \\    const rhs = @as(@Vector(2, i8), values: {
+        \\        executions = executions * 10 + 2;
+        \\        break :values .{ 2, 2 };
+        \\    });
+        \\    const truncated = @divTrunc(lhs, rhs);
+        \\    const floored = @divFloor(lhs, rhs);
+        \\    const exact = @divExact(lhs - @as(@Vector(2, i8), .{ 1, -1 }), rhs);
+        \\    const modulo = @mod(lhs, rhs);
+        \\    const remainder = @rem(lhs, rhs);
+        \\    return struct {
+        \\        values: [if (truncated[0] == 4 and truncated[1] == -4 and
+        \\            floored[0] == 4 and floored[1] == -5 and
+        \\            exact[0] == 4 and exact[1] == -4 and
+        \\            modulo[0] == 1 and modulo[1] == 1 and
+        \\            remainder[0] == 1 and remainder[1] == -1) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
