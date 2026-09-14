@@ -15204,6 +15204,51 @@ test "comptime static capture aliases isolate generic containers" {
         .{ .label = "a_original_distinct", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "specialization_distinct", .kind = .Field, .detail = "[5]u8" },
     });
+
+    try testCompletion(
+        \\const Namespace = struct {
+        \\    fn Holder(comptime n: usize) type {
+        \\        return struct {
+        \\            const Value = union(enum) { count: usize };
+        \\            const original: Value = .{ .count = n };
+        \\            const middle = original;
+        \\            const alias = middle;
+        \\            fn pointer() *const usize {
+        \\                return switch (alias) { .count => |*payload| payload };
+        \\            }
+        \\        };
+        \\    }
+        \\};
+        \\fn Select() type {
+        \\    const A = Namespace.Holder(4);
+        \\    const B = Namespace.Holder(5);
+        \\    var alias_same: usize = 2;
+        \\    if (A.pointer() == &A.alias.count) alias_same = 1;
+        \\    var middle_distinct: usize = 4;
+        \\    if (A.pointer() != &A.middle.count) middle_distinct = 3;
+        \\    var original_distinct: usize = 6;
+        \\    if (A.pointer() != &A.original.count) original_distinct = 5;
+        \\    var specialization_distinct: usize = 8;
+        \\    if (A.pointer() != B.pointer()) specialization_distinct = 7;
+        \\    return struct {
+        \\        a_value: [A.pointer().*]u8,
+        \\        b_value: [B.pointer().*]u8,
+        \\        alias_same: [alias_same]u8,
+        \\        middle_distinct: [middle_distinct]u8,
+        \\        original_distinct: [original_distinct]u8,
+        \\        specialization_distinct: [specialization_distinct]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "a_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "b_value", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "alias_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "middle_distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "original_distinct", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "specialization_distinct", .kind = .Field, .detail = "[7]u8" },
+    });
 }
 
 test "comptime static pointers preserve namespace identity" {
