@@ -16011,6 +16011,62 @@ test "comptime global sentinel boundary pointer distance" {
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[3]u8" }});
 }
 
+test "comptime offset sentinel slice boundaries" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const tail: [:9]const usize = values[1..];
+        \\fn Select() type {
+        \\    const index = tail.len;
+        \\    var sentinel = tail[index];
+        \\    sentinel += 2;
+        \\    return struct { sentinel: [sentinel]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "sentinel", .kind = .Field, .detail = "[11]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const tail: [:9]const usize = values[1..];
+        \\fn Select() type {
+        \\    const index = tail.len;
+        \\    var same: usize = 2;
+        \\    if (&tail[index] == &values[values.len]) same = 1;
+        \\    return struct { same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "same", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const tail: [:9]const usize = values[1..];
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const index = tail.len;
+        \\    const distance = &tail[index] - &tail[0];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[3]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const tail: [:9]const usize = values[1..];
+        \\fn Select() type {
+        \\    var state: usize = 0;
+        \\    const index = tail.len;
+        \\    const distance = &tail[index] - &values[0];
+        \\    state += 0;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[4]u8" }});
+}
+
 test "comptime aggregate slices preserve mixed pointer offsets" {
     try testCompletion(
         \\const values = [_]usize{ 3, 5, 7 };
