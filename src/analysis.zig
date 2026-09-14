@@ -8517,6 +8517,44 @@ fn resolveSelectValue(
         (predicate_values != null and predicate_values.?.len != predicate_vector.len) or
         (lhs_values != null and lhs_values.?.len != lhs_vector.len) or
         (rhs_values != null and rhs_values.?.len != rhs_vector.len)) return null;
+    if (predicate_items != null or lhs_items != null or rhs_items != null) {
+        const selected = try analyser.arena.alloc(Type, lhs_vector.len);
+        const unknown = Type.fromIP(analyser, element_type, null);
+        for (selected, 0..) |*value, i| {
+            const index: u32 = @intCast(i);
+            const predicate_value = if (predicate_items) |items|
+                items[i].ipIndex() orelse .unknown_unknown
+            else if (predicate_values) |slice|
+                slice.at(index, analyser.ip)
+            else
+                .unknown_unknown;
+            const lhs_value = if (lhs_items) |items|
+                items[i]
+            else if (lhs_values) |slice|
+                Type.fromIP(analyser, element_type, slice.at(index, analyser.ip))
+            else
+                unknown;
+            const rhs_value = if (rhs_items) |items|
+                items[i]
+            else if (rhs_values) |slice|
+                Type.fromIP(analyser, element_type, slice.at(index, analyser.ip))
+            else
+                unknown;
+            value.* = switch (predicate_value) {
+                .bool_true => lhs_value,
+                .bool_false => rhs_value,
+                else => if (!analyser.ip.isUndefined(predicate_value) and lhs_value.eql(rhs_value))
+                    lhs_value
+                else
+                    unknown,
+            };
+        }
+        return @as(?Type, try comptime_eval.Value.create(
+            analyser,
+            Type.fromIP(analyser, .type_type, result_type),
+            .{ .array = selected },
+        ));
+    }
 
     const values = try analyser.gpa.alloc(InternPool.Index, lhs_vector.len);
     defer analyser.gpa.free(values);

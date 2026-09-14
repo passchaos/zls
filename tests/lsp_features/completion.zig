@@ -4867,6 +4867,50 @@ test "comptime select accepts structured vectors" {
     });
 }
 
+test "comptime select preserves structured pointer vectors" {
+    try testCompletion(
+        \\const values = [_]u8{ 1, 2, 3, 4 };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const lhs = @as(@Vector(2, *const u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ &values[0], &values[1] };
+        \\    });
+        \\    const rhs = @as(@Vector(2, *const u8), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ &values[2], &values[3] };
+        \\    });
+        \\    const selected = @select(
+        \\        element: {
+        \\            executions = executions * 10 + 3;
+        \\            break :element *const u8;
+        \\        },
+        \\        predicate: {
+        \\            executions = executions * 10 + 4;
+        \\            break :predicate @as(@Vector(2, bool), .{ true, false });
+        \\        },
+        \\        lhs,
+        \\        rhs,
+        \\    );
+        \\    return struct {
+        \\        identity_first: [if (selected[0] == lhs[0]) 1 else 99]u8,
+        \\        identity_second: [if (selected[1] == rhs[1]) 1 else 99]u8,
+        \\        value_first: [selected[0].*]u8,
+        \\        value_second: [selected[1].*]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identity_first", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "identity_second", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "value_first", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "value_second", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1234]u8" },
+    });
+}
+
 test "comptime shuffle accepts structured vectors" {
     try testCompletion(
         \\fn Select() type {
