@@ -4231,6 +4231,74 @@ test "comptime interpreter propagates contextual local initializer types" {
     }
 }
 
+test "comptime unary float builtins preserve result locations" {
+    const cases = [_]struct { builtin: []const u8, operand: []const u8, expected: []const u8 }{
+        .{ .builtin = "@sin", .operand = "0", .expected = "0" },
+        .{ .builtin = "@cos", .operand = "0", .expected = "1" },
+        .{ .builtin = "@tan", .operand = "0", .expected = "0" },
+        .{ .builtin = "@exp", .operand = "0", .expected = "1" },
+        .{ .builtin = "@exp2", .operand = "3", .expected = "8" },
+        .{ .builtin = "@log", .operand = "1", .expected = "0" },
+        .{ .builtin = "@log2", .operand = "8", .expected = "3" },
+        .{ .builtin = "@log10", .operand = "100", .expected = "2" },
+        .{ .builtin = "@sqrt", .operand = "81", .expected = "9" },
+        .{ .builtin = "@floor", .operand = "2", .expected = "2" },
+        .{ .builtin = "@ceil", .operand = "2", .expected = "2" },
+        .{ .builtin = "@trunc", .operand = "2", .expected = "2" },
+        .{ .builtin = "@round", .operand = "2", .expected = "2" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\fn Select() type {{
+            \\    var executions: usize = 0;
+            \\    const value: f64 = {s}(@floatFromInt(operand: {{
+            \\        executions += 1;
+            \\        break :operand @as(u32, {s});
+            \\    }}));
+            \\    return struct {{
+            \\        items: [@intFromFloat(value)]u8,
+            \\        executions: [executions]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.builtin, case.operand });
+        defer allocator.free(source);
+        errdefer std.debug.print("unary float result location:\n{s}\n", .{source});
+        const expected_detail = try std.fmt.allocPrint(allocator, "[{s}]u8", .{case.expected});
+        defer allocator.free(expected_detail);
+        try testCompletion(source, &.{
+            .{ .label = "items", .kind = .Field, .detail = expected_detail },
+            .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+        });
+    }
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const optional: ?f64 = @sqrt(@floatFromInt(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(u32, 16);
+        \\    }));
+        \\    const fallible: error{}!f64 = @sqrt(@floatFromInt(operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand @as(u32, 25);
+        \\    }));
+        \\    return struct {
+        \\        optional_items: [@intFromFloat(optional orelse 0)]u8,
+        \\        fallible_items: [@intFromFloat(fallible catch 0)]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional_items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "fallible_items", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {

@@ -2246,50 +2246,11 @@ pub const Interpreter = struct {
                     const mask = try self.eval(handle, params[3]) orelse return null;
                     return self.analyser.resolveComptimeShuffleValue(element_type, lhs, rhs, mask);
                 }
-                if (std.mem.eql(u8, name, "@sin") or
-                    std.mem.eql(u8, name, "@cos") or
-                    std.mem.eql(u8, name, "@tan") or
-                    std.mem.eql(u8, name, "@exp") or
-                    std.mem.eql(u8, name, "@exp2") or
-                    std.mem.eql(u8, name, "@log") or
-                    std.mem.eql(u8, name, "@log2") or
-                    std.mem.eql(u8, name, "@log10") or
-                    std.mem.eql(u8, name, "@sqrt") or
-                    std.mem.eql(u8, name, "@floor") or
-                    std.mem.eql(u8, name, "@ceil") or
-                    std.mem.eql(u8, name, "@trunc") or
-                    std.mem.eql(u8, name, "@round"))
-                {
+                if (floatUnaryKind(name)) |kind| {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 1) return null;
                     const operand = try self.eval(handle, params[0]) orelse return null;
-                    const kind: Analyser.ComptimeFloatUnaryKind = if (std.mem.eql(u8, name, "@sin"))
-                        .sin
-                    else if (std.mem.eql(u8, name, "@cos"))
-                        .cos
-                    else if (std.mem.eql(u8, name, "@tan"))
-                        .tan
-                    else if (std.mem.eql(u8, name, "@exp"))
-                        .exp
-                    else if (std.mem.eql(u8, name, "@exp2"))
-                        .exp2
-                    else if (std.mem.eql(u8, name, "@log"))
-                        .log
-                    else if (std.mem.eql(u8, name, "@log2"))
-                        .log2
-                    else if (std.mem.eql(u8, name, "@log10"))
-                        .log10
-                    else if (std.mem.eql(u8, name, "@sqrt"))
-                        .sqrt
-                    else if (std.mem.eql(u8, name, "@floor"))
-                        .floor
-                    else if (std.mem.eql(u8, name, "@ceil"))
-                        .ceil
-                    else if (std.mem.eql(u8, name, "@trunc"))
-                        .trunc
-                    else
-                        .round;
                     return self.analyser.resolveComptimeFloatUnaryValue(operand, kind);
                 }
                 if (std.mem.eql(u8, name, "@hasField") or std.mem.eql(u8, name, "@hasDecl")) {
@@ -2452,6 +2413,23 @@ pub const Interpreter = struct {
         return self.evalSourceWithType(handle, node, destination);
     }
 
+    fn floatUnaryKind(name: []const u8) ?Analyser.ComptimeFloatUnaryKind {
+        if (std.mem.eql(u8, name, "@sin")) return .sin;
+        if (std.mem.eql(u8, name, "@cos")) return .cos;
+        if (std.mem.eql(u8, name, "@tan")) return .tan;
+        if (std.mem.eql(u8, name, "@exp")) return .exp;
+        if (std.mem.eql(u8, name, "@exp2")) return .exp2;
+        if (std.mem.eql(u8, name, "@log")) return .log;
+        if (std.mem.eql(u8, name, "@log2")) return .log2;
+        if (std.mem.eql(u8, name, "@log10")) return .log10;
+        if (std.mem.eql(u8, name, "@sqrt")) return .sqrt;
+        if (std.mem.eql(u8, name, "@floor")) return .floor;
+        if (std.mem.eql(u8, name, "@ceil")) return .ceil;
+        if (std.mem.eql(u8, name, "@trunc")) return .trunc;
+        if (std.mem.eql(u8, name, "@round")) return .round;
+        return null;
+    }
+
     fn pointerCastValue(
         self: *Interpreter,
         destination: Type,
@@ -2522,6 +2500,18 @@ pub const Interpreter = struct {
         const tree = &handle.tree;
         if (destination) |ty| if (ast.isBuiltinCall(tree, node)) {
             const name = tree.tokenSlice(tree.nodeMainToken(node));
+            if (floatUnaryKind(name)) |float_kind| {
+                if (!self.tick()) return null;
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 1) return null;
+                const result_type = self.payloadResultLocationType(ty);
+                const operand = try self.evalSourceWithType(handle, params[0], result_type) orelse return null;
+                return .{
+                    .value = try self.analyser.resolveComptimeFloatUnaryValue(operand.value, float_kind) orelse return null,
+                    .source_node = null,
+                };
+            }
             const kind: ?Analyser.ComptimeCastKind = if (std.mem.eql(u8, name, "@intCast"))
                 .int_cast
             else if (std.mem.eql(u8, name, "@truncate"))
