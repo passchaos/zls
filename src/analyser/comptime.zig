@@ -2486,7 +2486,8 @@ pub const Interpreter = struct {
     ) Error!?Type {
         const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
         if (!target.declaration.isConst()) return null;
-        if (!try target.declaration.isStatic()) {
+        const is_static = try target.declaration.isStatic();
+        if (!is_static) {
             const key: Analyser.TokenWithHandle = .{
                 .handle = target.declaration.handle,
                 .token = target.declaration.nameToken(),
@@ -2506,7 +2507,7 @@ pub const Interpreter = struct {
             .source = .of(declaration_node, target.declaration.handle),
             .container_type = target.declaration.container_type,
             .path = path,
-            .is_static = true,
+            .is_static = is_static,
         } }));
     }
 

@@ -15609,6 +15609,44 @@ test "comptime static optional payload pointers" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "fallback", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\fn pointer(comptime value: usize) *const usize {
+        \\    const local: ?usize = value;
+        \\    if (local) |*payload| return payload else unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(1) == pointer(1)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(1) != pointer(2)) distinct = 3;
+        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn pointer(comptime value: usize) *const usize {
+        \\    const local: error{Failure}!usize = value;
+        \\    if (local) |*payload| return payload else |_| unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(1) == pointer(1)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(1) != pointer(2)) distinct = 3;
+        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static switch pointer captures" {
