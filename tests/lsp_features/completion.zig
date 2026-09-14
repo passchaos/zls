@@ -2557,6 +2557,49 @@ test "generic function with comptime size builtins" {
     });
 }
 
+test "generic function with comptime packed field offsets" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Ast = packed struct { low: u3, flag: bool, high: T, tail: u1 };
+        \\    const Generated = @Struct(.@"packed", null, &.{ "low", "flag", "high", "tail" },
+        \\        &.{ u3, bool, T, u1 }, &.{ .{}, .{}, .{}, .{} });
+        \\    return if (@bitOffsetOf(Ast, "high") == 4 and @offsetOf(Ast, "high") == 0 and
+        \\        @bitOffsetOf(Ast, "tail") == 16 and @offsetOf(Ast, "tail") == 2 and
+        \\        @bitOffsetOf(Generated, "high") == 4 and @offsetOf(Generated, "high") == 0 and
+        \\        @bitOffsetOf(Generated, "tail") == 16 and @offsetOf(Generated, "tail") == 2)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u12) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u12" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var executions: usize = 1;
+        \\    const S = packed struct { low: u3, high: T };
+        \\    const offset = @bitOffsetOf(container: {
+        \\        executions += 1;
+        \\        break :container S;
+        \\    }, field_name: {
+        \\        executions *= 2;
+        \\        break :field_name "high";
+        \\    });
+        \\    return if (offset == 3 and executions == 4)
+        \\        struct { matched: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u5) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u5" },
+    });
+}
+
 test "generic function with nested comptime size builtin mutations" {
     try testCompletion(
         \\fn Buffer(comptime T: type) type {

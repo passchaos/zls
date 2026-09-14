@@ -2388,6 +2388,23 @@ pub const Interpreter = struct {
                         .alignment;
                     return self.analyser.resolveComptimeTypeSizeValue(operand, kind);
                 }
+                if (std.mem.eql(u8, name, "@bitOffsetOf") or std.mem.eql(u8, name, "@offsetOf")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const container_type = try self.eval(handle, params[0]) orelse return null;
+                    const name_value = try self.eval(handle, params[1]) orelse return null;
+                    if (name_value.data != .string_value) return null;
+                    const kind: Analyser.ComptimeFieldOffsetKind = if (std.mem.eql(u8, name, "@bitOffsetOf"))
+                        .bit_offset
+                    else
+                        .byte_offset;
+                    return self.analyser.resolveComptimeFieldOffsetValue(
+                        container_type,
+                        name_value.data.string_value.bytes,
+                        kind,
+                    );
+                }
             },
             .call, .call_comma, .call_one, .call_one_comma => {
                 if (try self.callValue(handle, node)) |value| return value;

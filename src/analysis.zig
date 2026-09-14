@@ -9986,6 +9986,72 @@ pub fn resolveComptimeTypeSizeValue(
     return try analyser.comptimeIntValue(value);
 }
 
+pub const ComptimeFieldOffsetKind = enum { bit_offset, byte_offset };
+
+pub fn resolveComptimeFieldOffsetValue(
+    analyser: *Analyser,
+    container_type: Type,
+    field_name: []const u8,
+    kind: ComptimeFieldOffsetKind,
+) Error!?Type {
+    if (!container_type.is_type_val) return null;
+
+    const bit_offset: u64 = switch (container_type.data) {
+        .container => blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
+            if (container_type.getContainerKind() != .keyword_struct or info.layout != .@"packed") return null;
+
+            var offset: u64 = 0;
+            for (info.declaration.ast.members) |member| {
+                const field = info.handle.tree.fullContainerField(member) orelse continue;
+                if (field.ast.tuple_like or field.comptime_token != null) return null;
+                const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse return null;
+                if (std.mem.eql(u8, name, field_name)) break :blk offset;
+
+                const field_type_node = field.ast.type_expr.unwrap() orelse return null;
+                const field_type = try analyser.resolveTypeOfNodeInternal(.{
+                    .node_handle = .of(field_type_node, info.handle),
+                    .container_type = container_type,
+                }) orelse return null;
+                const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
+                offset = std.math.add(u64, offset, field_bits) catch return null;
+            }
+            return null;
+        },
+        .ip_index => |payload| blk: {
+            const type_index = payload.index orelse return null;
+            const struct_info = switch (analyser.ip.indexToKey(type_index)) {
+                .struct_type => |struct_index| analyser.ip.getStruct(struct_index),
+                else => return null,
+            };
+            if (struct_info.layout != .@"packed") return null;
+            const name_index = analyser.ip.string_pool.getString(analyser.store.io, field_name) orelse return null;
+            const field_index = struct_info.fields.getIndex(name_index) orelse return null;
+            if (struct_info.fields.values()[field_index].is_comptime) return null;
+
+            const generated_fields = analyser.generated_struct_fields.get(type_index);
+            var offset: u64 = 0;
+            for (struct_info.fields.values()[0..field_index], 0..) |field, index| {
+                if (field.is_comptime) return null;
+                const field_type = if (generated_fields) |fields|
+                    fields[index].ty
+                else
+                    Type.fromIP(analyser, .type_type, field.ty);
+                const field_bits = analyser.resolveTypeBitSize(field_type) orelse return null;
+                offset = std.math.add(u64, offset, field_bits) catch return null;
+            }
+            break :blk offset;
+        },
+        else => return null,
+    };
+
+    return @as(?Type, try analyser.comptimeIntValue(switch (kind) {
+        .bit_offset => bit_offset,
+        .byte_offset => bit_offset / 8,
+    }));
+}
+
 fn comptimeIntValue(analyser: *Analyser, value: u64) error{OutOfMemory}!Type {
     const index = try analyser.ip.get(.{
         .int_u64_value = .{ .ty = .comptime_int_type, .int = value },
@@ -12532,6 +12598,19 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                     const ty = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     return try analyser.resolveComptimeTypeSizeValue(ty, .alignment) orelse
+                        Type.fromIP(analyser, .comptime_int_type, null);
+                },
+                .bit_offset_of, .offset_of => |tag| {
+                    if (params.len != 2) return null;
+                    if (!analyser.evaluate_comptime_values) {
+                        return Type.fromIP(analyser, .comptime_int_type, null);
+                    }
+                    const container_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse
+                        return Type.fromIP(analyser, .comptime_int_type, null);
+                    const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse
+                        return Type.fromIP(analyser, .comptime_int_type, null);
+                    const kind: ComptimeFieldOffsetKind = if (tag == .bit_offset_of) .bit_offset else .byte_offset;
+                    return try analyser.resolveComptimeFieldOffsetValue(container_type, field_name, kind) orelse
                         Type.fromIP(analyser, .comptime_int_type, null);
                 },
                 .int_from_bool => {
