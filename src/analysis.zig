@@ -869,6 +869,7 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
                         .offset = view.offset,
                         .len = view.backing.len - view.offset,
                         .elements_valid = view.elements_valid,
+                        .origin = view.origin,
                     } }),
                     .is_const = true,
                 };
@@ -2969,6 +2970,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                         .offset = view.offset + start,
                         .len = items.len - start,
                         .elements_valid = view.elements_valid,
+                        .origin = view.origin,
                     } }),
                     .is_const = true,
                 };
@@ -2991,6 +2993,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                         .offset = view.offset + start,
                         .len = end - start,
                         .elements_valid = view.elements_valid,
+                        .origin = view.origin,
                     } }),
                     .is_const = true,
                 };
@@ -6356,7 +6359,7 @@ fn resolveComptimePointerOffset(
     else
         pointer.runtimeType(analyser);
     if (pointer_type.pointerSize(analyser) != .many) return null;
-    const sequence = comptime_eval.Value.sequence(pointer) orelse return null;
+    const sequence = try comptime_eval.Value.sequenceAlloc(analyser, pointer) orelse return null;
     const offset_index = offset.ipIndex() orelse return null;
     if (analyser.ip.isUndefined(offset_index) or analyser.ip.isUnknown(offset_index)) return null;
     const amount = analyser.ip.toInt(offset_index, usize) orelse return null;
@@ -6373,6 +6376,7 @@ fn resolveComptimePointerOffset(
             .offset = new_offset,
             .len = sequence.backing.len - new_offset,
             .elements_valid = sequence.elements_valid,
+            .origin = sequence.origin,
         } },
     ));
 }
@@ -6385,7 +6389,7 @@ pub fn resolveComptimeBinaryValue(
     options: ComptimeBinaryOptions,
 ) error{OutOfMemory}!?Type {
     if (tag == .sub and lhs.data == .comptime_value and rhs.data == .comptime_value) {
-        if (comptime_eval.Value.pointerOffsetDifference(analyser, lhs, rhs)) |difference| {
+        if (try comptime_eval.Value.pointerOffsetDifference(analyser, lhs, rhs)) |difference| {
             return analyser.intValueWithType(.usize_type, difference);
         }
     }

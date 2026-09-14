@@ -30,8 +30,13 @@ pub const Value = struct {
         offset: usize,
         len: usize,
         elements_valid: bool,
+        origin: ?StaticOrigin = null,
 
         fn sameBacking(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
+            if (self.origin) |origin| {
+                const other_origin = other.origin orelse return null;
+                return origin.eql(other_origin);
+            } else if (other.origin != null) return null;
             if (self.backing.ptr == other.backing.ptr) return true;
             for (self.backing) |item| if (!isKnown(item, analyser, 0)) return null;
             for (other.backing) |item| if (!isKnown(item, analyser, 0)) return null;
@@ -42,6 +47,28 @@ pub const Value = struct {
 
         fn sameAddress(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
             return (self.sameBacking(other, analyser) orelse return null) and self.offset == other.offset;
+        }
+    };
+    pub const StaticOrigin = struct {
+        source: Analyser.NodeWithHandle,
+        container_type: ?Type,
+        path: []const Reference.Access,
+
+        fn hash(self: StaticOrigin, hasher: anytype) void {
+            std.hash.autoHash(hasher, self.source.node);
+            hasher.update(self.source.handle.uri.raw);
+            std.hash.autoHash(hasher, self.container_type != null);
+            if (self.container_type) |container_type| container_type.hashWithHasher(hasher);
+            hashPath(self.path, hasher);
+        }
+
+        fn eql(self: StaticOrigin, other: StaticOrigin) bool {
+            if (!self.source.eql(other.source) or
+                (self.container_type == null) != (other.container_type == null)) return false;
+            if (self.container_type) |container_type| {
+                if (!container_type.eql(other.container_type.?)) return false;
+            }
+            return pathEql(self.path, other.path);
         }
     };
     pub const ErrorUnion = union(enum) {
@@ -113,6 +140,8 @@ pub const Value = struct {
                 std.hash.autoHash(hasher, view.offset);
                 std.hash.autoHash(hasher, view.len);
                 std.hash.autoHash(hasher, view.elements_valid);
+                std.hash.autoHash(hasher, view.origin != null);
+                if (view.origin) |origin| origin.hash(hasher);
             },
             .fields => |fields| {
                 var fields_hash: u64 = 0;
@@ -169,7 +198,9 @@ pub const Value = struct {
                 const other_sequence = other.data.sequence;
                 if (view.offset != other_sequence.offset or view.len != other_sequence.len or
                     view.elements_valid != other_sequence.elements_valid or
+                    (view.origin == null) != (other_sequence.origin == null) or
                     view.backing.len != other_sequence.backing.len) return false;
+                if (view.origin) |origin| if (!origin.eql(other_sequence.origin.?)) return false;
                 for (view.backing, other_sequence.backing) |a, b| if (!a.eql(b)) return false;
             },
             .fields => |fields| {
@@ -325,14 +356,47 @@ pub const Value = struct {
         };
     }
 
-    pub fn sequenceOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) ?usize {
-        const lhs_sequence = sequence(lhs) orelse return null;
-        const rhs_sequence = sequence(rhs) orelse return null;
+    pub fn sequenceAlloc(analyser: *Analyser, value: Type) error{OutOfMemory}!?Sequence {
+        if (sequence(value)) |sequence_value| return sequence_value;
+        if (value.data == .comptime_value and value.data.comptime_value.data == .pointee) {
+            const pointee = value.data.comptime_value.data.pointee;
+            const payload = switch (pointee.value.data) {
+                .ip_index => |payload| payload,
+                else => return null,
+            };
+            const value_index = payload.index orelse return null;
+            const aggregate = switch (analyser.ip.indexToKey(value_index)) {
+                .aggregate => |aggregate| aggregate,
+                else => return null,
+            };
+            const indices = try aggregate.values.dupe(analyser.arena, analyser.ip);
+            const items = try analyser.arena.alloc(Type, indices.len);
+            for (indices, items) |index, *item| {
+                item.* = Type.fromIP(analyser, analyser.ip.typeOf(index), index);
+            }
+            return .{
+                .backing = items,
+                .offset = 0,
+                .len = items.len,
+                .elements_valid = true,
+                .origin = .{
+                    .source = pointee.source,
+                    .container_type = pointee.container_type,
+                    .path = pointee.path,
+                },
+            };
+        }
+        return null;
+    }
+
+    pub fn sequenceOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMemory}!?usize {
+        const lhs_sequence = try sequenceAlloc(analyser, lhs) orelse return null;
+        const rhs_sequence = try sequenceAlloc(analyser, rhs) orelse return null;
         if (!(lhs_sequence.sameBacking(rhs_sequence, analyser) orelse return null)) return null;
         return std.math.sub(usize, lhs_sequence.offset, rhs_sequence.offset) catch null;
     }
 
-    pub fn pointerOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) ?usize {
+    pub fn pointerOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMemory}!?usize {
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
         const lhs_pointer = lhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
         const rhs_pointer = rhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
@@ -345,7 +409,7 @@ pub const Value = struct {
             .one, .many => {},
             .slice, .c => return null,
         }
-        if (sequenceOffsetDifference(analyser, lhs, rhs)) |difference| return difference;
+        if (try sequenceOffsetDifference(analyser, lhs, rhs)) |difference| return difference;
         return switch (lhs.data.comptime_value.data) {
             .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
                 .reference => |rhs_reference| if (lhs_reference.storage == rhs_reference.storage)
@@ -382,6 +446,17 @@ pub const Value = struct {
             }
         }
         return true;
+    }
+
+    fn hashPath(path: []const Reference.Access, hasher: anytype) void {
+        for (path) |access| {
+            std.hash.autoHash(hasher, std.meta.activeTag(access));
+            switch (access) {
+                .field => |name| hasher.update(name),
+                .index => |index| std.hash.autoHash(hasher, index),
+                .optional_payload, .error_union_payload => {},
+            }
+        }
     }
 
     fn pathOffsetDifference(lhs: []const Reference.Access, rhs: []const Reference.Access) ?usize {
@@ -914,6 +989,7 @@ pub const Interpreter = struct {
                                     .offset = offset,
                                     .len = 1,
                                     .elements_valid = sequence.elements_valid,
+                                    .origin = sequence.origin,
                                 } }));
                             }
                         }

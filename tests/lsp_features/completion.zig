@@ -15369,13 +15369,29 @@ test "comptime pointer comparisons preserve address identity" {
         \\    if (pointer(false) == pointer(false)) same = 3;
         \\    var distinct: usize = 2;
         \\    if (pointer(false) != pointer(true)) distinct = 1;
-        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\    var shifted_distinct: usize = 6;
+        \\    if (pointer(false) + 1 != pointer(true) + 1) shifted_distinct = 5;
+        \\    const window: []const usize = (pointer(false) + 1)[0..1];
+        \\    var slice_same: usize = 8;
+        \\    if (window.ptr == pointer(false) + 1) slice_same = 7;
+        \\    var slice_distinct: usize = 10;
+        \\    if (window.ptr != pointer(true) + 1) slice_distinct = 9;
+        \\    return struct {
+        \\        same: [same]u8,
+        \\        distinct: [distinct]u8,
+        \\        shifted_distinct: [shifted_distinct]u8,
+        \\        slice_same: [slice_same]u8,
+        \\        slice_distinct: [slice_distinct]u8,
+        \\    };
         \\}
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "distinct", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "shifted_distinct", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "slice_same", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "slice_distinct", .kind = .Field, .detail = "[9]u8" },
     });
 
     try testCompletion(
