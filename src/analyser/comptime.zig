@@ -2520,7 +2520,7 @@ pub const Interpreter = struct {
         if (sequence.origin) |origin| {
             const path = try self.analyser.arena.alloc(Value.Reference.Access, origin.path.len + 1);
             @memcpy(path[0..origin.path.len], origin.path);
-            path[origin.path.len] = .{ .index = index };
+            path[origin.path.len] = .{ .index = offset };
             return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = .{
                 .value = item,
                 .source = origin.source,

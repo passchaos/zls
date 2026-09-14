@@ -15727,6 +15727,43 @@ test "comptime static for pointer captures" {
         .{ .label = "second", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "final", .kind = .Field, .detail = "[4]u8" },
     });
+
+    try testCompletion(
+        \\const values = [_]usize{ 2, 4, 6 };
+        \\fn pointer() *const usize {
+        \\    const many: [*]const usize = &values;
+        \\    const slice: []const usize = (many + 1)[0..2];
+        \\    for (slice[0..]) |*item| {
+        \\        if (item.* == 4) return item;
+        \\    }
+        \\    unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &values[1]) same = 1;
+        \\    return struct { items: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const values = [_]usize{ 2, 4 };
+        \\fn Select() type {
+        \\    var count: usize = 0;
+        \\    const many: [*]const usize = &values;
+        \\    for ((many + 2)[0..0]) |*item| {
+        \\        _ = item;
+        \\        count += 1;
+        \\    }
+        \\    return struct { count: [count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "count", .kind = .Field, .detail = "[0]u8" }});
 }
 
 test "comptime pointer casts preserve address identity" {
