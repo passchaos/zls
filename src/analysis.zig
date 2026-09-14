@@ -1017,6 +1017,27 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
     return null;
 }
 
+fn resolveStaticConstValue(
+    analyser: *Analyser,
+    options: ResolveOptions,
+    destination: Type,
+) Error!?Type {
+    const declaration = try analyser.resolveDeclarationOfNode(options) orelse return null;
+    if (!declaration.isConst() or !try declaration.isStatic()) return null;
+    const declaration_node = switch (declaration.decl) {
+        .ast_node => |node| node,
+        else => return null,
+    };
+    const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse return null;
+    const initializer = variable.ast.init_node.unwrap() orelse return null;
+    return comptime_eval.Interpreter.evaluateTyped(
+        analyser,
+        declaration.handle,
+        initializer,
+        try destination.typeOf(analyser),
+    );
+}
+
 pub fn resolveGenericType(analyser: *Analyser, ty: Type, bound_params: TokenToTypeMap) error{OutOfMemory}!Type {
     var visiting: Type.Data.GenericSet = .empty;
     defer visiting.deinit(analyser.gpa);
@@ -13600,9 +13621,18 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
         .field_access => {
             const lhs_node, const field_name = tree.nodeData(node_handle.node).node_and_token;
 
-            const lhs = (try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle))) orelse return null;
+            var lhs = (try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle))) orelse return null;
 
             const symbol = try analyser.identifierTokenName(tree, field_name) orelse return null;
+            if (analyser.evaluate_comptime_values and
+                std.mem.eql(u8, symbol, "len") and
+                lhs.type.pointerSize(analyser) == .slice)
+            {
+                if (try analyser.resolveStaticConstValue(.{
+                    .node_handle = .of(lhs_node, handle),
+                    .container_type = options.container_type,
+                }, lhs.type)) |value| lhs.type = value;
+            }
             if (analyser.evaluate_comptime_values and
                 lhs.type.is_type_val and
                 lhs.type.isEnumType(analyser))
@@ -13638,7 +13668,13 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
         .array_access => {
             const lhs_node, const rhs_node = tree.nodeData(node).node_and_node;
 
-            const lhs = try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle)) orelse return null;
+            var lhs = try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle)) orelse return null;
+            if (analyser.evaluate_comptime_values and lhs.type.pointerSize(analyser) == .slice) {
+                if (try analyser.resolveStaticConstValue(.{
+                    .node_handle = .of(lhs_node, handle),
+                    .container_type = options.container_type,
+                }, lhs.type)) |value| lhs.type = value;
+            }
 
             const index = try analyser.resolveIntegerLiteral(u64, .of(rhs_node, handle));
 
