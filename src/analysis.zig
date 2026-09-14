@@ -2472,9 +2472,24 @@ pub fn resolveComptimeSplatValue(
     };
     if (scalar.data != .ip_index) {
         const scalar_type = (try scalar.typeOf(analyser)).ipIndex() orelse return null;
-        if (scalar_type != vector.child) return null;
+        const child_type = Type.fromIP(analyser, .type_type, vector.child);
+        const coerced = if (scalar_type == vector.child)
+            scalar
+        else blk: {
+            _ = try analyser.coerceComptimeIPValue(
+                vector.child,
+                Type.fromIP(analyser, scalar_type, null),
+            ) orelse return null;
+            if (scalar.data != .comptime_value) return null;
+            break :blk switch (scalar.data.comptime_value.data) {
+                .reference => |reference| try comptime_eval.Value.create(analyser, child_type, .{ .reference = reference }),
+                .pointee => |pointee| try comptime_eval.Value.create(analyser, child_type, .{ .pointee = pointee }),
+                .sequence => |sequence| try comptime_eval.Value.create(analyser, child_type, .{ .sequence = sequence }),
+                else => return null,
+            };
+        };
         const values = try analyser.arena.alloc(Type, vector.len);
-        @memset(values, scalar);
+        @memset(values, coerced);
         return @as(?Type, try comptime_eval.Value.create(
             analyser,
             Type.fromIP(analyser, .type_type, vector_type),
