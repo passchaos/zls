@@ -15665,6 +15665,31 @@ test "comptime pointer comparisons preserve address identity" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const tuple = .{ @as(usize, 4), @as(usize, 5) };
+        \\fn Select() type {
+        \\    var dot_same: usize = 2;
+        \\    if (&tuple[0] == &tuple.@"0") dot_same = 1;
+        \\    var field_same: usize = 4;
+        \\    if (&tuple[0] == &@field(tuple, "0")) field_same = 3;
+        \\    const same_distance = &tuple[0] - &tuple.@"0";
+        \\    const unsupported_distance = &tuple[1] - &tuple[0];
+        \\    return struct {
+        \\        dot_same: [dot_same]u8,
+        \\        field_same: [field_same]u8,
+        \\        same_distance: [same_distance]u8,
+        \\        unsupported_distance: [unsupported_distance]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "dot_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "field_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "same_distance", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "unsupported_distance", .kind = .Field, .detail = "[?]u8" },
+    });
 }
 
 test "comptime pointer comparisons preserve wrapped identity" {

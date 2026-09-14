@@ -103,6 +103,7 @@ pub const Value = struct {
         pub const Access = union(enum) {
             field: []const u8,
             index: usize,
+            tuple_index: usize,
             optional_payload,
             error_union_payload,
         };
@@ -113,7 +114,7 @@ pub const Value = struct {
                 std.hash.autoHash(hasher, std.meta.activeTag(access));
                 switch (access) {
                     .field => |name| hasher.update(name),
-                    .index => |index| std.hash.autoHash(hasher, index),
+                    .index, .tuple_index => |index| std.hash.autoHash(hasher, index),
                     .optional_payload, .error_union_payload => {},
                 }
             }
@@ -435,6 +436,7 @@ pub const Value = struct {
             switch (lhs_access) {
                 .field => |name| if (!std.mem.eql(u8, name, rhs_access.field)) return false,
                 .index => |index| if (index != rhs_access.index) return false,
+                .tuple_index => |index| if (index != rhs_access.tuple_index) return false,
                 .optional_payload, .error_union_payload => {},
             }
         }
@@ -446,7 +448,7 @@ pub const Value = struct {
             std.hash.autoHash(hasher, std.meta.activeTag(access));
             switch (access) {
                 .field => |name| hasher.update(name),
-                .index => |index| std.hash.autoHash(hasher, index),
+                .index, .tuple_index => |index| std.hash.autoHash(hasher, index),
                 .optional_payload, .error_union_payload => {},
             }
         }
@@ -868,7 +870,11 @@ pub const Interpreter = struct {
                     const offset = std.math.add(usize, sequence.offset, index) catch return null;
                     return .{
                         .value = value,
-                        .target = .{ .pointee = try self.extendPointee(origin, value, .{ .index = offset }) },
+                        .target = .{ .pointee = try self.extendPointee(
+                            origin,
+                            value,
+                            try self.aggregateIndexAccess(origin.value, offset),
+                        ) },
                     };
                 }
             }
@@ -878,7 +884,11 @@ pub const Interpreter = struct {
                 return .{
                     .value = value,
                     .target = if (base_operand.target) |target|
-                        try self.extendCaptureTarget(target, value, .{ .index = index })
+                        try self.extendCaptureTarget(
+                            target,
+                            value,
+                            try self.aggregateIndexAccess(base_operand.value, index),
+                        )
                     else
                         null,
                 };
@@ -896,19 +906,16 @@ pub const Interpreter = struct {
             if (target == null) return .{ .value = value, .target = null };
             const aggregate = try self.captureAggregateValue(base_operand.value);
             const aggregate_type = try aggregate.typeOf(self.analyser);
-            if (aggregate_type.isTupleType(self.analyser)) {
-                const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return .{ .value = value, .target = null };
-                return .{
-                    .value = value,
-                    .target = try self.extendCaptureTarget(target.?, value, .{ .index = index }),
-                };
-            }
             if (!aggregate_type.isStructType(self.analyser) and !aggregate_type.isUnionType()) {
                 return .{ .value = value, .target = null };
             }
             return .{
                 .value = value,
-                .target = try self.extendCaptureTarget(target.?, value, .{ .field = field_name }),
+                .target = try self.extendCaptureTarget(
+                    target.?,
+                    value,
+                    try self.aggregateFieldAccess(base_operand.value, field_name),
+                ),
             };
         }
         if (tree.nodeTag(unwrapped) == .unwrap_optional) {
@@ -1004,7 +1011,11 @@ pub const Interpreter = struct {
             if (target == null) return .{ .value = value, .target = null };
             return .{
                 .value = value,
-                .target = try self.extendCaptureTarget(target.?, value, .{ .field = field_name }),
+                .target = try self.extendCaptureTarget(
+                    target.?,
+                    value,
+                    try self.aggregateFieldAccess(base_operand.value, field_name),
+                ),
             };
         }
         return self.captureOperandFallback(handle, unwrapped, depth);
@@ -1019,6 +1030,34 @@ pub const Interpreter = struct {
             },
             else => value,
         };
+    }
+
+    fn aggregateFieldAccess(
+        self: *Interpreter,
+        aggregate: Type,
+        field_name: []const u8,
+    ) Error!Value.Reference.Access {
+        const value = try self.captureAggregateValue(aggregate);
+        const aggregate_type = try value.typeOf(self.analyser);
+        if (aggregate_type.isTupleType(self.analyser)) {
+            const index = std.fmt.parseUnsigned(usize, field_name, 10) catch
+                return .{ .field = field_name };
+            return .{ .tuple_index = index };
+        }
+        return .{ .field = field_name };
+    }
+
+    fn aggregateIndexAccess(
+        self: *Interpreter,
+        aggregate: Type,
+        index: usize,
+    ) Error!Value.Reference.Access {
+        const value = try self.captureAggregateValue(aggregate);
+        const aggregate_type = try value.typeOf(self.analyser);
+        return if (aggregate_type.isTupleType(self.analyser))
+            .{ .tuple_index = index }
+        else
+            .{ .index = index };
     }
 
     fn aggregateCaptureTarget(self: *Interpreter, operand: CaptureOperand) Error!?CaptureTarget {
@@ -1048,7 +1087,7 @@ pub const Interpreter = struct {
                 break :sequence_target .{ .pointee = try self.extendPointee(
                     origin,
                     value,
-                    .{ .index = sequence.offset },
+                    try self.aggregateIndexAccess(origin.value, sequence.offset),
                 ) };
             },
             else => null,
@@ -1292,10 +1331,17 @@ pub const Interpreter = struct {
             if (tree.nodeTag(name_node) != .string_literal) return null;
             const name_value = try self.eval(handle, name_node) orelse return null;
             if (name_value.data != .string_value) return null;
+            const base_value = try self.analyser.resolveTypeOfNode(.{
+                .node_handle = .of(params[0], handle),
+                .container_type = self.container_type,
+            });
             const parent = try self.staticPointeeTarget(handle, params[0], depth + 1) orelse return null;
             const path = try self.analyser.arena.alloc(Value.Reference.Access, parent.path.len + 1);
             @memcpy(path[0..parent.path.len], parent.path);
-            path[parent.path.len] = .{ .field = name_value.data.string_value.bytes };
+            path[parent.path.len] = if (base_value) |aggregate|
+                try self.aggregateFieldAccess(aggregate, name_value.data.string_value.bytes)
+            else
+                .{ .field = name_value.data.string_value.bytes };
             return .{ .declaration = parent.declaration, .path = path };
         }
         if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |resolved| {
@@ -1314,12 +1360,28 @@ pub const Interpreter = struct {
             .field_access => blk: {
                 const base, const name_token = tree.nodeData(unwrapped).node_and_token;
                 const name = try self.analyser.identifierTokenName(tree, name_token) orelse return null;
-                break :blk .{ base, .{ .field = name } };
+                const base_value = try self.analyser.resolveTypeOfNode(.{
+                    .node_handle = .of(base, handle),
+                    .container_type = self.container_type,
+                });
+                const field_access: Value.Reference.Access = if (base_value) |aggregate|
+                    try self.aggregateFieldAccess(aggregate, name)
+                else
+                    .{ .field = name };
+                break :blk .{ base, field_access };
             },
             .array_access => blk: {
                 const base, const index_node = tree.nodeData(unwrapped).node_and_node;
                 const index = try self.staticIndex(handle, index_node) orelse return null;
-                break :blk .{ base, .{ .index = index } };
+                const base_value = try self.analyser.resolveTypeOfNode(.{
+                    .node_handle = .of(base, handle),
+                    .container_type = self.container_type,
+                });
+                const index_access: Value.Reference.Access = if (base_value) |aggregate|
+                    try self.aggregateIndexAccess(aggregate, index)
+                else
+                    .{ .index = index };
+                break :blk .{ base, index_access };
             },
             .unwrap_optional => .{ tree.nodeData(unwrapped).node_and_token[0], .optional_payload },
             else => return null,
@@ -2532,7 +2594,7 @@ pub const Interpreter = struct {
                 const items = try self.mutableElements(current) orelse return null;
                 const index = try self.integer(handle, index_node) orelse return null;
                 if (index >= items.len) return null;
-                return self.extendReference(parent, .{ .index = index });
+                return self.extendReference(parent, try self.aggregateIndexAccess(current, index));
             },
             .field_access => {
                 const base, const field_token = tree.nodeData(node).node_and_token;
@@ -2544,7 +2606,7 @@ pub const Interpreter = struct {
                     const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return null;
                     const items = try self.mutableElements(current) orelse return null;
                     if (index >= items.len) return null;
-                    return self.extendReference(parent, .{ .index = index });
+                    return self.extendReference(parent, .{ .tuple_index = index });
                 }
                 if (try self.analyser.resolveFieldAccess(current, field_name) == null) return null;
                 return self.extendReference(parent, .{ .field = field_name });
@@ -2602,7 +2664,7 @@ pub const Interpreter = struct {
     ) Error!?Type {
         const aggregate = try aggregate_type.instanceTypeVal(self.analyser) orelse return null;
         const child = switch (access) {
-            .index => |index| try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null,
+            .index, .tuple_index => |index| try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null,
             .field => |name| try self.analyser.resolveFieldAccess(aggregate, name) orelse return null,
             .optional_payload => try self.analyser.resolveOptionalUnwrap(aggregate) orelse return null,
             .error_union_payload => try self.analyser.resolveUnwrapErrorUnionType(aggregate, .payload) orelse return null,
@@ -3062,7 +3124,7 @@ pub const Interpreter = struct {
         const analyser = self.analyser;
         const child_destination = try self.assignmentChildType(destination, path[0]) orelse return null;
         switch (path[0]) {
-            .index => |index| {
+            .index, .tuple_index => |index| {
                 const items = try self.mutableElements(current) orelse return null;
                 if (index >= items.len) return null;
                 const updated = try analyser.arena.dupe(Type, items);
@@ -3236,7 +3298,7 @@ pub const Interpreter = struct {
         var current = value;
         for (path) |access| {
             current = switch (access) {
-                .index => |index| blk: {
+                .index, .tuple_index => |index| blk: {
                     const items = try self.mutableElements(current) orelse return null;
                     if (index >= items.len) return null;
                     break :blk items[index];
@@ -3261,7 +3323,7 @@ pub const Interpreter = struct {
         if (sequence.origin) |origin| {
             const path = try self.analyser.arena.alloc(Value.Reference.Access, origin.path.len + 1);
             @memcpy(path[0..origin.path.len], origin.path);
-            path[origin.path.len] = .{ .index = offset };
+            path[origin.path.len] = try self.aggregateIndexAccess(origin.value, offset);
             return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = .{
                 .value = item,
                 .source = origin.source,
