@@ -2781,6 +2781,12 @@ pub fn coerceComptimeIPValue(
             try analyser.coerceFloatValue(value_payload.type, coerced) != typed_value_index) return null;
         return coerced;
     }
+    if (!analyser.ip.isUnknown(typed_value_index) and
+        analyser.ip.zigTypeTag(destination_type) == .float and
+        source_tag == .comptime_int)
+    {
+        return analyser.coerceExactIntToFloatValue(destination_type, typed_value_index);
+    }
     const coerced = try analyser.coerceIP(destination_type, typed_value_index) orelse return null;
     if (!analyser.ip.isUnknown(typed_value_index) and
         analyser.ip.zigTypeTag(destination_type) == .error_set and
@@ -3830,6 +3836,9 @@ fn resolveCoercedIPValueFromIndex(
     {
         if (try analyser.coerceFloatValue(ip_ty, ip_index)) |coerced| return coerced;
     }
+    if (analyser.ip.zigTypeTag(ip_ty) == .float and source_tag == .comptime_int) {
+        return analyser.coerceExactIntToFloatValue(ip_ty, ip_index);
+    }
 
     var arena_allocator: std.heap.ArenaAllocator = .init(analyser.gpa);
     defer arena_allocator.deinit();
@@ -4016,6 +4025,36 @@ fn coerceNumericToFloatValue(
     const float_value = analyser.numericFloatValue(value) orelse return null;
     const comptime_value = try analyser.ip.get(.{ .float_comptime_value = float_value });
     return analyser.coerceFloatValue(dest_ty, comptime_value);
+}
+
+fn coerceExactIntToFloatValue(
+    analyser: *Analyser,
+    dest_ty: InternPool.Index,
+    value: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const precision: u8 = switch (dest_ty) {
+        .f16_type => 11,
+        .f32_type => 24,
+        .f64_type => 53,
+        .f80_type => 64,
+        .f128_type => 113,
+        else => return null,
+    };
+    const integer, const magnitude: u128 = if (analyser.ip.toInt(value, i128)) |signed|
+        .{
+            @as(f128, @floatFromInt(signed)),
+            if (signed < 0) @as(u128, @intCast(-(signed + 1))) + 1 else @intCast(signed),
+        }
+    else if (analyser.ip.toInt(value, u128)) |unsigned|
+        .{ @as(f128, @floatFromInt(unsigned)), unsigned }
+    else
+        return null;
+    if (magnitude != 0 and
+        128 - @clz(magnitude) - @ctz(magnitude) > precision) return null;
+    const comptime_value = try analyser.ip.get(.{ .float_comptime_value = integer });
+    const coerced = try analyser.coerceFloatValue(dest_ty, comptime_value) orelse return null;
+    if (!std.math.isFinite(analyser.floatValue(coerced) orelse return null)) return null;
+    return coerced;
 }
 
 fn resolveFloatRoundingValue(

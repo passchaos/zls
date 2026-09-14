@@ -4299,6 +4299,32 @@ test "comptime unary float builtins preserve result locations" {
     });
 }
 
+test "comptime exact integer to float coercions" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const exact: f32 = 16777216;
+        \\    const inexact: f32 = 16777217;
+        \\    const vector: @Vector(2, f64) = .{ 81, 16 };
+        \\    const partial: @Vector(2, f32) = .{ 16777217, 4 };
+        \\    return struct {
+        \\        exact: [if (exact == 16777216.0) 1 else 99]u8,
+        \\        inexact: [@intFromFloat(inexact)]u8,
+        \\        vector: [if (vector[0] == 81 and vector[1] == 16) 1 else 99]u8,
+        \\        partial_known: [@intFromFloat(partial[1])]u8,
+        \\        partial_unknown: [@intFromFloat(partial[0])]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "exact", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "inexact", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "vector", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "partial_known", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "partial_unknown", .kind = .Field, .detail = "[?]u8" },
+    });
+}
+
 test "comptime inferred splat result location immediate reads" {
     try testCompletion(
         \\fn Select() type {
