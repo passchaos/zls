@@ -2470,6 +2470,17 @@ pub fn resolveComptimeSplatValue(
         .vector_type => |vector| vector,
         else => return null,
     };
+    if (scalar.data != .ip_index) {
+        const scalar_type = (try scalar.typeOf(analyser)).ipIndex() orelse return null;
+        if (scalar_type != vector.child) return null;
+        const values = try analyser.arena.alloc(Type, vector.len);
+        @memset(values, scalar);
+        return @as(?Type, try comptime_eval.Value.create(
+            analyser,
+            Type.fromIP(analyser, .type_type, vector_type),
+            .{ .array = values },
+        ));
+    }
     const scalar_payload = switch (scalar.data) {
         .ip_index => |payload| payload,
         else => return null,

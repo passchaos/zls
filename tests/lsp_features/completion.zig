@@ -5231,6 +5231,33 @@ test "comptime error union splat result location" {
     });
 }
 
+test "comptime splat preserves pointer identity" {
+    try testCompletion(
+        \\const values = [_]u8{ 1, 2 };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const pointer = &values[1];
+        \\    const pointers: @Vector(2, *const u8) = @splat(operand: {
+        \\        executions += 1;
+        \\        break :operand pointer;
+        \\    });
+        \\    return struct {
+        \\        identity: [if (pointers[0] == pointer and pointers[1] == pointer) 1 else 99]u8,
+        \\        first: [pointers[0].*]u8,
+        \\        second: [pointers[1].*]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identity", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "first", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime interpreter evaluates assignment targets before values" {
     try testCompletion(
         \\fn Select() type {
