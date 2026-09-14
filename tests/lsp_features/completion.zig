@@ -4525,6 +4525,41 @@ test "comptime complementary comparisons accept structured vectors" {
     });
 }
 
+test "comptime self comparisons accept structured vectors" {
+    try testCompletion(
+        \\var runtime_i8: i8 = undefined;
+        \\var runtime_bool: bool = undefined;
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const integers = @as(@Vector(2, i8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ runtime_i8, 7 };
+        \\    });
+        \\    const booleans = @as(@Vector(2, bool), operand: {
+        \\        executions = executions * 10 + 2;
+        \\        break :operand .{ runtime_bool, true };
+        \\    });
+        \\    return struct {
+        \\        integers: [if (@reduce(.And, integers == integers) and
+        \\            !@reduce(.Or, integers != integers) and
+        \\            !@reduce(.Or, integers < integers) and
+        \\            !@reduce(.Or, integers > integers) and
+        \\            @reduce(.And, integers <= integers) and
+        \\            @reduce(.And, integers >= integers)) 1 else 99]u8,
+        \\        booleans: [if (@reduce(.And, booleans == booleans) and
+        \\            !@reduce(.Or, booleans != booleans)) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "integers", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "booleans", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[12]u8" },
+    });
+}
+
 test "comptime unary float builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {
