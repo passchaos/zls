@@ -485,8 +485,16 @@ pub const Interpreter = struct {
         switch (tree.nodeTag(node)) {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
             .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
-            .@"if" => if (ast.fullIf(tree, node).?.error_token != null) return true,
-            .@"while" => if (ast.fullWhile(tree, node).?.error_token != null) return true,
+            .@"if" => {
+                const branch = ast.fullIf(tree, node).?;
+                if (branch.error_token != null or
+                    if (branch.payload_token) |token| tree.tokenTag(token) == .asterisk else false) return true;
+            },
+            .@"while" => {
+                const loop = ast.fullWhile(tree, node).?;
+                if (loop.error_token != null or
+                    if (loop.payload_token) |token| tree.tokenTag(token) == .asterisk else false) return true;
+            },
             .@"switch", .switch_comma => if (tree.switchFull(node).label_token != null) return true,
             .assign_destructure => {
                 for (tree.assignDestructure(node).ast.variables) |lhs| {
@@ -2328,11 +2336,13 @@ pub const Interpreter = struct {
             return self.boolValue(try self.eval(handle, condition) orelse return null);
         const capture_by_ref = if (payload_token) |token| handle.tree.tokenTag(token) == .asterisk else false;
         const reference = if (capture_by_ref)
-            try self.referenceForNode(handle, condition) orelse return null
+            try self.referenceForNode(handle, condition)
         else
             null;
         const value = if (reference) |target|
             try self.readReference(target) orelse return null
+        else if (capture_by_ref)
+            try self.staticCaptureValue(handle, condition) orelse try self.eval(handle, condition) orelse return null
         else
             try self.eval(handle, condition) orelse return null;
         if (error_token) |failure_token| {
@@ -2345,6 +2355,8 @@ pub const Interpreter = struct {
                     if (payload_token) |payload_capture| {
                         const captured = if (reference) |target|
                             try self.referenceValue(try self.extendReference(target, .error_union_payload)) orelse return null
+                        else if (capture_by_ref)
+                            try self.staticPayloadPointer(handle, condition, payload, .error_union_payload) orelse return null
                         else
                             payload;
                         try self.bind(handle, payload_capture + @intFromBool(capture_by_ref), captured);
@@ -2359,11 +2371,64 @@ pub const Interpreter = struct {
         };
         const captured = if (reference) |target|
             try self.referenceValue(try self.extendReference(target, .optional_payload)) orelse return null
+        else if (capture_by_ref)
+            try self.staticPayloadPointer(handle, condition, payload, .optional_payload) orelse return null
         else
             payload;
         const token = payload_token.?;
         try self.bind(handle, token + @intFromBool(capture_by_ref), captured);
         return true;
+    }
+
+    fn staticCaptureValue(self: *Interpreter, handle: *Handle, condition: Ast.Node.Index) Error!?Type {
+        const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
+        if (target.path.len != 0 or !target.declaration.isConst() or
+            !try target.declaration.isStatic()) return null;
+        const declaration_node = switch (target.declaration.decl) {
+            .ast_node => |node| node,
+            else => return null,
+        };
+        const variable = target.declaration.handle.tree.fullVarDecl(declaration_node) orelse return null;
+        const initializer = variable.ast.init_node.unwrap() orelse return null;
+        const declaration_value = try target.declaration.resolveType(self.analyser) orelse return null;
+        return self.evaluateTypedWithContainer(
+            target.declaration.handle,
+            initializer,
+            try declaration_value.typeOf(self.analyser),
+            target.declaration.container_type,
+        );
+    }
+
+    fn staticPayloadPointer(
+        self: *Interpreter,
+        handle: *Handle,
+        condition: Ast.Node.Index,
+        payload: Type,
+        access: Value.Reference.Access,
+    ) Error!?Type {
+        const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
+        if (!target.declaration.isConst()) return null;
+        if (!try target.declaration.isStatic()) {
+            const key: Analyser.TokenWithHandle = .{
+                .handle = target.declaration.handle,
+                .token = target.declaration.nameToken(),
+            };
+            if (!self.bindings.contains(key)) return null;
+        }
+        const declaration_node = switch (target.declaration.decl) {
+            .ast_node => |node| node,
+            else => return null,
+        };
+        const path = try self.analyser.arena.alloc(Value.Reference.Access, target.path.len + 1);
+        @memcpy(path[0..target.path.len], target.path);
+        path[target.path.len] = access;
+        const pointer = try self.analyser.resolveAddressOf(true, payload);
+        return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = .{
+            .value = payload,
+            .source = .of(declaration_node, target.declaration.handle),
+            .container_type = target.declaration.container_type,
+            .path = path,
+        } }));
     }
 
     fn deref(self: *Interpreter, value: Type) Error!?Type {

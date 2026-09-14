@@ -15512,6 +15512,37 @@ test "comptime static optional payload pointers" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const present: ?usize = 4;
+        \\const success: error{Failure}!usize = 7;
+        \\fn optionalPointer() *const usize {
+        \\    if (present) |*payload| return payload else unreachable;
+        \\}
+        \\fn errorPointer() *const usize {
+        \\    if (success) |*payload| return payload else |_| unreachable;
+        \\}
+        \\fn Select() type {
+        \\    return struct { optional: [optionalPointer().*]u8, error_value: [errorPointer().*]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "optional", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "error_value", .kind = .Field, .detail = "[7]u8" },
+    });
+
+    try testCompletion(
+        \\const absent: ?usize = null;
+        \\const failure: error{Failure}!usize = error.Failure;
+        \\fn Select() type {
+        \\    if (absent) |*payload| return struct { value: [payload.*]u8 };
+        \\    if (failure) |*payload| return struct { value: [payload.*]u8 } else |_| {}
+        \\    return struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "fallback", .kind = .Field, .detail = "u8" }});
 }
 
 test "comptime pointer casts preserve address identity" {
