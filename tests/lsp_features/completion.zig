@@ -4231,6 +4231,71 @@ test "comptime interpreter propagates contextual local initializer types" {
     }
 }
 
+test "comptime inferred splat result location immediate reads" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const vectors = [_]@Vector(2, usize){@splat(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(u8, 4);
+        \\    })};
+        \\    var value: usize = vectors[0][1];
+        \\    value += 0;
+        \\    return struct { value: [value]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime inferred splat result location captured reads" {
+    try testCompletion(
+        \\const Pair = struct { vector: @Vector(2, usize) };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const pair: Pair = .{ .vector = @splat(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(u8, 4);
+        \\    }) };
+        \\    var value: usize = pair.vector[1];
+        \\    value += 0;
+        \\    return struct { value: [value]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\const Pair = struct { vector: @Vector(2, usize) };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const vectors = [_]@Vector(2, usize){@splat(operand: {
+        \\        executions += 1;
+        \\        break :operand runtime;
+        \\    })};
+        \\    const pair: Pair = .{ .vector = vectors[0] };
+        \\    return struct {
+        \\        vector_type: @TypeOf(pair.vector),
+        \\        value: [pair.vector[1]]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "vector_type", .kind = .Field, .detail = "@Vector(2,usize)" },
+        .{ .label = "value", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime interpreter evaluates assignment targets before values" {
     try testCompletion(
         \\fn Select() type {

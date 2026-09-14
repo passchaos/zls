@@ -2564,6 +2564,17 @@ pub const Interpreter = struct {
                 return .{ .value = value orelse return null, .source_node = null };
             }
         };
+        if (destination) |ty| {
+            var struct_buffer: [2]Ast.Node.Index = undefined;
+            if (tree.fullStructInit(&struct_buffer, node)) |literal| {
+                if (literal.ast.type_expr == .none and
+                    ty.isStructType(self.analyser) and
+                    !ty.isTupleType(self.analyser)) return .{
+                    .value = try self.evaluateStructInit(handle, ty, literal.ast.fields) orelse return null,
+                    .source_node = null,
+                };
+            }
+        }
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&block_buffer, node) != null) {
             if (!self.tick()) return null;
@@ -2831,12 +2842,21 @@ pub const Interpreter = struct {
     ) Error!?Type {
         const aggregate = try aggregate_type.instanceTypeVal(self.analyser) orelse return null;
         const child = switch (access) {
-            .index, .tuple_index => |index| try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null,
+            .index, .tuple_index => |index| child: {
+                if (aggregate_type.ipIndex()) |aggregate_index| {
+                    switch (self.analyser.ip.indexToKey(aggregate_index)) {
+                        .array_type => |array| if (index < array.len)
+                            break :child Type.fromIP(self.analyser, .type_type, array.child),
+                        else => {},
+                    }
+                }
+                break :child try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null;
+            },
             .field => |name| try self.analyser.resolveFieldAccess(aggregate, name) orelse return null,
             .optional_payload => try self.analyser.resolveOptionalUnwrap(aggregate) orelse return null,
             .error_union_payload => try self.analyser.resolveUnwrapErrorUnionType(aggregate, .payload) orelse return null,
         };
-        return @as(?Type, try child.typeOf(self.analyser));
+        return @as(?Type, if (child.is_type_val) child else try child.typeOf(self.analyser));
     }
 
     fn isOptionalOrNullValue(self: *Interpreter, value: Type) Error!bool {
