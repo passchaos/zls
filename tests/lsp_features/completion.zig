@@ -16992,6 +16992,60 @@ test "comptime temporary switch pointer captures" {
         .{ .label = "error_same", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "error_distinct", .kind = .Field, .detail = "[7]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const Holder = struct { marker: usize, value: Value };
+        \\fn makeHolder(marker: usize) Holder {
+        \\    return .{ .marker = marker, .value = .{ .b = 4 } };
+        \\}
+        \\fn pointer(marker: usize) *const usize {
+        \\    return switch (makeHolder(marker).value) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(1) == pointer(1)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(1) != pointer(2)) distinct = 3;
+        \\    return struct { value: [pointer(1).*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const Pair = struct { marker: usize, value: Value };
+        \\fn makeValues(marker: usize) [1]Pair {
+        \\    return .{.{ .marker = marker, .value = .{ .b = 4 } }};
+        \\}
+        \\fn pointer(marker: usize) *const usize {
+        \\    return switch (makeValues(marker)[0].value) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(1) == pointer(1)) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(1) != pointer(2)) distinct = 3;
+        \\    return struct { value: [pointer(1).*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

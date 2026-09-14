@@ -772,7 +772,8 @@ pub const Interpreter = struct {
         }
         if (tree.nodeTag(unwrapped) == .array_access) {
             const base, const index_node = tree.nodeData(unwrapped).node_and_node;
-            const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
+            var base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
+            base_operand.target = self.captureTargetOrTemporary(handle, base, base_operand);
             const index = try self.integer(handle, index_node) orelse return null;
             const value = try self.analyser.resolveBracketAccessType(base_operand.value, .{ .single = index }) orelse return null;
             if (try Value.sequenceAlloc(self.analyser, base_operand.value)) |sequence| {
@@ -803,7 +804,9 @@ pub const Interpreter = struct {
             const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
             const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
             const value = try self.analyser.resolveFieldAccess(base_operand.value, field_name) orelse return null;
-            const target = try self.aggregateCaptureTarget(base_operand);
+            var targeted_base = base_operand;
+            targeted_base.target = self.captureTargetOrTemporary(handle, base, base_operand);
+            const target = try self.aggregateCaptureTarget(targeted_base);
             if (target == null) return .{ .value = value, .target = null };
             const aggregate = try self.captureAggregateValue(base_operand.value);
             const aggregate_type = try aggregate.typeOf(self.analyser);
@@ -826,10 +829,11 @@ pub const Interpreter = struct {
             const base = tree.nodeData(unwrapped).node_and_token[0];
             const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
             const value = try self.analyser.resolveOptionalUnwrap(base_operand.value) orelse return null;
+            const target = self.captureTargetOrTemporary(handle, base, base_operand);
             return .{
                 .value = value,
-                .target = if (base_operand.target) |target|
-                    try self.extendCaptureTarget(target, value, .optional_payload)
+                .target = if (target) |capture_target|
+                    try self.extendCaptureTarget(capture_target, value, .optional_payload)
                 else
                     null,
             };
@@ -904,7 +908,9 @@ pub const Interpreter = struct {
             if (name_value.data != .string_value) return null;
             const field_name = name_value.data.string_value.bytes;
             const value = try self.analyser.resolveComptimeFieldValue(base_operand.value, field_name) orelse return null;
-            const target = try self.aggregateCaptureTarget(base_operand);
+            var targeted_base = base_operand;
+            targeted_base.target = self.captureTargetOrTemporary(handle, params[0], base_operand);
+            const target = try self.aggregateCaptureTarget(targeted_base);
             if (target == null) return .{ .value = value, .target = null };
             return .{
                 .value = value,
@@ -1079,6 +1085,19 @@ pub const Interpreter = struct {
             .is_static = false,
             .temporary_value = value,
         } };
+    }
+
+    fn captureTargetOrTemporary(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        operand: CaptureOperand,
+    ) ?CaptureTarget {
+        return operand.target orelse
+            if (Value.isKnown(operand.value, self.analyser, 0))
+                self.temporaryCaptureTarget(handle, node, operand.value)
+            else
+                null;
     }
 
     fn staticPointeeTarget(
