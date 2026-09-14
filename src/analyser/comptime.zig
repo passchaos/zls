@@ -2553,12 +2553,16 @@ pub const Interpreter = struct {
                 const params = tree.builtinCallParams(&buffer, node).?;
                 if (params.len != 1) return null;
                 const operand = try self.eval(handle, params[0]) orelse return null;
+                const result_type = if (kind != null or is_splat or is_enum)
+                    self.payloadResultLocationType(ty)
+                else
+                    ty;
                 const value: ?Type = if (kind) |cast_kind|
-                    try self.analyser.resolveComptimeCastValue(ty, operand, cast_kind)
+                    try self.analyser.resolveComptimeCastValue(result_type, operand, cast_kind)
                 else if (is_splat)
-                    try self.analyser.resolveComptimeSplatValue(ty, operand)
+                    try self.analyser.resolveComptimeSplatValue(result_type, operand)
                 else if (is_enum)
-                    try self.analyser.resolveComptimeEnumFromIntValue(ty, operand)
+                    try self.analyser.resolveComptimeEnumFromIntValue(result_type, operand)
                 else
                     try self.pointerCastValue(ty, operand, qualifier_cast);
                 return .{ .value = value orelse return null, .source_node = null };
@@ -2882,6 +2886,21 @@ pub const Interpreter = struct {
             },
             else => null,
         };
+    }
+
+    fn payloadResultLocationType(self: *Interpreter, destination: Type) Type {
+        var result = destination;
+        while (true) {
+            if (self.optionalPayloadType(result)) |payload| {
+                result = payload;
+                continue;
+            }
+            if (self.errorUnionTypes(result)) |types| {
+                result = types.payload;
+                continue;
+            }
+            return result;
+        }
     }
 
     const ErrorUnionTypes = struct {

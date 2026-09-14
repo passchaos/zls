@@ -4296,6 +4296,46 @@ test "comptime inferred splat result location captured reads" {
     });
 }
 
+test "comptime optional splat result location" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const vector: ?@Vector(2, usize) = @splat(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(u8, 4);
+        \\    });
+        \\    var value: usize = vector.?[1];
+        \\    value += 0;
+        \\    return struct { value: [value]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime error union splat result location" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const vector: error{}!@Vector(2, usize) = @splat(operand: {
+        \\        executions += 1;
+        \\        break :operand @as(u8, 4);
+        \\    });
+        \\    var value: usize = (vector catch unreachable)[1];
+        \\    value += 0;
+        \\    return struct { value: [value]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime interpreter evaluates assignment targets before values" {
     try testCompletion(
         \\fn Select() type {
