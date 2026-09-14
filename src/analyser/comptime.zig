@@ -30,7 +30,7 @@ pub const Value = struct {
         offset: usize,
         len: usize,
         elements_valid: bool,
-        origin: ?StaticOrigin = null,
+        origin: ?Pointee = null,
 
         fn sameBacking(self: Sequence, other: Sequence, analyser: *Analyser) ?bool {
             if (self.origin) |origin| {
@@ -49,28 +49,6 @@ pub const Value = struct {
             return (self.sameBacking(other, analyser) orelse return null) and self.offset == other.offset;
         }
     };
-    pub const StaticOrigin = struct {
-        source: Analyser.NodeWithHandle,
-        container_type: ?Type,
-        path: []const Reference.Access,
-
-        fn hash(self: StaticOrigin, hasher: anytype) void {
-            std.hash.autoHash(hasher, self.source.node);
-            hasher.update(self.source.handle.uri.raw);
-            std.hash.autoHash(hasher, self.container_type != null);
-            if (self.container_type) |container_type| container_type.hashWithHasher(hasher);
-            hashPath(self.path, hasher);
-        }
-
-        fn eql(self: StaticOrigin, other: StaticOrigin) bool {
-            if (!self.source.eql(other.source) or
-                (self.container_type == null) != (other.container_type == null)) return false;
-            if (self.container_type) |container_type| {
-                if (!container_type.eql(other.container_type.?)) return false;
-            }
-            return pathEql(self.path, other.path);
-        }
-    };
     pub const ErrorUnion = union(enum) {
         payload: Type,
         failure: Type,
@@ -81,6 +59,15 @@ pub const Value = struct {
         source: Analyser.NodeWithHandle,
         container_type: ?Type,
         path: []const Reference.Access,
+
+        fn hash(self: Pointee, hasher: anytype) void {
+            self.value.hashWithHasher(hasher);
+            std.hash.autoHash(hasher, self.source.node);
+            hasher.update(self.source.handle.uri.raw);
+            std.hash.autoHash(hasher, self.container_type != null);
+            if (self.container_type) |container_type| container_type.hashWithHasher(hasher);
+            hashPath(self.path, hasher);
+        }
 
         fn eql(self: Pointee, other: Pointee) bool {
             if (!self.source.eql(other.source) or
@@ -165,21 +152,7 @@ pub const Value = struct {
                 }
             },
             .reference => |reference| reference.hash(hasher),
-            .pointee => |pointee| {
-                pointee.value.hashWithHasher(hasher);
-                std.hash.autoHash(hasher, pointee.source.node);
-                hasher.update(pointee.source.handle.uri.raw);
-                std.hash.autoHash(hasher, pointee.container_type != null);
-                if (pointee.container_type) |container_type| container_type.hashWithHasher(hasher);
-                for (pointee.path) |access| {
-                    std.hash.autoHash(hasher, std.meta.activeTag(access));
-                    switch (access) {
-                        .field => |name| hasher.update(name),
-                        .index => |index| std.hash.autoHash(hasher, index),
-                        .optional_payload, .error_union_payload => {},
-                    }
-                }
-            },
+            .pointee => |pointee| pointee.hash(hasher),
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
                 hasher.update(node_handle.handle.uri.raw);
@@ -293,6 +266,17 @@ pub const Value = struct {
             else if (hasPointerIdentity(lhs, depth + 1)) false else null;
         }
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
+        switch (lhs.data.comptime_value.data) {
+            .reference => |lhs_reference| switch (rhs.data.comptime_value.data) {
+                .reference => |rhs_reference| return lhs_reference.eql(rhs_reference.*),
+                else => {},
+            },
+            .pointee => |lhs_pointee| switch (rhs.data.comptime_value.data) {
+                .pointee => |rhs_pointee| return lhs_pointee.eql(rhs_pointee),
+                else => {},
+            },
+            else => {},
+        }
         if (lhs.data.comptime_value.ty.isManyPointerType(analyser) and
             rhs.data.comptime_value.ty.isManyPointerType(analyser))
         {
@@ -360,35 +344,34 @@ pub const Value = struct {
     }
 
     pub fn sequenceAlloc(analyser: *Analyser, value: Type) error{OutOfMemory}!?Sequence {
-        if (sequence(value)) |sequence_value| return sequence_value;
         if (value.data == .comptime_value and value.data.comptime_value.data == .pointee) {
             const pointee = value.data.comptime_value.data.pointee;
-            const payload = switch (pointee.value.data) {
-                .ip_index => |payload| payload,
-                else => return null,
+            const items = elements(pointee.value) orelse interned: {
+                const payload = switch (pointee.value.data) {
+                    .ip_index => |payload| payload,
+                    else => return null,
+                };
+                const value_index = payload.index orelse return null;
+                const aggregate = switch (analyser.ip.indexToKey(value_index)) {
+                    .aggregate => |aggregate| aggregate,
+                    else => return null,
+                };
+                const indices = try aggregate.values.dupe(analyser.arena, analyser.ip);
+                const result = try analyser.arena.alloc(Type, indices.len);
+                for (indices, result) |index, *item| {
+                    item.* = Type.fromIP(analyser, analyser.ip.typeOf(index), index);
+                }
+                break :interned result;
             };
-            const value_index = payload.index orelse return null;
-            const aggregate = switch (analyser.ip.indexToKey(value_index)) {
-                .aggregate => |aggregate| aggregate,
-                else => return null,
-            };
-            const indices = try aggregate.values.dupe(analyser.arena, analyser.ip);
-            const items = try analyser.arena.alloc(Type, indices.len);
-            for (indices, items) |index, *item| {
-                item.* = Type.fromIP(analyser, analyser.ip.typeOf(index), index);
-            }
             return .{
                 .backing = items,
                 .offset = 0,
                 .len = items.len,
                 .elements_valid = true,
-                .origin = .{
-                    .source = pointee.source,
-                    .container_type = pointee.container_type,
-                    .path = pointee.path,
-                },
+                .origin = pointee,
             };
         }
+        if (sequence(value)) |sequence_value| return sequence_value;
         return null;
     }
 
@@ -2330,7 +2313,7 @@ pub const Interpreter = struct {
         if (destination.isConstSequencePointerType(analyser) and
             !(try value.typeOf(analyser)).eql(destination))
         {
-            if (Value.sequence(value)) |sequence| {
+            if (try Value.sequenceAlloc(analyser, value)) |sequence| {
                 _ = try self.coerce(destination, value) orelse
                     return if (allow_invalid) destination.instanceTypeVal(analyser) else null;
                 return @as(?Type, try Value.create(analyser, destination, .{ .sequence = sequence }));

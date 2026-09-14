@@ -15404,6 +15404,47 @@ test "comptime pointer comparisons preserve address identity" {
     });
 
     try testCompletion(
+        \\const one: usize = 1;
+        \\const two: usize = 2;
+        \\const first = [_]*const usize{ &one, &two };
+        \\const second = [_]*const usize{ &one, &two };
+        \\fn pointer(comptime other: bool) [*]const *const usize {
+        \\    return if (other) &second else &first;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(false) + 1 == pointer(false) + 1) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(false) + 1 != pointer(true) + 1) distinct = 3;
+        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\fn pointer(comptime value: usize) [*]const usize {
+        \\    const local = [_]usize{ value, 4 };
+        \\    return &local;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer(1) + 1 == pointer(1) + 1) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer(1) + 1 != pointer(2) + 1) distinct = 3;
+        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
         \\var runtime: usize = undefined;
         \\fn pointer() [*]const usize {
         \\    return &.{runtime};
