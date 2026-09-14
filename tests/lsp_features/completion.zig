@@ -4389,6 +4389,30 @@ test "comptime numeric casts accept structured vectors" {
     });
 }
 
+test "comptime bitCast accepts same-shaped structured vectors" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const source = @as(@Vector(2, u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ 0xff, 0x7f };
+        \\    });
+        \\    const signed: @Vector(2, i8) = @bitCast(source);
+        \\    const roundtrip: @Vector(2, u8) = @bitCast(signed);
+        \\    return struct {
+        \\        values: [if (signed[0] == -1 and signed[1] == 127 and
+        \\            @reduce(.And, roundtrip == source)) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime overflow builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {

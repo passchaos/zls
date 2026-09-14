@@ -2565,6 +2565,7 @@ fn resolveVectorCastValue(
             .int_from_float => try analyser.intFromFloatValue(dest_vector.child, source_value),
             .float_from_int => try analyser.floatFromIntValue(dest_vector.child, source_value),
             .float_cast => try analyser.coerceFloatValue(dest_vector.child, source_value),
+            .bit_cast => try analyser.bitCastIntValue(dest_vector.child, source_value),
             .truncate => try analyser.truncateIntValue(dest_vector.child, source_value),
             .int_cast => try analyser.coerceIP(dest_vector.child, source_value),
             else => return null,
