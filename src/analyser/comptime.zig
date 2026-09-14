@@ -59,9 +59,11 @@ pub const Value = struct {
         source: Analyser.NodeWithHandle,
         container_type: ?Type,
         path: []const Reference.Access,
+        is_static: bool,
 
         fn hash(self: Pointee, hasher: anytype) void {
-            self.value.hashWithHasher(hasher);
+            std.hash.autoHash(hasher, self.is_static);
+            if (!self.is_static) self.value.hashWithHasher(hasher);
             std.hash.autoHash(hasher, self.source.node);
             hasher.update(self.source.handle.uri.raw);
             std.hash.autoHash(hasher, self.container_type != null);
@@ -71,9 +73,10 @@ pub const Value = struct {
 
         fn eql(self: Pointee, other: Pointee) bool {
             if (!self.source.eql(other.source) or
-                !self.value.eql(other.value) or
+                self.is_static != other.is_static or
                 (self.container_type == null) != (other.container_type == null) or
                 self.path.len != other.path.len) return false;
+            if (!self.is_static and !self.value.eql(other.value)) return false;
             if (self.container_type) |container_type| {
                 if (!container_type.eql(other.container_type.?)) return false;
             }
@@ -556,7 +559,10 @@ pub const Interpreter = struct {
                 if (loop.error_token != null or
                     if (loop.payload_token) |token| tree.tokenTag(token) == .asterisk else false) return true;
             },
-            .@"switch", .switch_comma => if (tree.switchFull(node).label_token != null) return true,
+            .@"switch", .switch_comma => {
+                const switch_node = tree.switchFull(node);
+                if (switch_node.label_token != null or switchHasPointerCapture(tree, switch_node)) return true;
+            },
             .assign_destructure => {
                 for (tree.assignDestructure(node).ast.variables) |lhs| {
                     if (tree.fullVarDecl(lhs) != null) return true;
@@ -2185,6 +2191,7 @@ pub const Interpreter = struct {
                     .ast_node => |decl_node| decl_node,
                     else => break :static_pointer,
                 };
+                const is_static = try declaration.isStatic();
                 const pointee = if (target.path.len != 0)
                     try self.evaluateTypedWithContainer(
                         handle,
@@ -2202,7 +2209,7 @@ pub const Interpreter = struct {
                         return if (allow_invalid) destination.instanceTypeVal(analyser) else null,
                     .global_var_decl, .local_var_decl, .simple_var_decl, .aligned_var_decl => blk: {
                         if (!declaration.isConst()) break :static_pointer;
-                        if (!try declaration.isStatic()) {
+                        if (!is_static) {
                             break :blk self.bindings.get(.{
                                 .handle = declaration.handle,
                                 .token = declaration.nameToken(),
@@ -2225,6 +2232,7 @@ pub const Interpreter = struct {
                     .source = .of(declaration_node, declaration.handle),
                     .container_type = declaration.container_type,
                     .path = target.path,
+                    .is_static = is_static,
                 } }));
             }
             if (tree.nodeTag(literal_node) == .address_of) aggregate_pointer: {
@@ -2490,6 +2498,7 @@ pub const Interpreter = struct {
             .source = .of(declaration_node, target.declaration.handle),
             .container_type = target.declaration.container_type,
             .path = path,
+            .is_static = true,
         } }));
     }
 
@@ -2805,11 +2814,14 @@ pub const Interpreter = struct {
         const switch_node = tree.switchFull(node);
         const has_pointer_capture = switchHasPointerCapture(tree, switch_node);
         const reference = if (has_pointer_capture)
-            try self.referenceForNode(handle, switch_node.ast.condition) orelse return null
+            try self.referenceForNode(handle, switch_node.ast.condition)
         else
             null;
         const condition = if (reference) |target|
             try self.readReference(target) orelse return null
+        else if (has_pointer_capture)
+            try self.staticCaptureValue(handle, switch_node.ast.condition) orelse
+                try self.eval(handle, switch_node.ast.condition) orelse return null
         else
             try self.eval(handle, switch_node.ast.condition) orelse return null;
         return self.switchTargetForCondition(handle, node, condition, reference);
@@ -2840,7 +2852,6 @@ pub const Interpreter = struct {
                 const capture_by_ref = tree.tokenTag(payload_token) == .asterisk;
                 const name_token = payload_token + @intFromBool(capture_by_ref);
                 const captured = if (capture_by_ref) captured: {
-                    const base = reference orelse return null;
                     var literal_buffer: [2]Ast.Node.Index = undefined;
                     const aggregate_case = for (switch_case.ast.values) |case_value| {
                         if (tree.fullStructInit(&literal_buffer, case_value) != null or
@@ -2850,12 +2861,29 @@ pub const Interpreter = struct {
                         null
                     else
                         try self.analyser.resolveKnownUnionFieldName(condition);
-                    const payload_reference = if (active_field != null and
-                        (switch_case.ast.values.len != 0 or switch_case.inline_token != null))
-                        try self.extendReference(base, .{ .field = active_field.? })
-                    else
-                        base;
-                    break :captured try self.referenceValue(payload_reference) orelse return null;
+                    const has_payload_field = active_field != null and
+                        (switch_case.ast.values.len != 0 or switch_case.inline_token != null);
+                    if (reference) |base| {
+                        const payload_reference = if (has_payload_field)
+                            try self.extendReference(base, .{ .field = active_field.? })
+                        else
+                            base;
+                        break :captured try self.referenceValue(payload_reference) orelse return null;
+                    }
+                    if (!has_payload_field) return null;
+                    const payload = try self.analyser.resolveSwitchCaptureValue(
+                        condition,
+                        tree,
+                        switch_node,
+                        switch_case,
+                        false,
+                    ) orelse return null;
+                    break :captured try self.staticPayloadPointer(
+                        handle,
+                        switch_node.ast.condition,
+                        payload,
+                        .{ .field = active_field.? },
+                    ) orelse return null;
                 } else try self.analyser.resolveSwitchCaptureValue(condition, tree, switch_node, switch_case, false) orelse return null;
                 try self.bind(handle, name_token, captured);
                 if (tree.tokenTag(name_token + 1) == .comma) {

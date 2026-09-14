@@ -15611,6 +15611,42 @@ test "comptime static optional payload pointers" {
     , &.{.{ .label = "fallback", .kind = .Field, .detail = "u8" }});
 }
 
+test "comptime static switch pointer captures" {
+    try testCompletion(
+        \\const Value = union(enum) { count: usize, other: bool };
+        \\const value: Value = .{ .count = 4 };
+        \\fn pointer() *const usize {
+        \\    return switch (value) {
+        \\        .count => |*payload| payload,
+        \\        .other => unreachable,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &value.count) same = 1;
+        \\    return struct { items: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize, other: bool };
+        \\const value: Value = .{ .other = true };
+        \\fn Select() type {
+        \\    return switch (value) {
+        \\        .count => |*payload| struct { items: [payload.*]u8 },
+        \\        .other => struct { fallback: u8 },
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "fallback", .kind = .Field, .detail = "u8" }});
+}
+
 test "comptime pointer casts preserve address identity" {
     try testCompletion(
         \\const first: usize = 4;
