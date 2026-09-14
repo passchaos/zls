@@ -728,6 +728,16 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) == .@"nosuspend") {
+            return self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1);
+        }
+        if (tree.nodeTag(unwrapped) == .@"comptime") {
+            const operand = try self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1) orelse return null;
+            return .{
+                .value = operand.value,
+                .target = null,
+            };
+        }
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (tree.blockStatements(&block_buffer, unwrapped) != null) {
             if (!self.tick()) return null;
