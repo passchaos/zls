@@ -823,7 +823,10 @@ pub const Interpreter = struct {
                     else
                         null,
                 },
-                .failure => .{ .value = try self.eval(handle, rhs) orelse return null, .target = null },
+                .failure => |failure| blk: {
+                    if (self.catchCaptureToken(handle, unwrapped)) |token| try self.bind(handle, token, failure);
+                    break :blk self.captureOperand(handle, rhs, depth + 1);
+                },
             };
         }
         if (tree.nodeTag(unwrapped) == .deref) {

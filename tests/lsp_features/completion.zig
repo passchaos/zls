@@ -16350,6 +16350,32 @@ test "comptime static switch pointer captures" {
 
     try testCompletion(
         \\const Value = union(enum) { a: usize, b: usize };
+        \\const failure: error{Failure}!Value = error.Failure;
+        \\const fallback: Value = .{ .b = 4 };
+        \\fn fallbackFor(err: anyerror) *const Value {
+        \\    if (err != error.Failure) unreachable;
+        \\    return &fallback;
+        \\}
+        \\fn pointer() *const usize {
+        \\    return switch (failure catch |err| fallbackFor(err).*) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &fallback.b) same = 1;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
         \\const Holder = struct { value: Value };
         \\const holder: Holder = .{ .value = .{ .b = 4 } };
         \\fn selected(evaluations: *usize) *const Holder {
