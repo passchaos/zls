@@ -15206,6 +15206,44 @@ test "comptime static capture aliases isolate generic containers" {
     });
 }
 
+test "comptime static pointers preserve namespace identity" {
+    try testCompletion(
+        \\const Namespace = struct {
+        \\    const Value = union(enum) { count: usize };
+        \\    const scalar: usize = 3;
+        \\    const tagged: Value = .{ .count = 4 };
+        \\    const values = [_]usize{ 2, 5 };
+        \\    fn direct() *const usize {
+        \\        return &scalar;
+        \\    }
+        \\    fn switched() *const usize {
+        \\        return switch (tagged) { .count => |*payload| payload };
+        \\    }
+        \\    fn iterated() *const usize {
+        \\        for (&values) |*item| {
+        \\            if (item.* == 5) return item;
+        \\        }
+        \\        unreachable;
+        \\    }
+        \\};
+        \\fn Select() type {
+        \\    var direct_same: usize = 2;
+        \\    if (Namespace.direct() == &Namespace.scalar) direct_same = 1;
+        \\    var switch_same: usize = 4;
+        \\    if (Namespace.switched() == &Namespace.tagged.count) switch_same = 3;
+        \\    var for_same: usize = 6;
+        \\    if (Namespace.iterated() == &Namespace.values[1]) for_same = 5;
+        \\    return struct { direct_same: [direct_same]u8, switch_same: [switch_same]u8, for_same: [for_same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "direct_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "switch_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "for_same", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "comptime pointer identities preserve distinct aliases" {
     const source =
         \\const Namespace = struct {
