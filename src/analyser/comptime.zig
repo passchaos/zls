@@ -742,7 +742,114 @@ pub const Interpreter = struct {
             }
             return .{ .value = value, .target = null };
         }
+        if (tree.nodeTag(unwrapped) == .field_access) {
+            const base, const field_token = tree.nodeData(unwrapped).node_and_token;
+            const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
+            const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
+            const value = try self.analyser.resolveFieldAccess(base_operand.value, field_name) orelse return null;
+            const target = try self.aggregateCaptureTarget(base_operand);
+            if (target == null) return .{ .value = value, .target = null };
+            const aggregate = try self.captureAggregateValue(base_operand.value);
+            const aggregate_type = try aggregate.typeOf(self.analyser);
+            if (aggregate_type.isTupleType(self.analyser)) {
+                const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return .{ .value = value, .target = null };
+                return .{
+                    .value = value,
+                    .target = try self.extendCaptureTarget(target.?, value, .{ .index = index }),
+                };
+            }
+            if (!aggregate_type.isStructType(self.analyser) and !aggregate_type.isUnionType()) {
+                return .{ .value = value, .target = null };
+            }
+            return .{
+                .value = value,
+                .target = try self.extendCaptureTarget(target.?, value, .{ .field = field_name }),
+            };
+        }
+        if (tree.nodeTag(unwrapped) == .unwrap_optional) {
+            const base = tree.nodeData(unwrapped).node_and_token[0];
+            const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
+            const value = try self.analyser.resolveOptionalUnwrap(base_operand.value) orelse return null;
+            return .{
+                .value = value,
+                .target = if (base_operand.target) |target|
+                    try self.extendCaptureTarget(target, value, .optional_payload)
+                else
+                    null,
+            };
+        }
+        if (tree.nodeTag(unwrapped) == .deref) {
+            const pointer_operand = try self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1) orelse return null;
+            const value = try self.analyser.resolveDerefType(pointer_operand.value) orelse return null;
+            return .{
+                .value = value,
+                .target = try self.captureTargetFromPointer(pointer_operand.value, value),
+            };
+        }
+        if (ast.isBuiltinCall(tree, unwrapped) and
+            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(unwrapped)), "@field"))
+        {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const params = tree.builtinCallParams(&buffer, unwrapped).?;
+            if (params.len != 2) return null;
+            const base_operand = try self.captureOperand(handle, params[0], depth + 1) orelse return null;
+            const name_value = try self.eval(handle, params[1]) orelse return null;
+            if (name_value.data != .string_value) return null;
+            const field_name = name_value.data.string_value.bytes;
+            const value = try self.analyser.resolveComptimeFieldValue(base_operand.value, field_name) orelse return null;
+            const target = try self.aggregateCaptureTarget(base_operand);
+            if (target == null) return .{ .value = value, .target = null };
+            return .{
+                .value = value,
+                .target = try self.extendCaptureTarget(target.?, value, .{ .field = field_name }),
+            };
+        }
         return self.captureOperandFallback(handle, unwrapped, depth);
+    }
+
+    fn captureAggregateValue(self: *Interpreter, value: Type) Error!Type {
+        return switch (value.data) {
+            .comptime_value => |comptime_value| switch (comptime_value.data) {
+                .reference => |reference| try self.readReference(reference) orelse value,
+                .pointee => |pointee| pointee.value,
+                else => value,
+            },
+            else => value,
+        };
+    }
+
+    fn aggregateCaptureTarget(self: *Interpreter, operand: CaptureOperand) Error!?CaptureTarget {
+        return try self.captureTargetFromPointer(
+            operand.value,
+            try self.captureAggregateValue(operand.value),
+        ) orelse operand.target;
+    }
+
+    fn captureTargetFromPointer(
+        self: *Interpreter,
+        pointer: Type,
+        value: Type,
+    ) Error!?CaptureTarget {
+        if (pointer.data != .comptime_value) return null;
+        return switch (pointer.data.comptime_value.data) {
+            .reference => |reference| .{ .reference = reference },
+            .pointee => |pointee| pointee: {
+                var updated = pointee;
+                updated.value = value;
+                break :pointee .{ .pointee = updated };
+            },
+            .sequence => |sequence| sequence_target: {
+                const pointer_type = try pointer.data.comptime_value.ty.instanceUnchecked(self.analyser);
+                if (pointer_type.pointerSize(self.analyser) != .one) break :sequence_target null;
+                const origin = sequence.origin orelse break :sequence_target null;
+                break :sequence_target .{ .pointee = try self.extendPointee(
+                    origin,
+                    value,
+                    .{ .index = sequence.offset },
+                ) };
+            },
+            else => null,
+        };
     }
 
     fn captureOperandFallback(
