@@ -13817,6 +13817,27 @@ test "zero-parameter type function comptime evaluation" {
     });
 
     try testCompletion(
+        \\const Holder = struct { values: [3]usize };
+        \\const original: Holder = .{ .values = .{ 2, 3, 5 } };
+        \\const alias = original;
+        \\fn Select() type {
+        \\    const alias_base: [*]const usize = &alias.values;
+        \\    const original_base: [*]const usize = &original.values;
+        \\    const distance = (alias_base + 2) - alias_base;
+        \\    var distinct: usize = 4;
+        \\    if (alias_base + 1 != original_base + 1) distinct = 3;
+        \\    const unrelated = (alias_base + 1) - original_base;
+        \\    return struct { distance: [distance]u8, distinct: [distinct]u8, unrelated: [unrelated]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "distance", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "unrelated", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\const value: u32 = 4;
         \\fn Select() type {
         \\    var state: usize = 0;
