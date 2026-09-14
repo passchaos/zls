@@ -13625,7 +13625,7 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
 
             const symbol = try analyser.identifierTokenName(tree, field_name) orelse return null;
             if (analyser.evaluate_comptime_values and
-                std.mem.eql(u8, symbol, "len") and
+                (std.mem.eql(u8, symbol, "len") or std.mem.eql(u8, symbol, "ptr")) and
                 lhs.type.pointerSize(analyser) == .slice)
             {
                 if (try analyser.resolveStaticConstValue(.{
