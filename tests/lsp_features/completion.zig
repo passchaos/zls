@@ -5279,6 +5279,29 @@ test "comptime splat coerces structured pointer qualifiers" {
     });
 }
 
+test "comptime wrapped splat preserves pointer identity" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var value: u8 = 2;
+        \\    const pointer: *u8 = &value;
+        \\    const optional: ?@Vector(2, *const u8) = @splat(pointer);
+        \\    const fallible: error{}!@Vector(2, *const u8) = @splat(pointer);
+        \\    const optional_value = optional.?;
+        \\    const fallible_value = fallible catch unreachable;
+        \\    return struct {
+        \\        identity: [if (optional_value[0] == pointer and
+        \\            fallible_value[1] == pointer) 1 else 99]u8,
+        \\        values: [optional_value[1].* + fallible_value[0].*]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identity", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "values", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "comptime interpreter evaluates assignment targets before values" {
     try testCompletion(
         \\fn Select() type {
