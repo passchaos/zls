@@ -16016,6 +16016,38 @@ test "comptime static switch pointer captures" {
         .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize };
+        \\const values = [_]Value{ .{ .count = 2 }, .{ .count = 4 } };
+        \\const many: [*]const Value = @as([*]const Value, &values) + 1;
+        \\const slice: []const Value = values[1..];
+        \\fn manyPointer() *const usize {
+        \\    return switch (many[0]) { .count => |*payload| payload };
+        \\}
+        \\fn slicePointer() *const usize {
+        \\    return switch (slice[0]) { .count => |*payload| payload };
+        \\}
+        \\fn Select() type {
+        \\    var many_same: usize = 2;
+        \\    if (manyPointer() == &values[1].count) many_same = 1;
+        \\    var slice_same: usize = 4;
+        \\    if (slicePointer() == &values[1].count) slice_same = 3;
+        \\    return struct {
+        \\        many_value: [manyPointer().*]u8,
+        \\        slice_value: [slicePointer().*]u8,
+        \\        many_same: [many_same]u8,
+        \\        slice_same: [slice_same]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "many_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "slice_value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "many_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "slice_same", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

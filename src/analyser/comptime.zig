@@ -725,6 +725,38 @@ pub const Interpreter = struct {
                 .path = pointee.path,
             };
         }
+        sequence_origin: {
+            if (tree.nodeTag(unwrapped) != .array_access) break :sequence_origin;
+            const base, const index_node = tree.nodeData(unwrapped).node_and_node;
+            const evaluated = try self.eval(handle, base) orelse break :sequence_origin;
+            const base_type = try (try evaluated.typeOf(self.analyser)).instanceUnchecked(self.analyser);
+            const pointer_size = base_type.pointerSize(self.analyser) orelse break :sequence_origin;
+            if (pointer_size != .many and pointer_size != .slice) break :sequence_origin;
+            const index = switch (tree.nodeTag(unwrapGroupedSource(tree, index_node))) {
+                .number_literal, .identifier => try self.integer(handle, index_node) orelse break :sequence_origin,
+                else => break :sequence_origin,
+            };
+            const value = if (try Value.sequenceAlloc(self.analyser, evaluated) != null)
+                evaluated
+            else
+                try self.staticCaptureValue(handle, base) orelse break :sequence_origin;
+            const sequence = try Value.sequenceAlloc(self.analyser, value) orelse break :sequence_origin;
+            if (index >= sequence.len) break :sequence_origin;
+            if (sequence.origin) |origin| {
+                const offset = std.math.add(usize, sequence.offset, index) catch break :sequence_origin;
+                const path = try self.analyser.arena.alloc(Value.Reference.Access, origin.path.len + 1);
+                @memcpy(path[0..origin.path.len], origin.path);
+                path[origin.path.len] = .{ .index = offset };
+                return .{
+                    .declaration = .{
+                        .decl = .{ .ast_node = origin.source.node },
+                        .handle = origin.source.handle,
+                        .container_type = origin.container_type,
+                    },
+                    .path = path,
+                };
+            }
+        }
         if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |resolved| {
             var declaration = resolved;
             if (declaration.container_type == null and self.container_type != null and
@@ -1186,7 +1218,8 @@ pub const Interpreter = struct {
             },
             .slice, .slice_open, .slice_sentinel => {
                 const slice = handle.tree.fullSlice(node).?;
-                const value = try self.eval(handle, slice.ast.sliced) orelse return null;
+                const value = try self.staticSequenceValue(handle, slice.ast.sliced) orelse
+                    try self.eval(handle, slice.ast.sliced) orelse return null;
                 const start_value = try self.integerValue(handle, slice.ast.start) orelse return null;
                 const end = if (slice.ast.end.unwrap()) |end_node|
                     try self.integerValue(handle, end_node) orelse return null
@@ -2478,6 +2511,26 @@ pub const Interpreter = struct {
 
     fn staticCaptureValue(self: *Interpreter, handle: *Handle, condition: Ast.Node.Index) Error!?Type {
         return self.staticCaptureValueDepth(handle, condition, 0);
+    }
+
+    fn staticSequenceValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        const target = try self.staticPointeeTarget(handle, node, 0) orelse return null;
+        if (!target.declaration.isConst() or !try target.declaration.isStatic()) return null;
+        const value = try self.staticCaptureValue(handle, node) orelse return null;
+        var sequence = try Value.sequenceAlloc(self.analyser, value) orelse return null;
+        if (sequence.origin != null) return value;
+        const declaration_node = switch (target.declaration.decl) {
+            .ast_node => |declaration| declaration,
+            else => return null,
+        };
+        sequence.origin = .{
+            .value = value,
+            .source = .of(declaration_node, target.declaration.handle),
+            .container_type = target.declaration.container_type,
+            .path = target.path,
+            .is_static = true,
+        };
+        return @as(?Type, try Value.create(self.analyser, try value.typeOf(self.analyser), .{ .sequence = sequence }));
     }
 
     fn staticCaptureValueDepth(
