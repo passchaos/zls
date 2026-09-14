@@ -13838,6 +13838,29 @@ test "zero-parameter type function comptime evaluation" {
     });
 
     try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\fn makeValue(value: usize) Value {
+        \\    return .{ .b = value };
+        \\}
+        \\fn pointer(value: usize) *const usize {
+        \\    return switch (makeValue(value)) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const same = pointer(4) - pointer(4);
+        \\    const distinct = pointer(4) - pointer(5);
+        \\    return struct { same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "same", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[?]u8" },
+    });
+
+    try testCompletion(
         \\const value: u32 = 4;
         \\fn Select() type {
         \\    var state: usize = 0;

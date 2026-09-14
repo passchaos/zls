@@ -79,26 +79,18 @@ pub const Value = struct {
         }
 
         fn eql(self: Pointee, other: Pointee) bool {
+            return self.sameRoot(other) and pathEql(self.path, other.path);
+        }
+
+        fn sameRoot(self: Pointee, other: Pointee) bool {
             if ((self.temporary_value == null) != (other.temporary_value == null)) return false;
-            if (self.temporary_value) |value| {
-                if (!value.eql(other.temporary_value.?) or self.path.len != other.path.len) return false;
-                return pathEql(self.path, other.path);
-            }
+            if (self.temporary_value) |value| return value.eql(other.temporary_value.?);
             if (!self.source.eql(other.source) or
                 self.is_static != other.is_static or
-                (self.container_type == null) != (other.container_type == null) or
-                self.path.len != other.path.len) return false;
+                (self.container_type == null) != (other.container_type == null)) return false;
             if (!self.is_static and !self.value.eql(other.value)) return false;
             if (self.container_type) |container_type| {
                 if (!container_type.eql(other.container_type.?)) return false;
-            }
-            for (self.path, other.path) |lhs, rhs| {
-                if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
-                switch (lhs) {
-                    .field => |name| if (!std.mem.eql(u8, name, rhs.field)) return false,
-                    .index => |index| if (index != rhs.index) return false,
-                    .optional_payload, .error_union_payload => {},
-                }
             }
             return true;
         }
@@ -420,8 +412,7 @@ pub const Value = struct {
                 else => null,
             },
             .pointee => |lhs_pointee| switch (rhs.data.comptime_value.data) {
-                .pointee => |rhs_pointee| if (lhs_pointee.source.eql(rhs_pointee.source) and
-                    optionalTypeEql(lhs_pointee.container_type, rhs_pointee.container_type))
+                .pointee => |rhs_pointee| if (lhs_pointee.sameRoot(rhs_pointee))
                     pathOffsetDifference(lhs_pointee.path, rhs_pointee.path)
                 else
                     null,
