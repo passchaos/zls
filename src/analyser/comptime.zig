@@ -2459,6 +2459,16 @@ pub const Interpreter = struct {
     }
 
     fn staticCaptureValue(self: *Interpreter, handle: *Handle, condition: Ast.Node.Index) Error!?Type {
+        return self.staticCaptureValueDepth(handle, condition, 0);
+    }
+
+    fn staticCaptureValueDepth(
+        self: *Interpreter,
+        handle: *Handle,
+        condition: Ast.Node.Index,
+        depth: u8,
+    ) Error!?Type {
+        if (depth == 128) return null;
         const target = try self.staticPointeeTarget(handle, condition, 0) orelse return null;
         if (target.path.len != 0 or !target.declaration.isConst() or
             !try target.declaration.isStatic()) return null;
@@ -2469,10 +2479,20 @@ pub const Interpreter = struct {
         const variable = target.declaration.handle.tree.fullVarDecl(declaration_node) orelse return null;
         const initializer = variable.ast.init_node.unwrap() orelse return null;
         const declaration_value = try target.declaration.resolveType(self.analyser) orelse return null;
+        const destination = try declaration_value.typeOf(self.analyser);
+        if (try self.staticCaptureValueDepth(target.declaration.handle, initializer, depth + 1)) |value| {
+            return self.coerceAssignmentFromSource(
+                target.declaration.handle,
+                destination,
+                value,
+                initializer,
+                null,
+            );
+        }
         return self.evaluateTypedWithContainer(
             target.declaration.handle,
             initializer,
-            try declaration_value.typeOf(self.analyser),
+            destination,
             target.declaration.container_type,
         );
     }
