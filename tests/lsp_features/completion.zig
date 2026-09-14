@@ -16420,6 +16420,67 @@ test "comptime static switch pointer captures" {
         .{ .label = "base_evaluations", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "name_evaluations", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const result: error{Failure}!Value = .{ .b = 4 };
+        \\fn tryPointer() error{Failure}!*const usize {
+        \\    return switch (try result) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn catchPointer() *const usize {
+        \\    return switch (result catch unreachable) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const tried = tryPointer() catch unreachable;
+        \\    const unwrapped = &(result catch unreachable).b;
+        \\    var try_same: usize = 2;
+        \\    if (tried == unwrapped) try_same = 1;
+        \\    var catch_same: usize = 4;
+        \\    if (catchPointer() == unwrapped) catch_same = 3;
+        \\    return struct { value: [tried.*]u8, try_same: [try_same]u8, catch_same: [catch_same]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "try_same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "catch_same", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const result: error{Failure}!Value = .{ .b = 4 };
+        \\fn selected(evaluations: *usize) *const error{Failure}!Value {
+        \\    evaluations.* += 1;
+        \\    return &result;
+        \\}
+        \\fn pointer(evaluations: *usize) error{Failure}!*const usize {
+        \\    return switch (try selected(evaluations).*) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    const captured = pointer(&evaluations) catch unreachable;
+        \\    const unwrapped = &(result catch unreachable).b;
+        \\    var same: usize = 2;
+        \\    if (captured == unwrapped) same = 1;
+        \\    return struct { value: [captured.*]u8, same: [same]u8, evaluations: [evaluations]u8 };
+        \\}
+        \\const selected_value: Select() = undefined;
+        \\const field = selected_value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {

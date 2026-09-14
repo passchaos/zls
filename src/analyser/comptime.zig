@@ -778,6 +778,33 @@ pub const Interpreter = struct {
                     null,
             };
         }
+        if (tree.nodeTag(unwrapped) == .@"try") {
+            const base_operand = try self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1) orelse return null;
+            return switch (try self.errorUnionValue(base_operand.value) orelse return null) {
+                .payload => |value| .{
+                    .value = value,
+                    .target = if (base_operand.target) |target|
+                        try self.extendCaptureTarget(target, value, .error_union_payload)
+                    else
+                        null,
+                },
+                .failure => return null,
+            };
+        }
+        if (tree.nodeTag(unwrapped) == .@"catch") {
+            const lhs, const rhs = tree.nodeData(unwrapped).node_and_node;
+            const base_operand = try self.captureOperand(handle, lhs, depth + 1) orelse return null;
+            return switch (try self.errorUnionValue(base_operand.value) orelse return null) {
+                .payload => |value| .{
+                    .value = value,
+                    .target = if (base_operand.target) |target|
+                        try self.extendCaptureTarget(target, value, .error_union_payload)
+                    else
+                        null,
+                },
+                .failure => .{ .value = try self.eval(handle, rhs) orelse return null, .target = null },
+            };
+        }
         if (tree.nodeTag(unwrapped) == .deref) {
             const pointer_operand = try self.captureOperand(handle, tree.nodeData(unwrapped).node, depth + 1) orelse return null;
             const value = try self.analyser.resolveDerefType(pointer_operand.value) orelse return null;
@@ -967,6 +994,23 @@ pub const Interpreter = struct {
         if (depth == 128) return null;
         const tree = &handle.tree;
         const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) == .@"try" or tree.nodeTag(unwrapped) == .@"catch") {
+            const base = switch (tree.nodeTag(unwrapped)) {
+                .@"try" => tree.nodeData(unwrapped).node,
+                .@"catch" => tree.nodeData(unwrapped).node_and_node[0],
+                else => unreachable,
+            };
+            const value = try self.staticCaptureValue(handle, base) orelse return null;
+            if (switch (try self.errorUnionValue(value) orelse return null) {
+                .payload => false,
+                .failure => true,
+            }) return null;
+            const parent = try self.staticPointeeTarget(handle, base, depth + 1) orelse return null;
+            const path = try self.analyser.arena.alloc(Value.Reference.Access, parent.path.len + 1);
+            @memcpy(path[0..parent.path.len], parent.path);
+            path[parent.path.len] = .error_union_payload;
+            return .{ .declaration = parent.declaration, .path = path };
+        }
         if (tree.nodeTag(unwrapped) == .deref) {
             const pointer_node = tree.nodeData(unwrapped).node;
             const evaluated = try self.eval(handle, pointer_node);
