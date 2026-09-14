@@ -806,7 +806,10 @@ pub const Interpreter = struct {
                     else
                         null,
                 },
-                .failure => return null,
+                .failure => |failure| {
+                    self.pending_flow = .{ .returned = .{ .value = failure, .source_node = null } };
+                    return null;
+                },
             };
         }
         if (tree.nodeTag(unwrapped) == .@"catch") {
@@ -2159,9 +2162,15 @@ pub const Interpreter = struct {
                 if (!self.tick()) return null;
                 if (tree.switchFull(node).label_token != null)
                     break :blk self.expressionResult(try self.switchLoop(handle, node, true, destination));
-                const target = try self.switchTarget(handle, node) orelse break :blk .{
-                    .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
-                    .source_node = null,
+                const target = try self.switchTarget(handle, node) orelse {
+                    if (self.pending_flow) |pending| {
+                        self.pending_flow = null;
+                        break :blk self.expressionResult(pending);
+                    }
+                    break :blk .{
+                        .value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null,
+                        .source_node = null,
+                    };
                 };
                 break :blk self.evalSourceWithType(handle, target, destination);
             },
