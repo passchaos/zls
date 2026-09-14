@@ -3246,6 +3246,24 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
             },
         },
         .ip_index => |payload| {
+            if (rhs == .single) {
+                const child_type = switch (analyser.ip.indexToKey(payload.type)) {
+                    .array_type => |array| array.child,
+                    .vector_type => |vector| vector.child,
+                    .tuple_type => |tuple| tuple_child: {
+                        const index = rhs.single orelse return null;
+                        if (index >= tuple.types.len) return null;
+                        break :tuple_child tuple.types.at(@intCast(index), analyser.ip);
+                    },
+                    else => null,
+                };
+                if (child_type) |child| {
+                    return .{
+                        .type = Type.fromIP(analyser, child, null),
+                        .is_const = is_const,
+                    };
+                }
+            }
             const ty = try analyser.bracketAccessTypeFromIPIndex(payload.type);
             const instance = try ty.instanceUnchecked(analyser);
             const binding: Binding = .{ .type = instance, .is_const = is_const };

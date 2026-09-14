@@ -4251,6 +4251,41 @@ test "comptime inferred splat result location immediate reads" {
     });
 }
 
+test "nested vector element types remain vectors" {
+    try testCompletion(
+        \\const vectors: [1]@Vector(2, usize) = undefined;
+        \\fn Select() type {
+        \\    const Element = @TypeOf(vectors[0]);
+        \\    const size: usize = if (Element == @Vector(2, usize)) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\const arrays: [1][2]usize = undefined;
+        \\fn Select() type {
+        \\    const Element = @TypeOf(arrays[0]);
+        \\    const size: usize = if (Element == [2]usize) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\const tuples: [1]struct { usize, bool } = undefined;
+        \\fn Select() type {
+        \\    const Element = @TypeOf(tuples[0]);
+        \\    const size: usize = if (Element == struct { usize, bool }) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[1]u8" }});
+}
+
 test "comptime inferred splat result location captured reads" {
     try testCompletion(
         \\const Pair = struct { vector: @Vector(2, usize) };
