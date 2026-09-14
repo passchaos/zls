@@ -1203,8 +1203,11 @@ pub const Interpreter = struct {
             },
             .field_access => {
                 const base, const field_token = handle.tree.nodeData(node).node_and_token;
-                const value = try self.eval(handle, base) orelse return null;
                 const field_name = offsets.identifierTokenToNameSlice(&handle.tree, field_token);
+                const value = if (std.mem.eql(u8, field_name, "ptr"))
+                    try self.staticSequenceValue(handle, base) orelse try self.eval(handle, base) orelse return null
+                else
+                    try self.eval(handle, base) orelse return null;
                 return self.analyser.resolveFieldAccess(value, field_name);
             },
             .array_access => {
@@ -2517,19 +2520,27 @@ pub const Interpreter = struct {
         const target = try self.staticPointeeTarget(handle, node, 0) orelse return null;
         if (!target.declaration.isConst() or !try target.declaration.isStatic()) return null;
         const value = try self.staticCaptureValue(handle, node) orelse return null;
-        var sequence = try Value.sequenceAlloc(self.analyser, value) orelse return null;
-        if (sequence.origin != null) return value;
+        if (try Value.sequenceAlloc(self.analyser, value)) |sequence| {
+            if (sequence.origin != null) return value;
+        }
         const declaration_node = switch (target.declaration.decl) {
             .ast_node => |declaration| declaration,
             else => return null,
         };
-        sequence.origin = .{
+        const origin: Value.Pointee = .{
             .value = value,
             .source = .of(declaration_node, target.declaration.handle),
             .container_type = target.declaration.container_type,
             .path = target.path,
             .is_static = true,
         };
+        const pointer = try self.analyser.resolveAddressOf(true, value);
+        const pointee = try Value.create(
+            self.analyser,
+            try pointer.typeOf(self.analyser),
+            .{ .pointee = origin },
+        );
+        const sequence = try Value.sequenceAlloc(self.analyser, pointee) orelse return null;
         return @as(?Type, try Value.create(self.analyser, try value.typeOf(self.analyser), .{ .sequence = sequence }));
     }
 

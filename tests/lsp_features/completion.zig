@@ -16048,6 +16048,46 @@ test "comptime static switch pointer captures" {
         .{ .label = "many_same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "slice_same", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\const Value = union(enum) { count: usize };
+        \\const values = [_]Value{ .{ .count = 2 }, .{ .count = 4 } };
+        \\const slice: []const Value = values[1..];
+        \\const alias = slice;
+        \\fn pointer() *const usize {
+        \\    return switch (alias.ptr[0]) { .count => |*payload| payload };
+        \\}
+        \\fn Select() type {
+        \\    var capture_same: usize = 2;
+        \\    if (pointer() == &values[1].count) capture_same = 1;
+        \\    return struct {
+        \\        value: [pointer().*]u8,
+        \\        capture_same: [capture_same]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "capture_same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const values = [_]usize{ 2, 4 };
+        \\const slice: []const usize = values[1..];
+        \\const alias = slice;
+        \\fn Select() type {
+        \\    var pointer_same: usize = 4;
+        \\    if (alias.ptr == slice.ptr) pointer_same = 3;
+        \\    const distance = alias.ptr - slice.ptr;
+        \\    return struct { pointer_same: [pointer_same]u8, distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "pointer_same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "distance", .kind = .Field, .detail = "[0]u8" },
+    });
 }
 
 test "comptime static for pointer captures" {
