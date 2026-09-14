@@ -15953,6 +15953,47 @@ test "comptime sequence element addresses evaluate operands once" {
     });
 }
 
+test "comptime slices evaluate operands once" {
+    try testCompletion(
+        \\fn select(values: *[3:0]usize, evaluations: *usize) *[3:0]usize {
+        \\    evaluations.* += 1;
+        \\    return values;
+        \\}
+        \\fn bound(value: usize, evaluations: *usize) usize {
+        \\    evaluations.* += 1;
+        \\    return value;
+        \\}
+        \\fn sentinel(evaluations: *usize) usize {
+        \\    evaluations.* += 1;
+        \\    return 0;
+        \\}
+        \\fn Select() type {
+        \\    var values: [3:0]usize = .{ 3, 5, 7 };
+        \\    var base_evaluations: usize = 0;
+        \\    var bound_evaluations: usize = 0;
+        \\    var sentinel_evaluations: usize = 0;
+        \\    const slice = select(&values, &base_evaluations)[
+        \\        bound(1, &bound_evaluations)..bound(3, &bound_evaluations) :sentinel(&sentinel_evaluations)
+        \\    ];
+        \\    _ = slice;
+        \\    const base_count = base_evaluations;
+        \\    const bound_count = bound_evaluations;
+        \\    const sentinel_count = sentinel_evaluations;
+        \\    return struct {
+        \\        base: [base_count]u8,
+        \\        bounds: [bound_count]u8,
+        \\        sentinel: [sentinel_count]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "base", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "bounds", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "sentinel", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime local tuple pointers preserve field identity" {
     try testCompletion(
         \\fn fieldName(evaluations: *usize) []const u8 {
