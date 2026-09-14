@@ -4429,6 +4429,36 @@ test "comptime overflow builtins accept structured vectors" {
     });
 }
 
+test "comptime self binary identities accept structured vectors" {
+    try testCompletion(
+        \\var runtime: u8 = undefined;
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const values = @as(@Vector(2, u8), operand: {
+        \\        executions += 1;
+        \\        break :operand .{ runtime, 7 };
+        \\    });
+        \\    const xor = values ^ values;
+        \\    const sub = values - values;
+        \\    const wrapped = values -% values;
+        \\    const saturated = values -| values;
+        \\    const zero: @Vector(2, u8) = @splat(0);
+        \\    return struct {
+        \\        values: [if (@reduce(.And, xor == zero) and
+        \\            @reduce(.And, sub == zero) and
+        \\            @reduce(.And, wrapped == zero) and
+        \\            @reduce(.And, saturated == zero)) 1 else 99]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "comptime unary float builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {

@@ -6059,22 +6059,19 @@ fn resolveSelfBinaryValue(
     tag: Ast.Node.Tag,
     operand: Type,
 ) error{OutOfMemory}!?Type {
-    const payload = switch (operand.data) {
-        .ip_index => |payload| payload,
-        else => return null,
-    };
-    if (payload.index) |index| {
+    const operand_type = (try operand.typeOf(analyser)).ipIndex() orelse return null;
+    if (operand.ipIndex()) |index| {
         if (analyser.ip.isUndefined(index)) return operand.withoutIPIndex(analyser);
     }
-    const scalar_tag = analyser.ip.zigTypeTag(payload.type);
+    const scalar_tag = analyser.ip.zigTypeTag(operand_type);
     if (scalar_tag == .bool and tag == .bit_xor) {
         return Type.fromIP(analyser, .bool_type, .bool_false);
     }
-    if (analyser.fixedWidthIntegerBounds(payload.type) != null) {
-        return analyser.intValueWithType(payload.type, 0);
+    if (analyser.fixedWidthIntegerBounds(operand_type) != null) {
+        return analyser.intValueWithType(operand_type, 0);
     }
 
-    const vector = switch (analyser.ip.indexToKey(payload.type)) {
+    const vector = switch (analyser.ip.indexToKey(operand_type)) {
         .vector_type => |vector| vector,
         else => return null,
     };
@@ -6082,11 +6079,15 @@ fn resolveSelfBinaryValue(
     if (child_tag != .bool or tag != .bit_xor) {
         _ = analyser.fixedWidthIntegerBounds(vector.child) orelse return null;
     }
-    if (analyser.aggregateValues(operand)) |source_values| {
+    if (comptime_eval.Value.elements(operand)) |items| {
+        if (items.len != vector.len) return null;
+        for (items) |item| if (item.ipIndex()) |index| {
+            if (analyser.ip.isUndefined(index)) return null;
+        };
+    } else if (analyser.aggregateValues(operand)) |source_values| {
         if (source_values.len != vector.len) return null;
-        for (0..vector.len) |i| {
+        for (0..vector.len) |i|
             if (analyser.ip.isUndefined(source_values.at(@intCast(i), analyser.ip))) return null;
-        }
     }
 
     const zero: InternPool.Index = if (child_tag == .bool)
@@ -6096,7 +6097,7 @@ fn resolveSelfBinaryValue(
     const values = try analyser.gpa.alloc(InternPool.Index, vector.len);
     defer analyser.gpa.free(values);
     @memset(values, zero);
-    return analyser.aggregateValue(Type.fromIP(analyser, payload.type, null), values);
+    return analyser.aggregateValue(Type.fromIP(analyser, operand_type, null), values);
 }
 
 fn resolveComplementaryBinaryValue(
