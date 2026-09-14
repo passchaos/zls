@@ -754,6 +754,22 @@ pub const Interpreter = struct {
                 };
             }
         }
+        if (ast.isBuiltinCall(tree, unwrapped) and
+            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(unwrapped)), "@field"))
+        {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const params = tree.builtinCallParams(&buffer, unwrapped).?;
+            if (params.len != 2) return null;
+            const name_node = unwrapGroupedSource(tree, params[1]);
+            if (tree.nodeTag(name_node) != .string_literal) return null;
+            const name_value = try self.eval(handle, name_node) orelse return null;
+            if (name_value.data != .string_value) return null;
+            const parent = try self.staticPointeeTarget(handle, params[0], depth + 1) orelse return null;
+            const path = try self.analyser.arena.alloc(Value.Reference.Access, parent.path.len + 1);
+            @memcpy(path[0..parent.path.len], parent.path);
+            path[parent.path.len] = .{ .field = name_value.data.string_value.bytes };
+            return .{ .declaration = parent.declaration, .path = path };
+        }
         if (try self.analyser.resolveDeclarationOfNode(.of(unwrapped, handle))) |resolved| {
             var declaration = resolved;
             if (declaration.container_type == null and self.container_type != null and

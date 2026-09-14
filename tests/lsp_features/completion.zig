@@ -15899,6 +15899,28 @@ test "comptime nested alias optional payload pointers" {
         .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
     });
+
+    try testCompletion(
+        \\const Holder = struct { optional: ?usize };
+        \\const original: Holder = .{ .optional = 4 };
+        \\const alias = original;
+        \\fn pointer() *const usize {
+        \\    if (@field(alias, "optional")) |*payload| return payload else unreachable;
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &alias.optional.?) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer() != &original.optional.?) distinct = 3;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "comptime static switch pointer captures" {
@@ -16182,6 +16204,32 @@ test "comptime static switch pointer captures" {
         \\    if (pointer() == &alias.value) same = 1;
         \\    var distinct: usize = 4;
         \\    if (pointer() != &original.value) distinct = 3;
+        \\    return struct { value: [pointer().*]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[3]u8" },
+    });
+
+    try testCompletion(
+        \\const Value = union(enum) { a: usize, b: usize };
+        \\const Holder = struct { value: Value };
+        \\const original: Holder = .{ .value = .{ .b = 4 } };
+        \\const alias = original;
+        \\fn pointer() *const usize {
+        \\    return switch (@field(alias, "value")) {
+        \\        .a => unreachable,
+        \\        .b => |*payload| payload,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (pointer() == &alias.value.b) same = 1;
+        \\    var distinct: usize = 4;
+        \\    if (pointer() != &original.value.b) distinct = 3;
         \\    return struct { value: [pointer().*]u8, same: [same]u8, distinct: [distinct]u8 };
         \\}
         \\const selected: Select() = undefined;
