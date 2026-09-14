@@ -16319,6 +16319,54 @@ test "comptime static pointer arithmetic declaration distance" {
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime static pointer comparisons" {
+    try testCompletion(
+        \\const values = [_]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*]const usize = &values;
+        \\const tail = pointer + 1;
+        \\fn Select() type {
+        \\    const size: usize = if (tail == pointer + 1) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[1]u8" }});
+
+    try testCompletion(
+        \\const values = [_]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*]const usize = &values;
+        \\fn Select() type {
+        \\    const size: usize = if (pointer == pointer + 1) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[2]u8" }});
+
+    try testCompletion(
+        \\const lhs_values = [_]usize{ 2, 3 };
+        \\const rhs_values = [_]usize{ 2, 3 };
+        \\fn Select() type {
+        \\    const size: usize = if (&lhs_values == &rhs_values) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[2]u8" }});
+
+    try testCompletion(
+        \\var runtime: [*]const usize = undefined;
+        \\const values = [_]usize{ 2, 3 };
+        \\const pointer: [*]const usize = &values;
+        \\fn Select() type {
+        \\    const size: usize = if (pointer == runtime) 1 else 2;
+        \\    return struct { value: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime nonzero sentinel dynamic array boundary" {
     try testCompletion(
         \\const values = [_:9]usize{ 3, 5, 7 };

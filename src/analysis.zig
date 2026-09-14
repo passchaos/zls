@@ -13068,6 +13068,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                 }
                 if (analyser.resolveComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| return value;
+                if (analyser.comptime_interpreter == null and
+                    lhs_ty.pointerSize(analyser) != null and
+                    rhs_ty.pointerSize(analyser) != null)
+                {
+                    const destination = Type.fromIP(analyser, .type_type, .bool_type);
+                    if (try comptime_eval.Interpreter.evaluateTyped(analyser, handle, node, destination)) |value| return value;
+                }
             }
 
             const ty = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse
