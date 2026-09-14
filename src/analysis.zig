@@ -13380,6 +13380,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (analyser.evaluate_comptime_values) {
                 const binary_options = try analyser.resolveComptimeBinaryOptions(tree, lhs, rhs, .sub, true);
                 if (try analyser.resolveComptimeBinaryValue(.sub, lhs_ty, rhs_ty, binary_options)) |value| return value;
+                if (analyser.comptime_interpreter == null and
+                    lhs_ty.pointerSize(analyser) != null and
+                    rhs_ty.pointerSize(analyser) != null)
+                {
+                    const destination = Type.fromIP(analyser, .type_type, .usize_type);
+                    if (try comptime_eval.Interpreter.evaluateTyped(analyser, handle, node, destination)) |value| return value;
+                }
             }
             lhs_ty = lhs_ty.withoutIPIndex(analyser);
             rhs_ty = rhs_ty.withoutIPIndex(analyser);

@@ -16242,6 +16242,83 @@ test "comptime static sentinel slice coercions" {
     , &.{.{ .label = "distance", .kind = .Field, .detail = "[3]u8" }});
 }
 
+test "comptime static sentinel pointer arithmetic declarations" {
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const end = slice.ptr + slice.len;
+        \\fn Select() type {
+        \\    const value = end[0];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const end = slice.ptr + slice.len;
+        \\const alias = end;
+        \\fn Select() type {
+        \\    const value = alias[0];
+        \\    return struct { value: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "[9]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const end = slice.ptr + slice.len;
+        \\fn Select() type {
+        \\    const distance = &end[0] - &values[values.len];
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[0]u8" }});
+
+    try testCompletion(
+        \\const values = [_:9]usize{ 2, 3, 5, 7 };
+        \\const slice: [:9]const usize = &values;
+        \\const end = slice.ptr + slice.len;
+        \\fn Select() type {
+        \\    const distance = &end[0] - &values[0];
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[4]u8" }});
+}
+
+test "comptime static pointer arithmetic declaration distance" {
+    try testCompletion(
+        \\const values = [_]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*]const usize = &values;
+        \\const end = pointer + values.len;
+        \\fn Select() type {
+        \\    const distance = end - pointer;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[4]u8" }});
+
+    try testCompletion(
+        \\var runtime: [*]const usize = undefined;
+        \\const values = [_]usize{ 2, 3, 5, 7 };
+        \\const pointer: [*]const usize = &values;
+        \\fn Select() type {
+        \\    const distance = pointer - runtime;
+        \\    return struct { distance: [distance]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "distance", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime nonzero sentinel dynamic array boundary" {
     try testCompletion(
         \\const values = [_:9]usize{ 3, 5, 7 };
