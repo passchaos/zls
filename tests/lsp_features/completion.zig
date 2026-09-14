@@ -20212,6 +20212,56 @@ test "comptime pointer casts preserve address identity" {
     });
 }
 
+test "comptime field parent pointers preserve identity" {
+    try testCompletion(
+        \\const Record = struct { first: usize, second: usize };
+        \\fn Select() type {
+        \\    var record: Record = .{ .first = 3, .second = 5 };
+        \\    const parent: *Record = @fieldParentPtr("second", &record.second);
+        \\    parent.first += 1;
+        \\    var same: usize = 2;
+        \\    if (parent == &record) same = 1;
+        \\    return struct { value: [record.first]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Record = struct { first: usize, second: usize };
+        \\const record: Record = .{ .first = 3, .second = 5 };
+        \\fn parent() *const Record {
+        \\    return @fieldParentPtr("second", &record.second);
+        \\}
+        \\fn Select() type {
+        \\    var same: usize = 2;
+        \\    if (parent() == &record) same = 1;
+        \\    return struct { value: [parent().first]u8, same: [same]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\const Record = struct { first: usize, second: usize };
+        \\fn Select() type {
+        \\    var record: Record = .{ .first = 3, .second = 5 };
+        \\    const parent: *Record = @fieldParentPtr("first", &record.second);
+        \\    var size: usize = 2;
+        \\    if (parent == &record) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime sequence pointer parameter values" {
     try testCompletion(
         \\fn source() [*]const usize {

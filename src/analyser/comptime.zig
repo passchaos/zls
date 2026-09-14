@@ -2514,6 +2514,75 @@ pub const Interpreter = struct {
         };
     }
 
+    fn fieldParentPointerValue(
+        self: *Interpreter,
+        destination: Type,
+        field_name: []const u8,
+        field_pointer: Type,
+    ) Error!?Type {
+        const pointer_instance = try destination.instanceTypeVal(self.analyser) orelse return null;
+        if (pointer_instance.pointerSize(self.analyser) != .one) return null;
+        const expected_parent = try self.analyser.resolveDerefType(pointer_instance) orelse return null;
+        const expected_parent_type = try expected_parent.typeOf(self.analyser);
+        if (field_pointer.data != .comptime_value) return null;
+
+        return switch (field_pointer.data.comptime_value.data) {
+            .reference => |reference| blk: {
+                if (!parentFieldPathMatches(reference.path, field_name)) return null;
+                const parent_path = reference.path[0 .. reference.path.len - 1];
+                const parent = try self.readValuePath(reference.storage.value, parent_path) orelse return null;
+                if (!(try parent.typeOf(self.analyser)).eql(expected_parent_type)) return null;
+                const result = try self.analyser.arena.create(Value.Reference);
+                result.* = .{ .storage = reference.storage, .path = parent_path };
+                break :blk @as(?Type, try Value.create(self.analyser, destination, .{ .reference = result }));
+            },
+            .pointee => |pointee| blk: {
+                if (!parentFieldPathMatches(pointee.path, field_name)) return null;
+                const parent_path = pointee.path[0 .. pointee.path.len - 1];
+                const root_value = pointee.root_value orelse pointee.temporary_value orelse
+                    try self.staticPointeeRootValue(pointee) orelse return null;
+                const parent = try self.readValuePath(root_value, parent_path) orelse return null;
+                if (!(try parent.typeOf(self.analyser)).eql(expected_parent_type)) return null;
+                var result = pointee;
+                result.value = parent;
+                result.path = parent_path;
+                break :blk @as(?Type, try Value.create(self.analyser, destination, .{ .pointee = result }));
+            },
+            else => null,
+        };
+    }
+
+    fn parentFieldPathMatches(path: []const Value.Reference.Access, field_name: []const u8) bool {
+        if (path.len == 0) return false;
+        return switch (path[path.len - 1]) {
+            .field => |name| std.mem.eql(u8, name, field_name),
+            .tuple_index => |index| index == (std.fmt.parseUnsigned(usize, field_name, 10) catch return false),
+            else => false,
+        };
+    }
+
+    fn staticPointeeRootValue(self: *Interpreter, pointee: Value.Pointee) Error!?Type {
+        if (!pointee.is_static) return null;
+        const declaration: Analyser.DeclWithHandle = .{
+            .decl = .{ .ast_node = pointee.source.node },
+            .handle = pointee.source.handle,
+            .container_type = pointee.container_type,
+        };
+        const declaration_node = switch (declaration.decl) {
+            .ast_node => |node| node,
+            else => return null,
+        };
+        const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse return null;
+        const initializer = variable.ast.init_node.unwrap() orelse return null;
+        const declaration_value = try declaration.resolveType(self.analyser) orelse return null;
+        return self.evaluateTypedWithContainer(
+            declaration.handle,
+            initializer,
+            try declaration_value.typeOf(self.analyser),
+            declaration.container_type,
+        );
+    }
+
     fn evalSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?EvaluatedSource {
         return self.evalSourceWithType(handle, node, null);
     }
@@ -2553,6 +2622,7 @@ pub const Interpreter = struct {
             const is_enum = std.mem.eql(u8, name, "@enumFromInt");
             const is_error = std.mem.eql(u8, name, "@errorCast");
             const is_pointer = std.mem.eql(u8, name, "@ptrCast");
+            const is_field_parent = std.mem.eql(u8, name, "@fieldParentPtr");
             const qualifier_cast: ?Type.PointerQualifierCast = if (std.mem.eql(u8, name, "@constCast"))
                 .discard_const
             else if (std.mem.eql(u8, name, "@volatileCast"))
@@ -2561,6 +2631,23 @@ pub const Interpreter = struct {
                 .increase_alignment
             else
                 null;
+            if (is_field_parent) {
+                if (!self.tick()) return null;
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 2) return null;
+                const name_value = try self.eval(handle, params[0]) orelse return null;
+                if (name_value.data != .string_value) return null;
+                const field_pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                return .{
+                    .value = try self.fieldParentPointerValue(
+                        ty,
+                        name_value.data.string_value.bytes,
+                        field_pointer,
+                    ) orelse return null,
+                    .source_node = null,
+                };
+            }
             if (kind != null or is_splat or is_enum or is_error or is_pointer or qualifier_cast != null) {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
