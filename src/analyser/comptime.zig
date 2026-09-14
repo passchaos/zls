@@ -800,6 +800,67 @@ pub const Interpreter = struct {
             )) orelse return null;
             return .{ .value = result.value, .target = result.capture_target };
         }
+        if (tree.nodeTag(unwrapped) == .slice or tree.nodeTag(unwrapped) == .slice_open or
+            tree.nodeTag(unwrapped) == .slice_sentinel)
+        {
+            const slice = tree.fullSlice(unwrapped).?;
+            var base_operand = try self.captureOperand(handle, slice.ast.sliced, depth + 1) orelse return null;
+            base_operand.target = self.captureTargetOrTemporary(handle, slice.ast.sliced, base_operand);
+            const start_value = try self.integerValue(handle, slice.ast.start) orelse return null;
+            const end = if (slice.ast.end.unwrap()) |end_node|
+                try self.integerValue(handle, end_node) orelse return null
+            else
+                null;
+            const sentinel = if (slice.ast.sentinel.unwrap()) |sentinel_node|
+                (try self.eval(handle, sentinel_node) orelse return null).ipIndex() orelse return null
+            else
+                .none;
+            const access: Analyser.BracketAccess = if (end) |end_value|
+                .{ .range = .{
+                    .bounds = if (start_value == .known and end_value == .known)
+                        .{ start_value.known, end_value.known }
+                    else
+                        null,
+                    .sentinel = sentinel,
+                } }
+            else
+                .{ .open = .{
+                    .start = switch (start_value) {
+                        .known => |known| known,
+                        .unknown => null,
+                    },
+                    .sentinel = sentinel,
+                } };
+            const value = try self.analyser.resolveBracketAccessType(base_operand.value, access) orelse return null;
+            const start = switch (start_value) {
+                .known => |known| std.math.cast(usize, known) orelse return null,
+                .unknown => return .{ .value = value, .target = null },
+            };
+            if (try Value.sequenceAlloc(self.analyser, base_operand.value)) |base_sequence| {
+                const sliced_sequence = try Value.sequenceAlloc(self.analyser, value) orelse return null;
+                var sequence = base_sequence;
+                sequence.offset = std.math.add(usize, sequence.offset, start) catch return null;
+                sequence.len = sliced_sequence.len;
+                if (sequence.origin == null) {
+                    sequence.origin = if (base_operand.target) |target| switch (target) {
+                        .pointee => |pointee| pointee,
+                        .reference => null,
+                    } else null;
+                }
+                return .{
+                    .value = try Value.create(
+                        self.analyser,
+                        try value.typeOf(self.analyser),
+                        .{ .sequence = sequence },
+                    ),
+                    .target = null,
+                };
+            }
+            return .{
+                .value = value,
+                .target = null,
+            };
+        }
         if (tree.nodeTag(unwrapped) == .array_access) {
             const base, const index_node = tree.nodeData(unwrapped).node_and_node;
             var base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
