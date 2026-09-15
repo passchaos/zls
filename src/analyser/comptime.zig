@@ -2612,64 +2612,31 @@ pub const Interpreter = struct {
                     if (params.len != 2) return null;
                     const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
                     const source_node = unwrapGroupedSource(&handle.tree, params[1]);
-                    if (self.isDirectArrayRegionSyntax(handle, destination_node) or
-                        self.isDirectArrayRegionSyntax(handle, source_node))
-                    {
-                        const destination_operand = try self.fixedArrayCopyOperand(handle, destination_node, true) orelse return null;
-                        const source_operand = try self.fixedArrayCopyOperand(handle, source_node, false) orelse return null;
-                        const copy_len = if (destination_operand.provided_len) |destination_len|
-                            if (source_operand.provided_len) |source_len|
-                                if (destination_len == source_len) destination_len else return null
-                            else
-                                destination_len
+                    const destination_operand = try self.fixedArrayCopyOperand(handle, destination_node, true) orelse return null;
+                    const source_operand = try self.fixedArrayCopyOperand(handle, source_node, false) orelse return null;
+                    const copy_len = if (destination_operand.provided_len) |destination_len|
+                        if (source_operand.provided_len) |source_len|
+                            if (destination_len == source_len) destination_len else return null
                         else
-                            source_operand.provided_len orelse return null;
-                        const destination = self.arrayCopyRegion(destination_operand, copy_len) orelse return null;
-                        const source = self.arrayCopyRegion(source_operand, copy_len) orelse return null;
-                        if (!destination.element_type.eql(source.element_type) or
-                            copy_len > self.budget.steps) return null;
-                        if (std.mem.eql(u8, name, "@memcpy") and
-                            !(self.arraySliceRegionsDisjoint(destination, source) orelse return null)) return null;
-                        const source_current = try self.arraySliceRegionItems(source) orelse return null;
-                        const source_items = try self.analyser.arena.dupe(Type, source_current[source.start..source.end]);
-                        const destination_current = try self.arraySliceRegionItems(destination) orelse return null;
-                        const items = try self.analyser.arena.dupe(Type, destination_current);
-                        @memcpy(items[destination.start..destination.end], source_items);
-                        const updated = try Value.create(self.analyser, destination.array_type, .{ .array = items });
-                        const reference = switch (destination.target) {
-                            .reference => |reference| reference,
-                            .pointee => return null,
-                        };
-                        if (!try self.writeReference(handle, reference, updated, null)) return null;
-                        return Type.fromIP(self.analyser, .void_type, .void_value);
-                    }
-                    const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
-                    const source = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
-                    if (destination.data != .comptime_value or
-                        destination.data.comptime_value.data != .reference or
-                        source.data != .comptime_value or
-                        (try destination.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one or
-                        (try source.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one) return null;
-                    if (std.mem.eql(u8, name, "@memcpy")) {
-                        const overlap = Value.pointerIdentityEql(self.analyser, destination, source) orelse switch (source.data.comptime_value.data) {
-                            .pointee => |pointee| !pointee.is_static,
-                            else => true,
-                        };
-                        if (overlap) return null;
-                    }
-
-                    const reference = destination.data.comptime_value.data.reference;
-                    const current = try self.readReference(reference) orelse return null;
-                    const source_value = try self.analyser.resolveDerefType(source) orelse return null;
-                    const destination_info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
-                    const source_info = self.fixedArrayInfo(try source_value.typeOf(self.analyser)) orelse return null;
-                    if (destination_info.len != source_info.len or
-                        !destination_info.element_type.eql(source_info.element_type) or
-                        destination_info.len > self.budget.steps) return null;
-                    const source_items = try self.mutableElements(source_value) orelse return null;
-                    if (source_items.len != source_info.len) return null;
-                    const items = try self.analyser.arena.dupe(Type, source_items);
-                    const updated = try Value.create(self.analyser, destination_info.array_type, .{ .array = items });
+                            destination_len
+                    else
+                        source_operand.provided_len orelse return null;
+                    const destination = self.arrayCopyRegion(destination_operand, copy_len) orelse return null;
+                    const source = self.arrayCopyRegion(source_operand, copy_len) orelse return null;
+                    if (!destination.element_type.eql(source.element_type) or
+                        copy_len > self.budget.steps) return null;
+                    if (std.mem.eql(u8, name, "@memcpy") and
+                        !(self.arraySliceRegionsDisjoint(destination, source) orelse return null)) return null;
+                    const source_current = try self.arraySliceRegionItems(source) orelse return null;
+                    const source_items = try self.analyser.arena.dupe(Type, source_current[source.start..source.end]);
+                    const destination_current = try self.arraySliceRegionItems(destination) orelse return null;
+                    const items = try self.analyser.arena.dupe(Type, destination_current);
+                    @memcpy(items[destination.start..destination.end], source_items);
+                    const updated = try Value.create(self.analyser, destination.array_type, .{ .array = items });
+                    const reference = switch (destination.target) {
+                        .reference => |reference| reference,
+                        .pointee => return null,
+                    };
                     if (!try self.writeReference(handle, reference, updated, null)) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
@@ -4464,6 +4431,8 @@ pub const Interpreter = struct {
         var as_buffer: [2]Ast.Node.Index = undefined;
         const as_params = tree.builtinCallParams(&as_buffer, unwrapped).?;
         if (as_params.len != 2) return null;
+        const pointer_type = ast.fullPtrType(tree, unwrapGroupedSource(tree, as_params[0])) orelse return null;
+        if (pointer_type.size != .many and pointer_type.size != .c) return null;
         const operand_node = unwrapGroupedSource(tree, as_params[1]);
         const address_node = if (ast.isBuiltinCall(tree, operand_node) and
             std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(operand_node)), "@ptrCast"))
@@ -4477,24 +4446,6 @@ pub const Interpreter = struct {
         return .{
             .type_node = as_params[0],
             .array_node = tree.nodeData(address_node).node,
-        };
-    }
-
-    fn isDirectArrayRegionSyntax(_: *Interpreter, handle: *Handle, node: Ast.Node.Index) bool {
-        const unwrapped = unwrapGroupedSource(&handle.tree, node);
-        return switch (handle.tree.nodeTag(unwrapped)) {
-            .slice, .slice_open, .slice_sentinel => true,
-            .string_literal, .multiline_string_literal => true,
-            else => directArrayPointerCastSyntax: {
-                if (directArraySlicePointer(&handle.tree, unwrapped) != null) break :directArrayPointerCastSyntax true;
-                const pointer = directArrayPointerCast(&handle.tree, unwrapped) orelse
-                    break :directArrayPointerCastSyntax false;
-                const pointer_type = ast.fullPtrType(
-                    &handle.tree,
-                    unwrapGroupedSource(&handle.tree, pointer.type_node),
-                ) orelse break :directArrayPointerCastSyntax false;
-                break :directArrayPointerCastSyntax pointer_type.size == .many or pointer_type.size == .c;
-            },
         };
     }
 
@@ -4561,16 +4512,28 @@ pub const Interpreter = struct {
             if (try self.stringArrayRegion(handle, node, pointer)) |region| return region;
         if (pointer.data != .comptime_value or
             (try pointer.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one) return null;
-        const target: CaptureTarget = switch (pointer.data.comptime_value.data) {
-            .reference => |reference| .{ .reference = reference },
-            .pointee => |pointee| if (require_mutable) return null else .{ .pointee = pointee },
+        const captured: struct { target: CaptureTarget, current: Type } = switch (pointer.data.comptime_value.data) {
+            .reference => |reference| .{
+                .target = .{ .reference = reference },
+                .current = (try self.readReference(reference)) orelse return null,
+            },
+            .pointee => |pointee| if (require_mutable) return null else .{
+                .target = .{ .pointee = pointee },
+                .current = pointee.value,
+            },
+            .array, .sequence => if (require_mutable) return null else temporary: {
+                const value = try self.analyser.resolveDerefType(pointer) orelse return null;
+                break :temporary .{
+                    .target = self.temporaryCaptureTarget(handle, node, value),
+                    .current = value,
+                };
+            },
             else => return null,
         };
-        const current = try self.captureAggregateValue(pointer);
-        const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+        const info = self.fixedArrayInfo(try captured.current.typeOf(self.analyser)) orelse return null;
         if (info.len > self.budget.steps) return null;
         return .{
-            .target = target,
+            .target = captured.target,
             .array_type = info.array_type,
             .element_type = info.element_type,
             .start = 0,
@@ -4595,7 +4558,9 @@ pub const Interpreter = struct {
         }
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
         if (handle.tree.nodeTag(unwrapped) == .slice or handle.tree.nodeTag(unwrapped) == .slice_open) {
-            if (try self.directArrayPointerCastSliceRegion(handle, unwrapped, require_mutable)) |region| {
+            const slice = handle.tree.fullSlice(unwrapped).?;
+            if (directArrayPointerCast(&handle.tree, slice.ast.sliced) != null) {
+                const region = try self.directArrayPointerCastSliceRegion(handle, unwrapped, require_mutable) orelse return null;
                 return .{
                     .region = region,
                     .provided_len = region.end - region.start,

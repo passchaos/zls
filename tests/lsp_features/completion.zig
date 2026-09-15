@@ -10097,7 +10097,7 @@ test "generic function with comptime string memory copies" {
         \\    var literal_destination: [5]u8 = undefined;
         \\    var identifier_destination: [5]u8 = undefined;
         \\    @memcpy(&literal_destination, "world");
-        \\    @memmove(identifier_destination[0..5], source);
+        \\    @memmove(&identifier_destination, source);
         \\    return struct {
         \\        literal_first: [literal_destination[0]]T,
         \\        literal_last: [literal_destination[4]]T,
