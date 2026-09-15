@@ -2593,7 +2593,8 @@ pub const Interpreter = struct {
                     const source = self.arrayCopyRegion(source_operand, copy_len) orelse return null;
                     if (!destination.element_type.eql(source.element_type) or
                         copy_len > self.budget.steps) return null;
-                    if (!(destination.element_type.hasRuntimeBits(self.analyser) orelse return null))
+                    if (copy_len == 0 or
+                        !(destination.element_type.hasRuntimeBits(self.analyser) orelse return null))
                         return Type.fromIP(self.analyser, .void_type, .void_value);
                     if (std.mem.eql(u8, name, "@memcpy") and
                         !(self.arraySliceRegionsDisjoint(destination, source) orelse return null)) return null;

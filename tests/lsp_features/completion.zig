@@ -10232,6 +10232,37 @@ test "generic function rejects overlapping local slice memcpy" {
     , &.{.{ .label = "first", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "generic function with comptime zero length copy" {
+    try testCompletion(
+        \\const Holder = struct { left: [1]usize, right: [1]usize };
+        \\fn Select() type {
+        \\    var evaluations: usize = 1;
+        \\    var holder: Holder = .{ .left = .{2}, .right = .{3} };
+        \\    @memcpy(
+        \\        holder.left[start: {
+        \\            evaluations += 1;
+        \\            break :start 0;
+        \\        }..0],
+        \\        holder.right[start: {
+        \\            evaluations *= 2;
+        \\            break :start 0;
+        \\        }..0],
+        \\    );
+        \\    return struct {
+        \\        evaluations: [evaluations]u8,
+        \\        left: [holder.left[0]]u8,
+        \\        right: [holder.right[0]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "left", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "right", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "generic function with comptime local full slices" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
