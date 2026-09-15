@@ -248,7 +248,7 @@ pub const Scope = struct {
     };
 
     pub const ChildScopes = union {
-        pub const small_size = 4;
+        pub const small_size = 2;
 
         small: [small_size]Scope.OptionalIndex,
         other: struct {
@@ -1339,6 +1339,42 @@ pub fn getScopeChildScopesConst(
         const other = slice.items(.child_scopes)[@intFromEnum(scope)].other;
         return @ptrCast(doc_scope.extra.items[other.start..other.end]);
     }
+}
+
+test "child scope inline and spill storage" {
+    const allocator = std.testing.allocator;
+    const source: [:0]const u8 =
+        \\const Inline = struct {
+        \\    fn one() void {}
+        \\    fn two() void {}
+        \\};
+        \\const Spill = struct {
+        \\    fn one() void {}
+        \\    fn two() void {}
+        \\    fn three() void {}
+        \\};
+    ;
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    var document_scope = try DocumentScope.init(allocator, &tree);
+    defer document_scope.deinit(allocator);
+
+    var found_inline = false;
+    var found_spill = false;
+    const data = document_scope.scopes.items(.data);
+    for (0..document_scope.scopes.len) |index| {
+        const scope: Scope.Index = @enumFromInt(index);
+        const count = document_scope.getScopeChildScopesConst(scope).len;
+        if (count == Scope.ChildScopes.small_size) {
+            try std.testing.expect(data[index].is_child_scopes_small);
+            found_inline = true;
+        } else if (count == Scope.ChildScopes.small_size + 1) {
+            try std.testing.expect(!data[index].is_child_scopes_small);
+            found_spill = true;
+        }
+    }
+    try std.testing.expect(found_inline);
+    try std.testing.expect(found_spill);
 }
 
 test DeclarationLookupContext {
