@@ -15800,12 +15800,8 @@ pub const Type = struct {
                 result.is_type_val = false;
                 break :blk result;
             },
-            .type_info_value => |value| value.value_type.*,
-            .comptime_value => |value| blk: {
-                var ty = value.ty;
-                ty.is_type_val = false;
-                break :blk ty;
-            },
+            .type_info_value => |value| value.value_type.runtimeType(analyser),
+            .comptime_value => |value| value.ty.runtimeType(analyser),
             else => self,
         };
     }

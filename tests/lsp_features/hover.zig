@@ -1182,6 +1182,15 @@ test "var decl alias" {
     );
 }
 
+test "comptime typeInfo reflection value" {
+    try testHoverWithOptions(
+        \\const info<cursor> = @typeInfo(u8);
+    ,
+        \\const info = @typeInfo(u8)
+        \\(Type)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "alias with different type" {
     try testHoverWithOptions(
         \\const foo: i32 = 1;

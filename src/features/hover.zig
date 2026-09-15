@@ -111,6 +111,11 @@ fn hoverSymbolResolvedType(
         };
 
         for (possible_types.keys()) |ty| {
+            if (ty.data == .type_info_value or ty.data == .comptime_value) {
+                const type_str = try ty.runtimeTypeValue(analyser).stringifyTypeOf(analyser, options);
+                try resolved_type_strings.append(arena, type_str);
+                continue;
+            }
             const type_str = try ty.stringifyTypeOf(analyser, options);
 
             if (ty.ipIndex() != null) {
