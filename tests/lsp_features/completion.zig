@@ -9435,6 +9435,42 @@ test "generic function with comptime float atomic operations" {
     });
 }
 
+test "generic function with comptime pointer atomics" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var first: usize = 2;
+        \\    var second: usize = 5;
+        \\    var third: usize = 7;
+        \\    var pointer: *usize = &first;
+        \\    @atomicStore(*usize, &pointer, &second, .release);
+        \\    const loaded = @atomicLoad(*usize, &pointer, .acquire);
+        \\    const previous = @atomicRmw(*usize, &pointer, .Xchg, &third, .seq_cst);
+        \\    const success = @cmpxchgStrong(*usize, &pointer, &third, &first, .seq_cst, .acquire);
+        \\    const failure = @cmpxchgWeak(*usize, &pointer, &third, &second, .monotonic, .monotonic);
+        \\    const loaded_value = loaded.*;
+        \\    const previous_value = previous.*;
+        \\    const current_value = pointer.*;
+        \\    const succeeded = success == null;
+        \\    const observed_value = failure.?.*;
+        \\    return struct {
+        \\        loaded: [loaded_value]T,
+        \\        previous: [previous_value]T,
+        \\        current: [current_value]T,
+        \\        succeeded: [@intFromBool(succeeded)]u8,
+        \\        observed: [observed_value]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "loaded", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "previous", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "current", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "succeeded", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "observed", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };

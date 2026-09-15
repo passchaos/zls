@@ -2329,7 +2329,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 3) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type, true)) return null;
+                    if (!self.supportsAtomicValue(element_type, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2348,7 +2348,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 4) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type, true)) return null;
+                    if (!self.supportsAtomicValue(element_type, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2374,7 +2374,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 5) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type, true)) return null;
+                    if (!self.supportsAtomicValue(element_type, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2399,7 +2399,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 6) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type, false)) return null;
+                    if (!self.supportsAtomicValue(element_type, false)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -5006,13 +5006,18 @@ pub const Interpreter = struct {
         return std.meta.stringToEnum(std.builtin.AtomicRmwOp, value.data.enum_value.tag);
     }
 
-    fn supportsAtomicScalar(self: *Interpreter, ty: Type, allow_float: bool) bool {
+    fn supportsAtomicValue(self: *Interpreter, ty: Type, allow_float: bool) bool {
         if (!ty.is_type_val) return false;
-        const type_index = ty.ipIndex() orelse return false;
-        return switch (self.analyser.ip.zigTypeTag(type_index) orelse return false) {
-            .bool => true,
-            .int => self.analyser.ip.intInfo(type_index, builtin.target).bits <= builtin.target.ptrBitWidth(),
-            .float => allow_float and self.analyser.ip.floatBits(type_index, builtin.target) <= builtin.target.ptrBitWidth(),
+        return switch (ty.data) {
+            .pointer => |pointer| pointer.size == .one,
+            .ip_index => |payload| switch (self.analyser.ip.zigTypeTag(payload.index orelse return false) orelse return false) {
+                .bool => true,
+                .int => self.analyser.ip.intInfo(payload.index.?, builtin.target).bits <= builtin.target.ptrBitWidth(),
+                .float => allow_float and
+                    self.analyser.ip.floatBits(payload.index.?, builtin.target) <= builtin.target.ptrBitWidth(),
+                .pointer => self.analyser.ip.indexToKey(payload.index.?).pointer_type.flags.size == .one,
+                else => false,
+            },
             else => false,
         };
     }
