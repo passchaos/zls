@@ -9202,6 +9202,33 @@ test "generic function with comptime strict float mode" {
     });
 }
 
+test "generic function with comptime prefetch" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 0;
+        \\    var value: u8 = 0;
+        \\    @prefetch(target: {
+        \\        evaluations += 1;
+        \\        break :target &value;
+        \\    }, options: {
+        \\        evaluations *= 2;
+        \\        break :options .{ .rw = .write, .locality = 1, .cache = .instruction };
+        \\    });
+        \\    const optional: ?*u8 = &value;
+        \\    @prefetch(optional, defaults: {
+        \\        evaluations += 3;
+        \\        break :defaults .{};
+        \\    });
+        \\    const final = evaluations;
+        \\    return struct { items: [final]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[5]u16" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };

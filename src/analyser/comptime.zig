@@ -2299,6 +2299,22 @@ pub const Interpreter = struct {
                     if (mode.data != .enum_value or !std.mem.eql(u8, mode.data.enum_value.tag, "strict")) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@prefetch")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const pointer = try self.eval(handle, params[0]) orelse return null;
+                    const pointer_type = try pointer.typeOf(self.analyser);
+                    const unwrapped_type = self.optionalPayloadType(pointer_type) orelse pointer_type;
+                    const pointer_instance = try unwrapped_type.instanceTypeVal(self.analyser) orelse return null;
+                    if (pointer_instance.pointerSize(self.analyser) == null) return null;
+
+                    const options_instance = try self.analyser.instanceStdBuiltinType("PrefetchOptions") orelse return null;
+                    const options_type = try options_instance.typeOf(self.analyser);
+                    const options = try self.evaluateTypedExpression(handle, params[1], options_type) orelse return null;
+                    if (!Value.isKnown(options, self.analyser, 0)) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@memset")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
