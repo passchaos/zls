@@ -547,8 +547,6 @@ pub const Handle = struct {
             const name = offsets.tokenToSlice(tree, tree.nodeMainToken(node));
 
             if (std.mem.eql(u8, name, "@import")) {
-                try file_imports.ensureUnusedCapacity(allocator, 1);
-
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
                 if (params.len < 1) continue;
@@ -559,18 +557,20 @@ pub const Handle = struct {
 
                 if (!std.mem.endsWith(u8, import_string, ".zig")) continue;
 
+                try file_imports.ensureUnusedCapacity(allocator, 1);
                 const import_uri = try Uri.resolveImport(allocator, uri, parsed_uri, import_string);
                 file_imports.appendAssumeCapacity(import_uri);
                 continue;
             }
 
             if (std.mem.eql(u8, name, "@cImport")) {
-                try cimports.ensureUnusedCapacity(allocator, 1);
-
                 const c_source = translate_c.convertCInclude(allocator, tree, node) catch |err| switch (err) {
                     error.Unsupported => continue,
                     error.OutOfMemory => return error.OutOfMemory,
                 };
+                errdefer allocator.free(c_source);
+
+                try cimports.ensureUnusedCapacity(allocator, 1);
 
                 var hasher: CImportHasher = .init(&@splat(0));
                 hasher.update(c_source);
@@ -1866,6 +1866,36 @@ test "Handle.refresh finalizes import metadata and handles allocation failure" {
 
     try Test.run(std.testing.allocator, source);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{source});
+}
+
+test "Handle.refresh leaves module imports out of file metadata" {
+    const source = "const std = @import(\"std\");\n" ++
+        "const builtin = @import(\"builtin\");\n" ++
+        "const root = @import(\"root\");\n";
+    const allocator = std.testing.allocator;
+    const uri = try Uri.parse(allocator, "file:///project/main.zig");
+    defer uri.deinit(allocator);
+
+    const text = try allocator.dupeSentinel(u8, source, 0);
+    var handle: Handle = .{
+        .uri = uri,
+        .tree = undefined,
+        .file_imports = &.{},
+        .cimports = .empty,
+        .lsp_synced = false,
+        .impl = .{
+            .store = undefined,
+            .has_tree_and_source = false,
+        },
+    };
+    defer handle.deinit(allocator);
+    var old_handle: Handle = .dead;
+    defer old_handle.deinit(allocator);
+
+    try Handle.refresh(&handle, &old_handle, text, allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), handle.file_imports.len);
+    try std.testing.expectEqual(@as(usize, 0), handle.cimports.capacity);
 }
 
 /// returns `true` if all include paths could be collected
