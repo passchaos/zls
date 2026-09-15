@@ -2385,13 +2385,13 @@ pub const Interpreter = struct {
                             true,
                         )) return null;
                     const operation = try self.atomicRmwOperation(handle, params[2]) orelse return null;
-                    if (operation != .Xchg) return null;
                     const value = try self.evaluateTypedExpression(handle, params[3], element_type) orelse return null;
                     const order = try self.atomicOrder(handle, params[4]) orelse return null;
                     if (order == .unordered) return null;
                     const reference = pointer.data.comptime_value.data.reference;
                     const previous = try self.readReference(reference) orelse return null;
-                    if (!try self.writeReference(handle, reference, value, params[3])) return null;
+                    const updated = try self.atomicRmwValue(element_type, operation, previous, value) orelse return null;
+                    if (!try self.writeReference(handle, reference, updated, null)) return null;
                     return previous;
                 }
                 if (std.mem.eql(u8, name, "@cmpxchgStrong") or std.mem.eql(u8, name, "@cmpxchgWeak")) {
@@ -5013,6 +5013,38 @@ pub const Interpreter = struct {
             .bool => true,
             .int => self.analyser.ip.intInfo(type_index, builtin.target).bits <= builtin.target.ptrBitWidth(),
             else => false,
+        };
+    }
+
+    fn atomicRmwValue(
+        self: *Interpreter,
+        element_type: Type,
+        operation: std.builtin.AtomicRmwOp,
+        current: Type,
+        operand: Type,
+    ) Error!?Type {
+        if (operation == .Xchg) return operand;
+        const type_index = element_type.ipIndex() orelse return null;
+        if (self.analyser.ip.zigTypeTag(type_index) != .int) return null;
+        return switch (operation) {
+            .Xchg => unreachable,
+            .Add => self.analyser.resolveComptimeBinaryValue(.add_wrap, current, operand, .{}),
+            .Sub => self.analyser.resolveComptimeBinaryValue(.sub_wrap, current, operand, .{}),
+            .And => self.analyser.resolveComptimeBinaryValue(.bit_and, current, operand, .{}),
+            .Or => self.analyser.resolveComptimeBinaryValue(.bit_or, current, operand, .{}),
+            .Xor => self.analyser.resolveComptimeBinaryValue(.bit_xor, current, operand, .{}),
+            .Nand => nand: {
+                const value = try self.analyser.resolveComptimeBinaryValue(.bit_and, current, operand, .{}) orelse
+                    return null;
+                break :nand self.analyser.resolveComptimeUnaryValue(.bit_not, value);
+            },
+            .Min, .Max => {
+                const operands = [_]Type{ current, operand };
+                return self.analyser.resolveComptimeMinMaxValue(
+                    &operands,
+                    if (operation == .Min) .min else .max,
+                );
+            },
         };
     }
 

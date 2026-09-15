@@ -9388,6 +9388,30 @@ test "generic function with comptime compare exchange" {
     });
 }
 
+test "generic function with comptime integer atomic operations" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var value: u8 = 250;
+        \\    const add = @atomicRmw(u8, &value, .Add, 10, .seq_cst);
+        \\    const sub = @atomicRmw(u8, &value, .Sub, 5, .seq_cst);
+        \\    const anded = @atomicRmw(u8, &value, .And, 0x0f, .seq_cst);
+        \\    const nanded = @atomicRmw(u8, &value, .Nand, 0x0f, .seq_cst);
+        \\    const ored = @atomicRmw(u8, &value, .Or, 3, .seq_cst);
+        \\    const xored = @atomicRmw(u8, &value, .Xor, 0xff, .seq_cst);
+        \\    const maximum = @atomicRmw(u8, &value, .Max, 20, .seq_cst);
+        \\    const minimum = @atomicRmw(u8, &value, .Min, 7, .seq_cst);
+        \\    const old_values = @as(usize, add) + sub + anded + nanded + ored + xored + maximum + minimum;
+        \\    const final = value;
+        \\    return struct { values: [old_values]T, final: [final]u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[1039]u16" },
+        .{ .label = "final", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
