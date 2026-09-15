@@ -8389,6 +8389,29 @@ test "generic function with comptime numeric pointer addresses" {
     });
 }
 
+test "generic function with comptime numeric pointer arithmetic" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const base: [*]allowzero u16 = @ptrFromInt(0x1000);
+        \\    const advanced = base + 3;
+        \\    const retreated = advanced - 1;
+        \\    const c_base: [*c]u32 = @ptrFromInt(0x2000);
+        \\    const c_advanced = c_base + 2;
+        \\    const first: *[100]u16 = @ptrFromInt(100);
+        \\    const second: *[100]u16 = @ptrFromInt(50);
+        \\    const total = (@intFromPtr(advanced) - @intFromPtr(base)) +
+        \\        (@intFromPtr(retreated) - @intFromPtr(base)) +
+        \\        (@intFromPtr(c_advanced) - @intFromPtr(c_base)) +
+        \\        (advanced - base) + (first - second);
+        \\    return struct { items: [total]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[46]u16" },
+    });
+}
+
 test "generic function with comptime unknown bit builtin types" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

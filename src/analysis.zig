@@ -6535,6 +6535,25 @@ fn resolveComptimePointerOffset(
     offset: Type,
     subtract: bool,
 ) error{OutOfMemory}!?Type {
+    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .numeric_pointer) {
+        const info = pointer.data.comptime_value.ty.numericPointerArithmeticInfo(analyser) orelse return null;
+        if (info.size != .many and info.size != .c) return null;
+        const offset_index = offset.ipIndex() orelse return null;
+        if (analyser.ip.isUndefined(offset_index) or analyser.ip.isUnknown(offset_index)) return null;
+        const amount = analyser.ip.toInt(offset_index, u64) orelse return null;
+        if (amount == 0 or info.element_size == 0) return pointer;
+        const byte_offset = std.math.mul(u64, amount, info.element_size) catch return null;
+        const numeric_address = pointer.data.comptime_value.data.numeric_pointer;
+        const result_address = if (subtract)
+            std.math.sub(u64, numeric_address, byte_offset) catch return null
+        else
+            std.math.add(u64, numeric_address, byte_offset) catch return null;
+        return @as(?Type, try comptime_eval.Value.create(
+            analyser,
+            pointer.data.comptime_value.ty,
+            .{ .numeric_pointer = result_address },
+        ));
+    }
     const pointer_type = if (pointer.data == .comptime_value)
         try pointer.data.comptime_value.ty.instanceUnchecked(analyser)
     else
@@ -15946,6 +15965,12 @@ pub const Type = struct {
         payload_type: Type,
     };
 
+    pub const NumericPointerArithmeticInfo = struct {
+        size: std.builtin.Type.Pointer.Size,
+        element_type: Type,
+        element_size: u64,
+    };
+
     pub fn numericPointerInfo(self: Type, analyser: *Analyser) Error!?NumericPointerInfo {
         const info = self.pointerCastInfo(analyser) orelse return null;
         if (info.pointer.size == .slice or info.pointer.elem_ty.isFunc()) return null;
@@ -15966,6 +15991,25 @@ pub const Type = struct {
                 },
                 else => return null,
             } else self,
+        };
+    }
+
+    pub fn numericPointerArithmeticInfo(self: Type, analyser: *Analyser) ?NumericPointerArithmeticInfo {
+        const info = self.pointerCastInfo(analyser) orelse return null;
+        if (info.is_optional or info.pointer.size == .slice or info.pointer.alignment != 0 or
+            info.pointer.packed_offset.bit_offset != 0 or info.pointer.packed_offset.host_size != 0) return null;
+        const element_type = if (info.pointer.size == .one) switch (info.pointer.elem_ty.data) {
+            .array => |array| array.elem_ty.*,
+            .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                .array_type => |array| Type.fromIP(analyser, .type_type, array.child),
+                else => info.pointer.elem_ty,
+            },
+            else => info.pointer.elem_ty,
+        } else info.pointer.elem_ty;
+        return .{
+            .size = info.pointer.size,
+            .element_type = element_type,
+            .element_size = analyser.resolveTypeByteSize(element_type) orelse return null,
         };
     }
 

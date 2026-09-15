@@ -471,6 +471,21 @@ pub const Value = struct {
 
     pub fn pointerOffsetDifference(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMemory}!?usize {
         if (lhs.data != .comptime_value or rhs.data != .comptime_value) return null;
+        if (lhs.data.comptime_value.data == .numeric_pointer and
+            rhs.data.comptime_value.data == .numeric_pointer)
+        {
+            const lhs_info = lhs.data.comptime_value.ty.numericPointerArithmeticInfo(analyser) orelse return null;
+            const rhs_info = rhs.data.comptime_value.ty.numericPointerArithmeticInfo(analyser) orelse return null;
+            if (!lhs_info.element_type.eql(rhs_info.element_type) or
+                lhs_info.element_size == 0 or lhs_info.element_size != rhs_info.element_size) return null;
+            const byte_difference = std.math.sub(
+                u64,
+                lhs.data.comptime_value.data.numeric_pointer,
+                rhs.data.comptime_value.data.numeric_pointer,
+            ) catch return null;
+            if (byte_difference % lhs_info.element_size != 0) return null;
+            return std.math.cast(usize, byte_difference / lhs_info.element_size);
+        }
         const lhs_pointer = lhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
         const rhs_pointer = rhs.data.comptime_value.ty.instanceUnchecked(analyser) catch return null;
         if (!lhs.data.comptime_value.ty.hasSamePointerElementType(analyser, rhs.data.comptime_value.ty)) return null;
