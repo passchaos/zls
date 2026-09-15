@@ -24571,6 +24571,21 @@ test "deprecated sorting" {
     });
 }
 
+test "variables sort before functions" {
+    try testCompletionWithOptions(
+        \\const Namespace = struct {
+        \\    pub fn alpha() void {}
+        \\    pub var zeta: u8 = 0;
+        \\};
+        \\const value = Namespace.<cursor>
+    , &.{
+        .{ .label = "zeta", .kind = .Variable, .detail = "u8" },
+        .{ .label = "alpha", .kind = .Function, .detail = "fn () void" },
+    }, .{
+        .check_order = true,
+    });
+}
+
 test "declarations" {
     try testCompletion(
         \\const S = struct {

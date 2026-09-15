@@ -817,16 +817,18 @@ fn completeFieldAccess(builder: *Builder, loc: offsets.Loc) Analyser.Error!void 
     try typeToCompletion(builder, ty);
 }
 
-fn kindToSortScore(kind: types.completion.Item.Kind) u4 {
+const max_score: usize = 9;
+
+fn kindToSortScore(kind: types.completion.Item.Kind) usize {
     return switch (kind) {
         .Operator => 1,
         .Field, .EnumMember => 2,
         // Field with default value => 3
         .Method => 4,
-        .Function => 5,
+        .Variable => 5,
+        .Function => 6,
         .Text, // used for labels
         .Constant,
-        .Variable,
         .Struct,
         .Enum,
         .TypeParameter,
@@ -843,7 +845,7 @@ fn kindToSortScore(kind: types.completion.Item.Kind) u4 {
     };
 }
 
-fn itemSortScore(item: types.completion.Item) u4 {
+fn itemSortScore(item: types.completion.Item) usize {
     // Completion items have two ways to mark deprecation; we need to check both.
     const deprecated: bool = item.deprecated orelse if (item.tags) |tags|
         std.mem.findScalar(types.completion.Item.Tag, tags, .Deprecated) != null
@@ -851,13 +853,13 @@ fn itemSortScore(item: types.completion.Item) u4 {
         false;
 
     if (deprecated) {
-        return 9;
+        return max_score;
     } else {
         return kindToSortScore(item.kind.?);
     }
 }
 
-fn generateSortText(allocator: std.mem.Allocator, score: u4, label: []const u8) ![]const u8 {
+fn generateSortText(allocator: std.mem.Allocator, score: usize, label: []const u8) ![]const u8 {
     return try std.fmt.allocPrint(allocator, "{}_{s}", .{ score, label });
 }
 
@@ -1155,7 +1157,7 @@ fn completeFileSystemStringLiteral(builder: *Builder, pos_context: Analyser.Posi
             else
                 label;
 
-            const score: u4 = if (entry.kind == .file) 6 else 5;
+            const score: usize = if (entry.kind == .file) 6 else 5;
 
             try builder.completions.append(builder.arena, .{
                 .label = label,
