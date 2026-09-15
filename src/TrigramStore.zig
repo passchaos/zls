@@ -225,26 +225,22 @@ pub fn declarationsForQuery(
 
     const first = (store.trigram_to_declarations.get(ti.next() orelse return) orelse return).items;
 
-    try declaration_buffer.resize(allocator, first.len * 2);
+    try declaration_buffer.resize(allocator, first.len);
 
     var len = first.len;
     @memcpy(declaration_buffer.items[0..len], first);
 
     while (ti.next()) |trigram| {
-        const old_len = len;
         len = mergeIntersection(
             (store.trigram_to_declarations.get(trigram) orelse {
                 declaration_buffer.clearRetainingCapacity();
                 return;
             }).items,
             declaration_buffer.items[0..len],
-            declaration_buffer.items[len..],
         );
-        @memcpy(declaration_buffer.items[0..len], declaration_buffer.items[old_len..][0..len]);
-        declaration_buffer.shrinkRetainingCapacity(len * 2);
+        declaration_buffer.shrinkRetainingCapacity(len);
+        if (len == 0) break;
     }
-
-    declaration_buffer.shrinkRetainingCapacity(declaration_buffer.items.len / 2);
 }
 
 fn appendDeclaration(
@@ -433,14 +429,11 @@ fn testTrigramIterator(
     try @import("testing.zig").expectEqual(expected, actual_buffer.items);
 }
 
-/// Asserts `@min(a.len, b.len) <= out.len`.
+/// Intersects the sorted inputs in place, storing the result in `b`.
 fn mergeIntersection(
     a: []const Declaration.Index,
-    b: []const Declaration.Index,
-    out: []Declaration.Index,
+    b: []Declaration.Index,
 ) u32 {
-    assert(@min(a.len, b.len) <= out.len);
-
     var out_idx: u32 = 0;
 
     var a_idx: u32 = 0;
@@ -451,7 +444,7 @@ fn mergeIntersection(
         const b_val = b[b_idx];
 
         if (a_val == b_val) {
-            out[out_idx] = a_val;
+            b[out_idx] = a_val;
             out_idx += 1;
             a_idx += 1;
             b_idx += 1;
@@ -463,6 +456,48 @@ fn mergeIntersection(
     }
 
     return out_idx;
+}
+
+test mergeIntersection {
+    const I = Declaration.Index;
+
+    const a = [_]I{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5), @enumFromInt(8) };
+    var b = [_]I{ @enumFromInt(0), @enumFromInt(1), @enumFromInt(2), @enumFromInt(3), @enumFromInt(4), @enumFromInt(5) };
+
+    const len = mergeIntersection(&a, &b);
+    try std.testing.expectEqualSlices(I, &.{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5) }, b[0..len]);
+
+    var prng: std.Random.DefaultPrng = .init(0);
+    const random = prng.random();
+    for (0..1_000) |_| {
+        var random_a: [64]I = undefined;
+        var random_b: [64]I = undefined;
+        var expected: [64]I = undefined;
+        var a_len: usize = 0;
+        var b_len: usize = 0;
+        var expected_len: usize = 0;
+
+        for (0..64) |value| {
+            const item: I = @enumFromInt(value);
+            const in_a = random.boolean();
+            const in_b = random.boolean();
+            if (in_a) {
+                random_a[a_len] = item;
+                a_len += 1;
+            }
+            if (in_b) {
+                random_b[b_len] = item;
+                b_len += 1;
+            }
+            if (in_a and in_b) {
+                expected[expected_len] = item;
+                expected_len += 1;
+            }
+        }
+
+        const random_len = mergeIntersection(random_a[0..a_len], random_b[0..b_len]);
+        try std.testing.expectEqualSlices(I, expected[0..expected_len], random_b[0..random_len]);
+    }
 }
 
 const CuckooFilter = struct {
