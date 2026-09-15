@@ -9471,6 +9471,36 @@ test "generic function with comptime pointer atomics" {
     });
 }
 
+test "generic function with comptime enum atomics" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const State = enum(u8) { first = 2, second = 5, third = 7 };
+        \\    var state = State.first;
+        \\    @atomicStore(State, &state, .second, .release);
+        \\    const loaded = @atomicLoad(State, &state, .acquire);
+        \\    const previous = @atomicRmw(State, &state, .Xchg, .third, .seq_cst);
+        \\    const success = @cmpxchgStrong(State, &state, .third, .first, .seq_cst, .acquire);
+        \\    const failure = @cmpxchgWeak(State, &state, .third, .second, .monotonic, .monotonic);
+        \\    const final = state;
+        \\    return struct {
+        \\        loaded: [@intFromEnum(loaded)]T,
+        \\        previous: [@intFromEnum(previous)]T,
+        \\        current: [@intFromEnum(final)]T,
+        \\        succeeded: [@intFromBool(success == null)]u8,
+        \\        observed: [@intFromEnum(failure.?)]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "loaded", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "previous", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "current", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "succeeded", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "observed", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
