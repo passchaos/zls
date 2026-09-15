@@ -1193,6 +1193,29 @@ test "generic function with comptime integer and boolean reductions" {
     });
 }
 
+test "generic function with nested comptime reduction mutations" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 1;
+        \\    const sum = @reduce(operation: {
+        \\        evaluations += 1;
+        \\        break :operation .Add;
+        \\    }, operand: {
+        \\        evaluations *= 2;
+        \\        break :operand @as(@Vector(3, u8), .{ 1, 2, 3 });
+        \\    });
+        \\    const all = @reduce(.And, @as(@Vector(3, bool), .{ true, true, true }));
+        \\    return if (sum == 6 and all) struct {
+        \\        evaluations: [evaluations]T,
+        \\    } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u16" },
+    });
+}
+
 test "generic function with partially known boolean reductions" {
     try testCompletion(
         \\var runtime: bool = undefined;

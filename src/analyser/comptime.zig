@@ -2306,6 +2306,21 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeAbsValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@reduce")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const operation_instance = try self.analyser.instanceStdBuiltinType("ReduceOp") orelse return null;
+                    const operation_type = try operation_instance.typeOf(self.analyser);
+                    const operation_value = try self.evaluateTypedExpression(handle, params[0], operation_type) orelse return null;
+                    if (operation_value.data != .enum_value) return null;
+                    const operation = std.meta.stringToEnum(
+                        std.builtin.ReduceOp,
+                        operation_value.data.enum_value.tag,
+                    ) orelse return null;
+                    const operand = try self.eval(handle, params[1]) orelse return null;
+                    return self.analyser.resolveComptimeReduceValue(operation, operand);
+                }
                 if (std.mem.eql(u8, name, "@mulAdd")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

@@ -8373,7 +8373,7 @@ fn floatReduceValue(
     return @floatCast(result);
 }
 
-fn resolveReduceValue(
+pub fn resolveComptimeReduceValue(
     analyser: *Analyser,
     operation: std.builtin.ReduceOp,
     operand: Type,
@@ -12908,7 +12908,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (analyser.evaluate_comptime_values) {
                         const operation = try analyser.resolveReduceOperation(.of(params[0], handle));
                         if (operation) |op| {
-                            if (try analyser.resolveReduceValue(op, operand)) |value| return value;
+                            if (try analyser.resolveComptimeReduceValue(op, operand)) |value| return value;
                             if (op == .Xor) {
                                 if (try analyser.resolveEvenRuntimeSplatXorReduction(tree, handle, params[1], operand)) |value| return value;
                             }
