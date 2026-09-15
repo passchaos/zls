@@ -544,9 +544,12 @@ pub const Handle = struct {
                 => {},
                 else => continue,
             }
-            const name = offsets.tokenToSlice(tree, tree.nodeMainToken(node));
+            const builtin_kind = importBuiltinKind(
+                tree.source,
+                tree.tokenStart(tree.nodeMainToken(node)),
+            );
 
-            if (std.mem.eql(u8, name, "@import")) {
+            if (builtin_kind == .import) {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
                 if (params.len < 1) continue;
@@ -567,7 +570,7 @@ pub const Handle = struct {
                 continue;
             }
 
-            if (std.mem.eql(u8, name, "@cImport")) {
+            if (builtin_kind == .c_import) {
                 const c_source = translate_c.convertCInclude(allocator, tree, node) catch |err| switch (err) {
                     error.Unsupported => continue,
                     error.OutOfMemory => return error.OutOfMemory,
@@ -587,6 +590,20 @@ pub const Handle = struct {
                 continue;
             }
         }
+    }
+
+    const ImportBuiltinKind = enum { other, import, c_import };
+
+    fn importBuiltinKind(source: [:0]const u8, start: Ast.ByteOffset) ImportBuiltinKind {
+        if (matchesBuiltinName(source, start, "@import")) return .import;
+        if (matchesBuiltinName(source, start, "@cImport")) return .c_import;
+        return .other;
+    }
+
+    fn matchesBuiltinName(source: [:0]const u8, start: Ast.ByteOffset, comptime name: []const u8) bool {
+        const remaining = source[start..];
+        return std.mem.startsWith(u8, remaining, name) and
+            !offsets.isSymbolChar(remaining[name.len]);
     }
 
     /// A handle that can only be deallocated. Keep in sync with `deinit`.
@@ -1756,6 +1773,24 @@ pub const CImportHandle = struct {
     /// c source file
     source: []const u8,
 };
+
+test "import builtin matching avoids prefix collisions" {
+    const cases = [_]struct { [:0]const u8, Handle.ImportBuiltinKind }{
+        .{ "@import(\"x.zig\")", .import },
+        .{ "@import (\"x.zig\")", .import },
+        .{ "@import/* comment */(\"x.zig\")", .import },
+        .{ "@cImport({})", .c_import },
+        .{ "@cImport ({})", .c_import },
+        .{ "@imported()", .other },
+        .{ "@import_()", .other },
+        .{ "@cImporter()", .other },
+        .{ "@as(u8, 1)", .other },
+    };
+
+    for (cases) |case| {
+        try std.testing.expectEqual(case[1], Handle.importBuiltinKind(case[0], 0));
+    }
+}
 
 test "file imports and cimports are finalized to exact capacity" {
     const Test = struct {
