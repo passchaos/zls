@@ -10,6 +10,22 @@ pub const TrigramStore = @This();
 
 pub const Trigram = [3]u8;
 
+const TrigramContext = struct {
+    fn toInt(trigram: Trigram) u32 {
+        return @as(u32, trigram[0]) |
+            (@as(u32, trigram[1]) << 8) |
+            (@as(u32, trigram[2]) << 16);
+    }
+
+    pub fn hash(_: TrigramContext, trigram: Trigram) u32 {
+        return std.hash.int(toInt(trigram));
+    }
+
+    pub fn eql(_: TrigramContext, a: Trigram, b: Trigram, _: usize) bool {
+        return toInt(a) == toInt(b);
+    }
+};
+
 pub const Declaration = struct {
     pub const Index = enum(u32) { _ };
 
@@ -27,7 +43,7 @@ pub const Declaration = struct {
 };
 
 filter_buckets: ?[]CuckooFilter.Bucket,
-trigram_to_declarations: std.array_hash_map.Auto(Trigram, std.ArrayList(Declaration.Index)),
+trigram_to_declarations: std.array_hash_map.Custom(Trigram, std.ArrayList(Declaration.Index), TrigramContext, false),
 declarations: std.MultiArrayList(Declaration),
 
 pub fn init(
@@ -415,6 +431,15 @@ test TrigramIterator {
         "llo".*, "low".*, "owo".*,
         "wor".*, "orl".*, "rld".*,
     });
+}
+
+test TrigramContext {
+    const context: TrigramContext = .{};
+    try std.testing.expectEqual(@as(u32, 0x00636261), TrigramContext.toInt("abc".*));
+    try std.testing.expect(context.eql("abc".*, "abc".*, 0));
+    try std.testing.expect(!context.eql("abc".*, "abd".*, 0));
+    try std.testing.expectEqual(context.hash("abc".*), context.hash("abc".*));
+    try std.testing.expect(context.hash("abc".*) != context.hash("abd".*));
 }
 
 fn testTrigramIterator(
