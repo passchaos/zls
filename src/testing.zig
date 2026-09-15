@@ -57,7 +57,7 @@ pub fn printDocumentScope(doc_scope: DocumentScope) void {
 
         for (doc_scope.getScopeDeclarationsConst(scope_index)) |decl| {
             std.debug.print("    - {s:<8} {}\n", .{
-                doc_scope.declaration_lookup_map.keys()[@intFromEnum(decl)].name,
+                doc_scope.getDeclarationLookup(decl).name,
                 doc_scope.declarations.get(@intFromEnum(decl)),
             });
         }

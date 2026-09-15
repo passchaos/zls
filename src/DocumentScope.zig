@@ -10,6 +10,8 @@ const DocumentScope = @This();
 
 scopes: std.MultiArrayList(Scope),
 declarations: std.MultiArrayList(Declaration),
+/// Borrowed from the AST used to build this scope and valid for the same lifetime.
+source: []const u8,
 /// used for looking up a child declaration in a given scope
 declaration_lookup_map: DeclarationLookupMap,
 extra: std.ArrayList(u32),
@@ -17,7 +19,7 @@ extra: std.ArrayList(u32),
 /// Every `index` inside this `ArrayhashMap` is equivalent to a `Declaration.Index`
 /// This means that every declaration is only the child of a single scope
 pub const DeclarationLookupMap = std.array_hash_map.Custom(
-    DeclarationLookup,
+    DeclarationLookupKey,
     void,
     DeclarationLookupContext,
     false,
@@ -30,17 +32,36 @@ pub const DeclarationLookup = struct {
     kind: Kind,
 };
 
+const DeclarationLookupKey = struct {
+    scope: Scope.Index,
+    name_loc: Scope.SmallLoc,
+    kind: DeclarationLookup.Kind,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(DeclarationLookupKey) == 16);
+}
+
 pub const DeclarationLookupContext = struct {
-    pub fn hash(_: @This(), lookup: DeclarationLookup) u32 {
-        const seed = @as(u64, @intFromEnum(lookup.scope)) |
-            (@as(u64, @intFromEnum(lookup.kind)) << 32);
-        return @truncate(std.hash.Wyhash.hash(seed, lookup.name));
+    source: []const u8,
+
+    fn name(context: @This(), lookup: anytype) []const u8 {
+        return switch (@TypeOf(lookup)) {
+            DeclarationLookup => lookup.name,
+            DeclarationLookupKey => context.source[lookup.name_loc.start..lookup.name_loc.end],
+            else => @compileError("unsupported declaration lookup type"),
+        };
     }
 
-    pub fn eql(self: @This(), a: DeclarationLookup, b: DeclarationLookup, b_index: usize) bool {
-        _ = self;
+    pub fn hash(context: @This(), lookup: anytype) u32 {
+        const seed = @as(u64, @intFromEnum(lookup.scope)) |
+            (@as(u64, @intFromEnum(lookup.kind)) << 32);
+        return @truncate(std.hash.Wyhash.hash(seed, context.name(lookup)));
+    }
+
+    pub fn eql(context: @This(), a: anytype, b: DeclarationLookupKey, b_index: usize) bool {
         _ = b_index;
-        return a.scope == b.scope and a.kind == b.kind and std.mem.eql(u8, a.name, b.name);
+        return a.scope == b.scope and a.kind == b.kind and std.mem.eql(u8, context.name(a), context.name(b));
     }
 };
 
@@ -333,7 +354,8 @@ const ScopeContext = struct {
             kind: DeclarationLookup.Kind,
         ) error{OutOfMemory}!void {
             std.debug.assert((declaration == .label) == (kind == .label));
-            const name = offsets.identifierTokenToNameSlice(pushed.context.tree, identifier_token);
+            const name_loc = offsets.identifierTokenToNameLoc(pushed.context.tree, identifier_token);
+            const name = offsets.locToSlice(pushed.context.tree.source, name_loc);
             if (std.mem.eql(u8, name, "_")) return;
             defer std.debug.assert(pushed.context.doc_scope.declarations.len == pushed.context.doc_scope.declaration_lookup_map.count());
 
@@ -346,14 +368,23 @@ const ScopeContext = struct {
             const doc_scope = context.doc_scope;
             const allocator = context.allocator;
 
-            const gop = try doc_scope.declaration_lookup_map.getOrPut(allocator, .{
+            const lookup: DeclarationLookup = .{
                 .scope = pushed.scope,
                 .name = name,
                 .kind = kind,
-            });
+            };
+            const lookup_context: DeclarationLookupContext = .{ .source = doc_scope.source };
+            const gop = try doc_scope.declaration_lookup_map.getOrPutContextAdapted(allocator, lookup, lookup_context, lookup_context);
             if (gop.found_existing) return;
+            gop.key_ptr.* = .{
+                .scope = pushed.scope,
+                .name_loc = locToSmallLoc(name_loc),
+                .kind = kind,
+            };
+            errdefer _ = doc_scope.declaration_lookup_map.popContext(lookup_context);
 
             try doc_scope.declarations.append(allocator, declaration);
+            errdefer _ = doc_scope.declarations.pop();
             const declaration_index: Declaration.Index = @enumFromInt(doc_scope.declarations.len - 1);
 
             const data = &doc_scope.scopes.items(.data)[@intFromEnum(pushed.scope)];
@@ -489,6 +520,7 @@ pub fn init(allocator: std.mem.Allocator, tree: *const Ast) error{OutOfMemory}!D
     var document_scope: DocumentScope = .{
         .scopes = .empty,
         .declarations = .empty,
+        .source = tree.source,
         .declaration_lookup_map = .empty,
         .extra = .empty,
     };
@@ -1291,10 +1323,22 @@ pub fn getScopeDeclaration(
     doc_scope: DocumentScope,
     lookup: DeclarationLookup,
 ) Declaration.OptionalIndex {
-    return if (doc_scope.declaration_lookup_map.getIndex(lookup)) |idx|
+    return if (doc_scope.declaration_lookup_map.getIndexAdapted(lookup, DeclarationLookupContext{ .source = doc_scope.source })) |idx|
         @enumFromInt(idx)
     else
         .none;
+}
+
+pub fn getDeclarationLookup(
+    doc_scope: DocumentScope,
+    declaration: Declaration.Index,
+) DeclarationLookup {
+    const key = doc_scope.declaration_lookup_map.keys()[@intFromEnum(declaration)];
+    return .{
+        .scope = key.scope,
+        .name = doc_scope.source[key.name_loc.start..key.name_loc.end],
+        .kind = key.kind,
+    };
 }
 
 pub fn getScopeDeclarationsConst(
@@ -1379,33 +1423,63 @@ test "child scope inline and spill storage" {
 
 test DeclarationLookupContext {
     const allocator = std.testing.allocator;
+    const source = "alpha beta";
     const scopes = [_]Scope.Index{ .root, @enumFromInt(1), @enumFromInt(42) };
     const kinds = std.enums.values(DeclarationLookup.Kind);
-    const names = [_][]const u8{ "alpha", "beta", "@escaped", "" };
+    const names = [_]struct { []const u8, Scope.SmallLoc }{
+        .{ "alpha", .{ .start = 0, .end = 5 } },
+        .{ "beta", .{ .start = 6, .end = 10 } },
+    };
+    const context: DeclarationLookupContext = .{ .source = source };
 
     var map: DeclarationLookupMap = .empty;
     defer map.deinit(allocator);
-    try map.ensureTotalCapacity(allocator, scopes.len * kinds.len * names.len);
+    try map.ensureTotalCapacityContext(allocator, scopes.len * kinds.len * names.len, context);
 
     for (scopes) |scope| {
         for (kinds) |kind| {
-            for (names) |name| map.putAssumeCapacityNoClobber(.{
-                .scope = scope,
-                .name = name,
-                .kind = kind,
-            }, {});
+            for (names) |name| {
+                const lookup: DeclarationLookup = .{ .scope = scope, .name = name[0], .kind = kind };
+                const gop = map.getOrPutAssumeCapacityAdapted(lookup, context);
+                try std.testing.expect(!gop.found_existing);
+                gop.key_ptr.* = .{ .scope = scope, .name_loc = name[1], .kind = kind };
+            }
         }
     }
 
     try std.testing.expectEqual(scopes.len * kinds.len * names.len, map.count());
     for (scopes) |scope| {
         for (kinds) |kind| {
-            for (names) |name| try std.testing.expect(map.contains(.{
-                .scope = scope,
-                .name = name,
-                .kind = kind,
-            }));
+            for (names) |name| {
+                const lookup: DeclarationLookup = .{
+                    .scope = scope,
+                    .name = name[0],
+                    .kind = kind,
+                };
+                try std.testing.expect(map.containsAdapted(lookup, context));
+            }
         }
     }
-    try std.testing.expect(!map.contains(.{ .scope = .root, .name = "missing", .kind = .other }));
+    const missing: DeclarationLookup = .{ .scope = .root, .name = "missing", .kind = .other };
+    try std.testing.expect(!map.containsAdapted(missing, context));
+}
+
+test "DocumentScope.init handles every allocation failure" {
+    const source: [:0]const u8 =
+        \\const Container = struct {
+        \\    value: u32,
+        \\    fn method(self: @This()) u32 {
+        \\        return self.value;
+        \\    }
+        \\};
+    ;
+    var tree = try Ast.parse(std.testing.allocator, source, .zig);
+    defer tree.deinit(std.testing.allocator);
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn init(allocator: std.mem.Allocator, ast_tree: *const Ast) !void {
+            var document_scope = try DocumentScope.init(allocator, ast_tree);
+            defer document_scope.deinit(allocator);
+        }
+    }.init, .{&tree});
 }

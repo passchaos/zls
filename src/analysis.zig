@@ -19166,7 +19166,7 @@ pub fn lookupSymbolContainer(
 
     for (document_scope.getScopeDeclarationsConst(container_scope.scope)) |decl_index| {
         const index = @intFromEnum(decl_index);
-        const lookup = document_scope.declaration_lookup_map.keys()[index];
+        const lookup = document_scope.getDeclarationLookup(decl_index);
         if (lookup.kind != kind) continue;
         if (std.mem.findScalar(u8, lookup.name, '\\') == null) continue;
 
