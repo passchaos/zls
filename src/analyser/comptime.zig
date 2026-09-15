@@ -655,7 +655,8 @@ pub const Interpreter = struct {
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
                 const name = tree.tokenSlice(tree.nodeMainToken(node));
                 if (std.mem.eql(u8, name, "@alignCast") or
-                    std.mem.eql(u8, name, "@atomicLoad")) return true;
+                    std.mem.eql(u8, name, "@atomicLoad") or
+                    std.mem.eql(u8, name, "@intFromPtr")) return true;
             },
             .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
@@ -2138,6 +2139,18 @@ pub const Interpreter = struct {
                     if (params.len != 1) return null;
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeIntFromBoolValue(operand);
+                }
+                if (std.mem.eql(u8, name, "@intFromPtr")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
+                    const operand_type = try operand.typeOf(self.analyser);
+                    if (!operand_type.isOptionalRuntimePointerType(self.analyser)) return null;
+                    return switch (try self.optionalValue(operand) orelse return null) {
+                        .absent => Type.fromIP(self.analyser, .usize_type, .zero_usize),
+                        .payload => null,
+                    };
                 }
                 if (std.mem.eql(u8, name, "@tagName")) {
                     var buffer: [2]Ast.Node.Index = undefined;

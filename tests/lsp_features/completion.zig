@@ -8337,6 +8337,20 @@ test "generic function with nested comptime bit permutation mutations" {
     });
 }
 
+test "generic function with comptime null pointer address" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const pointer: ?*u8 = null;
+        \\    const address = @intFromPtr(pointer);
+        \\    return struct { items: [address + 1]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[1]u16" },
+    });
+}
+
 test "generic function with comptime unknown bit builtin types" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;
