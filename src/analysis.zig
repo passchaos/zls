@@ -11508,10 +11508,17 @@ pub fn resolveComptimePointerTypeSyntax(
     is_const: bool,
     is_volatile: bool,
     is_allowzero: bool,
+    sentinel_value: ?Type,
     elem_type: Type,
 ) error{OutOfMemory}!?Type {
     if (!elem_type.is_type_val) return null;
     if (size == .c and is_allowzero) return null;
+    const sentinel = if (sentinel_value) |value| sentinel: {
+        if (size == .one or size == .c) return null;
+        const elem_type_index = elem_type.ipIndex() orelse return null;
+        const value_index = value.ipIndex() orelse return null;
+        break :sentinel try analyser.coerceIP(elem_type_index, value_index) orelse return null;
+    } else InternPool.Index.none;
     return @as(?Type, try Type.createPointerTypeWithFlags(
         analyser,
         .{
@@ -11521,7 +11528,7 @@ pub fn resolveComptimePointerTypeSyntax(
             .is_allowzero = is_allowzero,
         },
         .{ .bit_offset = 0, .host_size = 0 },
-        .none,
+        sentinel,
         elem_type,
     ));
 }

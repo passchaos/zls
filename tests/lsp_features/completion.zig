@@ -22302,6 +22302,27 @@ test "nested comptime pointer child type mutation" {
     });
 }
 
+test "nested comptime sentinel pointer type mutations" {
+    try testCompletion(
+        \\fn Pointer(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const P = [*:sentinel: {
+        \\        order += 5;
+        \\        break :sentinel 0;
+        \\    }]const (child: {
+        \\        order *= 3;
+        \\        break :child T;
+        \\    });
+        \\    return struct { pointer: P, order: [order]u8 };
+        \\}
+        \\const pointer: Pointer(u8) = undefined;
+        \\const field = pointer.<cursor>
+    , &.{
+        .{ .label = "pointer", .kind = .Field, .detail = "[*:0]const u8" },
+        .{ .label = "order", .kind = .Field, .detail = "[8]u8" },
+    });
+}
+
 test "array" {
     try testCompletion(
         \\const foo: [3]u32 = undefined;
