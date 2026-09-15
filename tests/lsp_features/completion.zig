@@ -9183,6 +9183,25 @@ test "generic function with comptime branch hints" {
     });
 }
 
+test "generic function with comptime strict float mode" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var count: usize = 0;
+        \\    @setFloatMode(mode: {
+        \\        count += 1;
+        \\        break :mode .strict;
+        \\    });
+        \\    const value = @as(f32, 0x1p24) + 1.0;
+        \\    const final = count;
+        \\    return if (value == 0x1p24) struct { items: [final]T } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[1]u16" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

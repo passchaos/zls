@@ -2289,6 +2289,16 @@ pub const Interpreter = struct {
                         std.meta.stringToEnum(std.builtin.BranchHint, hint.data.enum_value.tag) == null) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@setFloatMode")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const mode_instance = try self.analyser.instanceStdBuiltinType("FloatMode") orelse return null;
+                    const mode_type = try mode_instance.typeOf(self.analyser);
+                    const mode = try self.evaluateTypedExpression(handle, params[0], mode_type) orelse return null;
+                    if (mode.data != .enum_value or !std.mem.eql(u8, mode.data.enum_value.tag, "strict")) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@compileLog")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
