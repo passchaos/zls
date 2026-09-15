@@ -15924,6 +15924,10 @@ pub const Type = struct {
         return info.pointer.size == .one and (!info.is_optional or !info.pointer.is_allowzero);
     }
 
+    pub fn isAtomicPackedStructType(self: Type, analyser: *Analyser) bool {
+        return self.isStructType(analyser) and analyser.containerTypeLayout(self) == .@"packed";
+    }
+
     pub const PointerQualifierCast = enum { discard_const, discard_volatile, increase_alignment };
 
     pub fn qualifierCastType(

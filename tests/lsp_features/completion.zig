@@ -9536,6 +9536,25 @@ test "generic function with comptime optional pointer atomics" {
     });
 }
 
+test "generic function with comptime packed struct atomics" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Bits = packed struct(u8) { low: u3, high: u5 };
+        \\    var value: Bits = .{ .low = 1, .high = 2 };
+        \\    @atomicStore(Bits, &value, .{ .low = 3, .high = 4 }, .release);
+        \\    const loaded = @atomicLoad(Bits, &value, .acquire);
+        \\    const previous = @atomicRmw(Bits, &value, .Xchg, .{ .low = 5, .high = 6 }, .seq_cst);
+        \\    const final = value;
+        \\    const total = @as(usize, loaded.low) + loaded.high + previous.low + previous.high + final.low + final.high;
+        \\    return struct { items: [total]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[25]u16" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };

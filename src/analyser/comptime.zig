@@ -2329,7 +2329,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 3) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!try self.supportsAtomicValue(element_type, true)) return null;
+                    if (!try self.supportsAtomicValue(element_type, true, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2348,7 +2348,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 4) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!try self.supportsAtomicValue(element_type, true)) return null;
+                    if (!try self.supportsAtomicValue(element_type, true, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2374,7 +2374,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 5) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!try self.supportsAtomicValue(element_type, true)) return null;
+                    if (!try self.supportsAtomicValue(element_type, true, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2399,7 +2399,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 6) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!try self.supportsAtomicValue(element_type, false)) return null;
+                    if (!try self.supportsAtomicValue(element_type, false, false)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -5006,8 +5006,18 @@ pub const Interpreter = struct {
         return std.meta.stringToEnum(std.builtin.AtomicRmwOp, value.data.enum_value.tag);
     }
 
-    fn supportsAtomicValue(self: *Interpreter, ty: Type, allow_float: bool) Error!bool {
+    fn supportsAtomicValue(
+        self: *Interpreter,
+        ty: Type,
+        allow_float: bool,
+        allow_packed_struct: bool,
+    ) Error!bool {
         if (!ty.is_type_val) return false;
+        if (allow_packed_struct and ty.isAtomicPackedStructType(self.analyser)) {
+            const bits = try self.analyser.resolveComptimeTypeSizeValue(ty, .bit_size) orelse return false;
+            return (self.analyser.ip.toInt(bits.ipIndex() orelse return false, u16) orelse return false) <=
+                builtin.target.ptrBitWidth();
+        }
         if (ty.isAtomicSinglePointerValueType(self.analyser)) return true;
         if (ty.isEnumType(self.analyser)) {
             const bits = try self.analyser.resolveComptimeTypeSizeValue(ty, .bit_size) orelse return false;
