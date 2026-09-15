@@ -42,8 +42,25 @@ pub const Declaration = struct {
     kind: Kind,
 };
 
+const PostingList = struct {
+    start: u32,
+    len: u32,
+
+    fn slice(list: PostingList, postings: []const Declaration.Index) []const Declaration.Index {
+        return postings[list.start..][0..list.len];
+    }
+};
+
+comptime {
+    assert(@sizeOf(PostingList) == 2 * @sizeOf(u32));
+}
+
+const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
+const PostingListBuilder = std.array_hash_map.Custom(Trigram, std.ArrayList(Declaration.Index), TrigramContext, false);
+
 filter_buckets: ?[]CuckooFilter.Bucket,
-trigram_to_declarations: std.array_hash_map.Custom(Trigram, std.ArrayList(Declaration.Index), TrigramContext, false),
+trigram_to_declarations: PostingMap,
+postings: []Declaration.Index,
 declarations: std.MultiArrayList(Declaration),
 
 pub fn init(
@@ -53,9 +70,16 @@ pub fn init(
     var store: TrigramStore = .{
         .filter_buckets = null,
         .trigram_to_declarations = .empty,
+        .postings = &.{},
         .declarations = .empty,
     };
     errdefer store.deinit(allocator);
+
+    var posting_lists: PostingListBuilder = .empty;
+    defer {
+        for (posting_lists.values()) |*list| list.deinit(allocator);
+        posting_lists.deinit(allocator);
+    }
 
     var walker: ast.Walker = try .init(allocator, tree, .root);
     defer walker.deinit(allocator);
@@ -76,6 +100,7 @@ pub fn init(
                     if (tree.tokenTag(fn_token + 1) != .identifier) continue;
 
                     try store.appendDeclaration(
+                        &posting_lists,
                         allocator,
                         tree,
                         fn_token + 1,
@@ -87,6 +112,7 @@ pub fn init(
                     const test_name_token = tree.nodeData(node).opt_token_and_node[0].unwrap() orelse continue;
 
                     try store.appendDeclaration(
+                        &posting_lists,
                         allocator,
                         tree,
                         test_name_token,
@@ -126,6 +152,7 @@ pub fn init(
                     if (isVarDeclAlias(tree, node)) continue;
 
                     try store.appendDeclaration(
+                        &posting_lists,
                         allocator,
                         tree,
                         main_token + 1,
@@ -140,6 +167,7 @@ pub fn init(
                     if (tree.tokenTag(name_token) != .identifier) continue;
 
                     try store.appendDeclaration(
+                        &posting_lists,
                         allocator,
                         tree,
                         name_token,
@@ -168,16 +196,27 @@ pub fn init(
         }
     }
 
-    const lists = store.trigram_to_declarations.values();
-    var index: usize = 0;
-    while (index < lists.len) {
-        if (lists[index].items.len == 0) {
-            lists[index].deinit(allocator);
-            store.trigram_to_declarations.swapRemoveAt(index);
-        } else {
-            index += 1;
-        }
+    const lists = posting_lists.values();
+    var posting_count: usize = 0;
+    for (lists) |list| {
+        assert(list.items.len != 0);
+        posting_count = std.math.add(usize, posting_count, list.items.len) catch return error.OutOfMemory;
     }
+    if (posting_count > std.math.maxInt(u32)) return error.OutOfMemory;
+
+    store.postings = try allocator.alloc(Declaration.Index, posting_count);
+    try store.trigram_to_declarations.ensureTotalCapacity(allocator, posting_lists.count());
+
+    var posting_start: usize = 0;
+    for (posting_lists.keys(), posting_lists.values()) |trigram, list| {
+        @memcpy(store.postings[posting_start..][0..list.items.len], list.items);
+        store.trigram_to_declarations.putAssumeCapacityNoClobber(trigram, .{
+            .start = @intCast(posting_start),
+            .len = @intCast(list.items.len),
+        });
+        posting_start += list.items.len;
+    }
+    assert(posting_start == store.postings.len);
 
     const trigrams = store.trigram_to_declarations.keys();
 
@@ -209,9 +248,7 @@ pub fn init(
 
 pub fn deinit(store: *TrigramStore, allocator: std.mem.Allocator) void {
     if (store.filter_buckets) |buckets| allocator.free(buckets);
-    for (store.trigram_to_declarations.values()) |*list| {
-        list.deinit(allocator);
-    }
+    allocator.free(store.postings);
     store.trigram_to_declarations.deinit(allocator);
     store.declarations.deinit(allocator);
     store.* = undefined;
@@ -239,7 +276,7 @@ pub fn declarationsForQuery(
 
     var ti: TrigramIterator = .init(query);
 
-    const first = (store.trigram_to_declarations.get(ti.next() orelse return) orelse return).items;
+    const first = (store.trigram_to_declarations.get(ti.next() orelse return) orelse return).slice(store.postings);
 
     try declaration_buffer.resize(allocator, first.len);
 
@@ -251,7 +288,7 @@ pub fn declarationsForQuery(
             (store.trigram_to_declarations.get(trigram) orelse {
                 declaration_buffer.clearRetainingCapacity();
                 return;
-            }).items,
+            }).slice(store.postings),
             declaration_buffer.items[0..len],
         );
         declaration_buffer.shrinkRetainingCapacity(len);
@@ -261,6 +298,7 @@ pub fn declarationsForQuery(
 
 fn appendDeclaration(
     store: *TrigramStore,
+    posting_lists: *PostingListBuilder,
     allocator: std.mem.Allocator,
     tree: *const Ast,
     name_token: Ast.TokenIndex,
@@ -283,13 +321,13 @@ fn appendDeclaration(
             for (0..name.len - 2) |index| {
                 var trigram = name[index..][0..3].*;
                 for (&trigram) |*char| char.* = std.ascii.toLower(char.*);
-                try store.appendOneTrigram(allocator, trigram);
+                try store.appendOneTrigram(posting_lists, allocator, trigram);
             }
         },
         .smart => {
             var it: TrigramIterator = .init(name);
             while (it.next()) |trigram| {
-                try store.appendOneTrigram(allocator, trigram);
+                try store.appendOneTrigram(posting_lists, allocator, trigram);
             }
         },
     }
@@ -307,12 +345,13 @@ fn appendDeclaration(
 
 fn appendOneTrigram(
     store: *TrigramStore,
+    posting_lists: *PostingListBuilder,
     allocator: std.mem.Allocator,
     trigram: Trigram,
 ) error{OutOfMemory}!void {
     const declaration_index: Declaration.Index = @enumFromInt(store.declarations.len);
 
-    const gop = try store.trigram_to_declarations.getOrPutValue(allocator, trigram, .empty);
+    const gop = try posting_lists.getOrPutValue(allocator, trigram, .empty);
 
     if (gop.value_ptr.getLastOrNull() != declaration_index) {
         try gop.value_ptr.append(allocator, declaration_index);
@@ -562,6 +601,50 @@ test "declarations and query results stay in source order" {
     for (declarations.items, 0..) |declaration, expected| {
         try std.testing.expectEqual(expected, @intFromEnum(declaration));
     }
+
+    var posting_end: usize = 0;
+    for (store.trigram_to_declarations.values()) |list| {
+        try std.testing.expectEqual(posting_end, list.start);
+        const posting_slice = list.slice(store.postings);
+        try std.testing.expect(posting_slice.len > 0);
+        for (posting_slice[1..], posting_slice[0 .. posting_slice.len - 1]) |current, previous| {
+            try std.testing.expect(@intFromEnum(previous) < @intFromEnum(current));
+        }
+        posting_end += posting_slice.len;
+    }
+    try std.testing.expectEqual(store.postings.len, posting_end);
+}
+
+test "empty store has no postings" {
+    const allocator = std.testing.allocator;
+    var tree = try Ast.parse(allocator, "", .zig);
+    defer tree.deinit(allocator);
+
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), store.trigram_to_declarations.count());
+    try std.testing.expectEqual(@as(usize, 0), store.postings.len);
+    try std.testing.expect(store.filter_buckets == null);
+}
+
+test "TrigramStore.init handles every allocation failure" {
+    const source: [:0]const u8 =
+        \\const alpha_symbol = struct {
+        \\    beta_field: u8,
+        \\    fn gammaFunction() void {}
+        \\};
+        \\var delta_symbol: u8 = 0;
+    ;
+    var tree = try Ast.parse(std.testing.allocator, source, .zig);
+    defer tree.deinit(std.testing.allocator);
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn init(allocator: std.mem.Allocator, ast_tree: *const Ast) !void {
+            var store = try TrigramStore.init(allocator, ast_tree);
+            defer store.deinit(allocator);
+        }
+    }.init, .{&tree});
 }
 
 const CuckooFilter = struct {
