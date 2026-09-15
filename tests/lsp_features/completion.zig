@@ -6822,6 +6822,33 @@ test "generic function with comptime Enum type constructor" {
     });
 }
 
+test "generic function with nested comptime Enum mutations" {
+    try testCompletion(
+        \\fn Mode(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const E = @Enum(tag_type: {
+        \\            order *= 2;
+        \\            break :tag_type T;
+        \\        }, mode: {
+        \\            order += 3;
+        \\            break :mode .exhaustive;
+        \\        }, names: {
+        \\            order *= 2;
+        \\            break :names &.{ "low", "high" };
+        \\        }, values: {
+        \\            order += 1;
+        \\            break :values &.{ 1, 7 };
+        \\        });
+        \\    return struct { value: E, order: [order]u8 };
+        \\}
+        \\const mode: Mode(u8) = undefined;
+        \\const field = mode.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "enum(u8) { low = 1, high = 7 }" },
+        .{ .label = "order", .kind = .Field, .detail = "[11]u8" },
+    });
+}
+
 test "generic function with comptime generated Enum values" {
     try testCompletion(
         \\fn Select(comptime Tag: type) type {

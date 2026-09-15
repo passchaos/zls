@@ -8321,7 +8321,17 @@ fn resolveEnumTypeConstructor(
         .container_type = container_type,
     }) orelse return null;
     if (names.len != raw_values.len) return null;
+    return analyser.createComptimeEnumType(tag_type_index, mode, names, raw_values);
+}
 
+fn createComptimeEnumType(
+    analyser: *Analyser,
+    tag_type: InternPool.Index,
+    mode: std.builtin.Type.Enum.Mode,
+    names: []const []const u8,
+    raw_values: []const InternPool.Index,
+) Error!?Type {
+    if (names.len != raw_values.len) return null;
     var fields: std.array_hash_map.Auto(InternPool.String, void) = .empty;
     errdefer fields.deinit(analyser.gpa);
     var values: std.array_hash_map.Auto(InternPool.Index, void) = .empty;
@@ -8336,7 +8346,7 @@ fn resolveEnumTypeConstructor(
     }
 
     const enum_index = try analyser.ip.createEnum(.{
-        .tag_type = tag_type_index,
+        .tag_type = tag_type,
         .fields = fields,
         .values = values,
         .namespace = .none,
@@ -8344,8 +8354,52 @@ fn resolveEnumTypeConstructor(
     });
     fields = .empty;
     values = .empty;
-    const enum_type = try analyser.ip.get(.{ .enum_type = enum_index });
-    return Type.fromIP(analyser, .type_type, enum_type);
+    return Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
+}
+
+pub fn comptimeEnumFieldValuesType(
+    analyser: *Analyser,
+    tag_type: Type,
+    field_count: usize,
+) Error!?Type {
+    if (!tag_type.is_type_val) return null;
+    const tag_type_index = tag_type.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(tag_type_index) != .int) return null;
+    const array_type = try Type.createArrayType(analyser, field_count, .none, tag_type);
+    return @as(?Type, try Type.createPointerType(analyser, .one, .none, true, array_type));
+}
+
+pub fn resolveComptimeEnumTypeValue(
+    analyser: *Analyser,
+    tag_type: Type,
+    mode_value: Type,
+    names_value: Type,
+    values_value: Type,
+) Error!?Type {
+    if (!tag_type.is_type_val) return null;
+    const tag_type_index = tag_type.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(tag_type_index) != .int) return null;
+    const mode = comptimeEnumValue(std.builtin.Type.Enum.Mode, mode_value) orelse return null;
+
+    const names_sequence = try comptime_eval.Value.sequenceAlloc(analyser, names_value) orelse return null;
+    if (!names_sequence.elements_valid) return null;
+    const name_items = names_sequence.backing[names_sequence.offset..][0..names_sequence.len];
+    const names = try analyser.arena.alloc([]const u8, name_items.len);
+    for (name_items, names, 0..) |item, *name, index| {
+        if (item.data != .string_value) return null;
+        name.* = item.data.string_value.bytes;
+        for (names[0..index]) |previous| if (std.mem.eql(u8, previous, name.*)) return null;
+    }
+
+    const values_sequence = try comptime_eval.Value.sequenceAlloc(analyser, values_value) orelse return null;
+    if (!values_sequence.elements_valid or values_sequence.len != names.len) return null;
+    const value_items = values_sequence.backing[values_sequence.offset..][0..values_sequence.len];
+    const raw_values = try analyser.arena.alloc(InternPool.Index, value_items.len);
+    for (value_items, raw_values) |item, *value| {
+        value.* = try analyser.coerceComptimeIPValue(tag_type_index, item) orelse return null;
+    }
+
+    return analyser.createComptimeEnumType(tag_type_index, mode, names, raw_values);
 }
 
 fn resolveFnParameterAttributes(

@@ -2406,6 +2406,20 @@ pub const Interpreter = struct {
                     for (params) |param| if (nodeNeedsEvaluation(&handle.tree, param, 0)) return null;
                     return self.analyser.resolveTypeOfNode(.of(node, handle));
                 }
+                if (std.mem.eql(u8, name, "@Enum")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 4) return null;
+                    const tag_type = try self.eval(handle, params[0]) orelse return null;
+                    const mode_instance = try self.analyser.instanceStdBuiltinType("Type.Enum.Mode") orelse return null;
+                    const mode_type = try mode_instance.typeOf(self.analyser);
+                    const mode = try self.evaluateTypedExpression(handle, params[1], mode_type) orelse return null;
+                    const names = try self.eval(handle, params[2]) orelse return null;
+                    const names_sequence = try Value.sequenceAlloc(self.analyser, names) orelse return null;
+                    const values_type = try self.analyser.comptimeEnumFieldValuesType(tag_type, names_sequence.len) orelse return null;
+                    const values = try self.evaluateTypedExpression(handle, params[3], values_type) orelse return null;
+                    return self.analyser.resolveComptimeEnumTypeValue(tag_type, mode, names, values);
+                }
                 if (std.mem.eql(u8, name, "@Tuple")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
