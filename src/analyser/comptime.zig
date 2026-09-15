@@ -2278,6 +2278,17 @@ pub const Interpreter = struct {
                     _ = try self.boolValue(enabled) orelse return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@branchHint")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const hint_instance = try self.analyser.instanceStdBuiltinType("BranchHint") orelse return null;
+                    const hint_type = try hint_instance.typeOf(self.analyser);
+                    const hint = try self.evaluateTypedExpression(handle, params[0], hint_type) orelse return null;
+                    if (hint.data != .enum_value or
+                        std.meta.stringToEnum(std.builtin.BranchHint, hint.data.enum_value.tag) == null) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@compileLog")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

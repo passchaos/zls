@@ -9162,6 +9162,27 @@ test "generic function with nested comptime control builtin mutations" {
     , &.{.{ .label = "items", .kind = .Field, .detail = "[2000]u8" }});
 }
 
+test "generic function with comptime branch hints" {
+    try testCompletion(
+        \\fn Select(comptime enabled: bool) type {
+        \\    var count: usize = 0;
+        \\    if (enabled) {
+        \\        @branchHint(hint: {
+        \\            count += 1;
+        \\            break :hint .likely;
+        \\        });
+        \\        const final = count;
+        \\        return struct { items: [final]u8 };
+        \\    }
+        \\    return struct { fallback: u8 };
+        \\}
+        \\const selected: Select(true) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {
