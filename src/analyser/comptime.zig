@@ -2394,6 +2394,49 @@ pub const Interpreter = struct {
                     if (!try self.writeReference(handle, reference, value, params[3])) return null;
                     return previous;
                 }
+                if (std.mem.eql(u8, name, "@cmpxchgStrong") or std.mem.eql(u8, name, "@cmpxchgWeak")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 6) return null;
+                    const element_type = try self.eval(handle, params[0]) orelse return null;
+                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                    if (pointer.data != .comptime_value or
+                        pointer.data.comptime_value.data != .reference or
+                        pointer.data.comptime_value.data.reference.path.len != 0 or
+                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                            self.analyser,
+                            element_type,
+                            true,
+                        )) return null;
+                    const expected = try self.evaluateTypedExpression(handle, params[2], element_type) orelse return null;
+                    const replacement = try self.evaluateTypedExpression(handle, params[3], element_type) orelse return null;
+                    if (!Value.isKnown(expected, self.analyser, 0) or
+                        !Value.isKnown(replacement, self.analyser, 0)) return null;
+                    const success_order = try self.atomicOrder(handle, params[4]) orelse return null;
+                    const failure_order = try self.atomicOrder(handle, params[5]) orelse return null;
+                    if (@intFromEnum(success_order) < @intFromEnum(std.builtin.AtomicOrder.monotonic) or
+                        @intFromEnum(failure_order) < @intFromEnum(std.builtin.AtomicOrder.monotonic) or
+                        @intFromEnum(failure_order) > @intFromEnum(success_order) or
+                        failure_order == .release or failure_order == .acq_rel) return null;
+
+                    const reference = pointer.data.comptime_value.data.reference;
+                    const current = try self.readReference(reference) orelse return null;
+                    const equality = try self.analyser.resolveComptimeComparisonValue(
+                        .equal_equal,
+                        current,
+                        expected,
+                    ) orelse return null;
+                    const matched = try self.boolValue(equality) orelse return null;
+                    const result_instance = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
+                    const result_type = try result_instance.typeOf(self.analyser);
+                    if (matched and !try self.writeReference(handle, reference, replacement, params[3])) return null;
+                    return @as(?Type, try Value.create(
+                        self.analyser,
+                        result_type,
+                        .{ .optional = if (matched) null else current },
+                    ));
+                }
                 if (std.mem.eql(u8, name, "@memset")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

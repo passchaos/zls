@@ -9342,6 +9342,52 @@ test "generic function with comptime atomic exchange" {
     });
 }
 
+test "generic function with comptime compare exchange" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 0;
+        \\    var value: usize = 2;
+        \\    const success = @cmpxchgStrong(element: {
+        \\        evaluations += 1;
+        \\        break :element usize;
+        \\    }, pointer: {
+        \\        evaluations *= 2;
+        \\        break :pointer &value;
+        \\    }, expected: {
+        \\        evaluations += 3;
+        \\        break :expected 2;
+        \\    }, replacement: {
+        \\        evaluations *= 2;
+        \\        break :replacement 7;
+        \\    }, success_order: {
+        \\        evaluations += 5;
+        \\        break :success_order .seq_cst;
+        \\    }, failure_order: {
+        \\        evaluations *= 2;
+        \\        break :failure_order .acquire;
+        \\    });
+        \\    const failure = @cmpxchgWeak(usize, &value, 3, 9, .monotonic, .monotonic);
+        \\    const final = value;
+        \\    const count = evaluations;
+        \\    const succeeded = success == null;
+        \\    const observed = failure.?;
+        \\    return struct {
+        \\        current: [final]T,
+        \\        evaluations: [count]u8,
+        \\        succeeded: [@intFromBool(succeeded)]u8,
+        \\        observed: [observed]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "current", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[30]u8" },
+        .{ .label = "succeeded", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "observed", .kind = .Field, .detail = "[7]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
