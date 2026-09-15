@@ -2329,7 +2329,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 3) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    if (!self.supportsAtomicScalar(element_type, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2348,7 +2348,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 4) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    if (!self.supportsAtomicScalar(element_type, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2374,7 +2374,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 5) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    if (!self.supportsAtomicScalar(element_type, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2399,7 +2399,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 6) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    if (!self.supportsAtomicScalar(element_type, false)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -5006,12 +5006,13 @@ pub const Interpreter = struct {
         return std.meta.stringToEnum(std.builtin.AtomicRmwOp, value.data.enum_value.tag);
     }
 
-    fn supportsAtomicScalar(self: *Interpreter, ty: Type) bool {
+    fn supportsAtomicScalar(self: *Interpreter, ty: Type, allow_float: bool) bool {
         if (!ty.is_type_val) return false;
         const type_index = ty.ipIndex() orelse return false;
         return switch (self.analyser.ip.zigTypeTag(type_index) orelse return false) {
             .bool => true,
             .int => self.analyser.ip.intInfo(type_index, builtin.target).bits <= builtin.target.ptrBitWidth(),
+            .float => allow_float and self.analyser.ip.floatBits(type_index, builtin.target) <= builtin.target.ptrBitWidth(),
             else => false,
         };
     }
@@ -5025,15 +5026,35 @@ pub const Interpreter = struct {
     ) Error!?Type {
         if (operation == .Xchg) return operand;
         const type_index = element_type.ipIndex() orelse return null;
-        if (self.analyser.ip.zigTypeTag(type_index) != .int) return null;
+        const type_tag = self.analyser.ip.zigTypeTag(type_index) orelse return null;
         return switch (operation) {
             .Xchg => unreachable,
-            .Add => self.analyser.resolveComptimeBinaryValue(.add_wrap, current, operand, .{}),
-            .Sub => self.analyser.resolveComptimeBinaryValue(.sub_wrap, current, operand, .{}),
-            .And => self.analyser.resolveComptimeBinaryValue(.bit_and, current, operand, .{}),
-            .Or => self.analyser.resolveComptimeBinaryValue(.bit_or, current, operand, .{}),
-            .Xor => self.analyser.resolveComptimeBinaryValue(.bit_xor, current, operand, .{}),
+            .Add => self.analyser.resolveComptimeBinaryValue(
+                if (type_tag == .int) .add_wrap else .add,
+                current,
+                operand,
+                .{},
+            ),
+            .Sub => self.analyser.resolveComptimeBinaryValue(
+                if (type_tag == .int) .sub_wrap else .sub,
+                current,
+                operand,
+                .{},
+            ),
+            .And => if (type_tag == .int)
+                self.analyser.resolveComptimeBinaryValue(.bit_and, current, operand, .{})
+            else
+                null,
+            .Or => if (type_tag == .int)
+                self.analyser.resolveComptimeBinaryValue(.bit_or, current, operand, .{})
+            else
+                null,
+            .Xor => if (type_tag == .int)
+                self.analyser.resolveComptimeBinaryValue(.bit_xor, current, operand, .{})
+            else
+                null,
             .Nand => nand: {
+                if (type_tag != .int) return null;
                 const value = try self.analyser.resolveComptimeBinaryValue(.bit_and, current, operand, .{}) orelse
                     return null;
                 break :nand self.analyser.resolveComptimeUnaryValue(.bit_not, value);

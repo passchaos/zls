@@ -9412,6 +9412,29 @@ test "generic function with comptime integer atomic operations" {
     });
 }
 
+test "generic function with comptime float atomic operations" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var value: f32 = 1.5;
+        \\    @atomicStore(f32, &value, 2.5, .release);
+        \\    const loaded = @atomicLoad(f32, &value, .acquire);
+        \\    const add = @atomicRmw(f32, &value, .Add, 1.25, .seq_cst);
+        \\    const sub = @atomicRmw(f32, &value, .Sub, 0.75, .seq_cst);
+        \\    const maximum = @atomicRmw(f32, &value, .Max, 4.5, .seq_cst);
+        \\    const minimum = @atomicRmw(f32, &value, .Min, 2.0, .seq_cst);
+        \\    const exchange = @atomicRmw(f32, &value, .Xchg, 6.0, .seq_cst);
+        \\    const total = @as(usize, @intFromFloat(
+        \\        loaded + add + sub + maximum + minimum + exchange + value,
+        \\    ));
+        \\    return struct { values: [total]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "values", .kind = .Field, .detail = "[24]u16" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
