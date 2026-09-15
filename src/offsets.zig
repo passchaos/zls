@@ -54,43 +54,63 @@ pub fn advancePosition(
     std.debug.assert(from_index <= to_index);
     std.debug.assert(to_index <= text.len);
 
-    var line = position.line;
-    var last_line_start: ?usize = null;
-    for (text[from_index..to_index], 0..) |c, offset| {
-        if (c == '\n') {
-            line += 1;
-            last_line_start = from_index + offset + 1;
-        }
+    var result = position;
+    switch (encoding) {
+        .@"utf-8" => for (text[from_index..to_index]) |c| {
+            if (c == '\n') {
+                result.line += 1;
+                result.character = 0;
+            } else {
+                result.character += 1;
+            }
+        },
+        .@"utf-16" => for (text[from_index..to_index]) |c| {
+            if (c == '\n') {
+                result.line += 1;
+                result.character = 0;
+            } else if (c < 0x80) {
+                result.character += 1;
+            } else if (c >= 0xF0) {
+                result.character += 2;
+            } else if (c >= 0xC0) {
+                result.character += 1;
+            }
+        },
+        .@"utf-32" => for (text[from_index..to_index]) |c| {
+            if (c == '\n') {
+                result.line += 1;
+                result.character = 0;
+            } else if (c < 0x80 or c >= 0xC0) {
+                result.character += 1;
+            }
+        },
     }
-
-    const character: usize = if (last_line_start) |line_start|
-        countCodeUnits(text[line_start..to_index], encoding)
-    else
-        @as(usize, position.character) + countCodeUnits(text[from_index..to_index], encoding);
-
-    return .{ .line = line, .character = @intCast(character) };
+    return result;
 }
 pub const countCodeUnits = offsets.countCodeUnits;
 pub const getNCodeUnitByteCount = offsets.getNCodeUnitByteCount;
 
 test advancePosition {
     const text = "a¶↉🠁\r\nxy\n🇺🇸 end";
+    var boundaries: [text.len + 1]usize = undefined;
+    var boundary_count: usize = 1;
+    boundaries[0] = 0;
+    var index: usize = 0;
+    while (index < text.len) {
+        index += std.unicode.utf8ByteSequenceLength(text[index]) catch unreachable;
+        boundaries[boundary_count] = index;
+        boundary_count += 1;
+    }
 
     inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
-        var expected: Position = .{ .line = 0, .character = 0 };
-        var actual: Position = .{ .line = 0, .character = 0 };
-        var previous_index: usize = 0;
-        var index: usize = 0;
-
-        while (index < text.len) {
-            index += std.unicode.utf8ByteSequenceLength(text[index]) catch unreachable;
-            expected = offsets.advancePosition(text, expected, previous_index, index, encoding);
-            actual = advancePosition(text, actual, previous_index, index, encoding);
-            try std.testing.expectEqual(expected, actual);
-            previous_index = index;
+        for (boundaries[0..boundary_count], 0..) |from_index, from_boundary| {
+            const from_position = offsets.indexToPosition(text, from_index, encoding);
+            for (boundaries[from_boundary..boundary_count]) |to_index| {
+                const expected = offsets.advancePosition(text, from_position, from_index, to_index, encoding);
+                const actual = advancePosition(text, from_position, from_index, to_index, encoding);
+                try std.testing.expectEqual(expected, actual);
+            }
         }
-
-        try std.testing.expectEqual(actual, advancePosition(text, actual, text.len, text.len, encoding));
     }
 }
 
