@@ -2820,6 +2820,33 @@ test "generic function with comptime Pointer type constructor" {
     });
 }
 
+test "generic function with nested comptime Pointer mutations" {
+    try testCompletion(
+        \\fn Holder(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const P = @Pointer(size: {
+        \\            order *= 2;
+        \\            break :size .slice;
+        \\        }, attributes: {
+        \\            order += 3;
+        \\            break :attributes .{ .@"const" = true };
+        \\        }, child: {
+        \\            order *= 2;
+        \\            break :child T;
+        \\        }, sentinel: {
+        \\            order += 1;
+        \\            break :sentinel 0;
+        \\        });
+        \\    return struct { ptr: P, order: [order]u8 };
+        \\}
+        \\const holder: Holder(u8) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "ptr", .kind = .Field, .detail = "[:0]const u8" },
+        .{ .label = "order", .kind = .Field, .detail = "[11]u8" },
+    });
+}
+
 test "generic function with dependent comptime value parameter" {
     try testCompletion(
         \\fn Select(comptime T: type, comptime value: T) type {

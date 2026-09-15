@@ -2364,6 +2364,20 @@ pub const Interpreter = struct {
                         .bits = bits,
                     } }));
                 }
+                if (std.mem.eql(u8, name, "@Pointer")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 4) return null;
+                    const size_instance = try self.analyser.instanceStdBuiltinType("Type.Pointer.Size") orelse return null;
+                    const size_type = try size_instance.typeOf(self.analyser);
+                    const size = try self.evaluateTypedExpression(handle, params[0], size_type) orelse return null;
+                    const attributes_instance = try self.analyser.instanceStdBuiltinType("Type.Pointer.Attributes") orelse return null;
+                    const attributes_type = try attributes_instance.typeOf(self.analyser);
+                    const attributes = try self.evaluateTypedExpression(handle, params[1], attributes_type) orelse return null;
+                    const child = try self.eval(handle, params[2]) orelse return null;
+                    const sentinel = try self.eval(handle, params[3]) orelse return null;
+                    return self.analyser.resolveComptimePointerTypeValue(size, attributes, child, sentinel);
+                }
                 if (std.mem.eql(u8, name, "@Tuple")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

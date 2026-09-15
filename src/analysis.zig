@@ -7656,6 +7656,106 @@ fn resolvePointerAttributes(
     return flags;
 }
 
+const OptionalComptimeValue = union(enum) {
+    absent,
+    payload: Type,
+};
+
+fn optionalComptimeValue(analyser: *Analyser, value: Type) ?OptionalComptimeValue {
+    const resolved = comptime_eval.Value.deref(value);
+    if (resolved.data == .comptime_value) {
+        return switch (resolved.data.comptime_value.data) {
+            .optional => |payload| if (payload) |item| .{ .payload = item } else .absent,
+            else => .{ .payload = resolved },
+        };
+    }
+    const index = resolved.ipIndex() orelse return .{ .payload = resolved };
+    return switch (analyser.ip.indexToKey(index)) {
+        .null_value => .absent,
+        .simple_value => |simple| if (simple == .null_value) .absent else .{ .payload = resolved },
+        .optional_value => |optional| .{ .payload = Type.fromIP(
+            analyser,
+            analyser.ip.typeOf(optional.val),
+            optional.val,
+        ) },
+        else => .{ .payload = resolved },
+    };
+}
+
+fn comptimeBoolValue(value: Type) ?bool {
+    return switch (comptime_eval.Value.deref(value).ipIndex() orelse return null) {
+        .bool_false => false,
+        .bool_true => true,
+        else => null,
+    };
+}
+
+fn comptimeEnumValue(comptime E: type, value: Type) ?E {
+    const resolved = comptime_eval.Value.deref(value);
+    if (resolved.data != .enum_value) return null;
+    return std.meta.stringToEnum(E, resolved.data.enum_value.tag);
+}
+
+fn createComptimePointerType(
+    analyser: *Analyser,
+    flags: InternPool.Key.Pointer.Flags,
+    child: Type,
+    sentinel_value: Type,
+) Error!?Type {
+    if (!child.is_type_val) return null;
+    if (flags.alignment != 0 and !std.math.isPowerOfTwo(flags.alignment)) return null;
+    const sentinel = switch (optionalComptimeValue(analyser, sentinel_value) orelse return null) {
+        .absent => InternPool.Index.none,
+        .payload => |payload| sentinel: {
+            if (flags.size == .one or flags.size == .c) return null;
+            const child_type = child.ipIndex() orelse return null;
+            const index = payload.ipIndex() orelse return null;
+            break :sentinel try analyser.coerceIP(child_type, index) orelse return null;
+        },
+    };
+    return @as(?Type, try Type.createPointerTypeWithFlags(
+        analyser,
+        flags,
+        .{ .bit_offset = 0, .host_size = 0 },
+        sentinel,
+        child,
+    ));
+}
+
+pub fn resolveComptimePointerTypeValue(
+    analyser: *Analyser,
+    size_value: Type,
+    attributes: Type,
+    child: Type,
+    sentinel_value: Type,
+) Error!?Type {
+    const size = comptimeEnumValue(std.builtin.Type.Pointer.Size, size_value) orelse return null;
+    var flags: InternPool.Key.Pointer.Flags = .{ .size = size };
+    flags.is_const = comptimeBoolValue(try analyser.resolveFieldAccess(attributes, "const") orelse return null) orelse return null;
+    flags.is_volatile = comptimeBoolValue(try analyser.resolveFieldAccess(attributes, "volatile") orelse return null) orelse return null;
+    flags.is_allowzero = comptimeBoolValue(try analyser.resolveFieldAccess(attributes, "allowzero") orelse return null) orelse return null;
+
+    const alignment_value = try analyser.resolveFieldAccess(attributes, "align") orelse return null;
+    switch (optionalComptimeValue(analyser, alignment_value) orelse return null) {
+        .absent => {},
+        .payload => |alignment| {
+            const bytes = analyser.ip.toInt(alignment.ipIndex() orelse return null, u16) orelse return null;
+            if (!std.math.isPowerOfTwo(bytes)) return null;
+            flags.alignment = bytes;
+        },
+    }
+
+    const address_space_value = try analyser.resolveFieldAccess(attributes, "addrspace") orelse return null;
+    switch (optionalComptimeValue(analyser, address_space_value) orelse return null) {
+        .absent => {},
+        .payload => |address_space| {
+            flags.address_space = comptimeEnumValue(std.builtin.AddressSpace, address_space) orelse return null;
+        },
+    }
+
+    return analyser.createComptimePointerType(flags, child, sentinel_value);
+}
+
 fn resolveTupleTypeConstructor(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -13055,23 +13155,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .node_handle = .of(params[3], handle),
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
-                    const sentinel = if (sentinel_value.ipIndex()) |index|
-                        if (analyser.ip.isNull(index))
-                            InternPool.Index.none
-                        else sentinel: {
-                            const child_type = child.ipIndex() orelse return .unknown_type;
-                            break :sentinel try analyser.coerceIP(child_type, index) orelse return .unknown_type;
-                        }
-                    else
-                        return .unknown_type;
-                    if (sentinel != .none and (size == .one or size == .c)) return .unknown_type;
-                    return try Type.createPointerTypeWithFlags(
-                        analyser,
-                        flags,
-                        .{ .bit_offset = 0, .host_size = 0 },
-                        sentinel,
-                        child,
-                    );
+                    return try analyser.createComptimePointerType(flags, child, sentinel_value) orelse .unknown_type;
                 },
                 .Fn => {
                     if (params.len != 4) return .unknown_type;
