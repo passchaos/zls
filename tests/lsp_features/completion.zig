@@ -9847,6 +9847,14 @@ test "generic function with comptime sliced memset" {
         \\    var evaluations: usize = 0;
         \\    var values: [4]usize = undefined;
         \\    var holder: Holder = .{ .values = .{ 1, 2, 3, 4 } };
+        \\    var local_values = [_]usize{ 1, 2, 3, 4, 5 };
+        \\    var full_values: [3]usize = undefined;
+        \\    var local_evaluations: usize = 0;
+        \\    const local_slice: []usize = local_values[1..end: {
+        \\        local_evaluations += 1;
+        \\        break :end 4;
+        \\    }];
+        \\    const full_slice: []usize = &full_values;
         \\    @memset(values[start: {
         \\        evaluations += 1;
         \\        break :start 1;
@@ -9858,12 +9866,18 @@ test "generic function with comptime sliced memset" {
         \\        break :fill 5;
         \\    });
         \\    @memset(holder.values[1..], 7);
+        \\    @memset(local_slice, 9);
+        \\    @memset(full_slice, 6);
         \\    const final = evaluations;
         \\    return struct {
         \\        first: [values[1]]T,
         \\        second: [values[2]]T,
         \\        nested_first: [holder.values[0]]T,
         \\        nested_last: [holder.values[3]]T,
+        \\        local_first: [local_values[1]]T,
+        \\        local_last: [local_values[4]]T,
+        \\        full_middle: [full_values[1]]T,
+        \\        local_evaluations: [local_evaluations]T,
         \\        evaluations: [final]u8,
         \\    };
         \\}
@@ -9874,6 +9888,10 @@ test "generic function with comptime sliced memset" {
         .{ .label = "second", .kind = .Field, .detail = "[5]u16" },
         .{ .label = "nested_first", .kind = .Field, .detail = "[1]u16" },
         .{ .label = "nested_last", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "local_first", .kind = .Field, .detail = "[9]u16" },
+        .{ .label = "local_last", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "full_middle", .kind = .Field, .detail = "[6]u16" },
+        .{ .label = "local_evaluations", .kind = .Field, .detail = "[1]u16" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[5]u8" },
     });
 }

@@ -2561,48 +2561,16 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
                     const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
-                    if (handle.tree.nodeTag(destination_node) == .slice or
-                        handle.tree.nodeTag(destination_node) == .slice_open or
-                        handle.tree.nodeTag(destination_node) == .slice_sentinel)
-                    {
-                        const region = try self.mutableArraySliceRegion(handle, destination_node) orelse return null;
-                        const element = try self.evaluateTypedExpression(handle, params[1], region.element_type) orelse return null;
-                        const current_items = try self.arraySliceRegionItems(region) orelse return null;
-                        const items = try self.analyser.arena.dupe(Type, current_items);
-                        @memset(items[region.start..region.end], element);
-                        const updated = try Value.create(self.analyser, region.array_type, .{ .array = items });
-                        const reference = switch (region.target) {
-                            .reference => |reference| reference,
-                            .pointee => return null,
-                        };
-                        if (!try self.writeReference(handle, reference, updated, null)) return null;
-                        return Type.fromIP(self.analyser, .void_type, .void_value);
-                    }
-                    const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
-                    if (destination.data != .comptime_value or
-                        destination.data.comptime_value.data != .reference) return null;
-                    const reference = destination.data.comptime_value.data.reference;
-                    const current = try self.readReference(reference) orelse return null;
-                    const aggregate_type = try current.typeOf(self.analyser);
-                    const len, const element_type = switch (aggregate_type.data) {
-                        .array => |array| .{
-                            std.math.cast(usize, array.elem_count orelse return null) orelse return null,
-                            array.elem_ty.*,
-                        },
-                        .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
-                            .array_type => |array| .{
-                                std.math.cast(usize, array.len) orelse return null,
-                                Type.fromIP(self.analyser, .type_type, array.child),
-                            },
-                            else => return null,
-                        },
-                        else => return null,
+                    const region = try self.fixedArrayRegion(handle, destination_node, true) orelse return null;
+                    const element = try self.evaluateTypedExpression(handle, params[1], region.element_type) orelse return null;
+                    const current_items = try self.arraySliceRegionItems(region) orelse return null;
+                    const items = try self.analyser.arena.dupe(Type, current_items);
+                    @memset(items[region.start..region.end], element);
+                    const updated = try Value.create(self.analyser, region.array_type, .{ .array = items });
+                    const reference = switch (region.target) {
+                        .reference => |reference| reference,
+                        .pointee => return null,
                     };
-                    if (len > self.budget.steps) return null;
-                    const element = try self.evaluateTypedExpression(handle, params[1], element_type) orelse return null;
-                    const items = try self.analyser.arena.alloc(Type, len);
-                    @memset(items, element);
-                    const updated = try Value.create(self.analyser, aggregate_type, .{ .array = items });
                     if (!try self.writeReference(handle, reference, updated, null)) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
@@ -4418,10 +4386,6 @@ pub const Interpreter = struct {
         return if (items.len == info.len) items else null;
     }
 
-    fn mutableArraySliceRegion(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?ArraySliceRegion {
-        return self.arraySliceRegion(handle, node, true);
-    }
-
     fn directArraySlicePointer(tree: *const Ast, node: Ast.Node.Index) ?Ast.Node.Index {
         const unwrapped = unwrapGroupedSource(tree, node);
         if (tree.nodeTag(unwrapped) != .field_access) return null;
@@ -4542,17 +4506,33 @@ pub const Interpreter = struct {
     ) Error!?ArraySliceRegion {
         if (require_mutable and local.pointer_type.isConstPointerType(self.analyser)) return null;
         const tree = &local.handle.tree;
-        const region = switch (tree.nodeTag(local.initializer)) {
+        const region: ArraySliceRegion = switch (tree.nodeTag(local.initializer)) {
             .slice, .slice_open => slice: {
                 const slice = tree.fullSlice(local.initializer).?;
                 if (!isLiteralIntegerExpression(tree, slice.ast.start) or
-                    (if (slice.ast.end.unwrap()) |end_node|
-                        !isLiteralIntegerExpression(tree, end_node)
-                    else
-                        false)) return null;
-                break :slice try self.arraySliceRegion(local.handle, local.initializer, require_mutable) orelse return null;
+                    !isStableArrayStorageExpression(tree, slice.ast.sliced, 0)) return null;
+                const operand = try self.captureOperand(local.handle, slice.ast.sliced, 0) orelse return null;
+                const target = operand.target orelse return null;
+                if (require_mutable and target != .reference) return null;
+                const current = try self.captureAggregateValue(operand.value);
+                const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+                const start = try self.integer(local.handle, slice.ast.start) orelse return null;
+                const items = Value.elements(pointer) orelse return null;
+                if (start > info.len or items.len > info.len - start) return null;
+                break :slice .{
+                    .target = target,
+                    .array_type = info.array_type,
+                    .element_type = info.element_type,
+                    .start = start,
+                    .end = start + items.len,
+                };
             },
-            .address_of, .string_literal, .multiline_string_literal => try self.fixedArrayRegion(local.handle, local.initializer, require_mutable) orelse return null,
+            .address_of => address: {
+                const operand = tree.nodeData(local.initializer).node;
+                if (!isStableArrayStorageExpression(tree, operand, 0)) return null;
+                break :address try self.fixedArrayRegion(local.handle, local.initializer, require_mutable) orelse return null;
+            },
+            .string_literal, .multiline_string_literal => try self.fixedArrayRegion(local.handle, local.initializer, require_mutable) orelse return null,
             else => return null,
         };
         if (Value.elements(pointer)) |items|
@@ -4564,6 +4544,21 @@ pub const Interpreter = struct {
 
     fn isLiteralIntegerExpression(tree: *const Ast, node: Ast.Node.Index) bool {
         return tree.nodeTag(unwrapGroupedSource(tree, node)) == .number_literal;
+    }
+
+    fn isStableArrayStorageExpression(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+        if (depth == 128) return false;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        return switch (tree.nodeTag(unwrapped)) {
+            .identifier => true,
+            .field_access => isStableArrayStorageExpression(tree, tree.nodeData(unwrapped).node_and_token[0], depth + 1),
+            .array_access => blk: {
+                const base, const index = tree.nodeData(unwrapped).node_and_node;
+                break :blk isStableArrayStorageExpression(tree, base, depth + 1) and
+                    isLiteralIntegerExpression(tree, index);
+            },
+            else => false,
+        };
     }
 
     fn fixedArrayRegion(
