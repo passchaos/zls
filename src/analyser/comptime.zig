@@ -19,6 +19,7 @@ pub const Value = struct {
         error_union: ErrorUnion,
         reference: *Reference,
         pointee: Pointee,
+        numeric_pointer: u64,
         /// Source-backed value used when an aggregate element cannot be
         /// materialized by the intern pool but can still be copied at comptime.
         expression: Analyser.NodeWithHandle,
@@ -162,6 +163,7 @@ pub const Value = struct {
             },
             .reference => |reference| reference.hash(hasher),
             .pointee => |pointee| pointee.hash(hasher),
+            .numeric_pointer => |numeric_address| std.hash.autoHash(hasher, numeric_address),
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
                 hasher.update(node_handle.handle.uri.raw);
@@ -206,6 +208,7 @@ pub const Value = struct {
             },
             .reference => |reference| return reference.eql(other.data.reference.*),
             .pointee => |pointee| return pointee.eql(other.data.pointee),
+            .numeric_pointer => |numeric_address| return numeric_address == other.data.numeric_pointer,
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
@@ -233,7 +236,7 @@ pub const Value = struct {
                 .error_union => |result| switch (result) {
                     inline else => |item| isKnown(item, analyser, depth + 1),
                 },
-                .reference, .pointee => true,
+                .reference, .pointee, .numeric_pointer => true,
                 .expression => false,
             },
             else => value.is_type_val,
@@ -247,7 +250,7 @@ pub const Value = struct {
     fn hasPointerIdentity(value: Type, depth: u8) bool {
         if (depth == 128 or value.data != .comptime_value) return false;
         return switch (value.data.comptime_value.data) {
-            .reference, .pointee, .sequence => true,
+            .reference, .pointee, .sequence, .numeric_pointer => true,
             .optional => |payload| if (payload) |item| hasPointerIdentity(item, depth + 1) else false,
             else => false,
         };
@@ -284,6 +287,10 @@ pub const Value = struct {
                 .pointee => |rhs_pointee| return lhs_pointee.eql(rhs_pointee),
                 else => {},
             },
+            .numeric_pointer => |lhs_address| switch (rhs.data.comptime_value.data) {
+                .numeric_pointer => |rhs_address| return lhs_address == rhs_address,
+                else => {},
+            },
             else => {},
         }
         if (lhs.data.comptime_value.ty.isManyPointerType(analyser) and
@@ -307,6 +314,10 @@ pub const Value = struct {
             .sequence => |lhs_sequence| switch (rhs.data.comptime_value.data) {
                 .sequence => |rhs_sequence| lhs_sequence.sameAddress(rhs_sequence, analyser),
                 .pointee => |rhs_pointee| sequencePointeeEql(lhs_sequence, rhs_pointee),
+                else => null,
+            },
+            .numeric_pointer => |lhs_address| switch (rhs.data.comptime_value.data) {
+                .numeric_pointer => |rhs_address| lhs_address == rhs_address,
                 else => null,
             },
             else => null,
@@ -656,7 +667,8 @@ pub const Interpreter = struct {
                 const name = tree.tokenSlice(tree.nodeMainToken(node));
                 if (std.mem.eql(u8, name, "@alignCast") or
                     std.mem.eql(u8, name, "@atomicLoad") or
-                    std.mem.eql(u8, name, "@intFromPtr")) return true;
+                    std.mem.eql(u8, name, "@intFromPtr") or
+                    std.mem.eql(u8, name, "@ptrFromInt")) return true;
             },
             .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
@@ -2146,11 +2158,21 @@ pub const Interpreter = struct {
                     if (params.len != 1) return null;
                     const operand = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
                     const operand_type = try operand.typeOf(self.analyser);
-                    if (!operand_type.isOptionalRuntimePointerType(self.analyser)) return null;
-                    return switch (try self.optionalValue(operand) orelse return null) {
-                        .absent => Type.fromIP(self.analyser, .usize_type, .zero_usize),
-                        .payload => null,
-                    };
+                    const pointer_info = try operand_type.numericPointerInfo(self.analyser) orelse return null;
+                    const numeric_address: u64 = if (pointer_info.is_optional) switch (try self.optionalValue(operand) orelse return null) {
+                        .absent => 0,
+                        .payload => |payload| if (payload.data == .comptime_value and
+                            payload.data.comptime_value.data == .numeric_pointer)
+                            payload.data.comptime_value.data.numeric_pointer
+                        else
+                            return null,
+                    } else if (operand.data == .comptime_value and operand.data.comptime_value.data == .numeric_pointer)
+                        operand.data.comptime_value.data.numeric_pointer
+                    else
+                        return null;
+                    return Type.fromIP(self.analyser, .usize_type, try self.analyser.ip.get(.{
+                        .int_u64_value = .{ .ty = .usize_type, .int = numeric_address },
+                    }));
                 }
                 if (std.mem.eql(u8, name, "@tagName")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -2833,6 +2855,7 @@ pub const Interpreter = struct {
             .comptime_value => |comptime_value| switch (comptime_value.data) {
                 .reference => |reference| @as(?Type, try Value.create(self.analyser, destination, .{ .reference = reference })),
                 .pointee => |pointee| @as(?Type, try Value.create(self.analyser, destination, .{ .pointee = pointee })),
+                .numeric_pointer => |numeric_address| @as(?Type, try Value.create(self.analyser, destination, .{ .numeric_pointer = numeric_address })),
                 .sequence => |sequence| blk: {
                     var casted = sequence;
                     casted.elements_valid = casted.elements_valid and destination.hasSamePointerElementType(self.analyser, source_type);
@@ -2842,6 +2865,23 @@ pub const Interpreter = struct {
             },
             else => null,
         };
+    }
+
+    fn pointerFromIntValue(self: *Interpreter, destination: Type, operand: Type) Error!?Type {
+        const info = try destination.numericPointerInfo(self.analyser) orelse return null;
+        const usize_type = Type.fromIP(self.analyser, .type_type, .usize_type);
+        const address_value = try self.coerce(usize_type, operand) orelse return null;
+        const numeric_address = self.analyser.ip.toInt(address_value.ipIndex() orelse return null, u64) orelse return null;
+        if (numeric_address == 0 and !info.allows_zero) return null;
+        if (numeric_address != 0 and info.alignment > 1 and numeric_address % info.alignment != 0) return null;
+        if (!info.is_optional) {
+            return @as(?Type, try Value.create(self.analyser, destination, .{ .numeric_pointer = numeric_address }));
+        }
+        if (numeric_address == 0) {
+            return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = null }));
+        }
+        const payload = try Value.create(self.analyser, info.payload_type, .{ .numeric_pointer = numeric_address });
+        return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = payload }));
     }
 
     fn fieldParentPointerValue(
@@ -2958,6 +2998,7 @@ pub const Interpreter = struct {
             const is_enum = std.mem.eql(u8, name, "@enumFromInt");
             const is_error = std.mem.eql(u8, name, "@errorCast");
             const is_pointer = std.mem.eql(u8, name, "@ptrCast");
+            const is_pointer_from_int = std.mem.eql(u8, name, "@ptrFromInt");
             const is_field_parent = std.mem.eql(u8, name, "@fieldParentPtr");
             const qualifier_cast: ?Type.PointerQualifierCast = if (std.mem.eql(u8, name, "@constCast"))
                 .discard_const
@@ -2985,7 +3026,7 @@ pub const Interpreter = struct {
                     .source_node = null,
                 };
             }
-            if (kind != null or is_splat or is_enum or is_error or is_pointer or qualifier_cast != null) {
+            if (kind != null or is_splat or is_enum or is_error or is_pointer or is_pointer_from_int or qualifier_cast != null) {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
@@ -3005,6 +3046,8 @@ pub const Interpreter = struct {
                     try self.analyser.resolveComptimeEnumFromIntValue(result_type, operand)
                 else if (is_error)
                     try self.errorCastValue(result_type, operand)
+                else if (is_pointer_from_int)
+                    try self.pointerFromIntValue(ty, operand)
                 else
                     try self.pointerCastValue(ty, operand, qualifier_cast);
                 return .{ .value = value orelse return null, .source_node = null };
@@ -4308,7 +4351,7 @@ pub const Interpreter = struct {
             .error_union => |result| switch (result) {
                 inline else => |item| self.containsOwnedReference(item, depth + 1),
             },
-            .expression => false,
+            .numeric_pointer, .expression => false,
         };
     }
 

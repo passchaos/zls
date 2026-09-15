@@ -8351,6 +8351,44 @@ test "generic function with comptime null pointer address" {
     });
 }
 
+test "generic function with comptime numeric pointer addresses" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const single: *allowzero u32 = @ptrFromInt(0x1000);
+        \\    const many: [*]allowzero u8 = @ptrFromInt(0x1200);
+        \\    const c_pointer: [*c]u8 = @ptrFromInt(0);
+        \\    const optional: ?*u8 = @ptrFromInt(0x1400);
+        \\    const absent: ?*u8 = @ptrFromInt(0);
+        \\    const retyped: *allowzero u8 = @ptrCast(single);
+        \\    const same = single == @as(*allowzero u32, @ptrFromInt(0x1000));
+        \\    const total = @intFromPtr(single) / 0x1000 +
+        \\        @intFromPtr(many) / 0x100 +
+        \\        @intFromPtr(c_pointer) +
+        \\        @intFromPtr(optional) / 0x100 +
+        \\        @intFromPtr(absent) +
+        \\        @intFromPtr(retyped) / 0x1000 +
+        \\        @intFromBool(same);
+        \\    return struct { items: [total]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[41]u16" },
+    });
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const lhs: *allowzero u8 = @ptrFromInt(0x1000);
+        \\    const rhs: *allowzero u8 = @ptrFromInt(0x1000);
+        \\    return if (lhs == rhs) struct { matched: T } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime unknown bit builtin types" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

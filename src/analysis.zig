@@ -15939,6 +15939,36 @@ pub const Type = struct {
             !info.pointer.is_allowzero;
     }
 
+    pub const NumericPointerInfo = struct {
+        is_optional: bool,
+        allows_zero: bool,
+        alignment: u64,
+        payload_type: Type,
+    };
+
+    pub fn numericPointerInfo(self: Type, analyser: *Analyser) Error!?NumericPointerInfo {
+        const info = self.pointerCastInfo(analyser) orelse return null;
+        if (info.pointer.size == .slice or info.pointer.elem_ty.isFunc()) return null;
+        if (info.is_optional and (info.pointer.size == .c or info.pointer.is_allowzero)) return null;
+        const alignment = if (info.pointer.alignment != 0)
+            info.pointer.alignment
+        else
+            try analyser.resolveTypeAlignment(info.pointer.elem_ty) orelse return null;
+        return .{
+            .is_optional = info.is_optional,
+            .allows_zero = info.is_optional or info.pointer.size == .c or info.pointer.is_allowzero,
+            .alignment = alignment,
+            .payload_type = if (info.is_optional) switch (self.data) {
+                .optional => |optional| optional.*,
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                    .optional_type => |optional| Type.fromIP(analyser, .type_type, optional.payload_type),
+                    else => return null,
+                },
+                else => return null,
+            } else self,
+        };
+    }
+
     pub fn isAtomicPackedStructType(self: Type, analyser: *Analyser) bool {
         return self.isStructType(analyser) and analyser.containerTypeLayout(self) == .@"packed";
     }
