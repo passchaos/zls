@@ -2324,6 +2324,51 @@ pub const Interpreter = struct {
                     if (!Value.isKnown(options, self.analyser, 0)) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@atomicLoad")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 3) return null;
+                    const element_type = try self.eval(handle, params[0]) orelse return null;
+                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                    if (pointer.data != .comptime_value or
+                        pointer.data.comptime_value.data != .reference or
+                        pointer.data.comptime_value.data.reference.path.len != 0 or
+                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                            self.analyser,
+                            element_type,
+                            false,
+                        )) return null;
+                    const order = try self.atomicOrder(handle, params[2]) orelse return null;
+                    if (order == .release or order == .acq_rel) return null;
+                    return self.readReference(pointer.data.comptime_value.data.reference);
+                }
+                if (std.mem.eql(u8, name, "@atomicStore")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 4) return null;
+                    const element_type = try self.eval(handle, params[0]) orelse return null;
+                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                    if (pointer.data != .comptime_value or
+                        pointer.data.comptime_value.data != .reference or
+                        pointer.data.comptime_value.data.reference.path.len != 0 or
+                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                            self.analyser,
+                            element_type,
+                            true,
+                        )) return null;
+                    const value = try self.evaluateTypedExpression(handle, params[2], element_type) orelse return null;
+                    const order = try self.atomicOrder(handle, params[3]) orelse return null;
+                    if (order == .acquire or order == .acq_rel) return null;
+                    if (!try self.writeReference(
+                        handle,
+                        pointer.data.comptime_value.data.reference,
+                        value,
+                        params[2],
+                    )) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@memset")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
@@ -4867,6 +4912,28 @@ pub const Interpreter = struct {
         const value = try self.evaluateTypedExpression(handle, node, modifier_type) orelse return null;
         if (value.data != .enum_value) return null;
         return std.meta.stringToEnum(std.builtin.CallModifier, value.data.enum_value.tag);
+    }
+
+    fn atomicOrder(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?std.builtin.AtomicOrder {
+        const order_instance = try self.analyser.instanceStdBuiltinType("AtomicOrder") orelse return null;
+        const order_type = try order_instance.typeOf(self.analyser);
+        const value = try self.evaluateTypedExpression(handle, node, order_type) orelse return null;
+        if (value.data != .enum_value) return null;
+        return std.meta.stringToEnum(std.builtin.AtomicOrder, value.data.enum_value.tag);
+    }
+
+    fn supportsAtomicScalar(self: *Interpreter, ty: Type) bool {
+        if (!ty.is_type_val) return false;
+        const type_index = ty.ipIndex() orelse return false;
+        return switch (self.analyser.ip.zigTypeTag(type_index) orelse return false) {
+            .bool => true,
+            .int => self.analyser.ip.intInfo(type_index, builtin.target).bits <= builtin.target.ptrBitWidth(),
+            else => false,
+        };
     }
 
     fn callArgumentValues(

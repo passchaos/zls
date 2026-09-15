@@ -15905,6 +15905,20 @@ pub const Type = struct {
         return !info.is_optional and info.pointer.size == .many;
     }
 
+    pub fn isPlainSinglePointerTo(self: Type, analyser: *Analyser, child: Type, require_mutable: bool) bool {
+        const info = self.typePointerInfo(analyser) orelse return false;
+        return info.size == .one and
+            (!require_mutable or !info.is_const) and
+            !info.is_volatile and
+            !info.is_allowzero and
+            info.address_space == .generic and
+            info.alignment == 0 and
+            info.packed_offset.bit_offset == 0 and
+            info.packed_offset.host_size == 0 and
+            info.sentinel == .none and
+            info.elem_ty.eql(child);
+    }
+
     pub const PointerQualifierCast = enum { discard_const, discard_volatile, increase_alignment };
 
     pub fn qualifierCastType(

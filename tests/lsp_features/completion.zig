@@ -9249,6 +9249,56 @@ test "generic function with comptime code generation controls" {
     });
 }
 
+test "generic function with comptime atomic load and store" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 0;
+        \\    var value: usize = 2;
+        \\    @atomicStore(store_type: {
+        \\        evaluations += 1;
+        \\        break :store_type usize;
+        \\    }, store_pointer: {
+        \\        evaluations *= 2;
+        \\        break :store_pointer &value;
+        \\    }, store_value: {
+        \\        evaluations += 3;
+        \\        break :store_value 5;
+        \\    }, store_order: {
+        \\        evaluations *= 2;
+        \\        break :store_order .release;
+        \\    });
+        \\    const loaded = @atomicLoad(load_type: {
+        \\        evaluations += 1;
+        \\        break :load_type usize;
+        \\    }, load_pointer: {
+        \\        evaluations *= 2;
+        \\        break :load_pointer &value;
+        \\    }, load_order: {
+        \\        evaluations += 3;
+        \\        break :load_order .acquire;
+        \\    });
+        \\    @atomicStore(usize, &value, loaded + 2, .seq_cst);
+        \\    const pointer: *const usize = &value;
+        \\    const final = @atomicLoad(usize, pointer, .unordered);
+        \\    var enabled = false;
+        \\    @atomicStore(bool, &enabled, true, .unordered);
+        \\    const enabled_value = @atomicLoad(bool, &enabled, .seq_cst);
+        \\    const count = evaluations;
+        \\    return struct {
+        \\        items: [final]T,
+        \\        evaluations: [count]u8,
+        \\        enabled: [@intFromBool(enabled_value)]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[25]u8" },
+        .{ .label = "enabled", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
