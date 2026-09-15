@@ -11511,6 +11511,8 @@ pub fn resolveComptimePointerTypeSyntax(
     sentinel_value: ?Type,
     address_space_value: ?Type,
     alignment_value: ?Type,
+    bit_offset_value: ?Type,
+    host_size_value: ?Type,
     elem_type: Type,
 ) error{OutOfMemory}!?Type {
     if (!elem_type.is_type_val) return null;
@@ -11530,6 +11532,11 @@ pub fn resolveComptimePointerTypeSyntax(
         comptimeEnumValue(std.builtin.AddressSpace, value) orelse return null
     else
         .generic;
+    if ((bit_offset_value == null) != (host_size_value == null)) return null;
+    const packed_offset: InternPool.Key.Pointer.PackedOffset = if (bit_offset_value) |bit_offset| .{
+        .bit_offset = analyser.ip.toInt(bit_offset.ipIndex() orelse return null, u16) orelse return null,
+        .host_size = analyser.ip.toInt(host_size_value.?.ipIndex() orelse return null, u16) orelse return null,
+    } else .{ .bit_offset = 0, .host_size = 0 };
     return @as(?Type, try Type.createPointerTypeWithFlags(
         analyser,
         .{
@@ -11540,7 +11547,7 @@ pub fn resolveComptimePointerTypeSyntax(
             .address_space = address_space,
             .alignment = alignment,
         },
-        .{ .bit_offset = 0, .host_size = 0 },
+        packed_offset,
         sentinel,
         elem_type,
     ));

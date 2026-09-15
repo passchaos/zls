@@ -2069,7 +2069,6 @@ pub const Interpreter = struct {
             .ptr_type_bit_range,
             => {
                 const pointer = ast.fullPtrType(&handle.tree, node).?;
-                if (pointer.ast.bit_range_start.unwrap() != null) return self.analyser.resolveTypeOfNode(.of(node, handle));
                 const elem_type = try self.eval(handle, pointer.ast.child_type) orelse return null;
                 const sentinel = if (pointer.ast.sentinel.unwrap()) |sentinel_node|
                     try self.evaluateTypedExpression(handle, sentinel_node, elem_type) orelse return null
@@ -2088,6 +2087,13 @@ pub const Interpreter = struct {
                     const usize_type = Type.fromIP(self.analyser, .type_type, .usize_type);
                     break :alignment try self.evaluateTypedExpression(handle, align_node, usize_type) orelse return null;
                 } else null;
+                const bit_offset, const host_size = if (pointer.ast.bit_range_start.unwrap()) |bit_offset_node| bit_range: {
+                    const u16_type = Type.fromIP(self.analyser, .type_type, .u16_type);
+                    const bit_offset = try self.evaluateTypedExpression(handle, bit_offset_node, u16_type) orelse return null;
+                    const host_size_node = pointer.ast.bit_range_end.unwrap() orelse return null;
+                    const host_size = try self.evaluateTypedExpression(handle, host_size_node, u16_type) orelse return null;
+                    break :bit_range .{ bit_offset, host_size };
+                } else .{ null, null };
                 return self.analyser.resolveComptimePointerTypeSyntax(
                     pointer.size,
                     pointer.const_token != null,
@@ -2096,6 +2102,8 @@ pub const Interpreter = struct {
                     sentinel,
                     address_space,
                     alignment,
+                    bit_offset,
+                    host_size,
                     elem_type,
                 );
             },

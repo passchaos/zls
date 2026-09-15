@@ -22371,6 +22371,33 @@ test "nested comptime pointer attribute mutations" {
     });
 }
 
+test "nested comptime bit pointer type mutations" {
+    try testCompletion(
+        \\fn Pointer(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const P = *align(alignment: {
+        \\        order += 3;
+        \\        break :alignment 1;
+        \\    }:bit_offset: {
+        \\        order *= 5;
+        \\        break :bit_offset 2;
+        \\    }:host_size: {
+        \\        order += 7;
+        \\        break :host_size 1;
+        \\    }) const (child: {
+        \\        order *= 2;
+        \\        break :child T;
+        \\    });
+        \\    return struct { pointer: P, order: [order]u8 };
+        \\}
+        \\const pointer: Pointer(u3) = undefined;
+        \\const field = pointer.<cursor>
+    , &.{
+        .{ .label = "pointer", .kind = .Field, .detail = "*align(1:2:1) const u3" },
+        .{ .label = "order", .kind = .Field, .detail = "[32]u8" },
+    });
+}
+
 test "array" {
     try testCompletion(
         \\const foo: [3]u32 = undefined;
