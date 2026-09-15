@@ -5053,28 +5053,38 @@ pub const Interpreter = struct {
         allow_packed_struct: bool,
     ) Error!bool {
         if (!ty.is_type_val) return false;
+        const max_bits = maxAtomicBits();
         if (allow_packed_struct and ty.isAtomicPackedStructType(self.analyser)) {
             const bits = try self.analyser.resolveComptimeTypeSizeValue(ty, .bit_size) orelse return false;
             return (self.analyser.ip.toInt(bits.ipIndex() orelse return false, u16) orelse return false) <=
-                builtin.target.ptrBitWidth();
+                max_bits;
         }
         if (ty.isAtomicSinglePointerValueType(self.analyser)) return true;
         if (ty.isEnumType(self.analyser)) {
             const bits = try self.analyser.resolveComptimeTypeSizeValue(ty, .bit_size) orelse return false;
             return (self.analyser.ip.toInt(bits.ipIndex() orelse return false, u16) orelse return false) <=
-                builtin.target.ptrBitWidth();
+                max_bits;
         }
         return switch (ty.data) {
             .pointer => |pointer| pointer.size == .one,
             .ip_index => |payload| switch (self.analyser.ip.zigTypeTag(payload.index orelse return false) orelse return false) {
                 .bool => true,
-                .int => self.analyser.ip.intInfo(payload.index.?, builtin.target).bits <= builtin.target.ptrBitWidth(),
+                .int => self.analyser.ip.intInfo(payload.index.?, builtin.target).bits <= max_bits,
                 .float => allow_float and
-                    self.analyser.ip.floatBits(payload.index.?, builtin.target) <= builtin.target.ptrBitWidth(),
+                    self.analyser.ip.floatBits(payload.index.?, builtin.target) <= max_bits,
                 .pointer => self.analyser.ip.indexToKey(payload.index.?).pointer_type.flags.size == .one,
                 else => false,
             },
             else => false,
+        };
+    }
+
+    fn maxAtomicBits() u16 {
+        return switch (builtin.target.cpu.arch) {
+            .aarch64, .aarch64_be => 128,
+            .mips64, .mips64el => 64,
+            .x86_64 => if (builtin.target.cpu.has(.x86, .cx16)) 128 else 64,
+            else => builtin.target.ptrBitWidth(),
         };
     }
 

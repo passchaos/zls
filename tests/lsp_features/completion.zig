@@ -9412,6 +9412,36 @@ test "generic function with comptime integer atomic operations" {
     });
 }
 
+test "generic function with comptime 128-bit atomics" {
+    const target = @import("builtin").target;
+    const supported = switch (target.cpu.arch) {
+        .aarch64, .aarch64_be => true,
+        .x86_64 => target.cpu.has(.x86, .cx16),
+        else => false,
+    };
+    if (!supported) return error.SkipZigTest;
+
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var value: u128 align(16) = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_fffe;
+        \\    const old = @atomicRmw(u128, &value, .Add, 3, .seq_cst);
+        \\    const success = @cmpxchgStrong(u128, &value, 1, 9, .seq_cst, .acquire);
+        \\    const final = @atomicLoad(u128, &value, .monotonic);
+        \\    return struct {
+        \\        wrapped: [@intFromBool(old == 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_fffe)]T,
+        \\        exchanged: [@intFromBool(success == null)]T,
+        \\        final: [@intCast(final)]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "wrapped", .kind = .Field, .detail = "[1]u16" },
+        .{ .label = "exchanged", .kind = .Field, .detail = "[1]u16" },
+        .{ .label = "final", .kind = .Field, .detail = "[9]u16" },
+    });
+}
+
 test "generic function with comptime float atomic operations" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
