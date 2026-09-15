@@ -2344,10 +2344,11 @@ pub const Interpreter = struct {
                                 self.readReference(reference)
                             else
                                 null,
-                            .pointee => |pointee| if (pointee.is_static and pointee.path.len == 0)
-                                self.analyser.resolveDerefType(pointer)
-                            else
-                                null,
+                            .pointee => |pointee| static: {
+                                if (!try self.supportsAtomicPointee(pointee, element_type)) break :static null;
+                                const root = try self.staticPointeeRootValue(pointee) orelse break :static null;
+                                break :static self.readValuePath(root, pointee.path);
+                            },
                             else => null,
                         },
                         else => null,
@@ -5067,8 +5068,37 @@ pub const Interpreter = struct {
         reference: *Value.Reference,
         element_type: Type,
     ) Error!bool {
-        var current_type = try reference.storage.value.typeOf(self.analyser);
-        for (reference.path) |access| {
+        return self.supportsAtomicPath(
+            try reference.storage.value.typeOf(self.analyser),
+            reference.path,
+            element_type,
+        );
+    }
+
+    fn supportsAtomicPointee(
+        self: *Interpreter,
+        pointee: Value.Pointee,
+        element_type: Type,
+    ) Error!bool {
+        if (!pointee.is_static) return false;
+        const declaration: Analyser.DeclWithHandle = .{
+            .decl = .{ .ast_node = pointee.source.node },
+            .handle = pointee.source.handle,
+            .container_type = pointee.container_type,
+        };
+        if (!declaration.isConst()) return false;
+        const root = try declaration.resolveType(self.analyser) orelse return false;
+        return self.supportsAtomicPath(try root.typeOf(self.analyser), pointee.path, element_type);
+    }
+
+    fn supportsAtomicPath(
+        self: *Interpreter,
+        root_type: Type,
+        path: []const Value.Reference.Access,
+        element_type: Type,
+    ) bool {
+        var current_type = root_type;
+        for (path) |access| {
             const index = switch (access) {
                 .index => |index| index,
                 else => return false,
