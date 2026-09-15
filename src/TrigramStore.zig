@@ -318,6 +318,7 @@ pub fn init(
         }
     }
 
+    store.trigram_to_declarations.shrinkAndFree(allocator, store.trigram_to_declarations.count());
     try store.declarations.setCapacity(allocator, store.declarations.len);
 
     return store;
@@ -798,6 +799,7 @@ test "declarations and query results stay in source order" {
         posting_end += posting_slice.len;
     }
     try std.testing.expectEqual(store.postings.len, posting_end);
+    try std.testing.expectEqual(store.trigram_to_declarations.count(), store.trigram_to_declarations.entries.capacity);
 }
 
 test "prepared queries match string queries" {
