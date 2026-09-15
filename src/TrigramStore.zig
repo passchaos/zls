@@ -318,6 +318,8 @@ pub fn init(
         }
     }
 
+    try store.declarations.setCapacity(allocator, store.declarations.len);
+
     return store;
 }
 
@@ -765,6 +767,7 @@ test "declarations and query results stay in source order" {
     const names = store.declarations.items(.name);
     const name_lengths = store.declarations.items(.name_len);
     try std.testing.expectEqual(@as(usize, 7), names.len);
+    try std.testing.expectEqual(store.declarations.len, store.declarations.capacity);
     for (names[1..], names[0 .. names.len - 1]) |current, previous| {
         try std.testing.expect(previous < current);
     }
