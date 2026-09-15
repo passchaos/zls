@@ -442,7 +442,10 @@ pub const Handle = struct {
         errdefer new_tree.deinit(allocator);
 
         var new_file_imports: std.ArrayList(Uri) = .empty;
-        errdefer new_file_imports.deinit(allocator);
+        errdefer {
+            for (new_file_imports.items) |uri| uri.deinit(allocator);
+            new_file_imports.deinit(allocator);
+        }
 
         var new_cimports: std.MultiArrayList(CImportHandle) = .empty;
         errdefer {
@@ -460,7 +463,11 @@ pub const Handle = struct {
             &new_cimports,
         );
 
-        const file_imports = try new_file_imports.toOwnedSlice(allocator);
+        const file_imports = try finalizeImports(
+            allocator,
+            &new_file_imports,
+            &new_cimports,
+        );
         errdefer file_imports.deinit(allocator);
 
         errdefer comptime unreachable;
@@ -481,6 +488,17 @@ pub const Handle = struct {
         handle.document_scope = .unset;
         old_handle.trigram_store = handle.trigram_store;
         handle.trigram_store = .unset;
+    }
+
+    fn finalizeImports(
+        allocator: std.mem.Allocator,
+        file_imports: *std.ArrayList(Uri),
+        cimports: *std.MultiArrayList(CImportHandle),
+    ) error{OutOfMemory}![]Uri {
+        if (cimports.capacity != cimports.len) {
+            try cimports.setCapacity(allocator, cimports.len);
+        }
+        return try file_imports.toOwnedSlice(allocator);
     }
 
     fn parseTree(allocator: std.mem.Allocator, new_text: [:0]const u8, mode: Ast.Mode) error{OutOfMemory}!Ast {
@@ -1734,6 +1752,121 @@ pub const CImportHandle = struct {
     /// c source file
     source: []const u8,
 };
+
+test "file imports and cimports are finalized to exact capacity" {
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var file_imports: std.ArrayList(Uri) = .empty;
+            defer {
+                for (file_imports.items) |uri| uri.deinit(allocator);
+                file_imports.deinit(allocator);
+            }
+            try file_imports.ensureTotalCapacity(allocator, 32);
+            try file_imports.append(allocator, try .parse(allocator, "file:///first.zig"));
+            try file_imports.append(allocator, try .parse(allocator, "file:///second.zig"));
+
+            var cimports: std.MultiArrayList(CImportHandle) = .empty;
+            defer cimports.deinit(allocator);
+            try cimports.ensureTotalCapacity(allocator, 32);
+            try cimports.append(allocator, .{
+                .node = @enumFromInt(1),
+                .hash = @splat(1),
+                .source = "#include <one.h>",
+            });
+            try cimports.append(allocator, .{
+                .node = @enumFromInt(2),
+                .hash = @splat(2),
+                .source = "#include <two.h>",
+            });
+
+            const owned_file_imports = try Handle.finalizeImports(
+                allocator,
+                &file_imports,
+                &cimports,
+            );
+            defer {
+                for (owned_file_imports) |uri| uri.deinit(allocator);
+                allocator.free(owned_file_imports);
+            }
+
+            try std.testing.expectEqual(@as(usize, 0), file_imports.capacity);
+            try std.testing.expectEqual(@as(usize, 2), owned_file_imports.len);
+            try std.testing.expectEqualStrings("file:///first.zig", owned_file_imports[0].raw);
+            try std.testing.expectEqualStrings("file:///second.zig", owned_file_imports[1].raw);
+
+            try std.testing.expectEqual(cimports.len, cimports.capacity);
+            try std.testing.expectEqual(@as(usize, 2), cimports.len);
+            try std.testing.expectEqual(@as(Ast.Node.Index, @enumFromInt(1)), cimports.items(.node)[0]);
+            try std.testing.expectEqual(@as(Ast.Node.Index, @enumFromInt(2)), cimports.items(.node)[1]);
+            try std.testing.expectEqualSlices(u8, &@as(CImportHash, @splat(1)), &cimports.items(.hash)[0]);
+            try std.testing.expectEqualSlices(u8, &@as(CImportHash, @splat(2)), &cimports.items(.hash)[1]);
+            try std.testing.expectEqualStrings("#include <one.h>", cimports.items(.source)[0]);
+            try std.testing.expectEqualStrings("#include <two.h>", cimports.items(.source)[1]);
+        }
+    };
+
+    try Test.run(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{});
+}
+
+test "empty import metadata finalizes without allocations" {
+    var file_imports: std.ArrayList(Uri) = .empty;
+    var cimports: std.MultiArrayList(CImportHandle) = .empty;
+
+    const owned_file_imports = try Handle.finalizeImports(
+        std.testing.failing_allocator,
+        &file_imports,
+        &cimports,
+    );
+    defer std.testing.failing_allocator.free(owned_file_imports);
+
+    try std.testing.expectEqual(@as(usize, 0), owned_file_imports.len);
+    try std.testing.expectEqual(@as(usize, 0), cimports.capacity);
+}
+
+test "Handle.refresh finalizes import metadata and handles allocation failure" {
+    const source = "const dependency = @import(\"dependency.zig\");\n" ++
+        "const c = @cImport({ @cInclude(\"one.h\"); });\n";
+
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator, source_text: []const u8) !void {
+            const uri = try Uri.parse(allocator, "file:///project/main.zig");
+            defer uri.deinit(allocator);
+
+            const text = try allocator.dupeSentinel(u8, source_text, 0);
+            var text_owned_by_handle = false;
+            defer if (!text_owned_by_handle) allocator.free(text);
+
+            var handle: Handle = .{
+                .uri = uri,
+                .tree = undefined,
+                .file_imports = &.{},
+                .cimports = .empty,
+                .lsp_synced = false,
+                .impl = .{
+                    .store = undefined,
+                    .has_tree_and_source = false,
+                },
+            };
+            defer if (text_owned_by_handle) handle.deinit(allocator);
+
+            var old_handle: Handle = .dead;
+            defer old_handle.deinit(allocator);
+
+            try Handle.refresh(&handle, &old_handle, text, allocator);
+            text_owned_by_handle = true;
+
+            try std.testing.expectEqual(@as(usize, 1), handle.file_imports.len);
+            try std.testing.expectEqualStrings("file:///project/dependency.zig", handle.file_imports[0].raw);
+            try std.testing.expectEqual(@as(usize, 1), handle.cimports.len);
+            try std.testing.expectEqual(handle.cimports.len, handle.cimports.capacity);
+            try std.testing.expectEqualStrings("#include <one.h>\n", handle.cimports.items(.source)[0]);
+        }
+    };
+
+    try Test.run(std.testing.allocator, source);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{source});
+}
 
 /// returns `true` if all include paths could be collected
 /// may return `false` because include paths from a build.zig may not have been resolved already
