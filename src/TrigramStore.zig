@@ -811,14 +811,10 @@ const CuckooFilter = struct {
     fn containsInBucket(filter: CuckooFilter, index: BucketIndex, fingerprint: Fingerprint) bool {
         assert(fingerprint != .none);
 
-        const bucket = filter.bucketAt(index);
-        for (bucket) |*slot| {
-            if (slot.* == fingerprint) {
-                return true;
-            }
-        }
-
-        return false;
+        const bucket: u32 = @bitCast(filter.bucketAt(index).*);
+        const needle: u32 = @as(u32, @intFromEnum(fingerprint)) * 0x01010101;
+        const matches = bucket ^ needle;
+        return ((matches -% 0x01010101) & ~matches & 0x80808080) != 0;
     }
 
     fn parity(integer: anytype) enum(u1) { even, odd } {
@@ -903,6 +899,22 @@ test "CuckooFilter - varied sizes" {
             }
             var key_iterator = entries.keyIterator();
             while (key_iterator.next()) |trigram| try std.testing.expect(filter.contains(trigram.*));
+        }
+    }
+}
+
+test "CuckooFilter bucket matching" {
+    var prng: std.Random.DefaultPrng = .init(0);
+    for (0..4_096) |_| {
+        var buckets: [2]CuckooFilter.Bucket = undefined;
+        prng.random().bytes(std.mem.asBytes(&buckets[0]));
+        const filter: CuckooFilter = .init(&buckets);
+        for (0..std.math.maxInt(u8)) |value| {
+            const fingerprint: CuckooFilter.Fingerprint = @enumFromInt(value);
+            const expected = for (buckets[0]) |slot| {
+                if (slot == fingerprint) break true;
+            } else false;
+            try std.testing.expectEqual(expected, filter.containsInBucket(@enumFromInt(0), fingerprint));
         }
     }
 }
