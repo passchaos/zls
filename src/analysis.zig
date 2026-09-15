@@ -11480,6 +11480,28 @@ pub fn resolveComptimeOptionalType(
     return @as(?Type, try Type.createOptionalType(analyser, child));
 }
 
+pub fn resolveComptimeArrayTypeValue(
+    analyser: *Analyser,
+    elem_count_value: Type,
+    sentinel_value: ?Type,
+    elem_type: Type,
+) error{OutOfMemory}!?Type {
+    if (!elem_type.is_type_val) return null;
+    const count_payload = switch (elem_count_value.data) {
+        .ip_index => |payload| payload,
+        else => return null,
+    };
+    const count_tag = analyser.ip.zigTypeTag(count_payload.type) orelse return null;
+    if (count_tag != .int and count_tag != .comptime_int) return null;
+    const elem_count = analyser.ip.toInt(count_payload.index orelse return null, u64) orelse return null;
+    const sentinel = if (sentinel_value) |value| sentinel: {
+        const elem_type_index = elem_type.ipIndex() orelse return null;
+        const value_index = value.ipIndex() orelse return null;
+        break :sentinel try analyser.coerceIP(elem_type_index, value_index) orelse return null;
+    } else InternPool.Index.none;
+    return @as(?Type, try Type.createArrayType(analyser, elem_count, sentinel, elem_type));
+}
+
 pub fn coerceIP(analyser: *Analyser, dest_ty: InternPool.Index, inst: InternPool.Index) error{OutOfMemory}!?InternPool.Index {
     if (inst == .none)
         return .none;

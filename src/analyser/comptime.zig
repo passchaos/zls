@@ -2048,6 +2048,21 @@ pub const Interpreter = struct {
                 const child = try self.eval(handle, child_node) orelse return null;
                 return self.analyser.resolveComptimeOptionalType(child);
             },
+            .array_type, .array_type_sentinel => {
+                const array = handle.tree.fullArrayType(node).?;
+                const usize_type = Type.fromIP(self.analyser, .type_type, .usize_type);
+                const elem_count = try self.evaluateTypedExpression(
+                    handle,
+                    array.ast.elem_count,
+                    usize_type,
+                ) orelse return null;
+                const elem_type = try self.eval(handle, array.ast.elem_type) orelse return null;
+                const sentinel = if (array.ast.sentinel.unwrap()) |sentinel_node|
+                    try self.evaluateTypedExpression(handle, sentinel_node, elem_type) orelse return null
+                else
+                    null;
+                return self.analyser.resolveComptimeArrayTypeValue(elem_count, sentinel, elem_type);
+            },
             .mul,
             .div,
             .mod,

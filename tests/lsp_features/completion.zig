@@ -22359,6 +22359,30 @@ test "array type" {
     , &.{});
 }
 
+test "nested comptime sentinel array type mutations" {
+    try testCompletion(
+        \\fn Array(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const A = [length: {
+        \\        order *= 2;
+        \\        break :length 3;
+        \\    }:sentinel: {
+        \\        order += 5;
+        \\        break :sentinel 0;
+        \\    }](child: {
+        \\        order *= 3;
+        \\        break :child T;
+        \\    });
+        \\    return struct { items: A, order: [order]u8 };
+        \\}
+        \\const array: Array(u8) = undefined;
+        \\const field = array.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3:0]u8" },
+        .{ .label = "order", .kind = .Field, .detail = "[11]u8" },
+    });
+}
+
 test "tuple fields" {
     try testCompletion(
         \\fn foo() void {
