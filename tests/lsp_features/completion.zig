@@ -22284,6 +22284,24 @@ test "pointer type" {
     , &.{});
 }
 
+test "nested comptime pointer child type mutation" {
+    try testCompletion(
+        \\fn Pointer(comptime T: type) type {
+        \\    var total: usize = 1;
+        \\    const P = [*]const (child: {
+        \\        total *= 3;
+        \\        break :child T;
+        \\    });
+        \\    return struct { pointer: P, total: [total]u8 };
+        \\}
+        \\const pointer: Pointer(u16) = undefined;
+        \\const field = pointer.<cursor>
+    , &.{
+        .{ .label = "pointer", .kind = .Field, .detail = "[*]const u16" },
+        .{ .label = "total", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "array" {
     try testCompletion(
         \\const foo: [3]u32 = undefined;

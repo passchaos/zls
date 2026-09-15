@@ -11502,6 +11502,30 @@ pub fn resolveComptimeArrayTypeValue(
     return @as(?Type, try Type.createArrayType(analyser, elem_count, sentinel, elem_type));
 }
 
+pub fn resolveComptimePointerTypeSyntax(
+    analyser: *Analyser,
+    size: std.builtin.Type.Pointer.Size,
+    is_const: bool,
+    is_volatile: bool,
+    is_allowzero: bool,
+    elem_type: Type,
+) error{OutOfMemory}!?Type {
+    if (!elem_type.is_type_val) return null;
+    if (size == .c and is_allowzero) return null;
+    return @as(?Type, try Type.createPointerTypeWithFlags(
+        analyser,
+        .{
+            .size = size,
+            .is_const = is_const,
+            .is_volatile = is_volatile,
+            .is_allowzero = is_allowzero,
+        },
+        .{ .bit_offset = 0, .host_size = 0 },
+        .none,
+        elem_type,
+    ));
+}
+
 pub fn coerceIP(analyser: *Analyser, dest_ty: InternPool.Index, inst: InternPool.Index) error{OutOfMemory}!?InternPool.Index {
     if (inst == .none)
         return .none;

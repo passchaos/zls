@@ -2063,6 +2063,25 @@ pub const Interpreter = struct {
                     null;
                 return self.analyser.resolveComptimeArrayTypeValue(elem_count, sentinel, elem_type);
             },
+            .ptr_type_aligned,
+            .ptr_type_sentinel,
+            .ptr_type,
+            .ptr_type_bit_range,
+            => {
+                const pointer = ast.fullPtrType(&handle.tree, node).?;
+                if (pointer.ast.sentinel.unwrap() != null or
+                    pointer.ast.align_node.unwrap() != null or
+                    pointer.ast.addrspace_node.unwrap() != null or
+                    pointer.ast.bit_range_start.unwrap() != null) return self.analyser.resolveTypeOfNode(.of(node, handle));
+                const elem_type = try self.eval(handle, pointer.ast.child_type) orelse return null;
+                return self.analyser.resolveComptimePointerTypeSyntax(
+                    pointer.size,
+                    pointer.const_token != null,
+                    pointer.volatile_token != null,
+                    pointer.allowzero_token != null,
+                    elem_type,
+                );
+            },
             .mul,
             .div,
             .mod,
