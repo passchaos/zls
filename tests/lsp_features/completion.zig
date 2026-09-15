@@ -9299,6 +9299,49 @@ test "generic function with comptime atomic load and store" {
     });
 }
 
+test "generic function with comptime atomic exchange" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 0;
+        \\    var value: usize = 2;
+        \\    const previous = @atomicRmw(element: {
+        \\        evaluations += 1;
+        \\        break :element usize;
+        \\    }, pointer: {
+        \\        evaluations *= 2;
+        \\        break :pointer &value;
+        \\    }, operation: {
+        \\        evaluations += 3;
+        \\        break :operation .Xchg;
+        \\    }, operand: {
+        \\        evaluations *= 2;
+        \\        break :operand 7;
+        \\    }, ordering: {
+        \\        evaluations += 5;
+        \\        break :ordering .seq_cst;
+        \\    });
+        \\    var enabled = false;
+        \\    const old_enabled = @atomicRmw(bool, &enabled, .Xchg, true, .monotonic);
+        \\    const final = value;
+        \\    const count = evaluations;
+        \\    const changed = !old_enabled and enabled;
+        \\    return struct {
+        \\        previous: [previous]T,
+        \\        current: [final]T,
+        \\        evaluations: [count]u8,
+        \\        changed: [@intFromBool(changed)]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "previous", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "current", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[15]u8" },
+        .{ .label = "changed", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };

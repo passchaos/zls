@@ -2369,6 +2369,31 @@ pub const Interpreter = struct {
                     )) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@atomicRmw")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 5) return null;
+                    const element_type = try self.eval(handle, params[0]) orelse return null;
+                    if (!self.supportsAtomicScalar(element_type)) return null;
+                    const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                    if (pointer.data != .comptime_value or
+                        pointer.data.comptime_value.data != .reference or
+                        pointer.data.comptime_value.data.reference.path.len != 0 or
+                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                            self.analyser,
+                            element_type,
+                            true,
+                        )) return null;
+                    const operation = try self.atomicRmwOperation(handle, params[2]) orelse return null;
+                    if (operation != .Xchg) return null;
+                    const value = try self.evaluateTypedExpression(handle, params[3], element_type) orelse return null;
+                    const order = try self.atomicOrder(handle, params[4]) orelse return null;
+                    if (order == .unordered) return null;
+                    const reference = pointer.data.comptime_value.data.reference;
+                    const previous = try self.readReference(reference) orelse return null;
+                    if (!try self.writeReference(handle, reference, value, params[3])) return null;
+                    return previous;
+                }
                 if (std.mem.eql(u8, name, "@memset")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
@@ -4924,6 +4949,18 @@ pub const Interpreter = struct {
         const value = try self.evaluateTypedExpression(handle, node, order_type) orelse return null;
         if (value.data != .enum_value) return null;
         return std.meta.stringToEnum(std.builtin.AtomicOrder, value.data.enum_value.tag);
+    }
+
+    fn atomicRmwOperation(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?std.builtin.AtomicRmwOp {
+        const operation_instance = try self.analyser.instanceStdBuiltinType("AtomicRmwOp") orelse return null;
+        const operation_type = try operation_instance.typeOf(self.analyser);
+        const value = try self.evaluateTypedExpression(handle, node, operation_type) orelse return null;
+        if (value.data != .enum_value) return null;
+        return std.meta.stringToEnum(std.builtin.AtomicRmwOp, value.data.enum_value.tag);
     }
 
     fn supportsAtomicScalar(self: *Interpreter, ty: Type) bool {
