@@ -9555,6 +9555,36 @@ test "generic function with comptime packed struct atomics" {
     });
 }
 
+test "generic function with comptime atomic array elements and constants" {
+    try testCompletion(
+        \\const constant: usize = 11;
+        \\fn Select(comptime T: type) type {
+        \\    var values = [_]usize{ 2, 3, 5 };
+        \\    const static_loaded = @atomicLoad(usize, &constant, .acquire);
+        \\    @atomicStore(usize, &values[0], 7, .release);
+        \\    const old_item = @atomicRmw(usize, &values[2], .Xchg, 13, .seq_cst);
+        \\    const success = @cmpxchgStrong(usize, &values[1], 3, 17, .seq_cst, .acquire);
+        \\    const final_first = @atomicLoad(usize, &values[0], .unordered);
+        \\    const final_last = @atomicLoad(usize, &values[2], .monotonic);
+        \\    return struct {
+        \\        static: [static_loaded]T,
+        \\        first: [final_first]T,
+        \\        old_item: [old_item]T,
+        \\        final_last: [final_last]T,
+        \\        succeeded: [@intFromBool(success == null)]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "static", .kind = .Field, .detail = "[11]u16" },
+        .{ .label = "first", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "old_item", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "final_last", .kind = .Field, .detail = "[13]u16" },
+        .{ .label = "succeeded", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };

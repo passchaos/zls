@@ -2331,17 +2331,27 @@ pub const Interpreter = struct {
                     const element_type = try self.eval(handle, params[0]) orelse return null;
                     if (!try self.supportsAtomicValue(element_type, true, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
-                    if (pointer.data != .comptime_value or
-                        pointer.data.comptime_value.data != .reference or
-                        pointer.data.comptime_value.data.reference.path.len != 0 or
-                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
-                            self.analyser,
-                            element_type,
-                            false,
-                        )) return null;
+                    if (!(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                        self.analyser,
+                        element_type,
+                        false,
+                    )) return null;
                     const order = try self.atomicOrder(handle, params[2]) orelse return null;
                     if (order == .release or order == .acq_rel) return null;
-                    return self.readReference(pointer.data.comptime_value.data.reference);
+                    return switch (pointer.data) {
+                        .comptime_value => |comptime_value| switch (comptime_value.data) {
+                            .reference => |reference| if (try self.supportsAtomicReference(reference, element_type))
+                                self.readReference(reference)
+                            else
+                                null,
+                            .pointee => |pointee| if (pointee.is_static and pointee.path.len == 0)
+                                self.analyser.resolveDerefType(pointer)
+                            else
+                                null,
+                            else => null,
+                        },
+                        else => null,
+                    };
                 }
                 if (std.mem.eql(u8, name, "@atomicStore")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -2352,11 +2362,14 @@ pub const Interpreter = struct {
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
-                        pointer.data.comptime_value.data.reference.path.len != 0 or
                         !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                             self.analyser,
                             element_type,
                             true,
+                        ) or
+                        !try self.supportsAtomicReference(
+                            pointer.data.comptime_value.data.reference,
+                            element_type,
                         )) return null;
                     const value = try self.evaluateTypedExpression(handle, params[2], element_type) orelse return null;
                     const order = try self.atomicOrder(handle, params[3]) orelse return null;
@@ -2378,11 +2391,14 @@ pub const Interpreter = struct {
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
-                        pointer.data.comptime_value.data.reference.path.len != 0 or
                         !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                             self.analyser,
                             element_type,
                             true,
+                        ) or
+                        !try self.supportsAtomicReference(
+                            pointer.data.comptime_value.data.reference,
+                            element_type,
                         )) return null;
                     const operation = try self.atomicRmwOperation(handle, params[2]) orelse return null;
                     const value = try self.evaluateTypedExpression(handle, params[3], element_type) orelse return null;
@@ -2403,11 +2419,14 @@ pub const Interpreter = struct {
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
-                        pointer.data.comptime_value.data.reference.path.len != 0 or
                         !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                             self.analyser,
                             element_type,
                             true,
+                        ) or
+                        !try self.supportsAtomicReference(
+                            pointer.data.comptime_value.data.reference,
+                            element_type,
                         )) return null;
                     const expected = try self.evaluateTypedExpression(handle, params[2], element_type) orelse return null;
                     const replacement = try self.evaluateTypedExpression(handle, params[3], element_type) orelse return null;
@@ -5036,6 +5055,24 @@ pub const Interpreter = struct {
             },
             else => false,
         };
+    }
+
+    fn supportsAtomicReference(
+        self: *Interpreter,
+        reference: *Value.Reference,
+        element_type: Type,
+    ) Error!bool {
+        var current_type = try reference.storage.value.typeOf(self.analyser);
+        for (reference.path) |access| {
+            const index = switch (access) {
+                .index => |index| index,
+                else => return false,
+            };
+            const info = self.fixedArrayInfo(current_type) orelse return false;
+            if (index >= info.len) return false;
+            current_type = info.element_type;
+        }
+        return current_type.eql(element_type);
     }
 
     fn atomicRmwValue(
