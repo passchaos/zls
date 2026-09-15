@@ -33,20 +33,6 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         declaration_buffer.clearRetainingCapacity();
         try trigram_store.declarationsForQuery(arena, request.query, &declaration_buffer);
 
-        const SortContext = struct {
-            names: []const std.zig.Ast.TokenIndex,
-            fn lessThan(ctx: @This(), lhs: TrigramStore.Declaration.Index, rhs: TrigramStore.Declaration.Index) bool {
-                return ctx.names[@intFromEnum(lhs)] < ctx.names[@intFromEnum(rhs)];
-            }
-        };
-
-        std.mem.sortUnstable(
-            TrigramStore.Declaration.Index,
-            declaration_buffer.items,
-            SortContext{ .names = trigram_store.declarations.items(.name) },
-            SortContext.lessThan,
-        );
-
         const slice = trigram_store.declarations.slice();
         const names = slice.items(.name);
         const kinds = slice.items(.kind);

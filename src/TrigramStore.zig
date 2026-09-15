@@ -278,6 +278,11 @@ fn appendDeclaration(
         },
     }
 
+    // The AST walker visits declarations in source order. Posting lists inherit
+    // this order, and their intersections preserve it.
+    if (store.declarations.len != 0) {
+        assert(store.declarations.items(.name)[store.declarations.len - 1] < name_token);
+    }
     try store.declarations.append(allocator, .{
         .name = name_token,
         .kind = kind,
@@ -497,6 +502,40 @@ test mergeIntersection {
 
         const random_len = mergeIntersection(random_a[0..a_len], random_b[0..b_len]);
         try std.testing.expectEqualSlices(I, expected[0..expected_len], random_b[0..random_len]);
+    }
+}
+
+test "declarations and query results stay in source order" {
+    const allocator = std.testing.allocator;
+    const source: [:0]const u8 =
+        \\const symbol_outer = struct {
+        \\    const symbol_nested = 1;
+        \\    symbol_field: u8,
+        \\    fn symbol_method() void {}
+        \\};
+        \\var symbol_global: u8 = 0;
+        \\test "symbol test" {}
+        \\extern fn symbol_extern() void;
+    ;
+
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+
+    const names = store.declarations.items(.name);
+    try std.testing.expectEqual(@as(usize, 7), names.len);
+    for (names[1..], names[0 .. names.len - 1]) |current, previous| {
+        try std.testing.expect(previous < current);
+    }
+
+    var declarations: std.ArrayList(Declaration.Index) = .empty;
+    defer declarations.deinit(allocator);
+    try store.declarationsForQuery(allocator, "symbol", &declarations);
+    try std.testing.expectEqual(names.len, declarations.items.len);
+    for (declarations.items, 0..) |declaration, expected| {
+        try std.testing.expectEqual(expected, @intFromEnum(declaration));
     }
 }
 
