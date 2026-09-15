@@ -11509,6 +11509,7 @@ pub fn resolveComptimePointerTypeSyntax(
     is_volatile: bool,
     is_allowzero: bool,
     sentinel_value: ?Type,
+    alignment_value: ?Type,
     elem_type: Type,
 ) error{OutOfMemory}!?Type {
     if (!elem_type.is_type_val) return null;
@@ -11519,6 +11520,11 @@ pub fn resolveComptimePointerTypeSyntax(
         const value_index = value.ipIndex() orelse return null;
         break :sentinel try analyser.coerceIP(elem_type_index, value_index) orelse return null;
     } else InternPool.Index.none;
+    const alignment = if (alignment_value) |value| alignment: {
+        const bytes = analyser.ip.toInt(value.ipIndex() orelse return null, u16) orelse return null;
+        if (!std.math.isPowerOfTwo(bytes)) return null;
+        break :alignment bytes;
+    } else 0;
     return @as(?Type, try Type.createPointerTypeWithFlags(
         analyser,
         .{
@@ -11526,6 +11532,7 @@ pub fn resolveComptimePointerTypeSyntax(
             .is_const = is_const,
             .is_volatile = is_volatile,
             .is_allowzero = is_allowzero,
+            .alignment = alignment,
         },
         .{ .bit_offset = 0, .host_size = 0 },
         sentinel,

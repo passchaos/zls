@@ -2069,20 +2069,24 @@ pub const Interpreter = struct {
             .ptr_type_bit_range,
             => {
                 const pointer = ast.fullPtrType(&handle.tree, node).?;
-                if (pointer.ast.align_node.unwrap() != null or
-                    pointer.ast.addrspace_node.unwrap() != null or
+                if (pointer.ast.addrspace_node.unwrap() != null or
                     pointer.ast.bit_range_start.unwrap() != null) return self.analyser.resolveTypeOfNode(.of(node, handle));
                 const elem_type = try self.eval(handle, pointer.ast.child_type) orelse return null;
                 const sentinel = if (pointer.ast.sentinel.unwrap()) |sentinel_node|
                     try self.evaluateTypedExpression(handle, sentinel_node, elem_type) orelse return null
                 else
                     null;
+                const alignment = if (pointer.ast.align_node.unwrap()) |align_node| alignment: {
+                    const usize_type = Type.fromIP(self.analyser, .type_type, .usize_type);
+                    break :alignment try self.evaluateTypedExpression(handle, align_node, usize_type) orelse return null;
+                } else null;
                 return self.analyser.resolveComptimePointerTypeSyntax(
                     pointer.size,
                     pointer.const_token != null,
                     pointer.volatile_token != null,
                     pointer.allowzero_token != null,
                     sentinel,
+                    alignment,
                     elem_type,
                 );
             },
