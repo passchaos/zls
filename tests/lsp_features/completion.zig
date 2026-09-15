@@ -10115,6 +10115,43 @@ test "generic function with comptime string memory copies" {
     });
 }
 
+test "generic function with comptime sentinel slice memory operations" {
+    try testCompletion(
+        \\const source = [_]usize{ 2, 3, 5, 7 };
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 0;
+        \\    var copied: [3:0]usize = @splat(0);
+        \\    var filled = [_]usize{ 1, 2, 3, 7 };
+        \\    var moved = [_]usize{ 1, 2, 3, 4, 5, 0 };
+        \\    @memcpy(copied[0..3 :0], source[0..3 :7]);
+        \\    @memset(filled[1..3 :sentinel: {
+        \\        evaluations += 1;
+        \\        break :sentinel 7;
+        \\    }], 5);
+        \\    @memmove(moved[1..5 :0], moved[0..4 :5]);
+        \\    return struct {
+        \\        copied_last: [copied[2]]T,
+        \\        copied_sentinel: [copied[3]]T,
+        \\        filled_middle: [filled[2]]T,
+        \\        filled_boundary: [filled[3]]T,
+        \\        moved_last: [moved[4]]T,
+        \\        moved_boundary: [moved[5]]T,
+        \\        evaluations: [evaluations]T,
+        \\    };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "copied_last", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "copied_sentinel", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "filled_middle", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "filled_boundary", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "moved_last", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "moved_boundary", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

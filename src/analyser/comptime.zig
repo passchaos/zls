@@ -2562,7 +2562,8 @@ pub const Interpreter = struct {
                     if (params.len != 2) return null;
                     const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
                     if (handle.tree.nodeTag(destination_node) == .slice or
-                        handle.tree.nodeTag(destination_node) == .slice_open)
+                        handle.tree.nodeTag(destination_node) == .slice_open or
+                        handle.tree.nodeTag(destination_node) == .slice_sentinel)
                     {
                         const region = try self.mutableArraySliceRegion(handle, destination_node) orelse return null;
                         const element = try self.evaluateTypedExpression(handle, params[1], region.element_type) orelse return null;
@@ -4388,7 +4389,6 @@ pub const Interpreter = struct {
     ) Error!?ArraySliceRegion {
         const tree = &handle.tree;
         const slice = tree.fullSlice(node) orelse return null;
-        if (slice.ast.sentinel.unwrap() != null) return null;
         const operand = try self.captureOperand(handle, slice.ast.sliced, 0) orelse return null;
         const target = operand.target orelse self.captureTargetOrTemporary(handle, slice.ast.sliced, operand) orelse return null;
         if (require_mutable and target != .reference) return null;
@@ -4401,6 +4401,20 @@ pub const Interpreter = struct {
         else
             info.len;
         if (start > end or end > info.len) return null;
+        if (slice.ast.sentinel.unwrap()) |sentinel_node| {
+            const sentinel = try self.evaluateTypedExpression(handle, sentinel_node, info.element_type) orelse return null;
+            const refreshed = switch (target) {
+                .reference => |reference| try self.readReference(reference) orelse return null,
+                .pointee => |pointee| pointee.value,
+            };
+            const boundary = try self.analyser.resolveBracketAccessType(refreshed, .{ .single = end }) orelse return null;
+            const equality = try self.analyser.resolveComptimeComparisonValue(
+                .equal_equal,
+                boundary,
+                sentinel,
+            ) orelse return null;
+            if (!(try self.boolValue(equality) orelse return null)) return null;
+        }
         return .{
             .target = target,
             .array_type = info.array_type,
@@ -4438,7 +4452,7 @@ pub const Interpreter = struct {
         if (!std.mem.eql(u8, offsets.identifierTokenToNameSlice(tree, field_token), "ptr")) return null;
         const slice_node = unwrapGroupedSource(tree, base);
         return switch (tree.nodeTag(slice_node)) {
-            .slice, .slice_open => slice_node,
+            .slice, .slice_open, .slice_sentinel => slice_node,
             else => null,
         };
     }
@@ -4469,7 +4483,7 @@ pub const Interpreter = struct {
     fn isDirectArrayRegionSyntax(_: *Interpreter, handle: *Handle, node: Ast.Node.Index) bool {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
         return switch (handle.tree.nodeTag(unwrapped)) {
-            .slice, .slice_open => true,
+            .slice, .slice_open, .slice_sentinel => true,
             .string_literal, .multiline_string_literal => true,
             else => directArrayPointerCastSyntax: {
                 if (directArraySlicePointer(&handle.tree, unwrapped) != null) break :directArrayPointerCastSyntax true;
@@ -4536,7 +4550,10 @@ pub const Interpreter = struct {
         require_mutable: bool,
     ) Error!?ArraySliceRegion {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
-        if (handle.tree.nodeTag(unwrapped) == .slice or handle.tree.nodeTag(unwrapped) == .slice_open) {
+        if (handle.tree.nodeTag(unwrapped) == .slice or
+            handle.tree.nodeTag(unwrapped) == .slice_open or
+            handle.tree.nodeTag(unwrapped) == .slice_sentinel)
+        {
             return self.arraySliceRegion(handle, unwrapped, require_mutable);
         }
         const pointer = try self.evalPreservingPointerIdentity(handle, node) orelse return null;
