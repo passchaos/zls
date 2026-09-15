@@ -5,6 +5,7 @@ const ast = @import("ast.zig");
 const Ast = std.zig.Ast;
 const assert = std.debug.assert;
 const offsets = @import("offsets.zig");
+const multi_array_list = @import("multi_array_list.zig");
 
 pub const TrigramStore = @This();
 
@@ -393,7 +394,7 @@ pub fn init(
     }
 
     store.trigram_to_declarations.shrinkAndFree(allocator, store.trigram_to_declarations.count());
-    try store.declarations.setCapacity(allocator, store.declarations.len);
+    try multi_array_list.shrinkAndFree(allocator, &store.declarations);
 
     return store;
 }
