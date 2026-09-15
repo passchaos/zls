@@ -1059,7 +1059,7 @@ pub fn loadDirectoryRecursive(store: *DocumentStore, directory_uri: Uri) LoadDir
 
 pub fn loadTrigramStores(
     store: *DocumentStore,
-    filter_uris: []const std.Uri,
+    filter_uris: []const Uri.SchemeAndPath,
 ) error{ OutOfMemory, Canceled }![]*DocumentStore.Handle {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -1069,21 +1069,8 @@ pub fn loadTrigramStores(
 
     var it: HandleIterator = .{ .store = store };
     while (it.next()) |handle| {
-        const uri = handle.uri.toStdUri();
-
-        var component_it = std.Io.Dir.path.componentIterator(uri.path.percent_encoded);
-        const skip = while (component_it.next()) |component| {
-            // Keep in sync with `loadDirectoryRecursive`
-            if (std.mem.startsWith(u8, component.name, ".")) break true;
-            if (std.mem.eql(u8, component.name, "zig-cache")) break true;
-            if (std.mem.eql(u8, component.name, "zig-pkg")) break true;
-        } else false;
-        if (skip) continue;
-
-        for (filter_uris) |filter_uri| {
-            if (!std.ascii.eqlIgnoreCase(uri.scheme, filter_uri.scheme)) continue;
-            if (std.mem.startsWith(u8, uri.path.percent_encoded, filter_uri.path.percent_encoded)) break;
-        } else continue;
+        const uri = handle.uri.schemeAndPath();
+        if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
         try handles.append(store.allocator, handle);
     }
 
@@ -1114,6 +1101,45 @@ pub fn loadTrigramStores(
     if (did_out_of_memory.load(.acquire)) return error.OutOfMemory;
 
     return try handles.toOwnedSlice(store.allocator);
+}
+
+fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri.SchemeAndPath) bool {
+    var component_it = std.Io.Dir.path.componentIterator(uri.path);
+    while (component_it.next()) |component| {
+        // Keep in sync with `loadDirectoryRecursive`
+        if (std.mem.startsWith(u8, component.name, ".")) return false;
+        if (std.mem.eql(u8, component.name, "zig-cache")) return false;
+        if (std.mem.eql(u8, component.name, "zig-pkg")) return false;
+    }
+
+    for (filter_uris) |filter_uri| {
+        if (!std.ascii.eqlIgnoreCase(uri.scheme, filter_uri.scheme)) continue;
+        if (std.mem.startsWith(u8, uri.path, filter_uri.path)) return true;
+    }
+    return false;
+}
+
+test matchesWorkspaceSymbolFilter {
+    const workspaces = [_]Uri.SchemeAndPath{
+        .{ .scheme = "file", .path = "/workspace" },
+        .{ .scheme = "untitled", .path = "/scratch/" },
+    };
+    const cases = [_]struct { Uri.SchemeAndPath, bool }{
+        .{ .{ .scheme = "file", .path = "/workspace/src/main.zig" }, true },
+        .{ .{ .scheme = "FILE", .path = "/workspace/main.zig" }, true },
+        .{ .{ .scheme = "untitled", .path = "/scratch/Untitled-1.zig" }, true },
+        .{ .{ .scheme = "file", .path = "/workspace/.git/main.zig" }, false },
+        .{ .{ .scheme = "file", .path = "/workspace/zig-cache/main.zig" }, false },
+        .{ .{ .scheme = "file", .path = "/workspace/zig-pkg/main.zig" }, false },
+        .{ .{ .scheme = "file", .path = "/other/main.zig" }, false },
+        .{ .{ .scheme = "http", .path = "/workspace/main.zig" }, false },
+        // Preserve the existing byte-prefix workspace matching semantics.
+        .{ .{ .scheme = "file", .path = "/workspace-other/main.zig" }, true },
+    };
+
+    for (cases) |case| {
+        try std.testing.expectEqual(case[1], matchesWorkspaceSymbolFilter(case[0], &workspaces));
+    }
 }
 
 const progress_token = "buildProgressToken";

@@ -14,11 +14,11 @@ const Uri = @import("../Uri.zig");
 pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspace.Symbol.Params) error{ OutOfMemory, Canceled }!?types.workspace.Symbol.Result {
     if (request.query.len == 0) return null;
 
-    var workspace_uris: std.ArrayList(std.Uri) = try .initCapacity(arena, server.workspaces.items.len);
+    var workspace_uris: std.ArrayList(Uri.SchemeAndPath) = try .initCapacity(arena, server.workspaces.items.len);
     defer workspace_uris.deinit(arena);
 
     for (server.workspaces.items) |workspace| {
-        workspace_uris.appendAssumeCapacity(workspace.uri.toStdUri());
+        workspace_uris.appendAssumeCapacity(workspace.uri.schemeAndPath());
     }
 
     const handles = try server.document_store.loadTrigramStores(workspace_uris.items);

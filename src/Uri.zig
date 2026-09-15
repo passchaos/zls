@@ -162,6 +162,40 @@ pub fn toStdUri(uri: Uri) std.Uri {
     return std.Uri.parse(uri.raw) catch unreachable;
 }
 
+pub const SchemeAndPath = struct {
+    scheme: []const u8,
+    path: []const u8,
+};
+
+/// Returns borrowed slices into the normalized URI without reparsing all URI
+/// components.
+pub fn schemeAndPath(uri: Uri) SchemeAndPath {
+    const scheme_end = std.mem.findScalar(u8, uri.raw, ':').?;
+    const path_start = std.mem.findScalarPos(u8, uri.raw, scheme_end + "://".len, '/').?;
+    return .{
+        .scheme = uri.raw[0..scheme_end],
+        .path = uri.raw[path_start..],
+    };
+}
+
+test schemeAndPath {
+    const texts = [_][]const u8{
+        "file:///workspace/src/main.zig",
+        "file://server/share/main.zig",
+        "untitled:///workspace/Untitled-1.zig",
+        "custom://user:pass@example.com:1234/path/to/main.zig",
+    };
+
+    for (texts) |text| {
+        const uri = try Uri.parse(std.testing.allocator, text);
+        defer uri.deinit(std.testing.allocator);
+        const expected = uri.toStdUri();
+        const actual = uri.schemeAndPath();
+        try std.testing.expectEqualStrings(expected.scheme, actual.scheme);
+        try std.testing.expectEqualStrings(expected.path.percent_encoded, actual.path);
+    }
+}
+
 pub const format = @compileError("Cannot format @import(\"Uri.zig\") directly!. Access the underlying raw string field instead.");
 pub const jsonStringify = @compileError("Cannot stringify @import(\"Uri.zig\") directly!. Access the underlying raw string field instead.");
 
