@@ -4326,6 +4326,11 @@ pub const Interpreter = struct {
         capacity_end: usize,
     };
 
+    const DirectArrayPointerCast = struct {
+        type_node: Ast.Node.Index,
+        array_node: Ast.Node.Index,
+    };
+
     fn fixedArrayInfo(self: *Interpreter, array_type: Type) ?FixedArrayInfo {
         if (!array_type.is_type_val) return null;
         return switch (array_type.data) {
@@ -4409,12 +4414,80 @@ pub const Interpreter = struct {
         };
     }
 
+    fn directArrayPointerCast(tree: *const Ast, node: Ast.Node.Index) ?DirectArrayPointerCast {
+        const unwrapped = unwrapGroupedSource(tree, node);
+        if (!ast.isBuiltinCall(tree, unwrapped) or
+            !std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(unwrapped)), "@as")) return null;
+        var as_buffer: [2]Ast.Node.Index = undefined;
+        const as_params = tree.builtinCallParams(&as_buffer, unwrapped).?;
+        if (as_params.len != 2) return null;
+        const cast_node = unwrapGroupedSource(tree, as_params[1]);
+        if (!ast.isBuiltinCall(tree, cast_node) or
+            !std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(cast_node)), "@ptrCast")) return null;
+        var cast_buffer: [2]Ast.Node.Index = undefined;
+        const cast_params = tree.builtinCallParams(&cast_buffer, cast_node).?;
+        if (cast_params.len != 1) return null;
+        const address_node = unwrapGroupedSource(tree, cast_params[0]);
+        if (tree.nodeTag(address_node) != .address_of) return null;
+        return .{
+            .type_node = as_params[0],
+            .array_node = tree.nodeData(address_node).node,
+        };
+    }
+
     fn isDirectArrayRegionSyntax(_: *Interpreter, handle: *Handle, node: Ast.Node.Index) bool {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
         return switch (handle.tree.nodeTag(unwrapped)) {
             .slice, .slice_open => true,
-            else => directArraySlicePointer(&handle.tree, unwrapped) != null,
+            else => directArraySlicePointer(&handle.tree, unwrapped) != null or
+                directArrayPointerCast(&handle.tree, unwrapped) != null,
         };
+    }
+
+    fn directArrayPointerCastRegion(
+        self: *Interpreter,
+        handle: *Handle,
+        pointer: DirectArrayPointerCast,
+        require_mutable: bool,
+    ) Error!?ArraySliceRegion {
+        const pointer_type = try self.eval(handle, pointer.type_node) orelse return null;
+        if (!pointer_type.is_type_val or
+            !pointer_type.isManyPointerType(self.analyser) or
+            (require_mutable and pointer_type.isConstSequencePointerType(self.analyser))) return null;
+        const pointer_info = pointer_type.numericPointerArithmeticInfo(self.analyser) orelse return null;
+        if (pointer_info.size != .many) return null;
+        const operand = try self.captureOperand(handle, pointer.array_node, 0) orelse return null;
+        const target = operand.target orelse self.captureTargetOrTemporary(handle, pointer.array_node, operand) orelse return null;
+        if (require_mutable and target != .reference) return null;
+        const current = try self.captureAggregateValue(operand.value);
+        const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+        if (info.len > self.budget.steps or
+            !info.element_type.eql(pointer_info.element_type)) return null;
+        return .{
+            .target = target,
+            .array_type = info.array_type,
+            .element_type = info.element_type,
+            .start = 0,
+            .end = info.len,
+        };
+    }
+
+    fn directArrayPointerCastSliceRegion(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        require_mutable: bool,
+    ) Error!?ArraySliceRegion {
+        const slice = handle.tree.fullSlice(node) orelse return null;
+        if (slice.ast.sentinel.unwrap() != null) return null;
+        const pointer = directArrayPointerCast(&handle.tree, slice.ast.sliced) orelse return null;
+        var region = try self.directArrayPointerCastRegion(handle, pointer, require_mutable) orelse return null;
+        const start = try self.integer(handle, slice.ast.start) orelse return null;
+        const end = try self.integer(handle, slice.ast.end.unwrap() orelse return null) orelse return null;
+        if (start > end or end > region.end) return null;
+        region.start = start;
+        region.end = end;
+        return region;
     }
 
     fn fixedArrayRegion(
@@ -4460,6 +4533,24 @@ pub const Interpreter = struct {
                 .region = region,
                 .provided_len = null,
                 .capacity_end = info.len,
+            };
+        }
+        const unwrapped = unwrapGroupedSource(&handle.tree, node);
+        if (handle.tree.nodeTag(unwrapped) == .slice or handle.tree.nodeTag(unwrapped) == .slice_open) {
+            if (try self.directArrayPointerCastSliceRegion(handle, unwrapped, require_mutable)) |region| {
+                return .{
+                    .region = region,
+                    .provided_len = region.end - region.start,
+                    .capacity_end = region.end,
+                };
+            }
+        }
+        if (directArrayPointerCast(&handle.tree, unwrapped)) |pointer| {
+            const region = try self.directArrayPointerCastRegion(handle, pointer, require_mutable) orelse return null;
+            return .{
+                .region = region,
+                .provided_len = null,
+                .capacity_end = region.end,
             };
         }
         const region = try self.fixedArrayRegion(handle, node, require_mutable) orelse return null;

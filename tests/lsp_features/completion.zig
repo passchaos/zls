@@ -10028,6 +10028,41 @@ test "generic function with comptime slice pointer memory copies" {
     });
 }
 
+test "generic function with comptime cast many pointer memory copies" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var source = [_]usize{ 2, 3, 5 };
+        \\    var destination = [_]usize{ 0, 0, 0 };
+        \\    var source_pointer = [_]usize{ 0, 0, 0 };
+        \\    var separated = [_]usize{ 1, 2, 3, 4 };
+        \\    var moved = [_]usize{ 1, 2, 3, 4 };
+        \\    const len: usize = 3;
+        \\    @memcpy(
+        \\        @as([*]usize, @ptrCast(&destination)),
+        \\        @as([*]const usize, @ptrCast(&source))[0..len],
+        \\    );
+        \\    @memcpy(source_pointer[0..3], @as([*]const usize, @ptrCast(&source)));
+        \\    @memcpy(separated[2..4], @as([*]const usize, @ptrCast(&separated))[0..2]);
+        \\    @memmove(@as([*]usize, @ptrCast(&moved)), moved[1..4]);
+        \\    return struct {
+        \\        destination_last: [destination[2]]T,
+        \\        source_pointer_middle: [source_pointer[1]]T,
+        \\        separated_last: [separated[3]]T,
+        \\        moved_first: [moved[0]]T,
+        \\        moved_last: [moved[3]]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "destination_last", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "source_pointer_middle", .kind = .Field, .detail = "[3]u16" },
+        .{ .label = "separated_last", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "moved_first", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "moved_last", .kind = .Field, .detail = "[4]u16" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {
