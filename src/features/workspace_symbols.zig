@@ -52,7 +52,10 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
             const kind = kinds[@intFromEnum(declaration)];
 
             const loc = offsets.tokenToLoc(&handle.tree, name_token);
-            const name = @import("document_symbol.zig").tokenNameMaybeQuotes(&handle.tree, name_token);
+            const name = @import("document_symbol.zig").tokenNameFromSlice(
+                handle.tree.source[loc.start..loc.end],
+                handle.tree.tokenTag(name_token),
+            );
 
             const start_position = offsets.advancePosition(handle.tree.source, last_position, last_index, loc.start, server.offset_encoding);
             const end_position = offsets.advancePosition(handle.tree.source, start_position, loc.start, loc.end, server.offset_encoding);

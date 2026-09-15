@@ -19,8 +19,11 @@ const Symbol = struct {
 };
 
 pub fn tokenNameMaybeQuotes(tree: *const Ast, token: Ast.TokenIndex) []const u8 {
-    const token_slice = tree.tokenSlice(token);
-    switch (tree.tokenTag(token)) {
+    return tokenNameFromSlice(tree.tokenSlice(token), tree.tokenTag(token));
+}
+
+pub fn tokenNameFromSlice(token_slice: []const u8, tag: std.zig.Token.Tag) []const u8 {
+    switch (tag) {
         .identifier => return token_slice,
         .string_literal => {
             const name = token_slice[1 .. token_slice.len - 1];
@@ -36,6 +39,13 @@ pub fn tokenNameMaybeQuotes(tree: *const Ast, token: Ast.TokenIndex) []const u8 
         },
         else => unreachable,
     }
+}
+
+test tokenNameFromSlice {
+    try std.testing.expectEqualStrings("identifier", tokenNameFromSlice("identifier", .identifier));
+    try std.testing.expectEqualStrings("quoted name", tokenNameFromSlice("\"quoted name\"", .string_literal));
+    try std.testing.expectEqualStrings("\"\"", tokenNameFromSlice("\"\"", .string_literal));
+    try std.testing.expectEqualStrings("\" padded \"", tokenNameFromSlice("\" padded \"", .string_literal));
 }
 
 pub fn getDocumentSymbols(
