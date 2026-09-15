@@ -23625,6 +23625,27 @@ test "merged error sets" {
     });
 }
 
+test "nested comptime merged error set mutations" {
+    try testCompletion(
+        \\fn Errors(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const E = (left: {
+        \\        order *= 2;
+        \\        break :left error{Foo};
+        \\    }) || (right: {
+        \\        order += 3;
+        \\        break :right error{Bar};
+        \\    });
+        \\    return struct { merged: E, order: [order]T };
+        \\}
+        \\const errors: Errors(u8) = undefined;
+        \\const field = errors.<cursor>
+    , &.{
+        .{ .label = "merged", .kind = .Field, .detail = "error{Bar,Foo}" },
+        .{ .label = "order", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "error union" {
     try testCompletion(
         \\const S = struct { alpha: u32 };

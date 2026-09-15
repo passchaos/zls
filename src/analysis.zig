@@ -11451,15 +11451,16 @@ fn resolveStringLiteral(analyser: *Analyser, options: ResolveOptions) Error!?[]c
     return field_name[1 .. field_name.len - 1];
 }
 
-fn resolveErrorSetIPIndex(analyser: *Analyser, options: ResolveOptions) Error!?InternPool.Index {
-    const ty = try analyser.resolveTypeOfNodeInternal(options) orelse return null;
-    if (!ty.is_type_val) return null;
-    const ip_index = switch (ty.data) {
-        .ip_index => |payload| payload.index orelse return null,
-        else => return null,
-    };
-    if (analyser.ip.zigTypeTag(ip_index) != .error_set) return null;
-    return ip_index;
+pub fn resolveComptimeMergedErrorSetType(
+    analyser: *Analyser,
+    lhs: Type,
+    rhs: Type,
+) error{OutOfMemory}!?Type {
+    if (!lhs.is_type_val or !rhs.is_type_val) return null;
+    const lhs_index = lhs.ipIndex() orelse return null;
+    const rhs_index = rhs.ipIndex() orelse return null;
+    if (analyser.ip.zigTypeTag(lhs_index) != .error_set or analyser.ip.zigTypeTag(rhs_index) != .error_set) return null;
+    return Type.fromIP(analyser, .type_type, try analyser.ip.errorSetMerge(lhs_index, rhs_index));
 }
 
 pub fn coerceIP(analyser: *Analyser, dest_ty: InternPool.Index, inst: InternPool.Index) error{OutOfMemory}!?InternPool.Index {
@@ -12972,10 +12973,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
         .merge_error_sets => {
             const lhs, const rhs = tree.nodeData(node).node_and_node;
-            const lhs_index = try analyser.resolveErrorSetIPIndex(.of(lhs, handle)) orelse return null;
-            const rhs_index = try analyser.resolveErrorSetIPIndex(.of(rhs, handle)) orelse return null;
-            const ip_index = try analyser.ip.errorSetMerge(lhs_index, rhs_index);
-            return Type.fromIP(analyser, .type_type, ip_index);
+            const lhs_type = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
+            const rhs_type = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
+            return analyser.resolveComptimeMergedErrorSetType(lhs_type, rhs_type);
         },
 
         .error_set_decl => {
