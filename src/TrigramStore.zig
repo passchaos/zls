@@ -57,6 +57,10 @@ comptime {
 
 const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
 const PostingListBuilder = std.array_hash_map.Custom(Trigram, std.ArrayList(Declaration.Index), TrigramContext, false);
+/// A filter pass scans the query before the exact lookup pass. Benchmarks
+/// against ZLS and Zig standard-library sources put the break-even point at a
+/// first posting list of roughly this size.
+const filter_min_posting_len = 160;
 
 filter_buckets: ?[]CuckooFilter.Bucket,
 trigram_to_declarations: PostingMap,
@@ -218,9 +222,12 @@ pub fn init(
     }
     assert(posting_start == store.postings.len);
 
-    const trigrams = store.trigram_to_declarations.keys();
+    const build_filter = for (store.trigram_to_declarations.values()) |list| {
+        if (list.len >= filter_min_posting_len) break true;
+    } else false;
 
-    if (trigrams.len > 0) {
+    if (build_filter) {
+        const trigrams = store.trigram_to_declarations.keys();
         var prng = std.Random.DefaultPrng.init(0);
 
         const filter_capacity = CuckooFilter.capacityForCount(trigrams.len) catch unreachable;
@@ -264,19 +271,19 @@ pub fn declarationsForQuery(
     assert(query.len >= 1);
     assert(declaration_buffer.items.len == 0);
 
-    if (store.filter_buckets) |buckets| {
-        const filter: CuckooFilter = .{ .buckets = buckets };
-        var ti: TrigramIterator = .init(query);
-        while (ti.next()) |trigram| {
-            if (!filter.contains(trigram)) {
-                return;
-            }
-        }
-    }
-
     var ti: TrigramIterator = .init(query);
 
     const first = (store.trigram_to_declarations.get(ti.next() orelse return) orelse return).slice(store.postings);
+
+    if (first.len >= filter_min_posting_len) {
+        if (store.filter_buckets) |buckets| {
+            const filter: CuckooFilter = .{ .buckets = buckets };
+            var filter_ti = ti;
+            while (filter_ti.next()) |trigram| {
+                if (!filter.contains(trigram)) return;
+            }
+        }
+    }
 
     try declaration_buffer.resize(allocator, first.len);
 
@@ -628,14 +635,71 @@ test "empty store has no postings" {
     try std.testing.expect(store.filter_buckets == null);
 }
 
+test "Cuckoo filter is reserved for queries with long first postings" {
+    const allocator = std.testing.allocator;
+
+    const Test = struct {
+        fn run(allocator_: std.mem.Allocator, declaration_count: usize, expect_filter: bool) !void {
+            var source_writer: std.Io.Writer.Allocating = .init(allocator_);
+            defer source_writer.deinit();
+
+            for (0..declaration_count) |_| {
+                source_writer.writer.writeAll("const common_symbol = 0;\n") catch return error.OutOfMemory;
+            }
+            source_writer.writer.writeAll("const rare_unique = 0;\n") catch return error.OutOfMemory;
+            const source = try source_writer.toOwnedSliceSentinel(0);
+            defer allocator_.free(source);
+
+            var tree = try Ast.parse(allocator_, source, .zig);
+            defer tree.deinit(allocator_);
+            try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+
+            var store = try TrigramStore.init(allocator_, &tree);
+            defer store.deinit(allocator_);
+            try std.testing.expectEqual(expect_filter, store.filter_buckets != null);
+
+            var declarations: std.ArrayList(Declaration.Index) = .empty;
+            defer declarations.deinit(allocator_);
+
+            try store.declarationsForQuery(allocator_, "common_symbol", &declarations);
+            try std.testing.expectEqual(declaration_count, declarations.items.len);
+
+            declarations.clearRetainingCapacity();
+            try store.declarationsForQuery(allocator_, "common_missing", &declarations);
+            try std.testing.expectEqual(@as(usize, 0), declarations.items.len);
+
+            declarations.clearRetainingCapacity();
+            try store.declarationsForQuery(allocator_, "rare_unique", &declarations);
+            try std.testing.expectEqual(@as(usize, 1), declarations.items.len);
+
+            if (store.filter_buckets) |buckets| {
+                // Short postings bypass the filter, while long postings use it.
+                @memset(buckets, @splat(.none));
+
+                declarations.clearRetainingCapacity();
+                try store.declarationsForQuery(allocator_, "rare_unique", &declarations);
+                try std.testing.expectEqual(@as(usize, 1), declarations.items.len);
+
+                declarations.clearRetainingCapacity();
+                try store.declarationsForQuery(allocator_, "common_symbol", &declarations);
+                try std.testing.expectEqual(@as(usize, 0), declarations.items.len);
+            }
+        }
+    };
+
+    try Test.run(allocator, filter_min_posting_len - 1, false);
+    try Test.run(allocator, filter_min_posting_len, true);
+}
+
 test "TrigramStore.init handles every allocation failure" {
-    const source: [:0]const u8 =
-        \\const alpha_symbol = struct {
-        \\    beta_field: u8,
-        \\    fn gammaFunction() void {}
-        \\};
-        \\var delta_symbol: u8 = 0;
-    ;
+    var source_writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer source_writer.deinit();
+    for (0..filter_min_posting_len) |_| {
+        source_writer.writer.writeAll("const common_symbol = 0;\n") catch return error.OutOfMemory;
+    }
+    const source = try source_writer.toOwnedSliceSentinel(0);
+    defer std.testing.allocator.free(source);
+
     var tree = try Ast.parse(std.testing.allocator, source, .zig);
     defer tree.deinit(std.testing.allocator);
 
