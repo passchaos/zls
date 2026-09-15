@@ -2415,7 +2415,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 6) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
-                    if (!try self.supportsAtomicValue(element_type, false, false)) return null;
+                    if (!try self.supportsAtomicValue(element_type, false, true)) return null;
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
@@ -2441,12 +2441,17 @@ pub const Interpreter = struct {
 
                     const reference = pointer.data.comptime_value.data.reference;
                     const current = try self.readReference(reference) orelse return null;
-                    const equality = try self.analyser.resolveComptimeComparisonValue(
-                        .equal_equal,
-                        current,
-                        expected,
-                    ) orelse return null;
-                    const matched = try self.boolValue(equality) orelse return null;
+                    if (!Value.isKnown(current, self.analyser, 0)) return null;
+                    const matched = if (element_type.isAtomicPackedStructType(self.analyser))
+                        current.eql(expected)
+                    else matched: {
+                        const equality = try self.analyser.resolveComptimeComparisonValue(
+                            .equal_equal,
+                            current,
+                            expected,
+                        ) orelse return null;
+                        break :matched try self.boolValue(equality) orelse return null;
+                    };
                     const result_instance = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
                     const result_type = try result_instance.typeOf(self.analyser);
                     if (matched and !try self.writeReference(handle, reference, replacement, params[3])) return null;

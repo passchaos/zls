@@ -9555,6 +9555,48 @@ test "generic function with comptime packed struct atomics" {
     });
 }
 
+test "generic function with comptime packed struct compare exchange" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const Bits = packed struct(u8) { low: u3, high: u5 };
+        \\    var value: Bits = .{ .low = 3, .high = 4 };
+        \\    const success = @cmpxchgStrong(
+        \\        Bits,
+        \\        &value,
+        \\        .{ .high = 4, .low = 3 },
+        \\        .{ .low = 5, .high = 6 },
+        \\        .seq_cst,
+        \\        .acquire,
+        \\    );
+        \\    const failure = @cmpxchgWeak(
+        \\        Bits,
+        \\        &value,
+        \\        .{ .low = 3, .high = 4 },
+        \\        .{ .low = 1, .high = 2 },
+        \\        .monotonic,
+        \\        .monotonic,
+        \\    );
+        \\    const final = value;
+        \\    const observed = failure.?;
+        \\    return struct {
+        \\        succeeded: [@intFromBool(success == null)]u8,
+        \\        final_low: [final.low]T,
+        \\        final_high: [final.high]T,
+        \\        observed_low: [observed.low]T,
+        \\        observed_high: [observed.high]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "succeeded", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "final_low", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "final_high", .kind = .Field, .detail = "[6]u16" },
+        .{ .label = "observed_low", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "observed_high", .kind = .Field, .detail = "[6]u16" },
+    });
+}
+
 test "generic function with comptime atomic array elements and constants" {
     try testCompletion(
         \\const constant: usize = 11;
