@@ -2331,6 +2331,40 @@ pub const Interpreter = struct {
                     if (!try self.writeReference(handle, reference, updated, null)) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@memcpy") or std.mem.eql(u8, name, "@memmove")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
+                    const source = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                    if (destination.data != .comptime_value or
+                        destination.data.comptime_value.data != .reference or
+                        source.data != .comptime_value or
+                        (try destination.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one or
+                        (try source.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one) return null;
+                    if (std.mem.eql(u8, name, "@memcpy")) {
+                        const overlap = Value.pointerIdentityEql(self.analyser, destination, source) orelse switch (source.data.comptime_value.data) {
+                            .pointee => |pointee| !pointee.is_static,
+                            else => true,
+                        };
+                        if (overlap) return null;
+                    }
+
+                    const reference = destination.data.comptime_value.data.reference;
+                    const current = try self.readReference(reference) orelse return null;
+                    const source_value = try self.analyser.resolveDerefType(source) orelse return null;
+                    const destination_info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+                    const source_info = self.fixedArrayInfo(try source_value.typeOf(self.analyser)) orelse return null;
+                    if (destination_info.len != source_info.len or
+                        !destination_info.element_type.eql(source_info.element_type) or
+                        destination_info.len > self.budget.steps) return null;
+                    const source_items = try self.mutableElements(source_value) orelse return null;
+                    if (source_items.len != source_info.len) return null;
+                    const items = try self.analyser.arena.dupe(Type, source_items);
+                    const updated = try Value.create(self.analyser, destination_info.array_type, .{ .array = items });
+                    if (!try self.writeReference(handle, reference, updated, null)) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@compileLog")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
@@ -3920,6 +3954,32 @@ pub const Interpreter = struct {
             item.* = Type.fromIP(self.analyser, self.analyser.ip.typeOf(item_index), item_index);
         }
         return items;
+    }
+
+    const FixedArrayInfo = struct {
+        array_type: Type,
+        element_type: Type,
+        len: usize,
+    };
+
+    fn fixedArrayInfo(self: *Interpreter, array_type: Type) ?FixedArrayInfo {
+        if (!array_type.is_type_val) return null;
+        return switch (array_type.data) {
+            .array => |array| .{
+                .array_type = array_type,
+                .element_type = array.elem_ty.*,
+                .len = std.math.cast(usize, array.elem_count orelse return null) orelse return null,
+            },
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
+                .array_type => |array| .{
+                    .array_type = array_type,
+                    .element_type = Type.fromIP(self.analyser, .type_type, array.child),
+                    .len = std.math.cast(usize, array.len) orelse return null,
+                },
+                else => null,
+            },
+            else => null,
+        };
     }
 
     fn writeAggregate(self: *Interpreter, handle: *Handle, base: Ast.Node.Index, current: Type, updated: Type) Error!bool {

@@ -9233,6 +9233,42 @@ test "generic function with comptime memset" {
     });
 }
 
+test "generic function with comptime memory copies" {
+    try testCompletion(
+        \\const Holder = struct { values: [3]usize };
+        \\const source = [_]usize{ 2, 3, 5 };
+        \\fn Select() type {
+        \\    var evaluations: usize = 0;
+        \\    var destination: [3]usize = undefined;
+        \\    var holder: Holder = .{ .values = undefined };
+        \\    @memcpy(target: {
+        \\        evaluations += 1;
+        \\        break :target &destination;
+        \\    }, input: {
+        \\        evaluations *= 2;
+        \\        break :input &source;
+        \\    });
+        \\    @memcpy(&holder.values, &destination);
+        \\    @memmove(&destination, &destination);
+        \\    return struct {
+        \\        first: [destination[0]]u8,
+        \\        last: [destination[2]]u8,
+        \\        nested: [holder.values[1]]u8,
+        \\        moved: [destination[2]]u8,
+        \\        evaluations: [evaluations]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "last", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "nested", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "moved", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {
