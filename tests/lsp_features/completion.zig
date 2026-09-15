@@ -9850,6 +9850,7 @@ test "generic function with comptime sliced memset" {
         \\    var local_values = [_]usize{ 1, 2, 3, 4, 5 };
         \\    var inferred_values = [_]usize{ 1, 2, 3, 4, 5 };
         \\    var full_values: [3]usize = undefined;
+        \\    var cast_values: [3]usize = undefined;
         \\    var local_evaluations: usize = 0;
         \\    const local_slice: []usize = local_values[1..end: {
         \\        local_evaluations += 1;
@@ -9873,6 +9874,7 @@ test "generic function with comptime sliced memset" {
         \\    @memset(local_slice, 9);
         \\    @memset(inferred_slice, 8);
         \\    @memset(full_slice, 6);
+        \\    @memset(@as([]usize, &cast_values), @intCast(11));
         \\    const final = evaluations;
         \\    return struct {
         \\        first: [values[1]]T,
@@ -9884,6 +9886,7 @@ test "generic function with comptime sliced memset" {
         \\        inferred_first: [inferred_values[0]]T,
         \\        inferred_boundary: [inferred_values[4]]T,
         \\        full_middle: [full_values[1]]T,
+        \\        cast_middle: [cast_values[1]]T,
         \\        local_evaluations: [local_evaluations]T,
         \\        evaluations: [final]u8,
         \\    };
@@ -9900,6 +9903,7 @@ test "generic function with comptime sliced memset" {
         .{ .label = "inferred_first", .kind = .Field, .detail = "[8]u16" },
         .{ .label = "inferred_boundary", .kind = .Field, .detail = "[5]u16" },
         .{ .label = "full_middle", .kind = .Field, .detail = "[6]u16" },
+        .{ .label = "cast_middle", .kind = .Field, .detail = "[11]u16" },
         .{ .label = "local_evaluations", .kind = .Field, .detail = "[1]u16" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[5]u8" },
     });
@@ -9911,7 +9915,10 @@ test "generic function with comptime memory copies" {
         \\const source = [_]usize{ 2, 3, 5 };
         \\fn Select() type {
         \\    var evaluations: usize = 0;
+        \\    var zero_bit_alias: usize = 1;
         \\    var destination: [3]usize = undefined;
+        \\    var zero_values: [3]void = @splat({});
+        \\    const zero_slice: []void = &zero_values;
         \\    var holder: Holder = .{ .values = undefined };
         \\    @memcpy(target: {
         \\        evaluations += 1;
@@ -9922,12 +9929,15 @@ test "generic function with comptime memory copies" {
         \\    });
         \\    @memcpy(&holder.values, &destination);
         \\    @memmove(&destination, &destination);
+        \\    @memcpy(zero_slice, zero_slice);
+        \\    zero_bit_alias += 1;
         \\    return struct {
         \\        first: [destination[0]]u8,
         \\        last: [destination[2]]u8,
         \\        nested: [holder.values[1]]u8,
         \\        moved: [destination[2]]u8,
         \\        evaluations: [evaluations]u8,
+        \\        zero_bit_alias: [zero_bit_alias]u8,
         \\    };
         \\}
         \\const selected: Select() = undefined;
@@ -9938,6 +9948,7 @@ test "generic function with comptime memory copies" {
         .{ .label = "nested", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "moved", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "zero_bit_alias", .kind = .Field, .detail = "[2]u8" },
     });
 }
 

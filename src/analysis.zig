@@ -15957,6 +15957,10 @@ pub const Type = struct {
         };
     }
 
+    pub fn hasRuntimeBits(self: Type, analyser: *Analyser) ?bool {
+        return (analyser.resolveTypeBitSize(self) orelse return null) != 0;
+    }
+
     pub fn isPlainSinglePointerTo(
         self: Type,
         analyser: *Analyser,
