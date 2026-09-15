@@ -22074,6 +22074,24 @@ test "optional type" {
     , &.{});
 }
 
+test "nested comptime optional type mutation" {
+    try testCompletion(
+        \\fn Optional(comptime T: type) type {
+        \\    var total: usize = 1;
+        \\    const Maybe = ?(child: {
+        \\        total *= 3;
+        \\        break :child T;
+        \\    });
+        \\    return struct { value: Maybe, total: [total]u8 };
+        \\}
+        \\const optional: Optional(u16) = undefined;
+        \\const field = optional.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "?u16" },
+        .{ .label = "total", .kind = .Field, .detail = "[3]u8" },
+    });
+}
+
 test "pointer deref" {
     try testCompletion(
         \\const foo: *u32 = undefined;

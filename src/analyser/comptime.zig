@@ -2043,6 +2043,11 @@ pub const Interpreter = struct {
                 const payload = try self.eval(handle, rhs) orelse return null;
                 return self.analyser.resolveComptimeErrorUnionType(error_set, payload);
             },
+            .optional_type => {
+                const child_node = handle.tree.nodeData(node).node;
+                const child = try self.eval(handle, child_node) orelse return null;
+                return self.analyser.resolveComptimeOptionalType(child);
+            },
             .mul,
             .div,
             .mod,

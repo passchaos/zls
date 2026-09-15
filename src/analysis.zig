@@ -11472,6 +11472,14 @@ pub fn resolveComptimeErrorUnionType(
     return @as(?Type, try Type.createErrorUnionType(analyser, error_set, payload));
 }
 
+pub fn resolveComptimeOptionalType(
+    analyser: *Analyser,
+    child: Type,
+) error{OutOfMemory}!?Type {
+    if (!child.is_type_val) return null;
+    return @as(?Type, try Type.createOptionalType(analyser, child));
+}
+
 pub fn coerceIP(analyser: *Analyser, dest_ty: InternPool.Index, inst: InternPool.Index) error{OutOfMemory}!?InternPool.Index {
     if (inst == .none)
         return .none;
@@ -12850,9 +12858,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const expr_node = tree.nodeData(node).node;
 
             const child_ty = try analyser.resolveTypeOfNodeInternal(.of(expr_node, handle)) orelse return null;
-            if (!child_ty.is_type_val) return null;
-
-            return try Type.createOptionalType(analyser, child_ty);
+            return analyser.resolveComptimeOptionalType(child_ty);
         },
         .ptr_type_aligned,
         .ptr_type_sentinel,
