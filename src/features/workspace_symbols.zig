@@ -26,6 +26,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
 
     var symbols: std.ArrayList(types.workspace.Symbol) = .empty;
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
+    defer declaration_buffer.deinit(server.document_store.allocator);
     var prepared_query: ?TrigramStore.Query = if (handles.len > 1) try .init(arena, request.query) else null;
     defer if (prepared_query) |*query| query.deinit(arena);
 
@@ -34,9 +35,9 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
 
         declaration_buffer.clearRetainingCapacity();
         if (prepared_query) |*query| {
-            try trigram_store.declarationsForPreparedQuery(arena, query, &declaration_buffer);
+            try trigram_store.declarationsForPreparedQuery(server.document_store.allocator, query, &declaration_buffer);
         } else {
-            try trigram_store.declarationsForQuery(arena, request.query, &declaration_buffer);
+            try trigram_store.declarationsForQuery(server.document_store.allocator, request.query, &declaration_buffer);
         }
 
         const slice = trigram_store.declarations.slice();
