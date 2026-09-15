@@ -5,6 +5,7 @@ const ast = @import("ast.zig");
 const Ast = std.zig.Ast;
 const tracy = @import("tracy");
 const offsets = @import("offsets.zig");
+const multi_array_list = @import("multi_array_list.zig");
 
 const DocumentScope = @This();
 
@@ -568,8 +569,8 @@ pub fn initWithDeclarationCapacity(
 
 pub fn shrinkToFit(scope: *DocumentScope, allocator: std.mem.Allocator) error{OutOfMemory}!void {
     scope.extra.shrinkAndFree(allocator, scope.extra.items.len);
-    try scope.declarations.setCapacity(allocator, scope.declarations.len);
-    try scope.scopes.setCapacity(allocator, scope.scopes.len);
+    try multi_array_list.shrinkAndFree(allocator, &scope.declarations);
+    try multi_array_list.shrinkAndFree(allocator, &scope.scopes);
     scope.declaration_lookup_map.shrinkAndFreeContext(allocator, scope.declaration_lookup_map.count(), .{ .source = scope.source });
 }
 
