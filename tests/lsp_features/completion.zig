@@ -9914,6 +9914,59 @@ test "generic function with comptime memory copies" {
     });
 }
 
+test "generic function with comptime sliced memory copies" {
+    try testCompletion(
+        \\const source = [_]usize{ 1, 2, 3, 4 };
+        \\fn Select(comptime T: type) type {
+        \\    var copied = [_]usize{ 9, 9, 9, 9, 9 };
+        \\    var local_source = [_]usize{ 5, 7, 11 };
+        \\    var local_destination = [_]usize{ 0, 0, 0, 0 };
+        \\    var separated = [_]usize{ 2, 3, 0, 0 };
+        \\    var moved_right = [_]usize{ 0, 1, 2, 3, 4 };
+        \\    var moved_left = [_]usize{ 0, 1, 2, 3, 4 };
+        \\    var sequenced = [_]usize{ 1, 2, 3, 4 };
+        \\    @memcpy(copied[1..4], source[1..4]);
+        \\    @memcpy(local_destination[1..4], local_source[0..3]);
+        \\    @memcpy(separated[2..4], separated[0..2]);
+        \\    @memmove(moved_right[2..5], moved_right[0..3]);
+        \\    @memmove(moved_left[0..3], moved_left[2..5]);
+        \\    @memmove(sequenced[0..2], sequenced[start: {
+        \\        sequenced[3] = 9;
+        \\        break :start 2;
+        \\    }..4]);
+        \\    const copied_first = copied[1];
+        \\    const copied_last = copied[3];
+        \\    const local_last = local_destination[3];
+        \\    const separated_last = separated[3];
+        \\    const right_last = moved_right[4];
+        \\    const left_first = moved_left[0];
+        \\    const sequenced_second = sequenced[1];
+        \\    const sequenced_last = sequenced[3];
+        \\    return struct {
+        \\        copied_first: [copied_first]T,
+        \\        copied_last: [copied_last]T,
+        \\        local_last: [local_last]T,
+        \\        separated_last: [separated_last]T,
+        \\        right_last: [right_last]T,
+        \\        left_first: [left_first]T,
+        \\        sequenced_second: [sequenced_second]T,
+        \\        sequenced_last: [sequenced_last]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "copied_first", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "copied_last", .kind = .Field, .detail = "[4]u16" },
+        .{ .label = "local_last", .kind = .Field, .detail = "[11]u16" },
+        .{ .label = "separated_last", .kind = .Field, .detail = "[3]u16" },
+        .{ .label = "right_last", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "left_first", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "sequenced_second", .kind = .Field, .detail = "[9]u16" },
+        .{ .label = "sequenced_last", .kind = .Field, .detail = "[9]u16" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

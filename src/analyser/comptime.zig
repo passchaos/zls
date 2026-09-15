@@ -2566,10 +2566,15 @@ pub const Interpreter = struct {
                     {
                         const region = try self.mutableArraySliceRegion(handle, destination_node) orelse return null;
                         const element = try self.evaluateTypedExpression(handle, params[1], region.element_type) orelse return null;
-                        const items = try self.analyser.arena.dupe(Type, region.items);
+                        const current_items = try self.arraySliceRegionItems(region) orelse return null;
+                        const items = try self.analyser.arena.dupe(Type, current_items);
                         @memset(items[region.start..region.end], element);
                         const updated = try Value.create(self.analyser, region.array_type, .{ .array = items });
-                        if (!try self.writeReference(handle, region.reference, updated, null)) return null;
+                        const reference = switch (region.target) {
+                            .reference => |reference| reference,
+                            .pointee => return null,
+                        };
+                        if (!try self.writeReference(handle, reference, updated, null)) return null;
                         return Type.fromIP(self.analyser, .void_type, .void_value);
                     }
                     const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
@@ -2604,6 +2609,35 @@ pub const Interpreter = struct {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
+                    const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
+                    const source_node = unwrapGroupedSource(&handle.tree, params[1]);
+                    if ((handle.tree.nodeTag(destination_node) == .slice or
+                        handle.tree.nodeTag(destination_node) == .slice_open) and
+                        (handle.tree.nodeTag(source_node) == .slice or
+                            handle.tree.nodeTag(source_node) == .slice_open))
+                    {
+                        const destination = try self.arraySliceRegion(handle, destination_node, true) orelse return null;
+                        const source = try self.arraySliceRegion(handle, source_node, false) orelse return null;
+                        const destination_len = destination.end - destination.start;
+                        const source_len = source.end - source.start;
+                        if (destination_len != source_len or
+                            !destination.element_type.eql(source.element_type) or
+                            destination_len > self.budget.steps) return null;
+                        if (std.mem.eql(u8, name, "@memcpy") and
+                            !(self.arraySliceRegionsDisjoint(destination, source) orelse return null)) return null;
+                        const source_current = try self.arraySliceRegionItems(source) orelse return null;
+                        const source_items = try self.analyser.arena.dupe(Type, source_current[source.start..source.end]);
+                        const destination_current = try self.arraySliceRegionItems(destination) orelse return null;
+                        const items = try self.analyser.arena.dupe(Type, destination_current);
+                        @memcpy(items[destination.start..destination.end], source_items);
+                        const updated = try Value.create(self.analyser, destination.array_type, .{ .array = items });
+                        const reference = switch (destination.target) {
+                            .reference => |reference| reference,
+                            .pointee => return null,
+                        };
+                        if (!try self.writeReference(handle, reference, updated, null)) return null;
+                        return Type.fromIP(self.analyser, .void_type, .void_value);
+                    }
                     const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
                     const source = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (destination.data != .comptime_value or
@@ -4274,11 +4308,10 @@ pub const Interpreter = struct {
         len: usize,
     };
 
-    const MutableArraySliceRegion = struct {
-        reference: *Value.Reference,
+    const ArraySliceRegion = struct {
+        target: CaptureTarget,
         array_type: Type,
         element_type: Type,
-        items: []const Type,
         start: usize,
         end: usize,
     };
@@ -4303,16 +4336,19 @@ pub const Interpreter = struct {
         };
     }
 
-    fn mutableArraySliceRegion(
+    fn arraySliceRegion(
         self: *Interpreter,
         handle: *Handle,
         node: Ast.Node.Index,
-    ) Error!?MutableArraySliceRegion {
+        require_mutable: bool,
+    ) Error!?ArraySliceRegion {
         const tree = &handle.tree;
         const slice = tree.fullSlice(node) orelse return null;
         if (slice.ast.sentinel.unwrap() != null) return null;
-        const reference = try self.referenceForNode(handle, slice.ast.sliced) orelse return null;
-        const current = try self.readReference(reference) orelse return null;
+        const operand = try self.captureOperand(handle, slice.ast.sliced, 0) orelse return null;
+        const target = operand.target orelse self.captureTargetOrTemporary(handle, slice.ast.sliced, operand) orelse return null;
+        if (require_mutable and target != .reference) return null;
+        const current = try self.captureAggregateValue(operand.value);
         const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
         if (info.len > self.budget.steps) return null;
         const start = try self.integer(handle, slice.ast.start) orelse return null;
@@ -4321,6 +4357,22 @@ pub const Interpreter = struct {
         else
             info.len;
         if (start > end or end > info.len) return null;
+        return .{
+            .target = target,
+            .array_type = info.array_type,
+            .element_type = info.element_type,
+            .start = start,
+            .end = end,
+        };
+    }
+
+    fn arraySliceRegionItems(self: *Interpreter, region: ArraySliceRegion) Error!?[]const Type {
+        const current = switch (region.target) {
+            .reference => |reference| try self.readReference(reference) orelse return null,
+            .pointee => |pointee| pointee.value,
+        };
+        const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+        if (!info.array_type.eql(region.array_type)) return null;
         const items = try self.mutableElements(current) orelse unknown: {
             const unknown_items = try self.analyser.arena.alloc(Type, info.len);
             for (unknown_items) |*item| {
@@ -4328,14 +4380,25 @@ pub const Interpreter = struct {
             }
             break :unknown unknown_items;
         };
-        if (items.len != info.len) return null;
-        return .{
-            .reference = reference,
-            .array_type = info.array_type,
-            .element_type = info.element_type,
-            .items = items,
-            .start = start,
-            .end = end,
+        return if (items.len == info.len) items else null;
+    }
+
+    fn mutableArraySliceRegion(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?ArraySliceRegion {
+        return self.arraySliceRegion(handle, node, true);
+    }
+
+    fn arraySliceRegionsDisjoint(_: *Interpreter, lhs: ArraySliceRegion, rhs: ArraySliceRegion) ?bool {
+        return switch (lhs.target) {
+            .reference => |lhs_reference| switch (rhs.target) {
+                .reference => |rhs_reference| if (lhs_reference.storage != rhs_reference.storage)
+                    true
+                else if (!lhs_reference.eql(rhs_reference.*))
+                    null
+                else
+                    lhs.end <= rhs.start or rhs.end <= lhs.start,
+                .pointee => |pointee| if (pointee.is_static or pointee.temporary_value != null) true else null,
+            },
+            .pointee => return null,
         };
     }
 
