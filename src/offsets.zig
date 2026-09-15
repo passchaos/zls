@@ -42,9 +42,57 @@ pub const lineSliceUntilPosition = offsets.lineSliceUntilPosition;
 pub const convertPositionEncoding = offsets.convertPositionEncoding;
 pub const convertRangeEncoding = offsets.convertRangeEncoding;
 
-pub const advancePosition = offsets.advancePosition;
+/// Advances an already-known position without rescanning the current line.
+/// Asserts that `position` corresponds to `from_index` and `from_index <= to_index`.
+pub fn advancePosition(
+    text: []const u8,
+    position: Position,
+    from_index: usize,
+    to_index: usize,
+    encoding: Encoding,
+) Position {
+    std.debug.assert(from_index <= to_index);
+    std.debug.assert(to_index <= text.len);
+
+    var line = position.line;
+    var last_line_start: ?usize = null;
+    for (text[from_index..to_index], 0..) |c, offset| {
+        if (c == '\n') {
+            line += 1;
+            last_line_start = from_index + offset + 1;
+        }
+    }
+
+    const character: usize = if (last_line_start) |line_start|
+        countCodeUnits(text[line_start..to_index], encoding)
+    else
+        @as(usize, position.character) + countCodeUnits(text[from_index..to_index], encoding);
+
+    return .{ .line = line, .character = @intCast(character) };
+}
 pub const countCodeUnits = offsets.countCodeUnits;
 pub const getNCodeUnitByteCount = offsets.getNCodeUnitByteCount;
+
+test advancePosition {
+    const text = "a¶↉🠁\r\nxy\n🇺🇸 end";
+
+    inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+        var expected: Position = .{ .line = 0, .character = 0 };
+        var actual: Position = .{ .line = 0, .character = 0 };
+        var previous_index: usize = 0;
+        var index: usize = 0;
+
+        while (index < text.len) {
+            index += std.unicode.utf8ByteSequenceLength(text[index]) catch unreachable;
+            expected = offsets.advancePosition(text, expected, previous_index, index, encoding);
+            actual = advancePosition(text, actual, previous_index, index, encoding);
+            try std.testing.expectEqual(expected, actual);
+            previous_index = index;
+        }
+
+        try std.testing.expectEqual(actual, advancePosition(text, actual, text.len, text.len, encoding));
+    }
+}
 
 pub const SourceIndexToTokenIndexResult = union(enum) {
     /// The source index is inside of whitespace.
