@@ -8415,9 +8415,10 @@ test "generic function with comptime numeric pointer arithmetic" {
 test "generic function with comptime numeric pointer ordering" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
-        \\    const low: [*c]u8 = @ptrFromInt(0x1000);
-        \\    const high: [*c]u8 = @ptrFromInt(0x2000);
-        \\    return if (low < high and low <= high and high > low and high >= low)
+        \\    const low: [*c]u32 = @ptrFromInt(0x1000);
+        \\    const high: [*c]u32 = @ptrFromInt(0x2000);
+        \\    return if (low < high and low <= high and high > low and high >= low and
+        \\        low > 1 and high >= 0x2000 and 0 < low and 0x1000 <= low)
         \\        struct { ordered: T }
         \\    else
         \\        struct { fallback: u8 };

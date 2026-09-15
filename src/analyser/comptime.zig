@@ -248,17 +248,46 @@ pub const Value = struct {
     }
 
     pub fn numericPointerOrder(analyser: *Analyser, lhs: Type, rhs: Type) ?std.math.Order {
-        if (lhs.data != .comptime_value or rhs.data != .comptime_value or
-            lhs.data.comptime_value.data != .numeric_pointer or
-            rhs.data.comptime_value.data != .numeric_pointer) return null;
-        const lhs_type = lhs.typeOf(analyser) catch return null;
-        const rhs_type = rhs.typeOf(analyser) catch return null;
-        const lhs_instance = lhs_type.instanceUnchecked(analyser) catch return null;
-        if (!lhs_type.eql(rhs_type) or lhs_instance.pointerSize(analyser) != .c) return null;
-        return std.math.order(
-            lhs.data.comptime_value.data.numeric_pointer,
-            rhs.data.comptime_value.data.numeric_pointer,
-        );
+        const lhs_address = numericPointerAddress(lhs);
+        const rhs_address = numericPointerAddress(rhs);
+        if (lhs_address != null and rhs_address != null) {
+            const lhs_type = lhs.typeOf(analyser) catch return null;
+            const rhs_type = rhs.typeOf(analyser) catch return null;
+            const lhs_instance = lhs_type.instanceUnchecked(analyser) catch return null;
+            if (!lhs_type.eql(rhs_type) or lhs_instance.pointerSize(analyser) != .c) return null;
+            return std.math.order(lhs_address.?, rhs_address.?);
+        }
+        if (lhs_address) |pointer_address| {
+            if (!isCPointerValue(analyser, lhs)) return null;
+            return std.math.order(pointer_address, integerAddress(analyser, rhs) orelse return null);
+        }
+        if (rhs_address) |pointer_address| {
+            if (!isCPointerValue(analyser, rhs)) return null;
+            return std.math.order(integerAddress(analyser, lhs) orelse return null, pointer_address);
+        }
+        return null;
+    }
+
+    fn numericPointerAddress(value: Type) ?u64 {
+        if (value.data != .comptime_value or value.data.comptime_value.data != .numeric_pointer) return null;
+        return value.data.comptime_value.data.numeric_pointer;
+    }
+
+    fn isCPointerValue(analyser: *Analyser, value: Type) bool {
+        const value_type = value.typeOf(analyser) catch return false;
+        const instance = value_type.instanceUnchecked(analyser) catch return false;
+        return instance.pointerSize(analyser) == .c;
+    }
+
+    fn integerAddress(analyser: *Analyser, value: Type) ?u64 {
+        const index = value.ipIndex() orelse return null;
+        const type_index = analyser.ip.typeOf(index);
+        const tag = analyser.ip.zigTypeTag(type_index) orelse return null;
+        if (tag != .int and tag != .comptime_int) return null;
+        const numeric_address = analyser.ip.toInt(index, u64) orelse return null;
+        const bits = builtin.target.ptrBitWidth();
+        if (bits < 64 and numeric_address >= (@as(u64, 1) << @intCast(bits))) return null;
+        return numeric_address;
     }
 
     fn hasPointerIdentity(value: Type, depth: u8) bool {
