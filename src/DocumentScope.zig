@@ -514,6 +514,17 @@ const ScopeContext = struct {
 };
 
 pub fn init(allocator: std.mem.Allocator, tree: *const Ast) error{OutOfMemory}!DocumentScope {
+    return initWithDeclarationCapacity(allocator, tree, 0);
+}
+
+/// Initializes a document scope with an initial capacity for declarations and
+/// their lookup entries. The capacity is only a hint; both containers grow as
+/// needed.
+pub fn initWithDeclarationCapacity(
+    allocator: std.mem.Allocator,
+    tree: *const Ast,
+    declaration_capacity: usize,
+) error{OutOfMemory}!DocumentScope {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
@@ -525,6 +536,12 @@ pub fn init(allocator: std.mem.Allocator, tree: *const Ast) error{OutOfMemory}!D
         .extra = .empty,
     };
     errdefer document_scope.deinit(allocator);
+    try document_scope.declarations.ensureTotalCapacity(allocator, declaration_capacity);
+    try document_scope.declaration_lookup_map.ensureTotalCapacityContext(
+        allocator,
+        declaration_capacity,
+        .{ .source = tree.source },
+    );
 
     var context: ScopeContext = .{
         .allocator = allocator,
@@ -1486,6 +1503,13 @@ test "DocumentScope.init handles every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
         fn init(allocator: std.mem.Allocator, ast_tree: *const Ast) !void {
             var document_scope = try DocumentScope.init(allocator, ast_tree);
+            defer document_scope.deinit(allocator);
+        }
+    }.init, .{&tree});
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn init(allocator: std.mem.Allocator, ast_tree: *const Ast) !void {
+            var document_scope = try DocumentScope.initWithDeclarationCapacity(allocator, ast_tree, 32);
             defer document_scope.deinit(allocator);
         }
     }.init, .{&tree});

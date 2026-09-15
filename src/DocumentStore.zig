@@ -706,7 +706,18 @@ pub const Handle = struct {
 
     const DocumentStoreContext = struct {
         fn create(handle: *Handle, allocator: std.mem.Allocator) error{OutOfMemory}!DocumentScope {
-            var document_scope: DocumentScope = try .init(allocator, &handle.tree);
+            // Pre-sizing the coupled declaration containers avoids repeated growth
+            // before they are compacted by shrinkToFit below. Keep small ASTs on
+            // the lazy allocation path to avoid adding work for tiny documents.
+            const declaration_capacity = if (handle.tree.nodes.len < 256)
+                0
+            else
+                handle.tree.nodes.len / 24 + 32;
+            var document_scope: DocumentScope = try .initWithDeclarationCapacity(
+                allocator,
+                &handle.tree,
+                declaration_capacity,
+            );
             errdefer document_scope.deinit(allocator);
 
             try document_scope.shrinkToFit(allocator);
