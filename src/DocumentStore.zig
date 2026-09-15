@@ -1143,6 +1143,11 @@ pub fn loadTrigramStores(
 }
 
 fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri.SchemeAndPath) bool {
+    for (filter_uris) |filter_uri| {
+        if (!std.ascii.eqlIgnoreCase(uri.scheme, filter_uri.scheme)) continue;
+        if (std.mem.startsWith(u8, uri.path, filter_uri.path)) break;
+    } else return false;
+
     var component_it = std.Io.Dir.path.componentIterator(uri.path);
     while (component_it.next()) |component| {
         // Keep in sync with `loadDirectoryRecursive`
@@ -1151,11 +1156,7 @@ fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri
         if (std.mem.eql(u8, component.name, "zig-pkg")) return false;
     }
 
-    for (filter_uris) |filter_uri| {
-        if (!std.ascii.eqlIgnoreCase(uri.scheme, filter_uri.scheme)) continue;
-        if (std.mem.startsWith(u8, uri.path, filter_uri.path)) return true;
-    }
-    return false;
+    return true;
 }
 
 test matchesWorkspaceSymbolFilter {
@@ -1179,6 +1180,10 @@ test matchesWorkspaceSymbolFilter {
     for (cases) |case| {
         try std.testing.expectEqual(case[1], matchesWorkspaceSymbolFilter(case[0], &workspaces));
     }
+    try std.testing.expect(!matchesWorkspaceSymbolFilter(
+        .{ .scheme = "file", .path = "/workspace/main.zig" },
+        &.{},
+    ));
 }
 
 const progress_token = "buildProgressToken";
