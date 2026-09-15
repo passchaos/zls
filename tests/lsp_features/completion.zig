@@ -9851,6 +9851,7 @@ test "generic function with comptime sliced memset" {
         \\    var inferred_values = [_]usize{ 1, 2, 3, 4, 5 };
         \\    var full_values: [3]usize = undefined;
         \\    var cast_values: [3]usize = undefined;
+        \\    var cast_pointer_values = [_]usize{ 1, 2, 3, 4 };
         \\    var local_evaluations: usize = 0;
         \\    const local_slice: []usize = local_values[1..end: {
         \\        local_evaluations += 1;
@@ -9875,6 +9876,7 @@ test "generic function with comptime sliced memset" {
         \\    @memset(inferred_slice, 8);
         \\    @memset(full_slice, 6);
         \\    @memset(@as([]usize, &cast_values), @intCast(11));
+        \\    @memset(@as([*]usize, @ptrCast(&cast_pointer_values))[1..3], 12);
         \\    const final = evaluations;
         \\    return struct {
         \\        first: [values[1]]T,
@@ -9887,6 +9889,8 @@ test "generic function with comptime sliced memset" {
         \\        inferred_boundary: [inferred_values[4]]T,
         \\        full_middle: [full_values[1]]T,
         \\        cast_middle: [cast_values[1]]T,
+        \\        cast_pointer_middle: [cast_pointer_values[2]]T,
+        \\        cast_pointer_last: [cast_pointer_values[3]]T,
         \\        local_evaluations: [local_evaluations]T,
         \\        evaluations: [final]u8,
         \\    };
@@ -9904,6 +9908,8 @@ test "generic function with comptime sliced memset" {
         .{ .label = "inferred_boundary", .kind = .Field, .detail = "[5]u16" },
         .{ .label = "full_middle", .kind = .Field, .detail = "[6]u16" },
         .{ .label = "cast_middle", .kind = .Field, .detail = "[11]u16" },
+        .{ .label = "cast_pointer_middle", .kind = .Field, .detail = "[12]u16" },
+        .{ .label = "cast_pointer_last", .kind = .Field, .detail = "[4]u16" },
         .{ .label = "local_evaluations", .kind = .Field, .detail = "[1]u16" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[5]u8" },
     });

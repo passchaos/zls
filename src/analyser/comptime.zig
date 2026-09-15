@@ -4470,6 +4470,14 @@ pub const Interpreter = struct {
         return region;
     }
 
+    fn directArrayPointerCastSlice(tree: *const Ast, node: Ast.Node.Index) bool {
+        const unwrapped = unwrapGroupedSource(tree, node);
+        return switch (tree.nodeTag(unwrapped)) {
+            .slice, .slice_open => directArrayPointerCast(tree, tree.fullSlice(unwrapped).?.ast.sliced) != null,
+            else => false,
+        };
+    }
+
     fn localArraySlice(
         self: *Interpreter,
         handle: *Handle,
@@ -4574,6 +4582,8 @@ pub const Interpreter = struct {
         require_mutable: bool,
     ) Error!?ArraySliceRegion {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
+        if (directArrayPointerCastSlice(&handle.tree, unwrapped))
+            return self.directArrayPointerCastSliceRegion(handle, unwrapped, require_mutable);
         if (handle.tree.nodeTag(unwrapped) == .slice or
             handle.tree.nodeTag(unwrapped) == .slice_open or
             handle.tree.nodeTag(unwrapped) == .slice_sentinel)
