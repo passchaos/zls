@@ -39,6 +39,7 @@ pub const Declaration = struct {
 
     /// Either `.identifier` or `.string_literal`.
     name: Ast.TokenIndex,
+    name_len: u32,
     kind: Kind,
 };
 
@@ -451,6 +452,7 @@ fn appendDeclaration(
     }
     try store.declarations.append(allocator, .{
         .name = name_token,
+        .name_len = @intCast(raw_name.len),
         .kind = kind,
     });
 }
@@ -749,9 +751,15 @@ test "declarations and query results stay in source order" {
     defer store.deinit(allocator);
 
     const names = store.declarations.items(.name);
+    const name_lengths = store.declarations.items(.name_len);
     try std.testing.expectEqual(@as(usize, 7), names.len);
     for (names[1..], names[0 .. names.len - 1]) |current, previous| {
         try std.testing.expect(previous < current);
+    }
+    for (names, name_lengths) |name_token, name_len| {
+        const loc = offsets.tokenToLoc(&tree, name_token);
+        try std.testing.expectEqual(loc.end - loc.start, name_len);
+        try std.testing.expectEqual(tree.tokenSlice(name_token).len, name_len);
     }
 
     var declarations: std.ArrayList(Declaration.Index) = .empty;

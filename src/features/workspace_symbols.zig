@@ -42,6 +42,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
 
         const slice = trigram_store.declarations.slice();
         const names = slice.items(.name);
+        const name_lengths = slice.items(.name_len);
         const kinds = slice.items(.kind);
 
         var last_index: usize = 0;
@@ -50,9 +51,11 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         try symbols.ensureUnusedCapacity(arena, declaration_buffer.items.len);
         for (declaration_buffer.items) |declaration| {
             const name_token = names[@intFromEnum(declaration)];
+            const name_len = name_lengths[@intFromEnum(declaration)];
             const kind = kinds[@intFromEnum(declaration)];
 
-            const loc = offsets.tokenToLoc(&handle.tree, name_token);
+            const start = handle.tree.tokenStart(name_token);
+            const loc: offsets.Loc = .{ .start = start, .end = start + name_len };
             const name = @import("document_symbol.zig").tokenNameFromSlice(
                 handle.tree.source[loc.start..loc.end],
                 handle.tree.tokenTag(name_token),
