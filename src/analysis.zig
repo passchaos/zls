@@ -11509,6 +11509,7 @@ pub fn resolveComptimePointerTypeSyntax(
     is_volatile: bool,
     is_allowzero: bool,
     sentinel_value: ?Type,
+    address_space_value: ?Type,
     alignment_value: ?Type,
     elem_type: Type,
 ) error{OutOfMemory}!?Type {
@@ -11525,6 +11526,10 @@ pub fn resolveComptimePointerTypeSyntax(
         if (!std.math.isPowerOfTwo(bytes)) return null;
         break :alignment bytes;
     } else 0;
+    const address_space = if (address_space_value) |value|
+        comptimeEnumValue(std.builtin.AddressSpace, value) orelse return null
+    else
+        .generic;
     return @as(?Type, try Type.createPointerTypeWithFlags(
         analyser,
         .{
@@ -11532,6 +11537,7 @@ pub fn resolveComptimePointerTypeSyntax(
             .is_const = is_const,
             .is_volatile = is_volatile,
             .is_allowzero = is_allowzero,
+            .address_space = address_space,
             .alignment = alignment,
         },
         .{ .bit_offset = 0, .host_size = 0 },

@@ -2069,13 +2069,21 @@ pub const Interpreter = struct {
             .ptr_type_bit_range,
             => {
                 const pointer = ast.fullPtrType(&handle.tree, node).?;
-                if (pointer.ast.addrspace_node.unwrap() != null or
-                    pointer.ast.bit_range_start.unwrap() != null) return self.analyser.resolveTypeOfNode(.of(node, handle));
+                if (pointer.ast.bit_range_start.unwrap() != null) return self.analyser.resolveTypeOfNode(.of(node, handle));
                 const elem_type = try self.eval(handle, pointer.ast.child_type) orelse return null;
                 const sentinel = if (pointer.ast.sentinel.unwrap()) |sentinel_node|
                     try self.evaluateTypedExpression(handle, sentinel_node, elem_type) orelse return null
                 else
                     null;
+                const address_space = if (pointer.ast.addrspace_node.unwrap()) |addrspace_node| address_space: {
+                    const address_space_instance = try self.analyser.instanceStdBuiltinType("AddressSpace") orelse return null;
+                    const address_space_type = try address_space_instance.typeOf(self.analyser);
+                    break :address_space try self.evaluateTypedExpression(
+                        handle,
+                        addrspace_node,
+                        address_space_type,
+                    ) orelse return null;
+                } else null;
                 const alignment = if (pointer.ast.align_node.unwrap()) |align_node| alignment: {
                     const usize_type = Type.fromIP(self.analyser, .type_type, .usize_type);
                     break :alignment try self.evaluateTypedExpression(handle, align_node, usize_type) orelse return null;
@@ -2086,6 +2094,7 @@ pub const Interpreter = struct {
                     pointer.volatile_token != null,
                     pointer.allowzero_token != null,
                     sentinel,
+                    address_space,
                     alignment,
                     elem_type,
                 );
