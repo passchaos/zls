@@ -60,7 +60,43 @@ comptime {
 }
 
 const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
-const PostingListBuilder = std.array_hash_map.Custom(Trigram, std.ArrayList(Declaration.Index), TrigramContext, false);
+const PostingListBuilderValue = struct {
+    first: Declaration.Index,
+    rest: std.ArrayList(Declaration.Index) = .empty,
+
+    fn len(list: PostingListBuilderValue) usize {
+        return 1 + list.rest.items.len;
+    }
+
+    fn last(list: PostingListBuilderValue) Declaration.Index {
+        return list.rest.getLastOrNull() orelse list.first;
+    }
+
+    fn deinit(list: *PostingListBuilderValue, allocator: std.mem.Allocator) void {
+        list.rest.deinit(allocator);
+    }
+};
+const PostingListBuilder = std.array_hash_map.Custom(Trigram, PostingListBuilderValue, TrigramContext, false);
+
+test PostingListBuilderValue {
+    const first: Declaration.Index = @enumFromInt(3);
+    const second: Declaration.Index = @enumFromInt(7);
+    var list: PostingListBuilderValue = .{ .first = first };
+    defer list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), list.len());
+    try std.testing.expectEqual(first, list.last());
+    try std.testing.expectEqual(@as(usize, 0), list.rest.capacity);
+
+    if (list.last() != first) try list.rest.append(std.testing.allocator, first);
+    try std.testing.expectEqual(@as(usize, 1), list.len());
+    try std.testing.expectEqual(@as(usize, 0), list.rest.capacity);
+
+    if (list.last() != second) try list.rest.append(std.testing.allocator, second);
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+    try std.testing.expectEqual(second, list.last());
+    try std.testing.expect(list.rest.capacity >= 1);
+}
 
 const PreparedTrigram = struct {
     value: Trigram,
@@ -271,8 +307,7 @@ pub fn init(
     const lists = posting_lists.values();
     var posting_count: usize = 0;
     for (lists) |list| {
-        assert(list.items.len != 0);
-        posting_count = std.math.add(usize, posting_count, list.items.len) catch return error.OutOfMemory;
+        posting_count = std.math.add(usize, posting_count, list.len()) catch return error.OutOfMemory;
     }
     if (posting_count > std.math.maxInt(u32)) return error.OutOfMemory;
 
@@ -281,12 +316,13 @@ pub fn init(
 
     var posting_start: usize = 0;
     for (posting_lists.keys(), posting_lists.values()) |trigram, list| {
-        @memcpy(store.postings[posting_start..][0..list.items.len], list.items);
+        store.postings[posting_start] = list.first;
+        @memcpy(store.postings[posting_start + 1 ..][0..list.rest.items.len], list.rest.items);
         store.trigram_to_declarations.putAssumeCapacityNoClobber(trigram, .{
             .start = @intCast(posting_start),
-            .len = @intCast(list.items.len),
+            .len = @intCast(list.len()),
         });
-        posting_start += list.items.len;
+        posting_start += list.len();
     }
     assert(posting_start == store.postings.len);
 
@@ -480,10 +516,11 @@ fn appendOneTrigram(
 ) error{OutOfMemory}!void {
     const declaration_index: Declaration.Index = @enumFromInt(store.declarations.len);
 
-    const gop = try posting_lists.getOrPutValue(allocator, trigram, .empty);
-
-    if (gop.value_ptr.getLastOrNull() != declaration_index) {
-        try gop.value_ptr.append(allocator, declaration_index);
+    const gop = try posting_lists.getOrPut(allocator, trigram);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .first = declaration_index };
+    } else if (gop.value_ptr.last() != declaration_index) {
+        try gop.value_ptr.rest.append(allocator, declaration_index);
     }
 }
 
