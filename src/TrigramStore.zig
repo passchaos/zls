@@ -39,7 +39,10 @@ pub const Declaration = struct {
 
     /// Either `.identifier` or `.string_literal`.
     name: Ast.TokenIndex,
-    name_len: u32,
+    name_len: packed struct(u32) {
+        bytes: u31,
+        is_ascii: bool,
+    },
     kind: Kind,
 };
 
@@ -427,6 +430,12 @@ fn appendDeclaration(
             .{ .smart, raw_name },
         else => unreachable,
     };
+    const is_ascii = switch (strategy) {
+        .smart => true,
+        .raw => for (raw_name) |c| {
+            if (!std.ascii.isAscii(c)) break false;
+        } else true,
+    };
 
     switch (strategy) {
         .raw => {
@@ -452,7 +461,10 @@ fn appendDeclaration(
     }
     try store.declarations.append(allocator, .{
         .name = name_token,
-        .name_len = @intCast(raw_name.len),
+        .name_len = .{
+            .bytes = @intCast(raw_name.len),
+            .is_ascii = is_ascii,
+        },
         .kind = kind,
     });
 }
@@ -758,8 +770,10 @@ test "declarations and query results stay in source order" {
     }
     for (names, name_lengths) |name_token, name_len| {
         const loc = offsets.tokenToLoc(&tree, name_token);
-        try std.testing.expectEqual(loc.end - loc.start, name_len);
-        try std.testing.expectEqual(tree.tokenSlice(name_token).len, name_len);
+        const token_slice = tree.tokenSlice(name_token);
+        try std.testing.expectEqual(loc.end - loc.start, name_len.bytes);
+        try std.testing.expectEqual(token_slice.len, name_len.bytes);
+        try std.testing.expectEqual(std.unicode.utf8CountCodepoints(token_slice) catch unreachable == token_slice.len, name_len.is_ascii);
     }
 
     var declarations: std.ArrayList(Declaration.Index) = .empty;

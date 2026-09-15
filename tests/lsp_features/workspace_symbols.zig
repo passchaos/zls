@@ -17,6 +17,7 @@ test "workspace symbols" {
         \\const SalamanderCrab = struct {
         \\    fn salamander_crab() void {}
         \\};
+        \\test "国際化" {}
     , .base_directory = "/animal_shelter/" });
 
     _ = try ctx.addDocument(.{ .source =
@@ -68,6 +69,23 @@ test "workspace symbols" {
     );
     try testDocumentSymbol(&ctx, "monke",
         \\Function evolveToMonke
+    );
+    try testDocumentSymbol(&ctx, "国際",
+        \\Method 国際化
+    );
+
+    const unicode_response = try ctx.server.sendRequestSync(
+        ctx.arena.allocator(),
+        "workspace/symbol",
+        .{ .query = "国際" },
+    ) orelse return error.InvalidResponse;
+    try std.testing.expectEqual(@as(usize, 1), unicode_response.workspace_symbols.len);
+    try std.testing.expectEqualDeep(
+        types.Range{
+            .start = .{ .line = 3, .character = 5 },
+            .end = .{ .line = 3, .character = 10 },
+        },
+        unicode_response.workspace_symbols[0].location.location.range,
     );
 }
 

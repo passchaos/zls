@@ -55,14 +55,17 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
             const kind = kinds[@intFromEnum(declaration)];
 
             const start = handle.tree.tokenStart(name_token);
-            const loc: offsets.Loc = .{ .start = start, .end = start + name_len };
+            const loc: offsets.Loc = .{ .start = start, .end = start + name_len.bytes };
             const name = @import("document_symbol.zig").tokenNameFromSlice(
                 handle.tree.source[loc.start..loc.end],
                 handle.tree.tokenTag(name_token),
             );
 
             const start_position = offsets.advancePosition(handle.tree.source, last_position, last_index, loc.start, server.offset_encoding);
-            const end_position = offsets.advancePosition(handle.tree.source, start_position, loc.start, loc.end, server.offset_encoding);
+            const end_position: offsets.Position = if (server.offset_encoding == .@"utf-8" or name_len.is_ascii)
+                .{ .line = start_position.line, .character = start_position.character + name_len.bytes }
+            else
+                offsets.advancePosition(handle.tree.source, start_position, loc.start, loc.end, server.offset_encoding);
             last_index = loc.end;
             last_position = end_position;
 
