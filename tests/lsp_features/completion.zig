@@ -10063,6 +10063,33 @@ test "generic function with comptime cast many pointer memory copies" {
     });
 }
 
+test "generic function with comptime C pointer memory copies" {
+    try testCompletion(
+        \\const source = [_]usize{ 2, 3, 5 };
+        \\fn Select(comptime T: type) type {
+        \\    var destination = [_]usize{ 0, 0, 0 };
+        \\    var copied_source = [_]usize{ 0, 0, 0 };
+        \\    var moved = [_]usize{ 1, 2, 3, 4 };
+        \\    @memcpy(@as([*c]usize, &destination), source[0..3]);
+        \\    @memcpy(copied_source[0..3], @as([*c]const usize, &source));
+        \\    @memmove(@as([*c]usize, @ptrCast(&moved)), moved[1..4]);
+        \\    return struct {
+        \\        destination_last: [destination[2]]T,
+        \\        source_middle: [copied_source[1]]T,
+        \\        moved_first: [moved[0]]T,
+        \\        moved_last: [moved[3]]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "destination_last", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "source_middle", .kind = .Field, .detail = "[3]u16" },
+        .{ .label = "moved_first", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "moved_last", .kind = .Field, .detail = "[4]u16" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

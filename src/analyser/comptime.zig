@@ -4421,13 +4421,15 @@ pub const Interpreter = struct {
         var as_buffer: [2]Ast.Node.Index = undefined;
         const as_params = tree.builtinCallParams(&as_buffer, unwrapped).?;
         if (as_params.len != 2) return null;
-        const cast_node = unwrapGroupedSource(tree, as_params[1]);
-        if (!ast.isBuiltinCall(tree, cast_node) or
-            !std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(cast_node)), "@ptrCast")) return null;
-        var cast_buffer: [2]Ast.Node.Index = undefined;
-        const cast_params = tree.builtinCallParams(&cast_buffer, cast_node).?;
-        if (cast_params.len != 1) return null;
-        const address_node = unwrapGroupedSource(tree, cast_params[0]);
+        const operand_node = unwrapGroupedSource(tree, as_params[1]);
+        const address_node = if (ast.isBuiltinCall(tree, operand_node) and
+            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(operand_node)), "@ptrCast"))
+        address: {
+            var cast_buffer: [2]Ast.Node.Index = undefined;
+            const cast_params = tree.builtinCallParams(&cast_buffer, operand_node).?;
+            if (cast_params.len != 1) return null;
+            break :address unwrapGroupedSource(tree, cast_params[0]);
+        } else operand_node;
         if (tree.nodeTag(address_node) != .address_of) return null;
         return .{
             .type_node = as_params[0],
@@ -4439,8 +4441,16 @@ pub const Interpreter = struct {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
         return switch (handle.tree.nodeTag(unwrapped)) {
             .slice, .slice_open => true,
-            else => directArraySlicePointer(&handle.tree, unwrapped) != null or
-                directArrayPointerCast(&handle.tree, unwrapped) != null,
+            else => directArrayPointerCastSyntax: {
+                if (directArraySlicePointer(&handle.tree, unwrapped) != null) break :directArrayPointerCastSyntax true;
+                const pointer = directArrayPointerCast(&handle.tree, unwrapped) orelse
+                    break :directArrayPointerCastSyntax false;
+                const pointer_type = ast.fullPtrType(
+                    &handle.tree,
+                    unwrapGroupedSource(&handle.tree, pointer.type_node),
+                ) orelse break :directArrayPointerCastSyntax false;
+                break :directArrayPointerCastSyntax pointer_type.size == .many or pointer_type.size == .c;
+            },
         };
     }
 
@@ -4452,10 +4462,9 @@ pub const Interpreter = struct {
     ) Error!?ArraySliceRegion {
         const pointer_type = try self.eval(handle, pointer.type_node) orelse return null;
         if (!pointer_type.is_type_val or
-            !pointer_type.isManyPointerType(self.analyser) or
-            (require_mutable and pointer_type.isConstSequencePointerType(self.analyser))) return null;
+            (require_mutable and pointer_type.isConstPointerType(self.analyser))) return null;
         const pointer_info = pointer_type.numericPointerArithmeticInfo(self.analyser) orelse return null;
-        if (pointer_info.size != .many) return null;
+        if (pointer_info.size != .many and pointer_info.size != .c) return null;
         const operand = try self.captureOperand(handle, pointer.array_node, 0) orelse return null;
         const target = operand.target orelse self.captureTargetOrTemporary(handle, pointer.array_node, operand) orelse return null;
         if (require_mutable and target != .reference) return null;

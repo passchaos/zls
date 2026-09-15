@@ -15936,6 +15936,11 @@ pub const Type = struct {
         return !info.is_optional and info.pointer.size == .many;
     }
 
+    pub fn isConstPointerType(self: Type, analyser: *Analyser) bool {
+        const info = self.pointerCastInfo(analyser) orelse return false;
+        return !info.is_optional and info.pointer.is_const;
+    }
+
     pub fn isPlainSinglePointerTo(
         self: Type,
         analyser: *Analyser,
