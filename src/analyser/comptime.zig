@@ -4364,27 +4364,36 @@ pub const Interpreter = struct {
         else
             info.len;
         if (start > end or end > info.len) return null;
-        if (slice.ast.sentinel.unwrap()) |sentinel_node| {
-            const sentinel = try self.evaluateTypedExpression(handle, sentinel_node, info.element_type) orelse return null;
-            const refreshed = switch (target) {
-                .reference => |reference| try self.readReference(reference) orelse return null,
-                .pointee => |pointee| pointee.value,
-            };
-            const boundary = try self.analyser.resolveBracketAccessType(refreshed, .{ .single = end }) orelse return null;
-            const equality = try self.analyser.resolveComptimeComparisonValue(
-                .equal_equal,
-                boundary,
-                sentinel,
-            ) orelse return null;
-            if (!(try self.boolValue(equality) orelse return null)) return null;
-        }
-        return .{
+        const region: ArraySliceRegion = .{
             .target = target,
             .array_type = info.array_type,
             .element_type = info.element_type,
             .start = start,
             .end = end,
         };
+        if (!try self.validateArrayRegionSentinel(handle, region, slice.ast.sentinel)) return null;
+        return region;
+    }
+
+    fn validateArrayRegionSentinel(
+        self: *Interpreter,
+        handle: *Handle,
+        region: ArraySliceRegion,
+        sentinel_node: Ast.Node.OptionalIndex,
+    ) Error!bool {
+        const node = sentinel_node.unwrap() orelse return true;
+        const sentinel = try self.evaluateTypedExpression(handle, node, region.element_type) orelse return false;
+        const current = switch (region.target) {
+            .reference => |reference| try self.readReference(reference) orelse return false,
+            .pointee => |pointee| pointee.value,
+        };
+        const boundary = try self.analyser.resolveBracketAccessType(current, .{ .single = region.end }) orelse return false;
+        const equality = try self.analyser.resolveComptimeComparisonValue(
+            .equal_equal,
+            boundary,
+            sentinel,
+        ) orelse return false;
+        return try self.boolValue(equality) orelse false;
     }
 
     fn arraySliceRegionItems(self: *Interpreter, region: ArraySliceRegion) Error!?[]const Type {
@@ -4475,7 +4484,6 @@ pub const Interpreter = struct {
         require_mutable: bool,
     ) Error!?ArraySliceRegion {
         const slice = handle.tree.fullSlice(node) orelse return null;
-        if (slice.ast.sentinel.unwrap() != null) return null;
         const pointer = directArrayPointerCast(&handle.tree, slice.ast.sliced) orelse return null;
         var region = try self.directArrayPointerCastRegion(handle, pointer, require_mutable) orelse return null;
         const start = try self.integer(handle, slice.ast.start) orelse return null;
@@ -4483,13 +4491,14 @@ pub const Interpreter = struct {
         if (start > end or end > region.end) return null;
         region.start = start;
         region.end = end;
+        if (!try self.validateArrayRegionSentinel(handle, region, slice.ast.sentinel)) return null;
         return region;
     }
 
     fn directArrayPointerCastSlice(tree: *const Ast, node: Ast.Node.Index) bool {
         const unwrapped = unwrapGroupedSource(tree, node);
         return switch (tree.nodeTag(unwrapped)) {
-            .slice, .slice_open => directArrayPointerCast(tree, tree.fullSlice(unwrapped).?.ast.sliced) != null,
+            .slice, .slice_open, .slice_sentinel => directArrayPointerCast(tree, tree.fullSlice(unwrapped).?.ast.sliced) != null,
             else => false,
         };
     }

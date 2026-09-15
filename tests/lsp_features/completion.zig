@@ -9875,6 +9875,7 @@ test "generic function with comptime sliced memset" {
         \\    var full_values: [3]usize = undefined;
         \\    var cast_values: [3]usize = undefined;
         \\    var cast_pointer_values = [_]usize{ 1, 2, 3, 4 };
+        \\    var sentinel_cast_values = [_]usize{ 1, 2, 3, 7 };
         \\    var local_evaluations: usize = 0;
         \\    const local_slice: []usize = local_values[1..end: {
         \\        local_evaluations += 1;
@@ -9900,6 +9901,7 @@ test "generic function with comptime sliced memset" {
         \\    @memset(full_slice, 6);
         \\    @memset(@as([]usize, &cast_values), @intCast(11));
         \\    @memset(@as([*]usize, @ptrCast(&cast_pointer_values))[1..3], 12);
+        \\    @memset(@as([*]usize, @ptrCast(&sentinel_cast_values))[1..3 :7], 13);
         \\    const final = evaluations;
         \\    return struct {
         \\        first: [values[1]]T,
@@ -9914,6 +9916,8 @@ test "generic function with comptime sliced memset" {
         \\        cast_middle: [cast_values[1]]T,
         \\        cast_pointer_middle: [cast_pointer_values[2]]T,
         \\        cast_pointer_last: [cast_pointer_values[3]]T,
+        \\        sentinel_cast_middle: [sentinel_cast_values[2]]T,
+        \\        sentinel_cast_boundary: [sentinel_cast_values[3]]T,
         \\        local_evaluations: [local_evaluations]T,
         \\        evaluations: [final]u8,
         \\    };
@@ -9933,6 +9937,8 @@ test "generic function with comptime sliced memset" {
         .{ .label = "cast_middle", .kind = .Field, .detail = "[11]u16" },
         .{ .label = "cast_pointer_middle", .kind = .Field, .detail = "[12]u16" },
         .{ .label = "cast_pointer_last", .kind = .Field, .detail = "[4]u16" },
+        .{ .label = "sentinel_cast_middle", .kind = .Field, .detail = "[13]u16" },
+        .{ .label = "sentinel_cast_boundary", .kind = .Field, .detail = "[7]u16" },
         .{ .label = "local_evaluations", .kind = .Field, .detail = "[1]u16" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[5]u8" },
     });
@@ -10064,11 +10070,16 @@ test "generic function with comptime slice pointer memory copies" {
         \\fn Select(comptime T: type) type {
         \\    var copied_from_pointer = [_]usize{ 0, 0, 0 };
         \\    var copied_to_pointer = [_]usize{ 0, 0, 0, 0 };
+        \\    var copied_with_sentinel = [_]usize{ 0, 0, 0, 0 };
         \\    var separated = [_]usize{ 1, 2, 3, 4 };
         \\    var separated_source = [_]usize{ 1, 2, 3, 4 };
         \\    var moved = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
         \\    @memcpy(copied_from_pointer[0..3], source[1..2].ptr);
         \\    @memcpy(copied_to_pointer[1..2].ptr, source[2..5]);
+        \\    @memcpy(
+        \\        @as([*]usize, @ptrCast(&copied_with_sentinel))[0..3 :0],
+        \\        @as([*]const usize, @ptrCast(&source))[0..3 :7],
+        \\    );
         \\    @memcpy(separated[2..].ptr, separated[0..2]);
         \\    @memcpy(separated_source[0..2], separated_source[2..3].ptr);
         \\    const len: usize = 5;
@@ -10077,6 +10088,8 @@ test "generic function with comptime slice pointer memory copies" {
         \\    return struct {
         \\        source_pointer: [copied_from_pointer[2]]T,
         \\        destination_pointer: [copied_to_pointer[3]]T,
+        \\        cast_sentinel: [copied_with_sentinel[2]]T,
+        \\        cast_boundary: [copied_with_sentinel[3]]T,
         \\        disjoint_pointer: [separated[3]]T,
         \\        disjoint_source_pointer: [separated_source[0]]T,
         \\        moved_first: [moved[2]]T,
@@ -10088,6 +10101,8 @@ test "generic function with comptime slice pointer memory copies" {
     , &.{
         .{ .label = "source_pointer", .kind = .Field, .detail = "[7]u16" },
         .{ .label = "destination_pointer", .kind = .Field, .detail = "[11]u16" },
+        .{ .label = "cast_sentinel", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "cast_boundary", .kind = .Field, .detail = "[0]u16" },
         .{ .label = "disjoint_pointer", .kind = .Field, .detail = "[2]u16" },
         .{ .label = "disjoint_source_pointer", .kind = .Field, .detail = "[3]u16" },
         .{ .label = "moved_first", .kind = .Field, .detail = "[1]u16" },
