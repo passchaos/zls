@@ -4595,24 +4595,30 @@ pub const Interpreter = struct {
             if (try self.stringArrayRegion(handle, node, pointer)) |region| return region;
         if (pointer.data != .comptime_value) return null;
         if (try self.localArraySlice(handle, unwrapped)) |local| {
+            if (try self.localArraySliceRegion(local, pointer, require_mutable)) |region| return region;
             if (!require_mutable) {
-                if (Value.elements(pointer)) |elements| {
-                    const element_type = local.pointer_type.sequencePointerElementType(self.analyser) orelse return null;
-                    const array_type = Type.fromIP(self.analyser, .type_type, try self.analyser.ip.get(.{ .array_type = .{
-                        .len = elements.len,
-                        .child = element_type.ipIndex() orelse return null,
-                    } }));
-                    const current = try Value.create(self.analyser, array_type, .{ .array = elements });
-                    return .{
-                        .target = self.temporaryCaptureTarget(handle, node, current),
-                        .array_type = array_type,
-                        .element_type = element_type,
-                        .start = 0,
-                        .end = elements.len,
-                    };
-                }
+                const tree = &local.handle.tree;
+                if (tree.nodeTag(local.initializer) != .address_of) return null;
+                const operand = unwrapGroupedSource(tree, tree.nodeData(local.initializer).node);
+                var literal_buffer: [2]Ast.Node.Index = undefined;
+                const literal = tree.fullArrayInit(&literal_buffer, operand) orelse return null;
+                if (literal.ast.type_expr != .none) return null;
+                const elements = Value.elements(pointer) orelse return null;
+                const element_type = local.pointer_type.sequencePointerElementType(self.analyser) orelse return null;
+                const array_type = Type.fromIP(self.analyser, .type_type, try self.analyser.ip.get(.{ .array_type = .{
+                    .len = elements.len,
+                    .child = element_type.ipIndex() orelse return null,
+                } }));
+                const current = try Value.create(self.analyser, array_type, .{ .array = elements });
+                return .{
+                    .target = self.temporaryCaptureTarget(handle, node, current),
+                    .array_type = array_type,
+                    .element_type = element_type,
+                    .start = 0,
+                    .end = elements.len,
+                };
             }
-            return self.localArraySliceRegion(local, pointer, require_mutable);
+            return null;
         }
         const pointer_type = pointer.data.comptime_value.ty;
         const pointer_size = (try pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) orelse return null;

@@ -10218,6 +10218,20 @@ test "generic function with comptime sentinel destination copy" {
     });
 }
 
+test "generic function rejects overlapping local slice memcpy" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var values = [_]usize{ 1, 2, 3, 4 };
+        \\    const source: []const usize = values[0..3];
+        \\    const destination: []usize = values[1..4];
+        \\    @memcpy(destination, source);
+        \\    return struct { first: [values[1]]T };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "first", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "generic function with comptime local full slices" {
     try testCompletion(
         \\fn Select(comptime T: type) type {
