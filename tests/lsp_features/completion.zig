@@ -10196,6 +10196,28 @@ test "generic function with comptime sentinel slice memory operations" {
     });
 }
 
+test "generic function with comptime sentinel destination copy" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const source: []const usize = &.{ 2, 3, 5 };
+        \\    var destination_buffer: [3:0]usize = @splat(0);
+        \\    const destination: [:0]usize = &destination_buffer;
+        \\    @memcpy(destination, source);
+        \\    return struct {
+        \\        first: [destination_buffer[0]]T,
+        \\        last: [destination_buffer[2]]T,
+        \\        sentinel: [destination_buffer[3]]T,
+        \\    };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "last", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "sentinel", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
 test "generic function with comptime local full slices" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

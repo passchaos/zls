@@ -4594,8 +4594,26 @@ pub const Interpreter = struct {
         if (!require_mutable)
             if (try self.stringArrayRegion(handle, node, pointer)) |region| return region;
         if (pointer.data != .comptime_value) return null;
-        if (try self.localArraySlice(handle, unwrapped)) |local|
+        if (try self.localArraySlice(handle, unwrapped)) |local| {
+            if (!require_mutable) {
+                if (Value.elements(pointer)) |elements| {
+                    const element_type = local.pointer_type.sequencePointerElementType(self.analyser) orelse return null;
+                    const array_type = Type.fromIP(self.analyser, .type_type, try self.analyser.ip.get(.{ .array_type = .{
+                        .len = elements.len,
+                        .child = element_type.ipIndex() orelse return null,
+                    } }));
+                    const current = try Value.create(self.analyser, array_type, .{ .array = elements });
+                    return .{
+                        .target = self.temporaryCaptureTarget(handle, node, current),
+                        .array_type = array_type,
+                        .element_type = element_type,
+                        .start = 0,
+                        .end = elements.len,
+                    };
+                }
+            }
             return self.localArraySliceRegion(local, pointer, require_mutable);
+        }
         const pointer_type = pointer.data.comptime_value.ty;
         const pointer_size = (try pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) orelse return null;
         if (pointer_size != .one and pointer_size != .slice) return null;
