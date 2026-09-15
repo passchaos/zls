@@ -9202,6 +9202,37 @@ test "generic function with comptime strict float mode" {
     });
 }
 
+test "generic function with comptime memset" {
+    try testCompletion(
+        \\const Holder = struct { values: [2]u8 };
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    var values: [3]usize = undefined;
+        \\    var holder: Holder = .{ .values = .{ 1, 2 } };
+        \\    @memset(&values, fill: {
+        \\        executions += 1;
+        \\        break :fill @as(u8, 4);
+        \\    });
+        \\    @memset(&holder.values, 7);
+        \\    return struct {
+        \\        first: [values[0]]u8,
+        \\        last: [values[2]]u8,
+        \\        nested_first: [holder.values[0]]u8,
+        \\        nested_last: [holder.values[1]]u8,
+        \\        executions: [executions]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "last", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "nested_first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "nested_last", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

@@ -2299,6 +2299,38 @@ pub const Interpreter = struct {
                     if (mode.data != .enum_value or !std.mem.eql(u8, mode.data.enum_value.tag, "strict")) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@memset")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
+                    if (destination.data != .comptime_value or
+                        destination.data.comptime_value.data != .reference) return null;
+                    const reference = destination.data.comptime_value.data.reference;
+                    const current = try self.readReference(reference) orelse return null;
+                    const aggregate_type = try current.typeOf(self.analyser);
+                    const len, const element_type = switch (aggregate_type.data) {
+                        .array => |array| .{
+                            std.math.cast(usize, array.elem_count orelse return null) orelse return null,
+                            array.elem_ty.*,
+                        },
+                        .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
+                            .array_type => |array| .{
+                                std.math.cast(usize, array.len) orelse return null,
+                                Type.fromIP(self.analyser, .type_type, array.child),
+                            },
+                            else => return null,
+                        },
+                        else => return null,
+                    };
+                    if (len > self.budget.steps) return null;
+                    const element = try self.evaluateTypedExpression(handle, params[1], element_type) orelse return null;
+                    const items = try self.analyser.arena.alloc(Type, len);
+                    @memset(items, element);
+                    const updated = try Value.create(self.analyser, aggregate_type, .{ .array = items });
+                    if (!try self.writeReference(handle, reference, updated, null)) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@compileLog")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
