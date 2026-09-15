@@ -2922,6 +2922,47 @@ test "generic function with comptime Fn type constructor" {
     });
 }
 
+test "generic function with nested comptime Fn mutations" {
+    try testCompletion(
+        \\fn Holder(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const F = @Fn(parameters: {
+        \\            order *= 2;
+        \\            break :parameters &.{*T};
+        \\        }, parameter_attributes: {
+        \\            order += 3;
+        \\            break :parameter_attributes &.{.{ .@"noalias" = true }};
+        \\        }, return_type: {
+        \\            order *= 2;
+        \\            break :return_type void;
+        \\        }, attributes: {
+        \\            order += 1;
+        \\            break :attributes .{};
+        \\        });
+        \\    return struct { callback: *const F, order: [order]u8 };
+        \\}
+        \\const holder: Holder(u8) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "*const fn(noalias *u8) void" },
+        .{ .label = "order", .kind = .Field, .detail = "[11]u8" },
+    });
+
+    try testCompletion(
+        \\fn Holder(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    order += 1;
+        \\    const F = @Fn(&.{T}, &.{.{}}, void, .{ .@"callconv" = .c, .varargs = true });
+        \\    return struct { callback: *const F, order: [order]u8 };
+        \\}
+        \\const holder: Holder(u8) = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "*const fn(u8, ...) callconv(.c) void" },
+        .{ .label = "order", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
 test "generic function with comptime std meta ArgsTuple generated function" {
     try testCompletion(
         \\const std = @import("std");

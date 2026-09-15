@@ -5903,7 +5903,7 @@ fn resolveEnumTagFromIntValue(
     return null;
 }
 
-fn tupleFieldCount(analyser: *Analyser, ty: Type) ?usize {
+pub fn tupleFieldCount(analyser: *Analyser, ty: Type) ?usize {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
         .tuple => |fields| fields.len,
@@ -8448,6 +8448,173 @@ fn resolveFnAttributes(
         if (flags.calling_convention != c_tag) return null;
     }
     return flags;
+}
+
+fn callingConventionTagFromValue(
+    analyser: *Analyser,
+    value: Type,
+) Error!?std.builtin.CallingConvention.Tag {
+    const resolved = comptime_eval.Value.deref(value);
+    const name = switch (resolved.data) {
+        .enum_value => |enum_value| enum_value.tag,
+        .ip_index => |payload| name: {
+            const value_index = payload.index orelse return null;
+            const union_value = switch (analyser.ip.indexToKey(value_index)) {
+                .union_value => |union_value| union_value,
+                else => return null,
+            };
+            const union_index = switch (analyser.ip.indexToKey(union_value.ty)) {
+                .union_type => |union_index| union_index,
+                else => return null,
+            };
+            const union_info = analyser.ip.getUnion(union_index);
+            if (union_value.field_index >= union_info.fields.count()) return null;
+            break :name try analyser.ip.string_pool.stringToSliceAlloc(
+                analyser.store.io,
+                analyser.arena,
+                union_info.fields.keys()[union_value.field_index],
+            );
+        },
+        else => return null,
+    };
+    const convention = std.meta.stringToEnum(std.builtin.CallingConvention.Tag, name) orelse return null;
+    if (convention == .auto or convention == .async or convention == .naked or convention == .@"inline") {
+        return convention;
+    }
+    const c_convention: std.builtin.CallingConvention.Tag = builtin.target.cCallingConvention() orelse return null;
+    return if (convention == c_convention) convention else null;
+}
+
+fn comptimeTupleTypeElements(analyser: *Analyser, tuple_type: Type) Error!?[]const Type {
+    return switch (tuple_type.data) {
+        .tuple => |types| types,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .tuple_type => |tuple| types: {
+                const types = try analyser.arena.alloc(Type, tuple.types.len);
+                for (types, 0..) |*parameter_type, index| {
+                    parameter_type.* = Type.fromIP(
+                        analyser,
+                        .type_type,
+                        tuple.types.at(@intCast(index), analyser.ip),
+                    );
+                }
+                break :types types;
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+pub fn comptimeFnParameterAttributesType(
+    analyser: *Analyser,
+    parameter_count: usize,
+) Error!?Type {
+    if (parameter_count > 32) return null;
+    const attributes_instance = try analyser.instanceStdBuiltinType("Type.Fn.Param.Attributes") orelse return null;
+    const attributes_type = try attributes_instance.typeOf(analyser);
+    const array_type = try Type.createArrayType(analyser, parameter_count, .none, attributes_type);
+    return @as(?Type, try Type.createPointerType(analyser, .one, .none, true, array_type));
+}
+
+fn createComptimeFnType(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+    container_type: ?Type,
+    parameter_types: []const Type,
+    noalias_bits: std.StaticBitSet(32),
+    return_type: Type,
+    flags: InternPool.Key.Function.Flags,
+) Error!?Type {
+    if (!return_type.is_type_val) return null;
+    const parameter_indices = try analyser.gpa.alloc(InternPool.Index, parameter_types.len);
+    defer analyser.gpa.free(parameter_indices);
+    const can_intern = for (parameter_types, parameter_indices) |parameter_type, *parameter_index| {
+        if (!parameter_type.is_type_val) return null;
+        parameter_index.* = parameter_type.ipIndex() orelse break false;
+    } else true;
+    if (can_intern) {
+        if (return_type.ipIndex()) |return_type_index| {
+            const function_type = try analyser.ip.get(.{ .function_type = .{
+                .args = try analyser.ip.getIndexSlice(parameter_indices),
+                .args_is_noalias = noalias_bits,
+                .return_type = return_type_index,
+                .flags = flags,
+            } });
+            return Type.fromIP(analyser, .type_type, function_type);
+        }
+    }
+
+    const function_parameters = try analyser.arena.alloc(Type.Data.Parameter, parameter_types.len);
+    for (function_parameters, parameter_types, 0..) |*parameter, parameter_type, index| {
+        parameter.* = .{
+            .doc_comments = null,
+            .modifier = if (noalias_bits.isSet(index)) .noalias_param else null,
+            .name = null,
+            .name_token = null,
+            .type = parameter_type,
+        };
+    }
+    const tree = &node_handle.handle.tree;
+    const enclosing_type = container_type orelse
+        try analyser.innermostContainer(node_handle.handle, tree.tokenStart(tree.nodeMainToken(node_handle.node)));
+    return .{ .data = .{ .function = .{
+        .fn_node = node_handle.node,
+        .fn_token = tree.nodeMainToken(node_handle.node),
+        .handle = node_handle.handle,
+        .container_type = try analyser.allocType(enclosing_type),
+        .doc_comments = null,
+        .name = null,
+        .parameters = function_parameters,
+        .has_varargs = flags.is_var_args,
+        .calling_convention = flags.calling_convention,
+        .return_value = try analyser.allocType(try return_type.instanceUnchecked(analyser)),
+    } }, .is_type_val = true };
+}
+
+pub fn resolveComptimeFnTypeValue(
+    analyser: *Analyser,
+    node_handle: NodeWithHandle,
+    container_type: ?Type,
+    parameter_values: Type,
+    parameter_attributes: Type,
+    return_type: Type,
+    attributes: Type,
+) Error!?Type {
+    const parameter_tuple = try analyser.resolveComptimeTupleTypeValue(parameter_values) orelse return null;
+    const parameter_types = try analyser.comptimeTupleTypeElements(parameter_tuple) orelse return null;
+    if (parameter_types.len > 32) return null;
+    const attribute_values = try comptime_eval.Value.sequenceAlloc(analyser, parameter_attributes) orelse return null;
+    if (!attribute_values.elements_valid or attribute_values.len != parameter_types.len) return null;
+    const attribute_items = attribute_values.backing[attribute_values.offset..][0..attribute_values.len];
+    var noalias_bits: std.StaticBitSet(32) = .empty;
+    for (attribute_items, 0..) |parameter_attribute, index| {
+        const noalias_value = try analyser.resolveFieldAccess(parameter_attribute, "noalias") orelse return null;
+        const is_noalias = comptimeBoolValue(noalias_value) orelse return null;
+        noalias_bits.setValue(index, is_noalias);
+    }
+
+    const calling_convention = if (comptime_eval.Value.field(attributes, "callconv")) |callconv_value| blk: {
+        const resolved = comptime_eval.Value.deref(callconv_value);
+        if (resolved.data == .ip_index and resolved.data.ip_index.index == null) break :blk .auto;
+        break :blk try analyser.callingConventionTagFromValue(resolved) orelse return null;
+    } else .auto;
+    const is_var_args = if (comptime_eval.Value.field(attributes, "varargs")) |varargs_value|
+        comptimeBoolValue(varargs_value) orelse return null
+    else
+        false;
+    if (is_var_args) {
+        const c_convention: std.builtin.CallingConvention.Tag = builtin.target.cCallingConvention() orelse return null;
+        if (calling_convention != c_convention) return null;
+    }
+    return analyser.createComptimeFnType(
+        node_handle,
+        container_type,
+        parameter_types,
+        noalias_bits,
+        return_type,
+        .{ .calling_convention = calling_convention, .is_var_args = is_var_args },
+    );
 }
 
 fn floatReduceValue(
@@ -13163,24 +13330,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .node_handle = .of(params[0], handle),
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
-                    const parameter_types: []const Type = switch (parameter_tuple.data) {
-                        .tuple => |types| types,
-                        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return .unknown_type)) {
-                            .tuple_type => |tuple| types: {
-                                const types = try analyser.arena.alloc(Type, tuple.types.len);
-                                for (types, 0..) |*parameter_type, index| {
-                                    parameter_type.* = Type.fromIP(
-                                        analyser,
-                                        .type_type,
-                                        tuple.types.at(@intCast(index), analyser.ip),
-                                    );
-                                }
-                                break :types types;
-                            },
-                            else => return .unknown_type,
-                        },
-                        else => return .unknown_type,
-                    };
+                    const parameter_types = try analyser.comptimeTupleTypeElements(parameter_tuple) orelse return .unknown_type;
                     const noalias_bits = try analyser.resolveFnParameterAttributes(.{
                         .node_handle = .of(params[1], handle),
                         .container_type = options.container_type,
@@ -13195,47 +13345,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         .container_type = options.container_type,
                     }) orelse return .unknown_type;
 
-                    const parameter_indices = try analyser.gpa.alloc(InternPool.Index, parameter_types.len);
-                    defer analyser.gpa.free(parameter_indices);
-                    const can_intern = for (parameter_types, parameter_indices) |parameter_type, *parameter_index| {
-                        parameter_index.* = parameter_type.ipIndex() orelse break false;
-                    } else true;
-                    if (can_intern) {
-                        if (return_type.ipIndex()) |return_type_index| {
-                            const function_type = try analyser.ip.get(.{ .function_type = .{
-                                .args = try analyser.ip.getIndexSlice(parameter_indices),
-                                .args_is_noalias = noalias_bits,
-                                .return_type = return_type_index,
-                                .flags = flags,
-                            } });
-                            return Type.fromIP(analyser, .type_type, function_type);
-                        }
-                    }
-
-                    const function_parameters = try analyser.arena.alloc(Type.Data.Parameter, parameter_types.len);
-                    for (function_parameters, parameter_types, 0..) |*parameter, parameter_type, index| {
-                        parameter.* = .{
-                            .doc_comments = null,
-                            .modifier = if (noalias_bits.isSet(index)) .noalias_param else null,
-                            .name = null,
-                            .name_token = null,
-                            .type = parameter_type,
-                        };
-                    }
-                    const enclosing_type = options.container_type orelse
-                        try analyser.innermostContainer(handle, tree.tokenStart(tree.nodeMainToken(node)));
-                    return .{ .data = .{ .function = .{
-                        .fn_node = node,
-                        .fn_token = tree.nodeMainToken(node),
-                        .handle = handle,
-                        .container_type = try analyser.allocType(enclosing_type),
-                        .doc_comments = null,
-                        .name = null,
-                        .parameters = function_parameters,
-                        .has_varargs = flags.is_var_args,
-                        .calling_convention = flags.calling_convention,
-                        .return_value = try analyser.allocType(try return_type.instanceUnchecked(analyser)),
-                    } }, .is_type_val = true };
+                    return try analyser.createComptimeFnType(
+                        node_handle,
+                        options.container_type,
+                        parameter_types,
+                        noalias_bits,
+                        return_type,
+                        flags,
+                    ) orelse .unknown_type;
                 },
                 .Struct, .Union, .Enum => |tag| {
                     if (analyser.cachedGeneratedContainerType(options)) |generated_type| return generated_type;

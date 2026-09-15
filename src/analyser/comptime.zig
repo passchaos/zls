@@ -2378,6 +2378,34 @@ pub const Interpreter = struct {
                     const sentinel = try self.eval(handle, params[3]) orelse return null;
                     return self.analyser.resolveComptimePointerTypeValue(size, attributes, child, sentinel);
                 }
+                if (std.mem.eql(u8, name, "@Fn")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 4) return null;
+                    const parameter_values = try self.eval(handle, params[0]) orelse return null;
+                    const parameter_tuple = try self.analyser.resolveComptimeTupleTypeValue(parameter_values) orelse return null;
+                    const parameter_count = self.analyser.tupleFieldCount(parameter_tuple) orelse return null;
+                    const parameter_attributes_type = try self.analyser.comptimeFnParameterAttributesType(parameter_count) orelse return null;
+                    const parameter_attributes = try self.evaluateTypedExpression(
+                        handle,
+                        params[1],
+                        parameter_attributes_type,
+                    ) orelse return null;
+                    const return_type = try self.eval(handle, params[2]) orelse return null;
+                    const attributes_instance = try self.analyser.instanceStdBuiltinType("Type.Fn.Attributes") orelse return null;
+                    const attributes_type = try attributes_instance.typeOf(self.analyser);
+                    const attributes = try self.evaluateTypedExpression(handle, params[3], attributes_type) orelse return null;
+                    if (try self.analyser.resolveComptimeFnTypeValue(
+                        .of(node, handle),
+                        self.container_type,
+                        parameter_values,
+                        parameter_attributes,
+                        return_type,
+                        attributes,
+                    )) |function_type| return function_type;
+                    for (params) |param| if (nodeNeedsEvaluation(&handle.tree, param, 0)) return null;
+                    return self.analyser.resolveTypeOfNode(.of(node, handle));
+                }
                 if (std.mem.eql(u8, name, "@Tuple")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
