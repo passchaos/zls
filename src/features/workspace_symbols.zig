@@ -26,12 +26,18 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
 
     var symbols: std.ArrayList(types.workspace.Symbol) = .empty;
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
+    var prepared_query: ?TrigramStore.Query = if (handles.len > 1) try .init(arena, request.query) else null;
+    defer if (prepared_query) |*query| query.deinit(arena);
 
     for (handles) |handle| {
         const trigram_store = handle.trigram_store.getCached();
 
         declaration_buffer.clearRetainingCapacity();
-        try trigram_store.declarationsForQuery(arena, request.query, &declaration_buffer);
+        if (prepared_query) |*query| {
+            try trigram_store.declarationsForPreparedQuery(arena, query, &declaration_buffer);
+        } else {
+            try trigram_store.declarationsForQuery(arena, request.query, &declaration_buffer);
+        }
 
         const slice = trigram_store.declarations.slice();
         const names = slice.items(.name);

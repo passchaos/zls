@@ -57,6 +57,70 @@ comptime {
 
 const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
 const PostingListBuilder = std.array_hash_map.Custom(Trigram, std.ArrayList(Declaration.Index), TrigramContext, false);
+
+const PreparedTrigram = struct {
+    value: Trigram,
+    map_hash: u32,
+};
+
+const PreparedTrigramContext = struct {
+    pub fn hash(_: PreparedTrigramContext, trigram: PreparedTrigram) u32 {
+        return trigram.map_hash;
+    }
+
+    pub fn eql(_: PreparedTrigramContext, a: PreparedTrigram, b: Trigram, _: usize) bool {
+        return TrigramContext.toInt(a.value) == TrigramContext.toInt(b);
+    }
+};
+
+/// A normalized, pre-hashed workspace-symbol query that can be reused across
+/// multiple stores. Queries of up to 18 non-underscore characters stay inline.
+pub const Query = struct {
+    const inline_capacity = 16;
+
+    inline_trigrams: [inline_capacity]PreparedTrigram = undefined,
+    heap_trigrams: ?[]PreparedTrigram = null,
+    len: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator, text: []const u8) error{OutOfMemory}!Query {
+        assert(text.len != 0);
+
+        var query: Query = .{};
+        errdefer query.deinit(allocator);
+        var iterator: TrigramIterator = .init(text);
+        while (iterator.next()) |trigram| {
+            if (query.len == inline_capacity) {
+                const heap_trigrams = try allocator.alloc(PreparedTrigram, text.len);
+                @memcpy(heap_trigrams[0..query.len], &query.inline_trigrams);
+                query.heap_trigrams = heap_trigrams;
+            }
+
+            const prepared: PreparedTrigram = .{
+                .value = trigram,
+                .map_hash = TrigramContext.hash(.{}, trigram),
+            };
+            if (query.heap_trigrams) |heap_trigrams| {
+                heap_trigrams[query.len] = prepared;
+            } else {
+                query.inline_trigrams[query.len] = prepared;
+            }
+            query.len += 1;
+        }
+
+        return query;
+    }
+
+    pub fn deinit(query: *Query, allocator: std.mem.Allocator) void {
+        if (query.heap_trigrams) |items| allocator.free(items);
+        query.* = undefined;
+    }
+
+    fn trigrams(query: *const Query) []const PreparedTrigram {
+        if (query.heap_trigrams) |items| return items[0..query.len];
+        return query.inline_trigrams[0..query.len];
+    }
+};
+
 /// A filter pass scans the query before the exact lookup pass. Benchmarks
 /// against ZLS and Zig standard-library sources put the break-even point at a
 /// first posting list of roughly this size.
@@ -303,6 +367,47 @@ pub fn declarationsForQuery(
     }
 }
 
+/// Asserts `declaration_buffer.items.len == 0`.
+pub fn declarationsForPreparedQuery(
+    store: *const TrigramStore,
+    allocator: std.mem.Allocator,
+    query: *const Query,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+) error{OutOfMemory}!void {
+    assert(declaration_buffer.items.len == 0);
+
+    const trigrams = query.trigrams();
+    if (trigrams.len == 0) return;
+
+    const first = (store.trigram_to_declarations.getAdapted(trigrams[0], PreparedTrigramContext{}) orelse return).slice(store.postings);
+
+    if (first.len >= filter_min_posting_len) {
+        if (store.filter_buckets) |buckets| {
+            const filter: CuckooFilter = .{ .buckets = buckets };
+            for (trigrams[1..]) |trigram| {
+                if (!filter.contains(trigram.value)) return;
+            }
+        }
+    }
+
+    try declaration_buffer.resize(allocator, first.len);
+
+    var len = first.len;
+    @memcpy(declaration_buffer.items[0..len], first);
+
+    for (trigrams[1..]) |trigram| {
+        len = mergeIntersection(
+            (store.trigram_to_declarations.getAdapted(trigram, PreparedTrigramContext{}) orelse {
+                declaration_buffer.clearRetainingCapacity();
+                return;
+            }).slice(store.postings),
+            declaration_buffer.items[0..len],
+        );
+        declaration_buffer.shrinkRetainingCapacity(len);
+        if (len == 0) break;
+    }
+}
+
 fn appendDeclaration(
     store: *TrigramStore,
     posting_lists: *PostingListBuilder,
@@ -479,6 +584,54 @@ test TrigramIterator {
     });
 }
 
+test Query {
+    const allocator = std.testing.allocator;
+
+    {
+        var query = try Query.init(allocator, "_Ab_cAb_");
+        defer query.deinit(allocator);
+
+        const expected = [_]Trigram{ "abc".*, "bca".*, "cab".* };
+        try std.testing.expect(query.heap_trigrams == null);
+        try std.testing.expectEqual(expected.len, query.trigrams().len);
+        for (query.trigrams(), expected) |actual, value| {
+            try std.testing.expectEqual(value, actual.value);
+            try std.testing.expectEqual(TrigramContext.hash(.{}, value), actual.map_hash);
+        }
+    }
+
+    {
+        var query = try Query.init(allocator, "abcdefghijklmnopqr");
+        defer query.deinit(allocator);
+
+        try std.testing.expect(query.heap_trigrams == null);
+        try std.testing.expectEqual(Query.inline_capacity, query.trigrams().len);
+    }
+
+    {
+        const text = "abcdefghijklmnopqrs";
+        var query = try Query.init(allocator, text);
+        defer query.deinit(allocator);
+
+        try std.testing.expect(query.heap_trigrams != null);
+        try std.testing.expectEqual(Query.inline_capacity + 1, query.trigrams().len);
+
+        try std.testing.checkAllAllocationFailures(allocator, struct {
+            fn init(allocator_: std.mem.Allocator, text_: []const u8) !void {
+                var result = try Query.init(allocator_, text_);
+                defer result.deinit(allocator_);
+            }
+        }.init, .{text});
+    }
+
+    {
+        var query = try Query.init(allocator, "___");
+        defer query.deinit(allocator);
+
+        try std.testing.expectEqual(@as(usize, 0), query.trigrams().len);
+    }
+}
+
 test TrigramContext {
     const context: TrigramContext = .{};
     try std.testing.expectEqual(@as(u32, 0x00636261), TrigramContext.toInt("abc".*));
@@ -620,6 +773,39 @@ test "declarations and query results stay in source order" {
         posting_end += posting_slice.len;
     }
     try std.testing.expectEqual(store.postings.len, posting_end);
+}
+
+test "prepared queries match string queries" {
+    const allocator = std.testing.allocator;
+    const source: [:0]const u8 =
+        \\const AlphaBeta = 1;
+        \\const alpha_gamma = 2;
+        \\const @"alpha delta" = 3;
+        \\const repeating_aaaaaaaaaaaaaaaaaaaa = 4;
+    ;
+    const queries = [_][]const u8{ "a", "ALPHA", "alpha_beta", "alpha delta", "aaaaaaaaaaaaaaaaaaaa", "missing", "___" };
+
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+
+    var string_results: std.ArrayList(Declaration.Index) = .empty;
+    defer string_results.deinit(allocator);
+    var prepared_results: std.ArrayList(Declaration.Index) = .empty;
+    defer prepared_results.deinit(allocator);
+
+    for (queries) |text| {
+        try store.declarationsForQuery(allocator, text, &string_results);
+        var query = try Query.init(allocator, text);
+        defer query.deinit(allocator);
+        try store.declarationsForPreparedQuery(allocator, &query, &prepared_results);
+
+        try std.testing.expectEqualSlices(Declaration.Index, string_results.items, prepared_results.items);
+        string_results.clearRetainingCapacity();
+        prepared_results.clearRetainingCapacity();
+    }
 }
 
 test "empty store has no postings" {
