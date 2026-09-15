@@ -9442,6 +9442,24 @@ test "generic function with comptime 128-bit atomics" {
     });
 }
 
+test "generic function with comptime over-aligned atomics" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var value: u32 align(16) = 3;
+        \\    const pointer: *align(16) u32 = @alignCast(&value);
+        \\    @atomicStore(u32, pointer, 5, .release);
+        \\    const old = @atomicRmw(u32, pointer, .Add, 2, .seq_cst);
+        \\    const final = @atomicLoad(u32, pointer, .acquire);
+        \\    return struct { old: [old]T, final: [final]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "old", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "final", .kind = .Field, .detail = "[7]u16" },
+    });
+}
+
 test "generic function with comptime float atomic operations" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

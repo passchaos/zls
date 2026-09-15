@@ -15905,18 +15905,25 @@ pub const Type = struct {
         return !info.is_optional and info.pointer.size == .many;
     }
 
-    pub fn isPlainSinglePointerTo(self: Type, analyser: *Analyser, child: Type, require_mutable: bool) bool {
+    pub fn isPlainSinglePointerTo(
+        self: Type,
+        analyser: *Analyser,
+        child: Type,
+        require_mutable: bool,
+    ) Error!bool {
         const info = self.typePointerInfo(analyser) orelse return false;
-        return info.size == .one and
-            (!require_mutable or !info.is_const) and
-            !info.is_volatile and
-            !info.is_allowzero and
-            info.address_space == .generic and
-            info.alignment == 0 and
-            info.packed_offset.bit_offset == 0 and
-            info.packed_offset.host_size == 0 and
-            info.sentinel == .none and
-            info.elem_ty.eql(child);
+        if (info.size != .one or
+            (require_mutable and info.is_const) or
+            info.is_volatile or
+            info.is_allowzero or
+            info.address_space != .generic or
+            info.packed_offset.bit_offset != 0 or
+            info.packed_offset.host_size != 0 or
+            info.sentinel != .none or
+            !info.elem_ty.eql(child)) return false;
+        if (info.alignment == 0) return true;
+        const natural_alignment = try analyser.resolveTypeAlignment(child) orelse return false;
+        return info.alignment >= natural_alignment;
     }
 
     pub fn isAtomicSinglePointerValueType(self: Type, analyser: *Analyser) bool {

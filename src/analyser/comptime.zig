@@ -2333,7 +2333,7 @@ pub const Interpreter = struct {
                     const element_type = try self.eval(handle, params[0]) orelse return null;
                     if (!try self.supportsAtomicValue(element_type, true, true)) return null;
                     const pointer = try self.evalAtomicPointer(handle, params[1]) orelse return null;
-                    if (!(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                    if (!try (try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                         self.analyser,
                         element_type,
                         false,
@@ -2364,7 +2364,7 @@ pub const Interpreter = struct {
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
-                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                        !try (try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                             self.analyser,
                             element_type,
                             true,
@@ -2393,7 +2393,7 @@ pub const Interpreter = struct {
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
-                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                        !try (try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                             self.analyser,
                             element_type,
                             true,
@@ -2421,7 +2421,7 @@ pub const Interpreter = struct {
                     const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
                     if (pointer.data != .comptime_value or
                         pointer.data.comptime_value.data != .reference or
-                        !(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
+                        !try (try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                             self.analyser,
                             element_type,
                             true,
