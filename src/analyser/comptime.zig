@@ -717,6 +717,36 @@ pub const Interpreter = struct {
         return interpreter.callValue(handle, node);
     }
 
+    pub fn evaluateValue(analyser: *Analyser, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        if (analyser.comptime_interpreter) |interpreter|
+            return interpreter.evaluateExpression(handle, node);
+        var budget: Budget = .{};
+        var interpreter: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = &budget,
+        };
+        if (!interpreter.enterExpression()) return null;
+        defer interpreter.leaveExpression();
+        const old_bindings = analyser.generic_bindings;
+        const old_values = analyser.evaluate_comptime_values;
+        const old_numbers = analyser.resolve_number_literal_values;
+        const old_flow = analyser.evaluate_comptime_control_flow;
+        analyser.comptime_interpreter = &interpreter;
+        analyser.generic_bindings = &interpreter.bindings;
+        analyser.evaluate_comptime_values = true;
+        analyser.resolve_number_literal_values = true;
+        analyser.evaluate_comptime_control_flow = true;
+        defer {
+            analyser.comptime_interpreter = null;
+            analyser.generic_bindings = old_bindings;
+            analyser.evaluate_comptime_values = old_values;
+            analyser.resolve_number_literal_values = old_numbers;
+            analyser.evaluate_comptime_control_flow = old_flow;
+        }
+        return interpreter.evaluateExpression(handle, node);
+    }
+
     pub fn evaluateTyped(
         analyser: *Analyser,
         handle: *Handle,
@@ -2140,6 +2170,28 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 0) return null;
                     return self.analyser.resolveComptimeSourceLocationValue(handle, node);
+                }
+                if (std.mem.eql(u8, name, "@call")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 3) return null;
+                    const modifier = try self.callModifier(handle, params[0]) orelse return null;
+                    switch (modifier) {
+                        .auto, .no_suspend, .always_tail, .always_inline, .compile_time => {},
+                        .never_tail, .never_inline => return null,
+                    }
+                    const callable = try self.eval(handle, params[1]) orelse return null;
+                    const arguments = try self.callArgumentValues(
+                        handle,
+                        params[2],
+                        try self.eval(handle, params[2]) orelse return null,
+                    ) orelse
+                        return null;
+                    return switch (try self.invokeFunction(handle, callable, .{ .values = arguments })) {
+                        .next => Type.fromIP(self.analyser, .void_type, .void_value),
+                        .returned => |result| result.value,
+                        else => null,
+                    };
                 }
                 if (std.mem.eql(u8, name, "@min") or std.mem.eql(u8, name, "@max")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -4656,14 +4708,61 @@ pub const Interpreter = struct {
         }
     }
 
+    const CallArguments = union(enum) {
+        nodes: []const Ast.Node.Index,
+        values: []const Type,
+
+        fn len(arguments: CallArguments) usize {
+            return switch (arguments) {
+                inline else => |items| items.len,
+            };
+        }
+    };
+
+    fn callModifier(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?std.builtin.CallModifier {
+        const modifier = try self.analyser.instanceStdBuiltinType("CallModifier") orelse return null;
+        const modifier_type = try modifier.typeOf(self.analyser);
+        const value = try self.evaluateTypedExpression(handle, node, modifier_type) orelse return null;
+        if (value.data != .enum_value) return null;
+        return std.meta.stringToEnum(std.builtin.CallModifier, value.data.enum_value.tag);
+    }
+
+    fn callArgumentValues(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        value: Type,
+    ) Error!?[]const Type {
+        var buffer: [2]Ast.Node.Index = undefined;
+        if (handle.tree.fullStructInit(&buffer, unwrapGroupedSource(&handle.tree, node))) |literal| {
+            if (literal.ast.type_expr == .none and literal.ast.fields.len == 0) return &.{};
+        }
+        if (value.ipIndex() == .empty_aggregate) return &.{};
+        if (!(try value.typeOf(self.analyser)).isTupleType(self.analyser)) return null;
+        return self.mutableElements(value);
+    }
+
     fn invoke(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
-        const analyser = self.analyser;
         var buffer: [1]Ast.Node.Index = undefined;
         const call_node = handle.tree.fullCall(&buffer, node).?;
         const callable = try self.eval(handle, call_node.ast.fn_expr) orelse return .unknown;
+        return self.invokeFunction(handle, callable, .{ .nodes = call_node.ast.params });
+    }
+
+    fn invokeFunction(
+        self: *Interpreter,
+        handle: *Handle,
+        callable: Type,
+        arguments: CallArguments,
+    ) Error!Flow {
+        const analyser = self.analyser;
         const function = try analyser.resolveFuncProtoOfCallable(callable) orelse return .unknown;
         const info = function.data.function;
-        if (info.parameters.len != call_node.ast.params.len or info.handle.tree.nodeTag(info.fn_node) != .fn_decl) return .unknown;
+        if (info.parameters.len != arguments.len() or info.handle.tree.nodeTag(info.fn_node) != .fn_decl) return .unknown;
         var fn_buffer: [1]Ast.Node.Index = undefined;
         const fn_proto = info.handle.tree.fullFnProto(&fn_buffer, info.fn_node).?;
         var child: Interpreter = .{
@@ -4686,20 +4785,33 @@ pub const Interpreter = struct {
                 try child.bindings.put(analyser.arena, token_handle, value);
             }
         }
-        for (info.parameters, call_node.ast.params) |parameter, argument| {
+        for (info.parameters, 0..) |parameter, index| {
             const parameter_type = try analyser.resolveGenericType(parameter.type, child.bindings);
-            const value = if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val)
-                try self.eval(handle, argument) orelse return .unknown
-            else value: {
-                const evaluated = try self.evalTypedSource(handle, argument, parameter_type) orelse return .unknown;
-                break :value try self.coerceFromSource(
-                    handle,
-                    parameter_type,
-                    evaluated.value,
-                    evaluated.source_node,
-                    null,
-                    self.optionalPayloadType(parameter_type) != null,
-                ) orelse return .unknown;
+            const value = switch (arguments) {
+                .nodes => |nodes| if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val)
+                    try self.eval(handle, nodes[index]) orelse return .unknown
+                else value: {
+                    const evaluated = try self.evalTypedSource(handle, nodes[index], parameter_type) orelse return .unknown;
+                    break :value try self.coerceFromSource(
+                        handle,
+                        parameter_type,
+                        evaluated.value,
+                        evaluated.source_node,
+                        null,
+                        self.optionalPayloadType(parameter_type) != null,
+                    ) orelse return .unknown;
+                },
+                .values => |values| if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val)
+                    values[index]
+                else
+                    try self.coerceFromSource(
+                        handle,
+                        parameter_type,
+                        values[index],
+                        null,
+                        null,
+                        self.optionalPayloadType(parameter_type) != null,
+                    ) orelse return .unknown,
             };
             try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {

@@ -12740,6 +12740,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                     return analyser.resolveLangrefType(version_data.builtins.get(call_name).?.return_type);
                 },
+                .call => {
+                    if (params.len != 3) return null;
+                    if (analyser.comptime_interpreter == null) {
+                        if (try comptime_eval.Interpreter.evaluateValue(analyser, handle, node)) |value| return value;
+                    }
+                    return null;
+                },
                 .min, .max => |tag| {
                     if (params.len < 2) return null;
                     const resolved = try analyser.arena.alloc(Type, params.len);

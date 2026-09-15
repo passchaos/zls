@@ -629,6 +629,21 @@ test "generic function with comptime string length" {
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
     });
+
+    try testCompletion(
+        \\fn increment(value: *usize) void {
+        \\    value.* += 1;
+        \\}
+        \\fn Select() type {
+        \\    var value: usize = 2;
+        \\    @call(.no_suspend, increment, .{&value});
+        \\    return struct { items: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
+    });
 }
 
 test "generic function with comptime anytype value parameter" {
@@ -9405,6 +9420,52 @@ test "generic function with comptime nested calls" {
         \\const items = vector.inner.<cursor>
     , &.{
         .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
+    });
+}
+
+test "generic function with comptime call builtin" {
+    try testCompletion(
+        \\fn combine(a: usize, b: usize) usize { return a * 10 + b; }
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const arguments = .{ @as(usize, 4), @as(usize, 7) };
+        \\    const stored = @call(.compile_time, combine, arguments);
+        \\    const literal = @call(.auto, combine, args: {
+        \\        executions += 1;
+        \\        break :args .{ 2, 5 };
+        \\    });
+        \\    return struct { literal: [literal]u8, stored: [stored]u8, executions: [executions]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "literal", .kind = .Field, .detail = "[25]u8" },
+        .{ .label = "stored", .kind = .Field, .detail = "[47]u8" },
+        .{ .label = "executions", .kind = .Field, .detail = "[1]u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer(comptime T: type, comptime N: usize) type {
+        \\    return struct { items: [N]T };
+        \\}
+        \\const buffer: @call(.always_inline, Buffer, .{ u16, 4 }) = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u16" },
+    });
+
+    try testCompletion(
+        \\fn Empty() usize {
+        \\    return 3;
+        \\}
+        \\fn Select() type {
+        \\    const value = @call(.always_tail, Empty, .{});
+        \\    return struct { items: [value]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[3]u8" },
     });
 }
 
