@@ -8962,6 +8962,18 @@ fn resolveComparisonValue(
     lhs: Type,
     rhs: Type,
 ) ?Type {
+    if (comptime_eval.Value.numericPointerOrder(analyser, lhs, rhs)) |order| {
+        const result = switch (tag) {
+            .equal_equal => order == .eq,
+            .bang_equal => order != .eq,
+            .less_than => order == .lt,
+            .greater_than => order == .gt,
+            .less_or_equal => order != .gt,
+            .greater_or_equal => order != .lt,
+            else => return null,
+        };
+        return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
+    }
     if (analyser.resolveIntegerBoundaryComparison(tag, lhs, rhs)) |value| {
         return Type.fromIP(analyser, .bool_type, if (value) .bool_true else .bool_false);
     }

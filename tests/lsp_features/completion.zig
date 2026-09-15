@@ -8412,6 +8412,23 @@ test "generic function with comptime numeric pointer arithmetic" {
     });
 }
 
+test "generic function with comptime numeric pointer ordering" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const low: [*c]u8 = @ptrFromInt(0x1000);
+        \\    const high: [*c]u8 = @ptrFromInt(0x2000);
+        \\    return if (low < high and low <= high and high > low and high >= low)
+        \\        struct { ordered: T }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "ordered", .kind = .Field, .detail = "u16" },
+    });
+}
+
 test "generic function with comptime unknown bit builtin types" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

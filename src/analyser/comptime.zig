@@ -247,6 +247,20 @@ pub const Value = struct {
         return pointerIdentityEqlDepth(analyser, lhs, rhs, 0);
     }
 
+    pub fn numericPointerOrder(analyser: *Analyser, lhs: Type, rhs: Type) ?std.math.Order {
+        if (lhs.data != .comptime_value or rhs.data != .comptime_value or
+            lhs.data.comptime_value.data != .numeric_pointer or
+            rhs.data.comptime_value.data != .numeric_pointer) return null;
+        const lhs_type = lhs.typeOf(analyser) catch return null;
+        const rhs_type = rhs.typeOf(analyser) catch return null;
+        const lhs_instance = lhs_type.instanceUnchecked(analyser) catch return null;
+        if (!lhs_type.eql(rhs_type) or lhs_instance.pointerSize(analyser) != .c) return null;
+        return std.math.order(
+            lhs.data.comptime_value.data.numeric_pointer,
+            rhs.data.comptime_value.data.numeric_pointer,
+        );
+    }
+
     fn hasPointerIdentity(value: Type, depth: u8) bool {
         if (depth == 128 or value.data != .comptime_value) return false;
         return switch (value.data.comptime_value.data) {
