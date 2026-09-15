@@ -31,13 +31,10 @@ pub const DeclarationLookup = struct {
 };
 
 pub const DeclarationLookupContext = struct {
-    pub fn hash(self: @This(), s: DeclarationLookup) u32 {
-        _ = self;
-        var hasher: std.hash.Wyhash = .init(0);
-        std.hash.autoHash(&hasher, s.scope);
-        hasher.update(s.name);
-        std.hash.autoHash(&hasher, s.kind);
-        return @truncate(hasher.final());
+    pub fn hash(_: @This(), lookup: DeclarationLookup) u32 {
+        const seed = @as(u64, @intFromEnum(lookup.scope)) |
+            (@as(u64, @intFromEnum(lookup.kind)) << 32);
+        return @truncate(std.hash.Wyhash.hash(seed, lookup.name));
     }
 
     pub fn eql(self: @This(), a: DeclarationLookup, b: DeclarationLookup, b_index: usize) bool {
@@ -1342,4 +1339,37 @@ pub fn getScopeChildScopesConst(
         const other = slice.items(.child_scopes)[@intFromEnum(scope)].other;
         return @ptrCast(doc_scope.extra.items[other.start..other.end]);
     }
+}
+
+test DeclarationLookupContext {
+    const allocator = std.testing.allocator;
+    const scopes = [_]Scope.Index{ .root, @enumFromInt(1), @enumFromInt(42) };
+    const kinds = std.enums.values(DeclarationLookup.Kind);
+    const names = [_][]const u8{ "alpha", "beta", "@escaped", "" };
+
+    var map: DeclarationLookupMap = .empty;
+    defer map.deinit(allocator);
+    try map.ensureTotalCapacity(allocator, scopes.len * kinds.len * names.len);
+
+    for (scopes) |scope| {
+        for (kinds) |kind| {
+            for (names) |name| map.putAssumeCapacityNoClobber(.{
+                .scope = scope,
+                .name = name,
+                .kind = kind,
+            }, {});
+        }
+    }
+
+    try std.testing.expectEqual(scopes.len * kinds.len * names.len, map.count());
+    for (scopes) |scope| {
+        for (kinds) |kind| {
+            for (names) |name| try std.testing.expect(map.contains(.{
+                .scope = scope,
+                .name = name,
+                .kind = kind,
+            }));
+        }
+    }
+    try std.testing.expect(!map.contains(.{ .scope = .root, .name = "missing", .kind = .other }));
 }
