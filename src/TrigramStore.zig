@@ -393,7 +393,7 @@ pub fn init(
         }
     }
 
-    store.trigram_to_declarations.shrinkAndFree(allocator, store.trigram_to_declarations.count());
+    try multi_array_list.shrinkAndFree(allocator, &store.trigram_to_declarations.entries);
     try multi_array_list.shrinkAndFree(allocator, &store.declarations);
 
     return store;
