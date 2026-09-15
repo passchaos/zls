@@ -2718,6 +2718,27 @@ test "generic function with comptime Int type constructor" {
     });
 }
 
+test "generic function with nested comptime Int mutations" {
+    try testCompletion(
+        \\fn Number(comptime T: type) type {
+        \\    var evaluations: usize = 1;
+        \\    const bits = @bitSizeOf(@Int(signedness: {
+        \\            evaluations += 1;
+        \\            break :signedness .signed;
+        \\        }, bits: {
+        \\            evaluations *= 2;
+        \\            break :bits 13;
+        \\        }));
+        \\    return struct { bits: [bits]T, evaluations: [evaluations]T };
+        \\}
+        \\const number: Number(u8) = undefined;
+        \\const field = number.<cursor>
+    , &.{
+        .{ .label = "bits", .kind = .Field, .detail = "[13]u8" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[4]u8" },
+    });
+}
+
 test "generic function with comptime Tuple type constructor" {
     try testCompletion(
         \\fn Pair(comptime T: type, comptime U: type) type {

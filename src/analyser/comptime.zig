@@ -2345,6 +2345,25 @@ pub const Interpreter = struct {
                     const child_type = try self.eval(handle, params[1]) orelse return null;
                     return self.analyser.resolveComptimeVectorType(len, child_type);
                 }
+                if (std.mem.eql(u8, name, "@Int")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 2) return null;
+                    const signedness_instance = try self.analyser.instanceStdBuiltinType("Signedness") orelse return null;
+                    const signedness_type = try signedness_instance.typeOf(self.analyser);
+                    const signedness_value = try self.evaluateTypedExpression(handle, params[0], signedness_type) orelse return null;
+                    if (signedness_value.data != .enum_value) return null;
+                    const signedness = std.meta.stringToEnum(
+                        std.builtin.Signedness,
+                        signedness_value.data.enum_value.tag,
+                    ) orelse return null;
+                    const bits_value = try self.eval(handle, params[1]) orelse return null;
+                    const bits = self.analyser.ip.toInt(bits_value.ipIndex() orelse return null, u16) orelse return null;
+                    return Type.fromIP(self.analyser, .type_type, try self.analyser.ip.get(.{ .int_type = .{
+                        .signedness = signedness,
+                        .bits = bits,
+                    } }));
+                }
                 if (std.mem.eql(u8, name, "@Tuple")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
