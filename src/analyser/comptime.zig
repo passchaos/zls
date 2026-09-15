@@ -2560,6 +2560,18 @@ pub const Interpreter = struct {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
+                    const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
+                    if (handle.tree.nodeTag(destination_node) == .slice or
+                        handle.tree.nodeTag(destination_node) == .slice_open)
+                    {
+                        const region = try self.mutableArraySliceRegion(handle, destination_node) orelse return null;
+                        const element = try self.evaluateTypedExpression(handle, params[1], region.element_type) orelse return null;
+                        const items = try self.analyser.arena.dupe(Type, region.items);
+                        @memset(items[region.start..region.end], element);
+                        const updated = try Value.create(self.analyser, region.array_type, .{ .array = items });
+                        if (!try self.writeReference(handle, region.reference, updated, null)) return null;
+                        return Type.fromIP(self.analyser, .void_type, .void_value);
+                    }
                     const destination = try self.evalPreservingPointerIdentity(handle, params[0]) orelse return null;
                     if (destination.data != .comptime_value or
                         destination.data.comptime_value.data != .reference) return null;
@@ -4262,6 +4274,15 @@ pub const Interpreter = struct {
         len: usize,
     };
 
+    const MutableArraySliceRegion = struct {
+        reference: *Value.Reference,
+        array_type: Type,
+        element_type: Type,
+        items: []const Type,
+        start: usize,
+        end: usize,
+    };
+
     fn fixedArrayInfo(self: *Interpreter, array_type: Type) ?FixedArrayInfo {
         if (!array_type.is_type_val) return null;
         return switch (array_type.data) {
@@ -4279,6 +4300,42 @@ pub const Interpreter = struct {
                 else => null,
             },
             else => null,
+        };
+    }
+
+    fn mutableArraySliceRegion(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?MutableArraySliceRegion {
+        const tree = &handle.tree;
+        const slice = tree.fullSlice(node) orelse return null;
+        if (slice.ast.sentinel.unwrap() != null) return null;
+        const reference = try self.referenceForNode(handle, slice.ast.sliced) orelse return null;
+        const current = try self.readReference(reference) orelse return null;
+        const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+        if (info.len > self.budget.steps) return null;
+        const start = try self.integer(handle, slice.ast.start) orelse return null;
+        const end = if (slice.ast.end.unwrap()) |end_node|
+            try self.integer(handle, end_node) orelse return null
+        else
+            info.len;
+        if (start > end or end > info.len) return null;
+        const items = try self.mutableElements(current) orelse unknown: {
+            const unknown_items = try self.analyser.arena.alloc(Type, info.len);
+            for (unknown_items) |*item| {
+                item.* = try info.element_type.instanceTypeVal(self.analyser) orelse return null;
+            }
+            break :unknown unknown_items;
+        };
+        if (items.len != info.len) return null;
+        return .{
+            .reference = reference,
+            .array_type = info.array_type,
+            .element_type = info.element_type,
+            .items = items,
+            .start = start,
+            .end = end,
         };
     }
 

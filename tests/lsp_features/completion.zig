@@ -9840,6 +9840,44 @@ test "generic function with comptime memset" {
     });
 }
 
+test "generic function with comptime sliced memset" {
+    try testCompletion(
+        \\const Holder = struct { values: [4]usize };
+        \\fn Select(comptime T: type) type {
+        \\    var evaluations: usize = 0;
+        \\    var values: [4]usize = undefined;
+        \\    var holder: Holder = .{ .values = .{ 1, 2, 3, 4 } };
+        \\    @memset(values[start: {
+        \\        evaluations += 1;
+        \\        break :start 1;
+        \\    }..end: {
+        \\        evaluations *= 2;
+        \\        break :end 3;
+        \\    }], fill: {
+        \\        evaluations += 3;
+        \\        break :fill 5;
+        \\    });
+        \\    @memset(holder.values[1..], 7);
+        \\    const final = evaluations;
+        \\    return struct {
+        \\        first: [values[1]]T,
+        \\        second: [values[2]]T,
+        \\        nested_first: [holder.values[0]]T,
+        \\        nested_last: [holder.values[3]]T,
+        \\        evaluations: [final]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "second", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "nested_first", .kind = .Field, .detail = "[1]u16" },
+        .{ .label = "nested_last", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "evaluations", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "generic function with comptime memory copies" {
     try testCompletion(
         \\const Holder = struct { values: [3]usize };
