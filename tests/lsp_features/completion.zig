@@ -10152,6 +10152,49 @@ test "generic function with comptime sentinel slice memory operations" {
     });
 }
 
+test "generic function with comptime local full slices" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var buffer: [5]u8 = undefined;
+        \\    const destination: []u8 = &buffer;
+        \\    const source: []const u8 = "hello";
+        \\    var number_source = [_]usize{ 2, 3, 5 };
+        \\    var number_destination: [3]usize = undefined;
+        \\    var moved = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
+        \\    var separated = [_]usize{ 2, 3, 0, 0 };
+        \\    const number_source_slice: []const usize = &number_source;
+        \\    const number_destination_slice: []usize = &number_destination;
+        \\    const moved_source: []const usize = moved[0..5];
+        \\    const moved_destination: []usize = moved[3..8];
+        \\    const separated_source: []const usize = separated[0..2];
+        \\    const separated_destination: []usize = separated[2..4];
+        \\    @memcpy(destination, source);
+        \\    @memcpy(number_destination_slice, number_source_slice);
+        \\    @memcpy(separated_destination, separated_source);
+        \\    @memmove(moved_destination, moved_source);
+        \\    return struct {
+        \\        first: [buffer[0]]T,
+        \\        middle: [buffer[2]]T,
+        \\        last: [buffer[4]]T,
+        \\        number_middle: [number_destination[1]]T,
+        \\        separated_last: [separated[3]]T,
+        \\        moved_first: [moved[3]]T,
+        \\        moved_last: [moved[7]]T,
+        \\    };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[104]u8" },
+        .{ .label = "middle", .kind = .Field, .detail = "[108]u8" },
+        .{ .label = "last", .kind = .Field, .detail = "[111]u8" },
+        .{ .label = "number_middle", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "separated_last", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "moved_first", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "moved_last", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

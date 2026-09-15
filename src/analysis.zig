@@ -15941,6 +15941,22 @@ pub const Type = struct {
         return !info.is_optional and info.pointer.is_const;
     }
 
+    pub fn sequencePointerElementType(self: Type, analyser: *Analyser) ?Type {
+        const info = self.pointerCastInfo(analyser) orelse return null;
+        if (info.is_optional) return null;
+        return switch (info.pointer.size) {
+            .many, .slice, .c => info.pointer.elem_ty,
+            .one => switch (info.pointer.elem_ty.data) {
+                .array => |array| array.elem_ty.*,
+                .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+                    .array_type => |array| Type.fromIP(analyser, .type_type, array.child),
+                    else => null,
+                },
+                else => null,
+            },
+        };
+    }
+
     pub fn isPlainSinglePointerTo(
         self: Type,
         analyser: *Analyser,

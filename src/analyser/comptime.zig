@@ -4299,6 +4299,12 @@ pub const Interpreter = struct {
         array_node: Ast.Node.Index,
     };
 
+    const LocalArraySlice = struct {
+        handle: *Handle,
+        initializer: Ast.Node.Index,
+        pointer_type: Type,
+    };
+
     fn fixedArrayInfo(self: *Interpreter, array_type: Type) ?FixedArrayInfo {
         if (!array_type.is_type_val) return null;
         return switch (array_type.data) {
@@ -4326,10 +4332,14 @@ pub const Interpreter = struct {
         value: Type,
     ) Error!?ArraySliceRegion {
         if (value.data != .string_value) return null;
-        const array_value = try self.analyser.resolveDerefType(value) orelse return null;
-        const info = self.fixedArrayInfo(try array_value.typeOf(self.analyser)) orelse return null;
         const bytes = value.data.string_value.bytes;
-        if (bytes.len != info.len or info.element_type.ipIndex() != .u8_type or info.len > self.budget.steps) return null;
+        if (bytes.len > self.budget.steps) return null;
+        const array_type = Type.fromIP(self.analyser, .type_type, try self.analyser.ip.get(.{ .array_type = .{
+            .len = bytes.len,
+            .child = .u8_type,
+            .sentinel = .zero_u8,
+        } }));
+        const element_type = Type.fromIP(self.analyser, .type_type, .u8_type);
         const items = try self.analyser.arena.alloc(Type, bytes.len);
         for (bytes, items) |byte, *item| {
             const index = try self.analyser.ip.get(.{ .int_u64_value = .{
@@ -4338,13 +4348,13 @@ pub const Interpreter = struct {
             } });
             item.* = Type.fromIP(self.analyser, .u8_type, index);
         }
-        const current = try Value.create(self.analyser, info.array_type, .{ .array = items });
+        const current = try Value.create(self.analyser, array_type, .{ .array = items });
         return .{
             .target = self.temporaryCaptureTarget(handle, node, current),
-            .array_type = info.array_type,
-            .element_type = info.element_type,
+            .array_type = array_type,
+            .element_type = element_type,
             .start = 0,
-            .end = info.len,
+            .end = bytes.len,
         };
     }
 
@@ -4494,6 +4504,68 @@ pub const Interpreter = struct {
         return region;
     }
 
+    fn localArraySlice(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?LocalArraySlice {
+        const tree = &handle.tree;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) != .identifier) return null;
+        const name = offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(unwrapped));
+        const declaration = try self.analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(tree.nodeMainToken(unwrapped))) orelse return null;
+        if (!declaration.isConst() or try declaration.isStatic()) return null;
+        const declaration_node = switch (declaration.decl) {
+            .ast_node => |decl_node| decl_node,
+            else => return null,
+        };
+        const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse return null;
+        if (variable.ast.type_node.unwrap() == null) return null;
+        const declaration_value = try declaration.resolveType(self.analyser) orelse return null;
+        const pointer_type = try declaration_value.typeOf(self.analyser);
+        if ((try pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .slice) return null;
+        return .{
+            .handle = declaration.handle,
+            .initializer = unwrapGroupedSource(
+                &declaration.handle.tree,
+                variable.ast.init_node.unwrap() orelse return null,
+            ),
+            .pointer_type = pointer_type,
+        };
+    }
+
+    fn localArraySliceRegion(
+        self: *Interpreter,
+        local: LocalArraySlice,
+        pointer: Type,
+        require_mutable: bool,
+    ) Error!?ArraySliceRegion {
+        if (require_mutable and local.pointer_type.isConstPointerType(self.analyser)) return null;
+        const tree = &local.handle.tree;
+        const region = switch (tree.nodeTag(local.initializer)) {
+            .slice, .slice_open => slice: {
+                const slice = tree.fullSlice(local.initializer).?;
+                if (!isLiteralIntegerExpression(tree, slice.ast.start) or
+                    (if (slice.ast.end.unwrap()) |end_node|
+                        !isLiteralIntegerExpression(tree, end_node)
+                    else
+                        false)) return null;
+                break :slice try self.arraySliceRegion(local.handle, local.initializer, require_mutable) orelse return null;
+            },
+            .address_of, .string_literal, .multiline_string_literal => try self.fixedArrayRegion(local.handle, local.initializer, require_mutable) orelse return null,
+            else => return null,
+        };
+        if (Value.elements(pointer)) |items|
+            if (items.len != region.end - region.start) return null;
+        const element_type = local.pointer_type.sequencePointerElementType(self.analyser) orelse return null;
+        if (!element_type.eql(region.element_type)) return null;
+        return region;
+    }
+
+    fn isLiteralIntegerExpression(tree: *const Ast, node: Ast.Node.Index) bool {
+        return tree.nodeTag(unwrapGroupedSource(tree, node)) == .number_literal;
+    }
+
     fn fixedArrayRegion(
         self: *Interpreter,
         handle: *Handle,
@@ -4510,8 +4582,13 @@ pub const Interpreter = struct {
         const pointer = try self.evalPreservingPointerIdentity(handle, node) orelse return null;
         if (!require_mutable)
             if (try self.stringArrayRegion(handle, node, pointer)) |region| return region;
-        if (pointer.data != .comptime_value or
-            (try pointer.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one) return null;
+        if (pointer.data != .comptime_value) return null;
+        if (try self.localArraySlice(handle, unwrapped)) |local|
+            return self.localArraySliceRegion(local, pointer, require_mutable);
+        const pointer_type = pointer.data.comptime_value.ty;
+        const pointer_size = (try pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) orelse return null;
+        if (pointer_size != .one and pointer_size != .slice) return null;
+        if (pointer_size == .slice and require_mutable and pointer_type.isConstPointerType(self.analyser)) return null;
         const captured: struct { target: CaptureTarget, current: Type } = switch (pointer.data.comptime_value.data) {
             .reference => |reference| .{
                 .target = .{ .reference = reference },
@@ -4521,7 +4598,14 @@ pub const Interpreter = struct {
                 .target = .{ .pointee = pointee },
                 .current = pointee.value,
             },
-            .array, .sequence => if (require_mutable) return null else temporary: {
+            .sequence => if (require_mutable) return null else temporary: {
+                const value = try self.analyser.resolveDerefType(pointer) orelse return null;
+                break :temporary .{
+                    .target = self.temporaryCaptureTarget(handle, node, value),
+                    .current = value,
+                };
+            },
+            .array => if (require_mutable or pointer_size == .slice) return null else temporary: {
                 const value = try self.analyser.resolveDerefType(pointer) orelse return null;
                 break :temporary .{
                     .target = self.temporaryCaptureTarget(handle, node, value),
@@ -4531,6 +4615,10 @@ pub const Interpreter = struct {
             else => return null,
         };
         const info = self.fixedArrayInfo(try captured.current.typeOf(self.analyser)) orelse return null;
+        if (pointer_size == .slice) {
+            const element_type = pointer_type.sequencePointerElementType(self.analyser) orelse return null;
+            if (!element_type.eql(info.element_type)) return null;
+        }
         if (info.len > self.budget.steps) return null;
         return .{
             .target = captured.target,
