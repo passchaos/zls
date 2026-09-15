@@ -3233,6 +3233,14 @@ pub const Interpreter = struct {
 
     fn coerce(self: *Interpreter, destination: Type, value: Type) Error!?Type {
         if (!destination.is_type_val) return null;
+        const destination_instance = try destination.instanceUnchecked(self.analyser);
+        if (destination_instance.pointerSize(self.analyser) == .c) {
+            const source_type = try value.typeOf(self.analyser);
+            const source_index = source_type.ipIndex() orelse return null;
+            const source_tag = self.analyser.ip.zigTypeTag(source_index) orelse return null;
+            if (source_tag == .int or source_tag == .comptime_int)
+                return self.pointerFromIntValue(destination, value);
+        }
         const type_index = destination.ipIndex() orelse return value;
         if (type_index == .type_type) return if (value.is_type_val) value else null;
         if (value.data == .ip_index) {

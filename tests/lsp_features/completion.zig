@@ -8430,6 +8430,28 @@ test "generic function with comptime numeric pointer ordering" {
     });
 }
 
+test "generic function with comptime implicit C pointer addresses" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var pointer: [*c]u32 = 0;
+        \\    const zero = pointer == 0;
+        \\    pointer = 40;
+        \\    const same = pointer == 40;
+        \\    const ordered = pointer > 1 and 0 < pointer;
+        \\    const address = @intFromPtr(pointer);
+        \\    return struct {
+        \\        items: [address]T,
+        \\        checks: [@intFromBool(zero and same and ordered)]u8,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[40]u16" },
+        .{ .label = "checks", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
 test "generic function with comptime unknown bit builtin types" {
     try testCompletion(
         \\var runtime_u8: u8 = undefined;

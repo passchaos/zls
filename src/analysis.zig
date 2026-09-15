@@ -15971,6 +15971,7 @@ pub const Type = struct {
     }
 
     pub const NumericPointerInfo = struct {
+        size: std.builtin.Type.Pointer.Size,
         is_optional: bool,
         allows_zero: bool,
         alignment: u64,
@@ -15985,13 +15986,15 @@ pub const Type = struct {
 
     pub fn numericPointerInfo(self: Type, analyser: *Analyser) Error!?NumericPointerInfo {
         const info = self.pointerCastInfo(analyser) orelse return null;
-        if (info.pointer.size == .slice or info.pointer.elem_ty.isFunc()) return null;
+        if (info.pointer.size == .slice or info.pointer.elem_ty.isFunc() or
+            info.pointer.elem_ty.isTupleType(analyser)) return null;
         if (info.is_optional and (info.pointer.size == .c or info.pointer.is_allowzero)) return null;
         const alignment = if (info.pointer.alignment != 0)
             info.pointer.alignment
         else
             try analyser.resolveTypeAlignment(info.pointer.elem_ty) orelse return null;
         return .{
+            .size = info.pointer.size,
             .is_optional = info.is_optional,
             .allows_zero = info.is_optional or info.pointer.size == .c or info.pointer.is_allowzero,
             .alignment = alignment,
