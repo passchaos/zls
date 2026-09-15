@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A high-fidelity dark desktop team chat interface prototype." />
+    <title>Signal House — Team Chat</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <button class="workspace-switcher" id="workspaceSwitcher" type="button" aria-expanded="false">
+          <span class="workspace-copy">
+            <span class="workspace-eyebrow">Workspace</span>
+            <span class="workspace-name">Signal House</span>
+          </span>
+          <i data-lucide="chevron-down" aria-hidden="true"></i>
+        </button>
+        <div class="workspace-menu" id="workspaceMenu" hidden>
+          <button type="button">Workspace settings</button>
+          <button type="button">Invite teammates</button>
+        </div>
+
+        <button class="primary-action" id="newMessageButton" type="button">
+          <i data-lucide="square-pen" aria-hidden="true"></i>
+          <span>New message</span>
+        </button>
+
+        <nav class="sidebar-scroll">
+          <section class="nav-section" aria-labelledby="channelsLabel">
+            <div class="section-heading">
+              <h2 id="channelsLabel">Channels</h2>
+              <button class="icon-button compact" id="addChannelButton" type="button" title="Add channel" aria-label="Add channel">
+                <i data-lucide="plus" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="channel-list" id="channelList">
+              <button class="channel-row" type="button" data-channel="announcements" data-members="48">
+                <span class="hash">#</span><span class="channel-name">announcements</span>
+              </button>
+              <button class="channel-row" type="button" data-channel="design" data-members="14">
+                <span class="hash">#</span><span class="channel-name">design</span>
+              </button>
+              <button class="channel-row selected" type="button" data-channel="product" data-members="12" aria-current="page">
+                <span class="hash">#</span><span class="channel-name">product</span>
+              </button>
+              <button class="channel-row unread" type="button" data-channel="random" data-members="31">
+                <span class="hash">#</span><span class="channel-name">random</span><span class="unread-dot" aria-label="Unread messages"></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="nav-section" aria-labelledby="dmLabel">
+            <div class="section-heading">
+              <h2 id="dmLabel">Direct messages</h2>
+              <button class="icon-button compact" type="button" title="New direct message" aria-label="New direct message">
+                <i data-lucide="plus" aria-hidden="true"></i>
+              </button>
+            </div>
+            <button class="dm-row" type="button" data-dm="Maya Rivera">
+              <span class="avatar avatar-maya">MR</span>
+              <span class="dm-copy"><span class="dm-name">Maya Rivera</span><span class="dm-preview">The review is ready.</span></span>
+              <span class="presence online" title="Online"></span>
+            </button>
+            <button class="dm-row unread" type="button" data-dm="Liam Chen">
+              <span class="avatar avatar-liam">LC</span>
+              <span class="dm-copy"><span class="dm-name">Liam Chen</span><span class="dm-preview">Sent a file</span></span>
+              <span class="unread-badge" aria-label="2 unread messages">2</span>
+            </button>
+            <button class="dm-row" type="button" data-dm="Priya Shah">
+              <span class="avatar avatar-priya">PS</span>
+              <span class="dm-copy"><span class="dm-name">Priya Shah</span><span class="dm-preview">See you tomorrow!</span></span>
+              <span class="presence away" title="Away"></span>
+            </button>
+          </section>
+        </nav>
+
+        <div class="profile-card">
+          <span class="avatar avatar-jordan">JL</span>
+          <span class="profile-copy"><strong>Jordan Lee</strong><span>Product designer</span></span>
+          <button class="icon-button" type="button" title="Profile settings" aria-label="Profile settings">
+            <i data-lucide="settings" aria-hidden="true"></i>
+          </button>
+        </div>
+      </aside>
+
+      <main class="conversation">
+        <header class="conversation-header">
+          <div>
+            <div class="channel-title-line">
+              <span class="hash title-hash">#</span><h1 id="channelTitle">product</h1>
+            </div>
+            <p id="channelSubtitle">Planning, decisions, and product momentum.</p>
+          </div>
+          <div class="header-actions">
+            <button class="member-count" id="memberCount" type="button" title="Show channel members">
+              <i data-lucide="users" aria-hidden="true"></i><span id="memberCountValue">12</span>
+            </button>
+            <button class="icon-button" id="searchButton" type="button" title="Search conversation" aria-label="Search conversation">
+              <i data-lucide="search" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button" id="muteButton" type="button" title="Mute notifications" aria-label="Mute notifications" aria-pressed="false">
+              <i data-lucide="bell-off" aria-hidden="true"></i>
+            </button>
+            <button class="video-button" id="videoButton" type="button" aria-pressed="false">
+              <i data-lucide="video" aria-hidden="true"></i><span>Start video call</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="search-bar" id="searchBar" hidden>
+          <i data-lucide="search" aria-hidden="true"></i>
+          <input id="searchInput" type="search" placeholder="Search in #product" aria-label="Search messages" />
+          <span id="searchCount">4 messages</span>
+          <button class="icon-button compact" id="closeSearch" type="button" title="Close search" aria-label="Close search">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <section class="message-stage" id="messageStage" aria-label="Messages in product">
+          <div class="conversation-empty" id="conversationEmpty" hidden>
+            <i data-lucide="message-circle" aria-hidden="true"></i>
+            <h2 id="emptyTitle">No messages yet</h2>
+            <p>Start the conversation with your team.</p>
+          </div>
+          <div class="message-list" id="messageList">
+            <div class="date-divider"><span>Today</span></div>
+            <article class="message-row" data-search="maya rivera 9:14 morning everyone i tightened up the handoff notes for the empty states">
+              <span class="avatar avatar-maya">MR</span>
+              <div class="message-body">
+                <div class="message-meta"><strong>Maya Rivera</strong><time datetime="2026-09-15T09:14:00">9:14 AM</time></div>
+                <p>Morning everyone — I tightened up the handoff notes for the empty states. The main flow is ready for a final pass.</p>
+              </div>
+            </article>
+
+            <article class="message-row" data-search="liam chen 9:19 mobile breakpoint spacing still feels tight around composer">
+              <span class="avatar avatar-liam">LC</span>
+              <div class="message-body">
+                <div class="message-meta"><strong>Liam Chen</strong><time datetime="2026-09-15T09:19:00">9:19 AM</time></div>
+                <p>The mobile breakpoint spacing still feels tight around the composer. I left a note in the review.</p>
+                <button class="thread-preview" id="openThread" type="button" aria-controls="threadPanel">
+                  <span class="thread-avatars"><span class="mini-avatar avatar-noah">NB</span><span class="mini-avatar avatar-maya">MR</span></span>
+                  <span><strong>2 replies</strong><small>Last reply 8 min ago</small></span>
+                  <i data-lucide="chevron-right" aria-hidden="true"></i>
+                </button>
+              </div>
+            </article>
+
+            <div class="unread-divider"><span>New</span></div>
+
+            <article class="message-row" data-search="priya shah 9:32 today launch checklist shared updated release checklist">
+              <span class="avatar avatar-priya">PS</span>
+              <div class="message-body">
+                <div class="message-meta"><strong>Priya Shah</strong><time datetime="2026-09-15T09:32:00">9:32 AM</time></div>
+                <p><span class="mention">@today</span> Launch checklist is ready. I added final owners and the rollout window.</p>
+                <button class="file-card" type="button" title="Open release checklist">
+                  <span class="file-icon"><i data-lucide="file-text" aria-hidden="true"></i></span>
+                  <span class="file-copy"><strong>release-checklist.pdf</strong><small>PDF · 2.4 MB</small></span>
+                  <i data-lucide="download" aria-hidden="true"></i>
+                </button>
+              </div>
+            </article>
+
+            <article class="message-row" data-search="noah brooks 9:41 looks good shipping after qa signoff thumbs up">
+              <span class="avatar avatar-noah">NB</span>
+              <div class="message-body">
+                <div class="message-meta"><strong>Noah Brooks</strong><time datetime="2026-09-15T09:41:00">9:41 AM</time></div>
+                <p>Looks good from engineering. We can ship right after QA signs off.</p>
+                <button class="reaction-chip active" type="button" data-reaction="thumbs-up" aria-pressed="true" title="Remove reaction">
+                  <span aria-hidden="true">👍</span><span class="reaction-count">4</span>
+                </button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <form class="composer" id="messageForm">
+          <div class="formatting-row" aria-label="Message formatting">
+            <button type="button" class="format-button" data-format="bold" title="Bold" aria-label="Bold"><i data-lucide="bold" aria-hidden="true"></i></button>
+            <button type="button" class="format-button" data-format="italic" title="Italic" aria-label="Italic"><i data-lucide="italic" aria-hidden="true"></i></button>
+            <button type="button" class="format-button" data-format="link" title="Insert link" aria-label="Insert link"><i data-lucide="link" aria-hidden="true"></i></button>
+            <button type="button" class="format-button" data-format="list" title="Bulleted list" aria-label="Bulleted list"><i data-lucide="list" aria-hidden="true"></i></button>
+          </div>
+          <textarea id="messageInput" rows="2" placeholder="Message #product" aria-label="Message product"></textarea>
+          <div class="composer-footer">
+            <div class="composer-tools">
+              <button class="icon-button" id="attachButton" type="button" title="Attach a file" aria-label="Attach a file"><i data-lucide="paperclip" aria-hidden="true"></i></button>
+              <button class="icon-button" id="emojiButton" type="button" title="Add emoji" aria-label="Add emoji"><i data-lucide="smile" aria-hidden="true"></i></button>
+              <input id="fileInput" type="file" hidden />
+              <span class="attachment-name" id="attachmentName"></span>
+            </div>
+            <button class="send-button" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+
+      <aside class="details-panel" aria-label="Channel details">
+        <div class="details-header">
+          <div><span class="eyebrow">About</span><h2 id="detailsTitle">Channel details</h2></div>
+          <button class="icon-button" id="channelOptionsButton" type="button" title="More channel options" aria-label="More channel options"><i data-lucide="ellipsis" aria-hidden="true"></i></button>
+        </div>
+        <div class="details-scroll">
+          <section class="detail-section">
+            <h3>Description</h3>
+            <p id="detailDescription">Discuss product strategy, research, specs, and the decisions that move releases forward.</p>
+          </section>
+          <section class="detail-section">
+            <h3>Topic</h3>
+            <div class="topic-row"><i data-lucide="flag" aria-hidden="true"></i><span id="topicValue">Q4 onboarding refresh</span></div>
+          </section>
+          <section class="detail-section members-section">
+            <button class="section-toggle" id="membersToggle" type="button" aria-expanded="true">
+              <span>Members <span class="member-total" id="memberTotal">12</span></span>
+              <i data-lucide="chevron-up" aria-hidden="true"></i>
+            </button>
+            <div class="member-list" id="memberList">
+              <div class="member-row"><span class="avatar avatar-maya">MR</span><span><strong>Maya Rivera</strong><small>Product lead</small></span><span class="presence online"></span></div>
+              <div class="member-row"><span class="avatar avatar-jordan">JL</span><span><strong>Jordan Lee</strong><small>Product designer</small></span><span class="presence online"></span></div>
+              <div class="member-row"><span class="avatar avatar-liam">LC</span><span><strong>Liam Chen</strong><small>Engineer</small></span><span class="presence online"></span></div>
+              <div class="member-row"><span class="avatar avatar-priya">PS</span><span><strong>Priya Shah</strong><small>Product manager</small></span><span class="presence away"></span></div>
+              <div class="member-row extra-member" hidden><span class="avatar avatar-ava">AK</span><span><strong>Ava Kim</strong><small>Research</small></span><span class="presence online"></span></div>
+              <div class="member-row extra-member" hidden><span class="avatar avatar-omar">OH</span><span><strong>Omar Haddad</strong><small>Engineering</small></span><span class="presence away"></span></div>
+              <div class="member-row extra-member" hidden><span class="avatar avatar-ines">IC</span><span><strong>Ines Costa</strong><small>Content design</small></span><span class="presence online"></span></div>
+              <div class="member-row extra-member" hidden><span class="avatar avatar-theo">TM</span><span><strong>Theo Martin</strong><small>Analytics</small></span><span class="presence online"></span></div>
+            </div>
+            <button class="view-all" id="viewAllMembers" type="button">View all members</button>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <section class="thread-panel" id="threadPanel" aria-label="Thread" aria-hidden="true" inert>
+      <header class="thread-header">
+        <div><span class="eyebrow">Thread</span><h2>Mobile spacing</h2></div>
+        <button class="icon-button" id="closeThread" type="button" title="Close thread" aria-label="Close thread"><i data-lucide="x" aria-hidden="true"></i></button>
+      </header>
+      <div class="thread-scroll">
+        <article class="thread-message parent-message">
+          <span class="avatar avatar-liam">LC</span>
+          <div><div class="message-meta"><strong>Liam Chen</strong><time>9:19 AM</time></div><p>The mobile breakpoint spacing still feels tight around the composer. I left a note in the review.</p></div>
+        </article>
+        <div class="reply-divider"><span>2 replies</span></div>
+        <article class="thread-message">
+          <span class="avatar avatar-maya">MR</span>
+          <div><div class="message-meta"><strong>Maya Rivera</strong><time>9:24 AM</time></div><p>Agreed. I’ll give the input another 8px and tighten the toolbar instead.</p></div>
+        </article>
+        <article class="thread-message">
+          <span class="avatar avatar-noah">NB</span>
+          <div><div class="message-meta"><strong>Noah Brooks</strong><time>9:27 AM</time></div><p>That should keep the tap targets comfortable without increasing the overall height.</p></div>
+        </article>
+        <div id="threadReplies"></div>
+      </div>
+      <form class="reply-composer" id="replyForm">
+        <textarea id="replyInput" rows="3" placeholder="Reply to thread" aria-label="Reply to thread"></textarea>
+        <div class="reply-actions">
+          <div>
+            <button class="icon-button" id="replyAttachButton" type="button" title="Attach a file" aria-label="Attach a file"><i data-lucide="paperclip" aria-hidden="true"></i></button>
+            <button class="icon-button" id="replyEmojiButton" type="button" title="Add emoji" aria-label="Add emoji"><i data-lucide="smile" aria-hidden="true"></i></button>
+            <input id="replyFileInput" type="file" hidden />
+            <span class="attachment-name" id="replyAttachmentName"></span>
+          </div>
+          <button class="send-button" type="submit">Reply</button>
+        </div>
+      </form>
+    </section>
+
+    <dialog id="channelDialog">
+      <form method="dialog" id="channelForm">
+        <div class="dialog-title"><span class="icon-tile"><i data-lucide="hash" aria-hidden="true"></i></span><div><h2>Create a channel</h2><p>Give your team a focused place to talk.</p></div></div>
+        <label for="channelNameInput">Channel name</label>
+        <input id="channelNameInput" name="channelName" autocomplete="off" placeholder="e.g. research" required pattern="[a-z0-9-]+" />
+        <div class="dialog-actions"><button class="secondary-button" value="cancel" type="button" id="cancelChannel">Cancel</button><button class="send-button" value="create" type="submit">Create channel</button></div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

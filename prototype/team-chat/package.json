@@ -1,0 +1,8 @@
+{
+  "name": "signal-house-team-chat-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test app.test.mjs"
+  }
+}
