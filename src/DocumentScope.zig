@@ -571,7 +571,7 @@ pub fn shrinkToFit(scope: *DocumentScope, allocator: std.mem.Allocator) error{Ou
     scope.extra.shrinkAndFree(allocator, scope.extra.items.len);
     try multi_array_list.shrinkAndFree(allocator, &scope.declarations);
     try multi_array_list.shrinkAndFree(allocator, &scope.scopes);
-    scope.declaration_lookup_map.shrinkAndFreeContext(allocator, scope.declaration_lookup_map.count(), .{ .source = scope.source });
+    try multi_array_list.shrinkAndFree(allocator, &scope.declaration_lookup_map.entries);
 }
 
 pub fn deinit(scope: *DocumentScope, allocator: std.mem.Allocator) void {
