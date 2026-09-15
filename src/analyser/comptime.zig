@@ -653,7 +653,9 @@ pub const Interpreter = struct {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
             .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
-                if (std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@alignCast")) return true;
+                const name = tree.tokenSlice(tree.nodeMainToken(node));
+                if (std.mem.eql(u8, name, "@alignCast") or
+                    std.mem.eql(u8, name, "@atomicLoad")) return true;
             },
             .@"if" => {
                 const branch = ast.fullIf(tree, node).?;
@@ -2330,7 +2332,7 @@ pub const Interpreter = struct {
                     if (params.len != 3) return null;
                     const element_type = try self.eval(handle, params[0]) orelse return null;
                     if (!try self.supportsAtomicValue(element_type, true, true)) return null;
-                    const pointer = try self.evalPreservingPointerIdentity(handle, params[1]) orelse return null;
+                    const pointer = try self.evalAtomicPointer(handle, params[1]) orelse return null;
                     if (!(try pointer.typeOf(self.analyser)).isPlainSinglePointerTo(
                         self.analyser,
                         element_type,
@@ -2344,11 +2346,10 @@ pub const Interpreter = struct {
                                 self.readReference(reference)
                             else
                                 null,
-                            .pointee => |pointee| static: {
-                                if (!try self.supportsAtomicPointee(pointee, element_type)) break :static null;
-                                const root = try self.staticPointeeRootValue(pointee) orelse break :static null;
-                                break :static self.readValuePath(root, pointee.path);
-                            },
+                            .pointee => |pointee| if (try self.supportsAtomicPointee(pointee, element_type))
+                                pointee.value
+                            else
+                                null,
                             else => null,
                         },
                         else => null,
@@ -2732,6 +2733,20 @@ pub const Interpreter = struct {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
         if (handle.tree.nodeTag(unwrapped) != .identifier) return value;
         return try self.staticCaptureValue(handle, unwrapped) orelse value;
+    }
+
+    fn evalAtomicPointer(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+    ) Error!?Type {
+        const unwrapped = unwrapGroupedSource(&handle.tree, node);
+        if (handle.tree.nodeTag(unwrapped) != .address_of)
+            return self.evalPreservingPointerIdentity(handle, node);
+        const operand_node = handle.tree.nodeData(unwrapped).node;
+        const operand = try self.captureOperand(handle, operand_node, 0) orelse return null;
+        const target = self.captureTargetOrTemporary(handle, operand_node, operand) orelse return null;
+        return self.captureTargetPointer(target, operand.value, null);
     }
 
     fn evalTypedSource(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?EvaluatedSource {
@@ -5080,15 +5095,20 @@ pub const Interpreter = struct {
         pointee: Value.Pointee,
         element_type: Type,
     ) Error!bool {
-        if (!pointee.is_static) return false;
-        const declaration: Analyser.DeclWithHandle = .{
-            .decl = .{ .ast_node = pointee.source.node },
-            .handle = pointee.source.handle,
-            .container_type = pointee.container_type,
+        for (pointee.path) |access| switch (access) {
+            .index => {},
+            else => return false,
         };
-        if (!declaration.isConst()) return false;
-        const root = try declaration.resolveType(self.analyser) orelse return false;
-        return self.supportsAtomicPath(try root.typeOf(self.analyser), pointee.path, element_type);
+        if (pointee.temporary_value == null) {
+            if (!pointee.is_static and pointee.root_value == null) return false;
+            const declaration: Analyser.DeclWithHandle = .{
+                .decl = .{ .ast_node = pointee.source.node },
+                .handle = pointee.source.handle,
+                .container_type = pointee.container_type,
+            };
+            if (!declaration.isConst()) return false;
+        }
+        return (try pointee.value.typeOf(self.analyser)).eql(element_type);
     }
 
     fn supportsAtomicPath(

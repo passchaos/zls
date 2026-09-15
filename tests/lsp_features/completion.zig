@@ -9627,6 +9627,25 @@ test "generic function with comptime atomic array elements and constants" {
     });
 }
 
+test "generic function with comptime immutable atomic loads" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const local: usize = 7;
+        \\    const local_loaded = @atomicLoad(usize, &local, .acquire);
+        \\    const temporary_loaded = @atomicLoad(usize, &@as(usize, 11), .seq_cst);
+        \\    return struct {
+        \\        local: [local_loaded]T,
+        \\        temporary: [temporary_loaded]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "local", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "temporary", .kind = .Field, .detail = "[11]u16" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
