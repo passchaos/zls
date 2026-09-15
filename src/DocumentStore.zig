@@ -670,10 +670,7 @@ pub const Handle = struct {
             var document_scope: DocumentScope = try .init(allocator, &handle.tree);
             errdefer document_scope.deinit(allocator);
 
-            // remove unused capacity
-            document_scope.extra.shrinkAndFree(allocator, document_scope.extra.items.len);
-            try document_scope.declarations.setCapacity(allocator, document_scope.declarations.len);
-            try document_scope.scopes.setCapacity(allocator, document_scope.scopes.len);
+            try document_scope.shrinkToFit(allocator);
 
             return document_scope;
         }

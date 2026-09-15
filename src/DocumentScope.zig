@@ -549,6 +549,13 @@ pub fn init(allocator: std.mem.Allocator, tree: *const Ast) error{OutOfMemory}!D
     return document_scope;
 }
 
+pub fn shrinkToFit(scope: *DocumentScope, allocator: std.mem.Allocator) error{OutOfMemory}!void {
+    scope.extra.shrinkAndFree(allocator, scope.extra.items.len);
+    try scope.declarations.setCapacity(allocator, scope.declarations.len);
+    try scope.scopes.setCapacity(allocator, scope.scopes.len);
+    scope.declaration_lookup_map.shrinkAndFreeContext(allocator, scope.declaration_lookup_map.count(), .{ .source = scope.source });
+}
+
 pub fn deinit(scope: *DocumentScope, allocator: std.mem.Allocator) void {
     scope.scopes.deinit(allocator);
     scope.declarations.deinit(allocator);
@@ -1482,4 +1489,30 @@ test "DocumentScope.init handles every allocation failure" {
             defer document_scope.deinit(allocator);
         }
     }.init, .{&tree});
+}
+
+test "DocumentScope.shrinkToFit preserves lookups" {
+    const allocator = std.testing.allocator;
+    const source: [:0]const u8 =
+        \\const Container = struct {
+        \\    value: u32,
+        \\    fn method(self: @This()) u32 {
+        \\        return self.value;
+        \\    }
+        \\};
+    ;
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    var document_scope = try DocumentScope.init(allocator, &tree);
+    defer document_scope.deinit(allocator);
+
+    const count = document_scope.declaration_lookup_map.count();
+    try document_scope.shrinkToFit(allocator);
+    try std.testing.expectEqual(count, document_scope.declaration_lookup_map.count());
+    try std.testing.expectEqual(count, document_scope.declaration_lookup_map.capacity());
+    try std.testing.expectEqual(document_scope.scopes.len, document_scope.scopes.capacity);
+    try std.testing.expectEqual(document_scope.declarations.len, document_scope.declarations.capacity);
+
+    const root_lookup: DeclarationLookup = .{ .scope = .root, .name = "Container", .kind = .other };
+    try std.testing.expect(document_scope.getScopeDeclaration(root_lookup) != .none);
 }
