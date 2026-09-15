@@ -9967,6 +9967,30 @@ test "generic function with comptime sliced memory copies" {
     });
 }
 
+test "generic function with comptime mixed memory copies" {
+    try testCompletion(
+        \\const source = [_]usize{ 2, 3, 5 };
+        \\fn Select(comptime T: type) type {
+        \\    var first = [_]usize{ 0, 0, 0, 0 };
+        \\    var second = [_]usize{ 0, 0, 0 };
+        \\    var third = [_]usize{ 7, 11, 13 };
+        \\    @memcpy(first[1..4], &source);
+        \\    @memcpy(&second, first[1..4]);
+        \\    @memmove(third[0..3], &third);
+        \\    const a = first[3];
+        \\    const b = second[1];
+        \\    const c = third[2];
+        \\    return struct { a: [a]T, b: [b]T, c: [c]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "a", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "b", .kind = .Field, .detail = "[3]u16" },
+        .{ .label = "c", .kind = .Field, .detail = "[13]u16" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

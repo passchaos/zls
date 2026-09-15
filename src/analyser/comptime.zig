@@ -2612,12 +2612,12 @@ pub const Interpreter = struct {
                     const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
                     const source_node = unwrapGroupedSource(&handle.tree, params[1]);
                     if ((handle.tree.nodeTag(destination_node) == .slice or
-                        handle.tree.nodeTag(destination_node) == .slice_open) and
+                        handle.tree.nodeTag(destination_node) == .slice_open) or
                         (handle.tree.nodeTag(source_node) == .slice or
                             handle.tree.nodeTag(source_node) == .slice_open))
                     {
-                        const destination = try self.arraySliceRegion(handle, destination_node, true) orelse return null;
-                        const source = try self.arraySliceRegion(handle, source_node, false) orelse return null;
+                        const destination = try self.fixedArrayRegion(handle, destination_node, true) orelse return null;
+                        const source = try self.fixedArrayRegion(handle, source_node, false) orelse return null;
                         const destination_len = destination.end - destination.start;
                         const source_len = source.end - source.start;
                         if (destination_len != source_len or
@@ -4385,6 +4385,36 @@ pub const Interpreter = struct {
 
     fn mutableArraySliceRegion(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?ArraySliceRegion {
         return self.arraySliceRegion(handle, node, true);
+    }
+
+    fn fixedArrayRegion(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        require_mutable: bool,
+    ) Error!?ArraySliceRegion {
+        const unwrapped = unwrapGroupedSource(&handle.tree, node);
+        if (handle.tree.nodeTag(unwrapped) == .slice or handle.tree.nodeTag(unwrapped) == .slice_open) {
+            return self.arraySliceRegion(handle, unwrapped, require_mutable);
+        }
+        const pointer = try self.evalPreservingPointerIdentity(handle, node) orelse return null;
+        if (pointer.data != .comptime_value or
+            (try pointer.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one) return null;
+        const target: CaptureTarget = switch (pointer.data.comptime_value.data) {
+            .reference => |reference| .{ .reference = reference },
+            .pointee => |pointee| if (require_mutable) return null else .{ .pointee = pointee },
+            else => return null,
+        };
+        const current = try self.captureAggregateValue(pointer);
+        const info = self.fixedArrayInfo(try current.typeOf(self.analyser)) orelse return null;
+        if (info.len > self.budget.steps) return null;
+        return .{
+            .target = target,
+            .array_type = info.array_type,
+            .element_type = info.element_type,
+            .start = 0,
+            .end = info.len,
+        };
     }
 
     fn arraySliceRegionsDisjoint(_: *Interpreter, lhs: ArraySliceRegion, rhs: ArraySliceRegion) ?bool {
