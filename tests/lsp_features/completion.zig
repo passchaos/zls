@@ -23646,6 +23646,27 @@ test "nested comptime merged error set mutations" {
     });
 }
 
+test "nested comptime error union type mutations" {
+    try testCompletion(
+        \\fn Result(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const E = (errors: {
+        \\        order *= 2;
+        \\        break :errors error{Oops};
+        \\    })!(payload: {
+        \\        order += 3;
+        \\        break :payload T;
+        \\    });
+        \\    return struct { result: E, order: [order]u8 };
+        \\}
+        \\const result: Result(u16) = undefined;
+        \\const field = result.<cursor>
+    , &.{
+        .{ .label = "result", .kind = .Field, .detail = "error{Oops}!u16" },
+        .{ .label = "order", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "error union" {
     try testCompletion(
         \\const S = struct { alpha: u32 };

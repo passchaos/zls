@@ -11463,6 +11463,15 @@ pub fn resolveComptimeMergedErrorSetType(
     return Type.fromIP(analyser, .type_type, try analyser.ip.errorSetMerge(lhs_index, rhs_index));
 }
 
+pub fn resolveComptimeErrorUnionType(
+    analyser: *Analyser,
+    error_set: Type,
+    payload: Type,
+) error{OutOfMemory}!?Type {
+    if (!error_set.is_type_val or !payload.is_type_val) return null;
+    return @as(?Type, try Type.createErrorUnionType(analyser, error_set, payload));
+}
+
 pub fn coerceIP(analyser: *Analyser, dest_ty: InternPool.Index, inst: InternPool.Index) error{OutOfMemory}!?InternPool.Index {
     if (inst == .none)
         return .none;
@@ -12963,12 +12972,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             const lhs, const rhs = tree.nodeData(node).node_and_node;
 
             const error_set = try analyser.resolveTypeOfNodeInternal(.of(lhs, handle)) orelse return null;
-            if (!error_set.is_type_val) return null;
-
             const payload = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
-            if (!payload.is_type_val) return null;
-
-            return try Type.createErrorUnionType(analyser, error_set, payload);
+            return analyser.resolveComptimeErrorUnionType(error_set, payload);
         },
 
         .merge_error_sets => {

@@ -2037,6 +2037,12 @@ pub const Interpreter = struct {
                 const rhs_value = try self.eval(handle, rhs) orelse return null;
                 return self.analyser.resolveComptimeMergedErrorSetType(lhs_value, rhs_value);
             },
+            .error_union => {
+                const lhs, const rhs = handle.tree.nodeData(node).node_and_node;
+                const error_set = try self.eval(handle, lhs) orelse return null;
+                const payload = try self.eval(handle, rhs) orelse return null;
+                return self.analyser.resolveComptimeErrorUnionType(error_set, payload);
+            },
             .mul,
             .div,
             .mod,
