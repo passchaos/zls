@@ -530,7 +530,7 @@ pub const Handle = struct {
         const tracy_zone = tracy.trace(@src());
         defer tracy_zone.end();
 
-        const parsed_uri = uri.toStdUri();
+        var parsed_uri: ?std.Uri = null;
 
         const node_tags = tree.nodes.items(.tag);
         for (node_tags, 0..) |tag, i| {
@@ -558,7 +558,11 @@ pub const Handle = struct {
                 if (!std.mem.endsWith(u8, import_string, ".zig")) continue;
 
                 try file_imports.ensureUnusedCapacity(allocator, 1);
-                const import_uri = try Uri.resolveImport(allocator, uri, parsed_uri, import_string);
+                const base_uri = parsed_uri orelse blk: {
+                    parsed_uri = uri.toStdUri();
+                    break :blk parsed_uri.?;
+                };
+                const import_uri = try Uri.resolveImport(allocator, uri, base_uri, import_string);
                 file_imports.appendAssumeCapacity(import_uri);
                 continue;
             }
@@ -1826,6 +1830,7 @@ test "empty import metadata finalizes without allocations" {
 
 test "Handle.refresh finalizes import metadata and handles allocation failure" {
     const source = "const dependency = @import(\"dependency.zig\");\n" ++
+        "const nested = @import(\"nested/second.zig\");\n" ++
         "const c = @cImport({ @cInclude(\"one.h\"); });\n";
 
     const Test = struct {
@@ -1856,8 +1861,9 @@ test "Handle.refresh finalizes import metadata and handles allocation failure" {
             try Handle.refresh(&handle, &old_handle, text, allocator);
             text_owned_by_handle = true;
 
-            try std.testing.expectEqual(@as(usize, 1), handle.file_imports.len);
+            try std.testing.expectEqual(@as(usize, 2), handle.file_imports.len);
             try std.testing.expectEqualStrings("file:///project/dependency.zig", handle.file_imports[0].raw);
+            try std.testing.expectEqualStrings("file:///project/nested/second.zig", handle.file_imports[1].raw);
             try std.testing.expectEqual(@as(usize, 1), handle.cimports.len);
             try std.testing.expectEqual(handle.cimports.len, handle.cimports.capacity);
             try std.testing.expectEqualStrings("#include <one.h>\n", handle.cimports.items(.source)[0]);
