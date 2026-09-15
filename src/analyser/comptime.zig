@@ -2299,6 +2299,15 @@ pub const Interpreter = struct {
                     if (mode.data != .enum_value or !std.mem.eql(u8, mode.data.enum_value.tag, "strict")) return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
+                if (std.mem.eql(u8, name, "@breakpoint") or
+                    std.mem.eql(u8, name, "@disableInstrumentation") or
+                    std.mem.eql(u8, name, "@disableIntrinsics"))
+                {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 0) return null;
+                    return Type.fromIP(self.analyser, .void_type, .void_value);
+                }
                 if (std.mem.eql(u8, name, "@prefetch")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;

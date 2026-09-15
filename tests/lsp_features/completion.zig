@@ -9229,6 +9229,26 @@ test "generic function with comptime prefetch" {
     });
 }
 
+test "generic function with comptime code generation controls" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    var count: usize = 1;
+        \\    @breakpoint();
+        \\    count += 1;
+        \\    @disableInstrumentation();
+        \\    count += 1;
+        \\    @disableIntrinsics();
+        \\    count += 1;
+        \\    const final = count;
+        \\    return struct { items: [final]T };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[4]u16" },
+    });
+}
+
 test "generic function with comptime memset" {
     try testCompletion(
         \\const Holder = struct { values: [2]u8 };
