@@ -649,6 +649,7 @@ test "TrigramStore.init handles every allocation failure" {
 
 const CuckooFilter = struct {
     buckets: []Bucket,
+    const target_load_percentage = 70;
 
     pub const Fingerprint = enum(u8) {
         none = std.math.maxInt(u8),
@@ -733,11 +734,11 @@ const CuckooFilter = struct {
     }
 
     pub fn capacityForCount(count: usize) error{Overflow}!usize {
-        const overallocated_count = std.math.divCeil(usize, try std.math.mul(usize, count, 105), 100) catch |err| switch (err) {
+        const bucket_count = std.math.divCeil(usize, try std.math.mul(usize, count, 100), @typeInfo(Bucket).array.len * target_load_percentage) catch |err| switch (err) {
             error.DivisionByZero => unreachable,
             else => |e| return e,
         };
-        return overallocated_count + (overallocated_count & 1);
+        return bucket_count + (bucket_count & 1);
     }
 
     pub fn append(filter: CuckooFilter, random: std.Random, trigram: Trigram) error{EvictionFailed}!void {
@@ -830,6 +831,7 @@ test CuckooFilter {
 
     const element_count = 499;
     const filter_size = comptime CuckooFilter.capacityForCount(element_count) catch unreachable;
+    comptime assert(filter_size == 180);
 
     var entries: std.array_hash_map.Auto(Trigram, void) = .empty;
     defer entries.deinit(allocator);
@@ -872,5 +874,35 @@ test CuckooFilter {
 
         errdefer std.log.err("fpr: {d}%", .{fpr * 100});
         try std.testing.expect(fpr < 0.035);
+    }
+}
+
+test "CuckooFilter - varied sizes" {
+    const allocator = std.testing.allocator;
+    const element_counts = [_]usize{ 1, 2, 3, 7, 31, 127, 499, 1_023, 4_095 };
+
+    for (element_counts) |element_count| {
+        const filter_size = try CuckooFilter.capacityForCount(element_count);
+        const buckets = try allocator.alloc(CuckooFilter.Bucket, filter_size);
+        defer allocator.free(buckets);
+        const filter: CuckooFilter = .init(buckets);
+        var entries: std.AutoHashMapUnmanaged(Trigram, void) = .empty;
+        defer entries.deinit(allocator);
+        try entries.ensureTotalCapacity(allocator, @intCast(element_count));
+
+        for (0..64) |seed| {
+            filter.reset();
+            entries.clearRetainingCapacity();
+            var source_prng: std.Random.DefaultPrng = .init(seed);
+            var filter_prng: std.Random.DefaultPrng = .init(~seed);
+            while (entries.count() < element_count) {
+                const trigram: Trigram = @bitCast(source_prng.random().int(u24));
+                if (entries.contains(trigram)) continue;
+                entries.putAssumeCapacity(trigram, {});
+                try filter.append(filter_prng.random(), trigram);
+            }
+            var key_iterator = entries.keyIterator();
+            while (key_iterator.next()) |trigram| try std.testing.expect(filter.contains(trigram.*));
+        }
     }
 }
