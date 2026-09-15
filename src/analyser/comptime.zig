@@ -4484,16 +4484,19 @@ pub const Interpreter = struct {
             else => return null,
         };
         const variable = declaration.handle.tree.fullVarDecl(declaration_node) orelse return null;
-        if (variable.ast.type_node.unwrap() == null) return null;
         const declaration_value = try declaration.resolveType(self.analyser) orelse return null;
         const pointer_type = try declaration_value.typeOf(self.analyser);
-        if ((try pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .slice) return null;
+        const initializer = unwrapGroupedSource(
+            &declaration.handle.tree,
+            variable.ast.init_node.unwrap() orelse return null,
+        );
+        const pointer_size = (try pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) orelse return null;
+        if (pointer_size != .slice and
+            declaration.handle.tree.nodeTag(initializer) != .slice and
+            declaration.handle.tree.nodeTag(initializer) != .slice_open) return null;
         return .{
             .handle = declaration.handle,
-            .initializer = unwrapGroupedSource(
-                &declaration.handle.tree,
-                variable.ast.init_node.unwrap() orelse return null,
-            ),
+            .initializer = initializer,
             .pointer_type = pointer_type,
         };
     }
@@ -4504,7 +4507,8 @@ pub const Interpreter = struct {
         pointer: Type,
         require_mutable: bool,
     ) Error!?ArraySliceRegion {
-        if (require_mutable and local.pointer_type.isConstPointerType(self.analyser)) return null;
+        const declared_size = (try local.pointer_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser) orelse return null;
+        if (declared_size == .slice and require_mutable and local.pointer_type.isConstPointerType(self.analyser)) return null;
         const tree = &local.handle.tree;
         const region: ArraySliceRegion = switch (tree.nodeTag(local.initializer)) {
             .slice, .slice_open => slice: {

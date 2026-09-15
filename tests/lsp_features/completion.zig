@@ -9848,12 +9848,16 @@ test "generic function with comptime sliced memset" {
         \\    var values: [4]usize = undefined;
         \\    var holder: Holder = .{ .values = .{ 1, 2, 3, 4 } };
         \\    var local_values = [_]usize{ 1, 2, 3, 4, 5 };
+        \\    var inferred_values = [_]usize{ 1, 2, 3, 4, 5 };
         \\    var full_values: [3]usize = undefined;
         \\    var local_evaluations: usize = 0;
         \\    const local_slice: []usize = local_values[1..end: {
         \\        local_evaluations += 1;
         \\        break :end 4;
         \\    }];
+        \\    var inferred_end: usize = 4;
+        \\    _ = &inferred_end;
+        \\    const inferred_slice = inferred_values[0..inferred_end];
         \\    const full_slice: []usize = &full_values;
         \\    @memset(values[start: {
         \\        evaluations += 1;
@@ -9867,6 +9871,7 @@ test "generic function with comptime sliced memset" {
         \\    });
         \\    @memset(holder.values[1..], 7);
         \\    @memset(local_slice, 9);
+        \\    @memset(inferred_slice, 8);
         \\    @memset(full_slice, 6);
         \\    const final = evaluations;
         \\    return struct {
@@ -9876,6 +9881,8 @@ test "generic function with comptime sliced memset" {
         \\        nested_last: [holder.values[3]]T,
         \\        local_first: [local_values[1]]T,
         \\        local_last: [local_values[4]]T,
+        \\        inferred_first: [inferred_values[0]]T,
+        \\        inferred_boundary: [inferred_values[4]]T,
         \\        full_middle: [full_values[1]]T,
         \\        local_evaluations: [local_evaluations]T,
         \\        evaluations: [final]u8,
@@ -9890,6 +9897,8 @@ test "generic function with comptime sliced memset" {
         .{ .label = "nested_last", .kind = .Field, .detail = "[7]u16" },
         .{ .label = "local_first", .kind = .Field, .detail = "[9]u16" },
         .{ .label = "local_last", .kind = .Field, .detail = "[5]u16" },
+        .{ .label = "inferred_first", .kind = .Field, .detail = "[8]u16" },
+        .{ .label = "inferred_boundary", .kind = .Field, .detail = "[5]u16" },
         .{ .label = "full_middle", .kind = .Field, .detail = "[6]u16" },
         .{ .label = "local_evaluations", .kind = .Field, .detail = "[1]u16" },
         .{ .label = "evaluations", .kind = .Field, .detail = "[5]u8" },
@@ -10178,16 +10187,23 @@ test "generic function with comptime local full slices" {
         \\    const source: []const u8 = "hello";
         \\    var number_source = [_]usize{ 2, 3, 5 };
         \\    var number_destination: [3]usize = undefined;
+        \\    var inferred_source = [_]usize{ 7, 11, 13, 17 };
+        \\    var inferred_destination = [_]usize{ 0, 0, 0, 0 };
         \\    var moved = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
         \\    var separated = [_]usize{ 2, 3, 0, 0 };
         \\    const number_source_slice: []const usize = &number_source;
         \\    const number_destination_slice: []usize = &number_destination;
+        \\    var inferred_end: usize = 3;
+        \\    _ = &inferred_end;
+        \\    const inferred_source_slice = inferred_source[0..inferred_end];
+        \\    const inferred_destination_slice = inferred_destination[1 .. inferred_end + 1];
         \\    const moved_source: []const usize = moved[0..5];
         \\    const moved_destination: []usize = moved[3..8];
         \\    const separated_source: []const usize = separated[0..2];
         \\    const separated_destination: []usize = separated[2..4];
         \\    @memcpy(destination, source);
         \\    @memcpy(number_destination_slice, number_source_slice);
+        \\    @memcpy(inferred_destination_slice, inferred_source_slice);
         \\    @memcpy(separated_destination, separated_source);
         \\    @memmove(moved_destination, moved_source);
         \\    return struct {
@@ -10195,6 +10211,8 @@ test "generic function with comptime local full slices" {
         \\        middle: [buffer[2]]T,
         \\        last: [buffer[4]]T,
         \\        number_middle: [number_destination[1]]T,
+        \\        inferred_first: [inferred_destination[1]]T,
+        \\        inferred_last: [inferred_destination[3]]T,
         \\        separated_last: [separated[3]]T,
         \\        moved_first: [moved[3]]T,
         \\        moved_last: [moved[7]]T,
@@ -10207,6 +10225,8 @@ test "generic function with comptime local full slices" {
         .{ .label = "middle", .kind = .Field, .detail = "[108]u8" },
         .{ .label = "last", .kind = .Field, .detail = "[111]u8" },
         .{ .label = "number_middle", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "inferred_first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "inferred_last", .kind = .Field, .detail = "[13]u8" },
         .{ .label = "separated_last", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "moved_first", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "moved_last", .kind = .Field, .detail = "[5]u8" },
