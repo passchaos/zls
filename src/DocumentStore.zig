@@ -705,14 +705,53 @@ pub const Handle = struct {
     }
 
     const DocumentStoreContext = struct {
+        fn declarationCapacity(tree: *const Ast) usize {
+            return declarationCapacityFromTags(tree.nodes.items(.tag));
+        }
+
+        fn declarationCapacityFromTags(tags: []const Ast.Node.Tag) usize {
+            const baseline = if (tags.len < 256) 0 else tags.len / 24 + 32;
+            if (tags.len < 4096) return baseline;
+
+            // A bounded sample catches generated sources and platform constant
+            // tables whose declaration density is far above the usual ratio.
+            const sample_count = 64;
+            var declaration_tags: usize = 0;
+            for (0..sample_count) |sample_index| {
+                const index: usize = @intCast(
+                    (@as(u64, @intCast(sample_index)) * @as(u64, @intCast(tags.len))) / sample_count,
+                );
+                switch (tags[index]) {
+                    .global_var_decl,
+                    .local_var_decl,
+                    .simple_var_decl,
+                    .aligned_var_decl,
+                    .fn_proto,
+                    .fn_proto_multi,
+                    .fn_proto_one,
+                    .fn_proto_simple,
+                    .fn_decl,
+                    .container_field,
+                    .container_field_init,
+                    .container_field_align,
+                    => declaration_tags += 1,
+                    else => {},
+                }
+            }
+            // Keep ordinary source files on the stable baseline estimate.
+            if (declaration_tags <= sample_count / 8) return baseline;
+
+            const sampled_estimate: usize = @intCast(
+                (@as(u64, @intCast(declaration_tags)) * @as(u64, @intCast(tags.len))) / sample_count + 32,
+            );
+            return @max(baseline, sampled_estimate);
+        }
+
         fn create(handle: *Handle, allocator: std.mem.Allocator) error{OutOfMemory}!DocumentScope {
             // Pre-sizing the coupled declaration containers avoids repeated growth
             // before they are compacted by shrinkToFit below. Keep small ASTs on
             // the lazy allocation path to avoid adding work for tiny documents.
-            const declaration_capacity = if (handle.tree.nodes.len < 256)
-                0
-            else
-                handle.tree.nodes.len / 24 + 32;
+            const declaration_capacity = declarationCapacity(&handle.tree);
             var document_scope: DocumentScope = try .initWithDeclarationCapacity(
                 allocator,
                 &handle.tree,
@@ -1168,6 +1207,17 @@ fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri
     }
 
     return true;
+}
+
+test "document declaration capacity sampling" {
+    const small = [_]Ast.Node.Tag{.container_field} ** 255;
+    try std.testing.expectEqual(0, Handle.DocumentStoreContext.declarationCapacityFromTags(&small));
+
+    const ordinary = [_]Ast.Node.Tag{.identifier} ** 4096;
+    try std.testing.expectEqual(ordinary.len / 24 + 32, Handle.DocumentStoreContext.declarationCapacityFromTags(&ordinary));
+
+    const dense = [_]Ast.Node.Tag{.container_field} ** 4096;
+    try std.testing.expectEqual(dense.len + 32, Handle.DocumentStoreContext.declarationCapacityFromTags(&dense));
 }
 
 test matchesWorkspaceSymbolFilter {
