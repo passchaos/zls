@@ -9991,6 +9991,43 @@ test "generic function with comptime mixed memory copies" {
     });
 }
 
+test "generic function with comptime slice pointer memory copies" {
+    try testCompletion(
+        \\const source = [_]usize{ 2, 3, 5, 7, 11 };
+        \\fn Select(comptime T: type) type {
+        \\    var copied_from_pointer = [_]usize{ 0, 0, 0 };
+        \\    var copied_to_pointer = [_]usize{ 0, 0, 0, 0 };
+        \\    var separated = [_]usize{ 1, 2, 3, 4 };
+        \\    var separated_source = [_]usize{ 1, 2, 3, 4 };
+        \\    var moved = [_]usize{ 1, 2, 3, 4, 5, 6, 7, 8 };
+        \\    @memcpy(copied_from_pointer[0..3], source[1..2].ptr);
+        \\    @memcpy(copied_to_pointer[1..2].ptr, source[2..5]);
+        \\    @memcpy(separated[2..].ptr, separated[0..2]);
+        \\    @memcpy(separated_source[0..2], separated_source[2..3].ptr);
+        \\    const len: usize = 5;
+        \\    @memmove(moved[3..].ptr, moved[0..len]);
+        \\    @memmove(moved[2..7].ptr, moved[3 .. len + 3]);
+        \\    return struct {
+        \\        source_pointer: [copied_from_pointer[2]]T,
+        \\        destination_pointer: [copied_to_pointer[3]]T,
+        \\        disjoint_pointer: [separated[3]]T,
+        \\        disjoint_source_pointer: [separated_source[0]]T,
+        \\        moved_first: [moved[2]]T,
+        \\        moved_last: [moved[6]]T,
+        \\    };
+        \\}
+        \\const selected: Select(u16) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "source_pointer", .kind = .Field, .detail = "[7]u16" },
+        .{ .label = "destination_pointer", .kind = .Field, .detail = "[11]u16" },
+        .{ .label = "disjoint_pointer", .kind = .Field, .detail = "[2]u16" },
+        .{ .label = "disjoint_source_pointer", .kind = .Field, .detail = "[3]u16" },
+        .{ .label = "moved_first", .kind = .Field, .detail = "[1]u16" },
+        .{ .label = "moved_last", .kind = .Field, .detail = "[5]u16" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {

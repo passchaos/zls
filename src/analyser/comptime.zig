@@ -2611,18 +2611,22 @@ pub const Interpreter = struct {
                     if (params.len != 2) return null;
                     const destination_node = unwrapGroupedSource(&handle.tree, params[0]);
                     const source_node = unwrapGroupedSource(&handle.tree, params[1]);
-                    if ((handle.tree.nodeTag(destination_node) == .slice or
-                        handle.tree.nodeTag(destination_node) == .slice_open) or
-                        (handle.tree.nodeTag(source_node) == .slice or
-                            handle.tree.nodeTag(source_node) == .slice_open))
+                    if (self.isDirectArrayRegionSyntax(handle, destination_node) or
+                        self.isDirectArrayRegionSyntax(handle, source_node))
                     {
-                        const destination = try self.fixedArrayRegion(handle, destination_node, true) orelse return null;
-                        const source = try self.fixedArrayRegion(handle, source_node, false) orelse return null;
-                        const destination_len = destination.end - destination.start;
-                        const source_len = source.end - source.start;
-                        if (destination_len != source_len or
-                            !destination.element_type.eql(source.element_type) or
-                            destination_len > self.budget.steps) return null;
+                        const destination_operand = try self.fixedArrayCopyOperand(handle, destination_node, true) orelse return null;
+                        const source_operand = try self.fixedArrayCopyOperand(handle, source_node, false) orelse return null;
+                        const copy_len = if (destination_operand.provided_len) |destination_len|
+                            if (source_operand.provided_len) |source_len|
+                                if (destination_len == source_len) destination_len else return null
+                            else
+                                destination_len
+                        else
+                            source_operand.provided_len orelse return null;
+                        const destination = self.arrayCopyRegion(destination_operand, copy_len) orelse return null;
+                        const source = self.arrayCopyRegion(source_operand, copy_len) orelse return null;
+                        if (!destination.element_type.eql(source.element_type) or
+                            copy_len > self.budget.steps) return null;
                         if (std.mem.eql(u8, name, "@memcpy") and
                             !(self.arraySliceRegionsDisjoint(destination, source) orelse return null)) return null;
                         const source_current = try self.arraySliceRegionItems(source) orelse return null;
@@ -4316,6 +4320,12 @@ pub const Interpreter = struct {
         end: usize,
     };
 
+    const ArrayCopyOperand = struct {
+        region: ArraySliceRegion,
+        provided_len: ?usize,
+        capacity_end: usize,
+    };
+
     fn fixedArrayInfo(self: *Interpreter, array_type: Type) ?FixedArrayInfo {
         if (!array_type.is_type_val) return null;
         return switch (array_type.data) {
@@ -4387,6 +4397,26 @@ pub const Interpreter = struct {
         return self.arraySliceRegion(handle, node, true);
     }
 
+    fn directArraySlicePointer(tree: *const Ast, node: Ast.Node.Index) ?Ast.Node.Index {
+        const unwrapped = unwrapGroupedSource(tree, node);
+        if (tree.nodeTag(unwrapped) != .field_access) return null;
+        const base, const field_token = tree.nodeData(unwrapped).node_and_token;
+        if (!std.mem.eql(u8, offsets.identifierTokenToNameSlice(tree, field_token), "ptr")) return null;
+        const slice_node = unwrapGroupedSource(tree, base);
+        return switch (tree.nodeTag(slice_node)) {
+            .slice, .slice_open => slice_node,
+            else => null,
+        };
+    }
+
+    fn isDirectArrayRegionSyntax(_: *Interpreter, handle: *Handle, node: Ast.Node.Index) bool {
+        const unwrapped = unwrapGroupedSource(&handle.tree, node);
+        return switch (handle.tree.nodeTag(unwrapped)) {
+            .slice, .slice_open => true,
+            else => directArraySlicePointer(&handle.tree, unwrapped) != null,
+        };
+    }
+
     fn fixedArrayRegion(
         self: *Interpreter,
         handle: *Handle,
@@ -4415,6 +4445,36 @@ pub const Interpreter = struct {
             .start = 0,
             .end = info.len,
         };
+    }
+
+    fn fixedArrayCopyOperand(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        require_mutable: bool,
+    ) Error!?ArrayCopyOperand {
+        if (directArraySlicePointer(&handle.tree, node)) |slice_node| {
+            const region = try self.arraySliceRegion(handle, slice_node, require_mutable) orelse return null;
+            const info = self.fixedArrayInfo(region.array_type) orelse return null;
+            return .{
+                .region = region,
+                .provided_len = null,
+                .capacity_end = info.len,
+            };
+        }
+        const region = try self.fixedArrayRegion(handle, node, require_mutable) orelse return null;
+        return .{
+            .region = region,
+            .provided_len = region.end - region.start,
+            .capacity_end = region.end,
+        };
+    }
+
+    fn arrayCopyRegion(_: *Interpreter, operand: ArrayCopyOperand, len: usize) ?ArraySliceRegion {
+        if (operand.region.start > operand.capacity_end or len > operand.capacity_end - operand.region.start) return null;
+        var region = operand.region;
+        region.end = region.start + len;
+        return region;
     }
 
     fn arraySliceRegionsDisjoint(_: *Interpreter, lhs: ArraySliceRegion, rhs: ArraySliceRegion) ?bool {
