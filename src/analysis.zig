@@ -8056,7 +8056,7 @@ fn resolveStructTypeConstructor(
         .node_handle = .of(params[1], handle),
         .container_type = container_type,
     }) orelse return null;
-    var backing_type: InternPool.Index = if (backing_type_value.ipIndex()) |index|
+    const backing_type: InternPool.Index = if (backing_type_value.ipIndex()) |index|
         if (analyser.ip.isNull(index))
             .none
         else if (backing_type_value.is_type_val and analyser.ip.zigTypeTag(index) == .int)
@@ -8095,6 +8095,20 @@ fn resolveStructTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try analyser.arena.alloc(InternPool.Index, resolved_types.len);
     for (field_types, resolved_types) |*index, ty| index.* = ty.ipIndex() orelse .unknown_type;
+    return analyser.createComptimeStructType(layout, backing_type, names, resolved_types, field_types, alignments);
+}
+
+fn createComptimeStructType(
+    analyser: *Analyser,
+    layout: std.builtin.Type.ContainerLayout,
+    initial_backing_type: InternPool.Index,
+    names: []const []const u8,
+    resolved_types: []const Type,
+    field_types: []const InternPool.Index,
+    alignments: []const u16,
+) Error!?Type {
+    if (names.len != resolved_types.len or names.len != field_types.len or names.len != alignments.len) return null;
+    var backing_type = initial_backing_type;
     if (layout == .@"packed") {
         var total_bits: u64 = 0;
         for (field_types, alignments) |field_type, alignment| {
@@ -8138,6 +8152,106 @@ fn resolveStructTypeConstructor(
     };
     try analyser.generated_struct_fields.put(analyser.gpa, struct_type, generated_fields);
     return Type.fromIP(analyser, .type_type, struct_type);
+}
+
+pub const ComptimeStructFieldArrayTypes = struct {
+    field_types: Type,
+    attributes: Type,
+};
+
+pub fn comptimeStructFieldArrayTypes(
+    analyser: *Analyser,
+    field_count: usize,
+) Error!?ComptimeStructFieldArrayTypes {
+    const field_types_array = try Type.createArrayType(
+        analyser,
+        field_count,
+        .none,
+        Type.fromIP(analyser, .type_type, .type_type),
+    );
+    const attributes_instance = try analyser.instanceStdBuiltinType("Type.StructField.Attributes") orelse return null;
+    const attributes_type = try attributes_instance.typeOf(analyser);
+    const attributes_array = try Type.createArrayType(analyser, field_count, .none, attributes_type);
+    return .{
+        .field_types = try Type.createPointerType(analyser, .one, .none, true, field_types_array),
+        .attributes = try Type.createPointerType(analyser, .one, .none, true, attributes_array),
+    };
+}
+
+pub fn resolveComptimeStructTypeValue(
+    analyser: *Analyser,
+    layout_value: Type,
+    backing_type_value: Type,
+    names_value: Type,
+    field_types_value: Type,
+    attributes_value: Type,
+) Error!?Type {
+    const layout = comptimeEnumValue(std.builtin.Type.ContainerLayout, layout_value) orelse return null;
+    const backing_type = switch (optionalComptimeValue(analyser, backing_type_value) orelse return null) {
+        .absent => InternPool.Index.none,
+        .payload => |payload| backing: {
+            if (!payload.is_type_val) return null;
+            const index = payload.ipIndex() orelse return null;
+            if (analyser.ip.zigTypeTag(index) != .int) return null;
+            break :backing index;
+        },
+    };
+    if (layout != .@"packed" and backing_type != .none) return null;
+
+    const names_sequence = try comptime_eval.Value.sequenceAlloc(analyser, names_value) orelse return null;
+    if (!names_sequence.elements_valid) return null;
+    const name_items = names_sequence.backing[names_sequence.offset..][0..names_sequence.len];
+    const names = try analyser.arena.alloc([]const u8, name_items.len);
+    for (name_items, names, 0..) |item, *name, index| {
+        if (item.data != .string_value) return null;
+        name.* = item.data.string_value.bytes;
+        for (names[0..index]) |previous| if (std.mem.eql(u8, previous, name.*)) return null;
+    }
+
+    const field_types_sequence = try comptime_eval.Value.sequenceAlloc(analyser, field_types_value) orelse return null;
+    if (!field_types_sequence.elements_valid or field_types_sequence.len != names.len) return null;
+    const field_type_items = field_types_sequence.backing[field_types_sequence.offset..][0..field_types_sequence.len];
+    const resolved_types = try analyser.arena.dupe(Type, field_type_items);
+    const field_types = try analyser.arena.alloc(InternPool.Index, resolved_types.len);
+    for (field_types, resolved_types) |*index, ty| {
+        if (!ty.is_type_val) return null;
+        index.* = ty.ipIndex() orelse .unknown_type;
+    }
+
+    const attributes_sequence = try comptime_eval.Value.sequenceAlloc(analyser, attributes_value) orelse return null;
+    if (!attributes_sequence.elements_valid or attributes_sequence.len != names.len) return null;
+    const attribute_items = attributes_sequence.backing[attributes_sequence.offset..][0..attributes_sequence.len];
+    const alignments = try analyser.arena.alloc(u16, attribute_items.len);
+    @memset(alignments, 0);
+    for (attribute_items, alignments) |attributes, *alignment| {
+        if (comptime_eval.Value.field(attributes, "comptime")) |value| {
+            if (comptimeBoolValue(value) orelse return null) return null;
+        }
+        if (comptime_eval.Value.field(attributes, "default_value_ptr")) |value| {
+            switch (optionalComptimeValue(analyser, value) orelse return null) {
+                .absent => {},
+                .payload => return null,
+            }
+        }
+        if (comptime_eval.Value.field(attributes, "align")) |value| {
+            switch (optionalComptimeValue(analyser, value) orelse return null) {
+                .absent => {},
+                .payload => |payload| {
+                    alignment.* = analyser.ip.toInt(payload.ipIndex() orelse return null, u16) orelse return null;
+                    if (!std.math.isPowerOfTwo(alignment.*)) return null;
+                },
+            }
+        }
+    }
+
+    return analyser.createComptimeStructType(
+        layout,
+        backing_type,
+        names,
+        resolved_types,
+        field_types,
+        alignments,
+    );
 }
 
 fn resolveUnionFieldAlignments(

@@ -3034,6 +3034,36 @@ test "generic function with comptime Struct type constructor" {
     });
 }
 
+test "generic function with nested comptime Struct mutations" {
+    try testCompletion(
+        \\fn Record(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const S = @Struct(layout: {
+        \\            order *= 2;
+        \\            break :layout .auto;
+        \\        }, backing: {
+        \\            order += 3;
+        \\            break :backing null;
+        \\        }, names: {
+        \\            order *= 2;
+        \\            break :names &.{ "value", "enabled" };
+        \\        }, types: {
+        \\            order += 3;
+        \\            break :types &.{ T, bool };
+        \\        }, attributes: {
+        \\            order *= 2;
+        \\            break :attributes &.{ .{ .@"align" = 4 }, .{} };
+        \\        });
+        \\    return struct { value: S, order: [order]u8 };
+        \\}
+        \\const record: Record(u16) = undefined;
+        \\const field = record.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "struct { value: u16 align(4), enabled: bool }" },
+        .{ .label = "order", .kind = .Field, .detail = "[26]u8" },
+    });
+}
+
 test "generic Struct with mutable comptime field arrays" {
     try testCompletion(
         \\const std = @import("std");
