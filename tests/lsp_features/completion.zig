@@ -3382,6 +3382,36 @@ test "generic function with comptime Union type constructor" {
     });
 }
 
+test "generic function with nested comptime Union mutations" {
+    try testCompletion(
+        \\fn Value(comptime T: type) type {
+        \\    var order: usize = 1;
+        \\    const U = @Union(layout: {
+        \\            order *= 2;
+        \\            break :layout .auto;
+        \\        }, tag_type: {
+        \\            order += 3;
+        \\            break :tag_type null;
+        \\        }, names: {
+        \\            order *= 2;
+        \\            break :names &.{ "value", "enabled" };
+        \\        }, types: {
+        \\            order += 3;
+        \\            break :types &.{ T, bool };
+        \\        }, attributes: {
+        \\            order *= 2;
+        \\            break :attributes &.{ .{ .@"align" = 4 }, .{} };
+        \\        });
+        \\    return struct { value: U, order: [order]u8 };
+        \\}
+        \\const value: Value(u16) = undefined;
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "union { value: u16 align(4), enabled: bool }" },
+        .{ .label = "order", .kind = .Field, .detail = "[26]u8" },
+    });
+}
+
 test "generic function with comptime generated Union values" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

@@ -8312,7 +8312,7 @@ fn resolveUnionTypeConstructor(
         if (analyser.ip.zigTypeTag(argument_type) != .@"enum") return null;
         break :blk argument_type;
     } else .none;
-    var backing_int_ty: InternPool.Index = if (layout == .@"packed" and has_argument_type) blk: {
+    const backing_int_ty: InternPool.Index = if (layout == .@"packed" and has_argument_type) blk: {
         if (analyser.ip.zigTypeTag(argument_type) != .int) return null;
         break :blk argument_type;
     } else .none;
@@ -8338,6 +8338,20 @@ fn resolveUnionTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
     defer analyser.gpa.free(field_types);
+    return analyser.createComptimeUnionType(layout, tag_type, backing_int_ty, names, field_types, alignments);
+}
+
+fn createComptimeUnionType(
+    analyser: *Analyser,
+    layout: std.builtin.Type.ContainerLayout,
+    tag_type: InternPool.Index,
+    initial_backing_int_ty: InternPool.Index,
+    names: []const []const u8,
+    field_types: []const InternPool.Index,
+    alignments: []const u16,
+) Error!?Type {
+    if (names.len != field_types.len or names.len != alignments.len) return null;
+    var backing_int_ty = initial_backing_int_ty;
     if (layout == .@"packed") {
         if (field_types.len == 0) return null;
         const field_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, field_types[0])) orelse return null;
@@ -8384,6 +8398,102 @@ fn resolveUnionTypeConstructor(
     fields = .empty;
     const union_type = try analyser.ip.get(.{ .union_type = union_index });
     return Type.fromIP(analyser, .type_type, union_type);
+}
+
+pub const ComptimeUnionFieldArrayTypes = struct {
+    field_types: Type,
+    attributes: Type,
+};
+
+pub fn comptimeUnionFieldArrayTypes(
+    analyser: *Analyser,
+    field_count: usize,
+) Error!?ComptimeUnionFieldArrayTypes {
+    const field_types_array = try Type.createArrayType(
+        analyser,
+        field_count,
+        .none,
+        Type.fromIP(analyser, .type_type, .type_type),
+    );
+    const attributes_instance = try analyser.instanceStdBuiltinType("Type.UnionField.Attributes") orelse return null;
+    const attributes_type = try attributes_instance.typeOf(analyser);
+    const attributes_array = try Type.createArrayType(analyser, field_count, .none, attributes_type);
+    return .{
+        .field_types = try Type.createPointerType(analyser, .one, .none, true, field_types_array),
+        .attributes = try Type.createPointerType(analyser, .one, .none, true, attributes_array),
+    };
+}
+
+pub fn resolveComptimeUnionTypeValue(
+    analyser: *Analyser,
+    layout_value: Type,
+    argument_type_value: Type,
+    names_value: Type,
+    field_types_value: Type,
+    attributes_value: Type,
+) Error!?Type {
+    const layout = comptimeEnumValue(std.builtin.Type.ContainerLayout, layout_value) orelse return null;
+    const argument_type = switch (optionalComptimeValue(analyser, argument_type_value) orelse return null) {
+        .absent => InternPool.Index.none,
+        .payload => |payload| argument: {
+            if (!payload.is_type_val) return null;
+            break :argument payload.ipIndex() orelse return null;
+        },
+    };
+    const tag_type: InternPool.Index = if (layout == .auto and argument_type != .none) blk: {
+        if (analyser.ip.zigTypeTag(argument_type) != .@"enum") return null;
+        break :blk argument_type;
+    } else .none;
+    const backing_int_ty: InternPool.Index = if (layout == .@"packed" and argument_type != .none) blk: {
+        if (analyser.ip.zigTypeTag(argument_type) != .int) return null;
+        break :blk argument_type;
+    } else .none;
+    if (layout == .@"extern" and argument_type != .none) return null;
+
+    const names_sequence = try comptime_eval.Value.sequenceAlloc(analyser, names_value) orelse return null;
+    if (!names_sequence.elements_valid) return null;
+    const name_items = names_sequence.backing[names_sequence.offset..][0..names_sequence.len];
+    const names = try analyser.arena.alloc([]const u8, name_items.len);
+    for (name_items, names, 0..) |item, *name, index| {
+        if (item.data != .string_value) return null;
+        name.* = item.data.string_value.bytes;
+        for (names[0..index]) |previous| if (std.mem.eql(u8, previous, name.*)) return null;
+    }
+
+    const field_types_sequence = try comptime_eval.Value.sequenceAlloc(analyser, field_types_value) orelse return null;
+    if (!field_types_sequence.elements_valid or field_types_sequence.len != names.len) return null;
+    const field_type_items = field_types_sequence.backing[field_types_sequence.offset..][0..field_types_sequence.len];
+    const field_types = try analyser.arena.alloc(InternPool.Index, field_type_items.len);
+    for (field_types, field_type_items) |*index, ty| {
+        if (!ty.is_type_val) return null;
+        index.* = ty.ipIndex() orelse return null;
+    }
+
+    const attributes_sequence = try comptime_eval.Value.sequenceAlloc(analyser, attributes_value) orelse return null;
+    if (!attributes_sequence.elements_valid or attributes_sequence.len != names.len) return null;
+    const attribute_items = attributes_sequence.backing[attributes_sequence.offset..][0..attributes_sequence.len];
+    const alignments = try analyser.arena.alloc(u16, attribute_items.len);
+    @memset(alignments, 0);
+    for (attribute_items, alignments) |attributes, *alignment| {
+        if (comptime_eval.Value.field(attributes, "align")) |value| {
+            switch (optionalComptimeValue(analyser, value) orelse return null) {
+                .absent => {},
+                .payload => |payload| {
+                    alignment.* = analyser.ip.toInt(payload.ipIndex() orelse return null, u16) orelse return null;
+                    if (!std.math.isPowerOfTwo(alignment.*)) return null;
+                },
+            }
+        }
+    }
+
+    return analyser.createComptimeUnionType(
+        layout,
+        tag_type,
+        backing_int_ty,
+        names,
+        field_types,
+        alignments,
+    );
 }
 
 fn resolveIntegerValueList(
