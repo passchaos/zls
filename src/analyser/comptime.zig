@@ -5008,6 +5008,7 @@ pub const Interpreter = struct {
 
     fn supportsAtomicValue(self: *Interpreter, ty: Type, allow_float: bool) Error!bool {
         if (!ty.is_type_val) return false;
+        if (ty.isAtomicSinglePointerValueType(self.analyser)) return true;
         if (ty.isEnumType(self.analyser)) {
             const bits = try self.analyser.resolveComptimeTypeSizeValue(ty, .bit_size) orelse return false;
             return (self.analyser.ip.toInt(bits.ipIndex() orelse return false, u16) orelse return false) <=

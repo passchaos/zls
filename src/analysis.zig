@@ -15919,6 +15919,11 @@ pub const Type = struct {
             info.elem_ty.eql(child);
     }
 
+    pub fn isAtomicSinglePointerValueType(self: Type, analyser: *Analyser) bool {
+        const info = self.pointerCastInfo(analyser) orelse return false;
+        return info.pointer.size == .one and (!info.is_optional or !info.pointer.is_allowzero);
+    }
+
     pub const PointerQualifierCast = enum { discard_const, discard_volatile, increase_alignment };
 
     pub fn qualifierCastType(
