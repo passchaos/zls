@@ -4351,6 +4351,35 @@ pub const Interpreter = struct {
         };
     }
 
+    fn stringArrayRegion(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        value: Type,
+    ) Error!?ArraySliceRegion {
+        if (value.data != .string_value) return null;
+        const array_value = try self.analyser.resolveDerefType(value) orelse return null;
+        const info = self.fixedArrayInfo(try array_value.typeOf(self.analyser)) orelse return null;
+        const bytes = value.data.string_value.bytes;
+        if (bytes.len != info.len or info.element_type.ipIndex() != .u8_type or info.len > self.budget.steps) return null;
+        const items = try self.analyser.arena.alloc(Type, bytes.len);
+        for (bytes, items) |byte, *item| {
+            const index = try self.analyser.ip.get(.{ .int_u64_value = .{
+                .ty = .u8_type,
+                .int = byte,
+            } });
+            item.* = Type.fromIP(self.analyser, .u8_type, index);
+        }
+        const current = try Value.create(self.analyser, info.array_type, .{ .array = items });
+        return .{
+            .target = self.temporaryCaptureTarget(handle, node, current),
+            .array_type = info.array_type,
+            .element_type = info.element_type,
+            .start = 0,
+            .end = info.len,
+        };
+    }
+
     fn arraySliceRegion(
         self: *Interpreter,
         handle: *Handle,
@@ -4441,6 +4470,7 @@ pub const Interpreter = struct {
         const unwrapped = unwrapGroupedSource(&handle.tree, node);
         return switch (handle.tree.nodeTag(unwrapped)) {
             .slice, .slice_open => true,
+            .string_literal, .multiline_string_literal => true,
             else => directArrayPointerCastSyntax: {
                 if (directArraySlicePointer(&handle.tree, unwrapped) != null) break :directArrayPointerCastSyntax true;
                 const pointer = directArrayPointerCast(&handle.tree, unwrapped) orelse
@@ -4510,6 +4540,8 @@ pub const Interpreter = struct {
             return self.arraySliceRegion(handle, unwrapped, require_mutable);
         }
         const pointer = try self.evalPreservingPointerIdentity(handle, node) orelse return null;
+        if (!require_mutable)
+            if (try self.stringArrayRegion(handle, node, pointer)) |region| return region;
         if (pointer.data != .comptime_value or
             (try pointer.data.comptime_value.ty.instanceUnchecked(self.analyser)).pointerSize(self.analyser) != .one) return null;
         const target: CaptureTarget = switch (pointer.data.comptime_value.data) {

@@ -10090,6 +10090,31 @@ test "generic function with comptime C pointer memory copies" {
     });
 }
 
+test "generic function with comptime string memory copies" {
+    try testCompletion(
+        \\fn Select(comptime T: type) type {
+        \\    const source = "hello";
+        \\    var literal_destination: [5]u8 = undefined;
+        \\    var identifier_destination: [5]u8 = undefined;
+        \\    @memcpy(&literal_destination, "world");
+        \\    @memmove(identifier_destination[0..5], source);
+        \\    return struct {
+        \\        literal_first: [literal_destination[0]]T,
+        \\        literal_last: [literal_destination[4]]T,
+        \\        identifier_first: [identifier_destination[0]]T,
+        \\        identifier_last: [identifier_destination[4]]T,
+        \\    };
+        \\}
+        \\const selected: Select(u8) = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "literal_first", .kind = .Field, .detail = "[119]u8" },
+        .{ .label = "literal_last", .kind = .Field, .detail = "[100]u8" },
+        .{ .label = "identifier_first", .kind = .Field, .detail = "[104]u8" },
+        .{ .label = "identifier_last", .kind = .Field, .detail = "[111]u8" },
+    });
+}
+
 test "generic function with nested comptime compileLog mutations" {
     try testCompletion(
         \\fn Select() type {
