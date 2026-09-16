@@ -898,6 +898,10 @@ fn mergeIntersection(
     a: []const Declaration.Index,
     b: []Declaration.Index,
 ) u32 {
+    if (a.len == 0 or b.len == 0) return 0;
+    if (isSkewed(a.len, b.len)) return binaryIntersectionInto(b, a, b);
+    if (isSkewed(b.len, a.len)) return binaryIntersectionInto(a, b, b);
+
     var out_idx: u32 = 0;
 
     var a_idx: u32 = 0;
@@ -928,6 +932,10 @@ fn mergeIntersectionInto(
     output: []Declaration.Index,
 ) u32 {
     assert(output.len >= @min(a.len, b.len));
+    if (a.len == 0 or b.len == 0) return 0;
+    if (isSkewed(a.len, b.len)) return binaryIntersectionInto(b, a, output);
+    if (isSkewed(b.len, a.len)) return binaryIntersectionInto(a, b, output);
+
     var out_index: u32 = 0;
     var a_index: usize = 0;
     var b_index: usize = 0;
@@ -948,8 +956,58 @@ fn mergeIntersectionInto(
     return out_index;
 }
 
+// Benchmarks with uniformly distributed sorted indexes put the crossover near
+// 64:1. Keep moderately skewed inputs on the cache-friendly linear merge.
+const binary_intersection_ratio = 64;
+
+fn isSkewed(long_len: usize, short_len: usize) bool {
+    return short_len != 0 and long_len / binary_intersection_ratio >= short_len;
+}
+
+fn binaryIntersectionInto(
+    short: []const Declaration.Index,
+    long: []const Declaration.Index,
+    output: []Declaration.Index,
+) u32 {
+    assert(short.len <= output.len);
+    var out_index: u32 = 0;
+    var long_start: usize = 0;
+    for (short) |needle| {
+        long_start += lowerBoundDeclaration(long[long_start..], needle);
+        if (long_start == long.len) break;
+        if (long[long_start] == needle) {
+            output[out_index] = needle;
+            out_index += 1;
+            long_start += 1;
+        }
+    }
+    return out_index;
+}
+
+fn lowerBoundDeclaration(items: []const Declaration.Index, needle: Declaration.Index) usize {
+    var low: usize = 0;
+    var high: usize = items.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (@intFromEnum(items[mid]) < @intFromEnum(needle)) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
 test mergeIntersection {
     const I = Declaration.Index;
+    try std.testing.expect(!isSkewed(63, 1));
+    try std.testing.expect(isSkewed(64, 1));
+    try std.testing.expect(!isSkewed(64, 2));
+
+    var empty: [0]I = .{};
+    try std.testing.expectEqual(@as(u32, 0), mergeIntersection(&.{}, &empty));
+    var empty_output: [0]I = .{};
+    try std.testing.expectEqual(@as(u32, 0), mergeIntersectionInto(&.{}, &.{}, &empty_output));
 
     const a = [_]I{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5), @enumFromInt(8) };
     var b = [_]I{ @enumFromInt(0), @enumFromInt(1), @enumFromInt(2), @enumFromInt(3), @enumFromInt(4), @enumFromInt(5) };
@@ -994,6 +1052,21 @@ test mergeIntersection {
         const random_len = mergeIntersection(random_a[0..a_len], random_b[0..b_len]);
         try std.testing.expectEqualSlices(I, expected[0..expected_len], random_b[0..random_len]);
     }
+
+    var long: [4096]I = undefined;
+    for (&long, 0..) |*item, value| item.* = @enumFromInt(value * 2);
+    const short = [_]I{ @enumFromInt(0), @enumFromInt(2048), @enumFromInt(4095), @enumFromInt(8190), @enumFromInt(9000) };
+    const skewed_expected = [_]I{ @enumFromInt(0), @enumFromInt(2048), @enumFromInt(8190) };
+    var long_copy = long;
+    var short_copy = short;
+    const short_into_long_len = mergeIntersection(&short, &long_copy);
+    const long_into_short_len = mergeIntersection(&long, &short_copy);
+    try std.testing.expectEqualSlices(I, &skewed_expected, long_copy[0..short_into_long_len]);
+    try std.testing.expectEqualSlices(I, &skewed_expected, short_copy[0..long_into_short_len]);
+
+    var direct_skewed: [short.len]I = undefined;
+    const direct_skewed_len = mergeIntersectionInto(&long, &short, &direct_skewed);
+    try std.testing.expectEqualSlices(I, &skewed_expected, direct_skewed[0..direct_skewed_len]);
 }
 
 test "declarations and query results stay in source order" {
