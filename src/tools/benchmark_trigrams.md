@@ -51,6 +51,30 @@ improved raw repeated and periodic hits by 90% and 83%, respectively. It falls
 back to the prior replay algorithm after 32 unique trigrams. Other raw and
 reusable-prepared cases did not regress.
 
+## Short raw repeated-prefix queries, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
+declarations per generated symbol family, and 1,024 rounds per sample. The
+baseline was `b40d9053`; both executables were pinned to the same CPU for 16
+counterbalanced runs. The benchmark adds an eight-character repeated-trigram
+hit, which is too short for the long-query rare-posting path.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 10,594 | 10,605 | 10,511 | 10,517 |
+| late-selective | 816 | 814 | 672 | 674 |
+| early-selective | 493 | 499 | 405 | 406 |
+| equal near-miss | 16,795 | 16,815 | 16,737 | 16,746 |
+| short repeated hit | 7,660 | 1,692 | 1,582 | 1,582 |
+| repeated hit | 1,839 | 1,841 | 1,582 | 1,582 |
+| periodic hit | 19,958 | 20,024 | 16,959 | 17,061 |
+| repeated miss | 128 | 129 | 82 | 82 |
+| missing suffix | 128 | 129 | 82 | 82 |
+
+All result counts and checksums matched. A non-inlined path that recognizes an
+equal first trigram and skips its later repetitions improved the short raw hit
+by 78%. Other changes stayed within 1.2%.
+
 ## Adaptive skewed intersection, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096 generated

@@ -519,6 +519,11 @@ pub fn declarationSliceForQuery(
     }
 
     const second = (store.trigram_to_declarations.get(second_trigram) orelse return &.{}).slice(store.postings);
+    if (query.len <= Query.inline_capacity + 2 and
+        TrigramContext.toInt(first_trigram) == TrigramContext.toInt(second_trigram))
+    {
+        return store.intersectRawQueryAfterRepeatedPrefix(allocator, query, declaration_buffer, first_trigram, first);
+    }
     if (query.len > Query.inline_capacity + 2 and
         first.len >= filter_min_posting_len and second.len >= filter_min_posting_len)
     {
@@ -549,6 +554,41 @@ pub fn declarationSliceForQuery(
         if (len == 0) break;
     }
     return declaration_buffer.items;
+}
+
+noinline fn intersectRawQueryAfterRepeatedPrefix(
+    store: *const TrigramStore,
+    allocator: std.mem.Allocator,
+    query: []const u8,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+    repeated_trigram: Trigram,
+    declarations: []const Declaration.Index,
+) error{OutOfMemory}![]const Declaration.Index {
+    var iterator: TrigramIterator = .init(query);
+    _ = iterator.next();
+    _ = iterator.next();
+    while (iterator.next()) |trigram| {
+        if (TrigramContext.toInt(trigram) == TrigramContext.toInt(repeated_trigram)) continue;
+        const posting = (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
+        try declaration_buffer.resize(allocator, @min(declarations.len, posting.len));
+        var len = mergeIntersectionInto(declarations, posting, declaration_buffer.items);
+        declaration_buffer.shrinkRetainingCapacity(len);
+        if (len == 0) return declaration_buffer.items;
+        while (iterator.next()) |remaining_trigram| {
+            if (TrigramContext.toInt(remaining_trigram) == TrigramContext.toInt(repeated_trigram)) continue;
+            len = mergeIntersection(
+                (store.trigram_to_declarations.get(remaining_trigram) orelse {
+                    declaration_buffer.clearRetainingCapacity();
+                    return &.{};
+                }).slice(store.postings),
+                declaration_buffer.items[0..len],
+            );
+            declaration_buffer.shrinkRetainingCapacity(len);
+            if (len == 0) break;
+        }
+        return declaration_buffer.items;
+    }
+    return declarations;
 }
 
 const PostingSeed = struct {
@@ -1533,6 +1573,17 @@ test "long queries start with rare posting lists" {
     prepared_buffer.clearRetainingCapacity();
     const periodic_prepared = try store.declarationSliceForPreparedQuery(allocator, &periodic_query, &prepared_buffer);
     try std.testing.expectEqualSlices(Declaration.Index, periodic_raw, periodic_prepared);
+
+    raw_buffer.clearRetainingCapacity();
+    const short_repeated_text = "aaaaaaaa";
+    const short_repeated_raw = try store.declarationSliceForQuery(allocator, short_repeated_text, &raw_buffer);
+    try std.testing.expectEqual(@as(usize, 0), raw_buffer.items.len);
+
+    var short_repeated_query = try Query.init(allocator, short_repeated_text);
+    defer short_repeated_query.deinit(allocator);
+    prepared_buffer.clearRetainingCapacity();
+    const short_repeated_prepared = try store.declarationSliceForPreparedQuery(allocator, &short_repeated_query, &prepared_buffer);
+    try std.testing.expectEqualSlices(Declaration.Index, short_repeated_raw, short_repeated_prepared);
 
     raw_buffer.clearRetainingCapacity();
     const overflow_text = "abcdefghijklmnopqrstuvwxyz0123456789";

@@ -66,6 +66,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "late-selective", .query = "common_symbol_unique_tail", .expected_count = 1 },
         .{ .name = "early-selective", .query = "unique_tail_common_symbol", .expected_count = 1 },
         .{ .name = "equal-near-miss", .query = "abcde", .expected_count = declaration_count },
+        .{ .name = "short-repeated-hit", .query = "aaaaaaaa", .expected_count = declaration_count },
         .{ .name = "repeated-hit", .query = "aaaaaaaaaaaaaaaaaaaa", .expected_count = declaration_count },
         .{ .name = "periodic-hit", .query = "abcabcabcabcabcabcabc", .expected_count = declaration_count },
         .{ .name = "repeated", .query = "common_symbol_common_symbol_unique_tail", .expected_count = 0 },
