@@ -163,7 +163,7 @@ trigram_to_declarations: PostingMap,
 postings: []Declaration.Index,
 declarations: std.MultiArrayList(Declaration),
 
-fn denseDeclarationCapacity(tree: *const Ast) usize {
+pub fn estimatedDeclarationCapacity(tree: *const Ast) usize {
     return denseDeclarationCapacityFromTags(tree.nodes.items(.tag));
 }
 
@@ -211,7 +211,7 @@ pub fn init(
         .declarations = .empty,
     };
     errdefer store.deinit(allocator);
-    try store.declarations.ensureTotalCapacity(allocator, denseDeclarationCapacity(tree));
+    try store.declarations.ensureTotalCapacity(allocator, estimatedDeclarationCapacity(tree));
 
     var posting_occurrences: std.ArrayList(u32) = .empty;
     defer posting_occurrences.deinit(allocator);

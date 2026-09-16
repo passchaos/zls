@@ -105,6 +105,11 @@ long list cannot produce the expensive large/large intersection that the
 filter is meant to avoid, so the filter is now reserved for stores with at
 least two 160-entry posting lists.
 
+The same benchmark rejected using `rootDecls().len` as a declaration-capacity
+lower bound. Across 24 fixed-CPU counterbalanced runs, TrigramStore init
+regressed by 0.3% to 0.7% on all four real files; final compaction erased the
+expected allocation-growth benefit.
+
 ## Bounded raw-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096

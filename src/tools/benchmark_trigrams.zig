@@ -120,13 +120,15 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
     const missing_ns, const missing_sum = try measureRaw(io, allocator, &store, missing_query, 1024);
     if (missing_sum != 0) return error.UnstableChecksum;
     std.debug.print(
-        "{s}: {d} bytes parse={d} ns init={d} ns longest-miss={d} ns declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} longest-trigram={X:0>6} filter-bytes={d}\n",
+        "{s}: {d} bytes parse={d} ns init={d} ns longest-miss={d} ns root-decls={d} declaration-hint={d} declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} longest-trigram={X:0>6} filter-bytes={d}\n",
         .{
             path,
             source.len,
             parse_ns,
             init_ns,
             missing_ns,
+            tree.rootDecls().len,
+            TrigramStore.estimatedDeclarationCapacity(&tree),
             stats.declarations,
             stats.trigrams,
             stats.postings,
