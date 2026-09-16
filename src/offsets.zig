@@ -56,12 +56,23 @@ pub fn advancePosition(
 
     var result = position;
     switch (encoding) {
-        .@"utf-8" => for (text[from_index..to_index]) |c| {
-            if (c == '\n') {
-                result.line += 1;
-                result.character = 0;
-            } else {
-                result.character += 1;
+        .@"utf-8" => {
+            const slice = text[from_index..to_index];
+            if (slice.len >= 64) {
+                const line_count = std.mem.countScalar(u8, slice, '\n');
+                if (line_count == 0) {
+                    result.character += @intCast(slice.len);
+                } else {
+                    result.line += @intCast(line_count);
+                    result.character = @intCast(slice.len - std.mem.findScalarLast(u8, slice, '\n').? - 1);
+                }
+            } else for (slice) |c| {
+                if (c == '\n') {
+                    result.line += 1;
+                    result.character = 0;
+                } else {
+                    result.character += 1;
+                }
             }
         },
         .@"utf-16" => for (text[from_index..to_index]) |c| {
@@ -111,6 +122,13 @@ test advancePosition {
                 try std.testing.expectEqual(expected, actual);
             }
         }
+    }
+
+    const long_text = "a" ** 62 ++ "\n" ++ "b" ** 64 ++ "\ntrailer";
+    inline for (.{ 63, 64, 127, 128, long_text.len }) |to_index| {
+        const expected = offsets.advancePosition(long_text, .{ .line = 5, .character = 7 }, 0, to_index, .@"utf-8");
+        const actual = advancePosition(long_text, .{ .line = 5, .character = 7 }, 0, to_index, .@"utf-8");
+        try std.testing.expectEqual(expected, actual);
     }
 }
 
