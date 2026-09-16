@@ -102,3 +102,25 @@ Counts and checksums remained identical. Common queries improved by 37% raw
 and 41% prepared; the equal-length near-miss improved by 14%. Other changes
 stayed within 1.1%. At the 160-entry activation boundary, common queries
 improved by 31--33%; inputs below the threshold were unchanged within 1%.
+
+## Adjacent prepared-trigram deduplication, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
+declarations per generated symbol family, and 1,024 rounds per sample. The
+baseline was `c5aa7978`; both executables were pinned to the same CPU for 16
+counterbalanced runs. The benchmark adds a 20-character repeated-trigram hit.
+Values below are median nanoseconds per query.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 10,604 | 10,582 | 10,553 | 10,496 |
+| late-selective | 868 | 861 | 681 | 679 |
+| early-selective | 500 | 501 | 412 | 411 |
+| equal near-miss | 5,543 | 5,519 | 5,481 | 5,473 |
+| repeated hit | 16,328 | 16,309 | 16,147 | 1,581 |
+| repeated miss | 128 | 127 | 82 | 82 |
+| missing suffix | 128 | 126 | 82 | 82 |
+
+All result counts and checksums matched. Removing adjacent duplicate trigrams
+while preparing a reusable query improved the repeated hit by 90%, avoided its
+otherwise unnecessary heap allocation, and left all other cases within 1.6%.

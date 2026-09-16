@@ -175,6 +175,13 @@ pub const Query = struct {
         errdefer query.deinit(allocator);
         var iterator: TrigramIterator = .init(text);
         while (iterator.next()) |trigram| {
+            if (query.len != 0) {
+                const previous = if (query.heap_trigrams) |items|
+                    items[query.len - 1].value
+                else
+                    query.inline_trigrams[query.len - 1].value;
+                if (TrigramContext.toInt(previous) == TrigramContext.toInt(trigram)) continue;
+            }
             if (query.len == inline_capacity) {
                 const heap_trigrams = try allocator.alloc(PreparedTrigram, text.len - 2);
                 @memcpy(heap_trigrams[0..query.len], &query.inline_trigrams);
@@ -994,6 +1001,15 @@ test Query {
         try std.testing.expect(query.heap_trigrams == null);
         try std.testing.expectEqual(Query.inline_capacity, query.trigrams().len);
     }
+
+    {
+        var query = try Query.init(allocator, "aaaaaaaaaaaaaaaaaaaa");
+        defer query.deinit(allocator);
+
+        try std.testing.expect(query.heap_trigrams == null);
+        try std.testing.expectEqual(@as(usize, 1), query.trigrams().len);
+        try std.testing.expectEqual("aaa".*, query.trigrams()[0].value);
+    }
 }
 
 test TrigramContext {
@@ -1376,8 +1392,13 @@ test "prepared queries match string queries" {
         try std.testing.expectEqualSlices(Declaration.Index, string_results.items, prepared_results.items);
         try std.testing.expectEqualSlices(Declaration.Index, string_results.items, raw_slice);
         try std.testing.expectEqualSlices(Declaration.Index, string_results.items, prepared_slice);
-        if (query.trigrams().len == 1 and string_results.items.len != 0) {
+        var raw_iterator: TrigramIterator = .init(text);
+        _ = raw_iterator.next();
+        const raw_has_one_trigram = raw_iterator.next() == null;
+        if (raw_has_one_trigram and string_results.items.len != 0) {
             try std.testing.expectEqual(@as(usize, 0), raw_slice_buffer.items.len);
+        }
+        if (query.trigrams().len == 1 and prepared_results.items.len != 0) {
             try std.testing.expectEqual(@as(usize, 0), prepared_slice_buffer.items.len);
         }
         string_results.clearRetainingCapacity();
