@@ -473,6 +473,7 @@ pub fn declarationSliceForQuery(
 ) error{OutOfMemory}![]const Declaration.Index {
     assert(query.len >= 1);
     assert(declaration_buffer.items.len == 0);
+    if (query.len <= 3) return store.declarationsForShortQuery(query);
 
     var ti: TrigramIterator = .init(query);
 
@@ -508,6 +509,22 @@ pub fn declarationSliceForQuery(
         if (len == 0) break;
     }
     return declaration_buffer.items;
+}
+
+fn declarationsForShortQuery(
+    store: *const TrigramStore,
+    query: []const u8,
+) []const Declaration.Index {
+    assert(query.len != 0 and query.len <= 3);
+    var trigram: Trigram = @splat(0);
+    var len: u2 = 0;
+    for (query) |c| {
+        if (c == '_') continue;
+        trigram[len] = std.ascii.toLower(c);
+        len += 1;
+    }
+    if (len == 0) return &.{};
+    return (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
 }
 
 /// Asserts `declaration_buffer.items.len == 0`.
@@ -1033,6 +1050,41 @@ test "prepared queries match string queries" {
         prepared_results.clearRetainingCapacity();
         raw_slice_buffer.clearRetainingCapacity();
         prepared_slice_buffer.clearRetainingCapacity();
+    }
+}
+
+test "short raw queries match trigram normalization" {
+    const allocator = std.testing.allocator;
+    const source: [:0]const u8 =
+        \\const alpha = 1;
+        \\const beta = 2;
+        \\const a_b = 3;
+    ;
+    const queries = [_][]const u8{ "a", "ab", "alp", "ALP", "_a", "a_", "a_b", "___", "zzz" };
+
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+
+    var expected: std.ArrayList(Declaration.Index) = .empty;
+    defer expected.deinit(allocator);
+    for (queries) |query_text| {
+        var iterator: TrigramIterator = .init(query_text);
+        const trigram = iterator.next();
+        try std.testing.expect(iterator.next() == null);
+        if (trigram) |value| {
+            if (store.trigram_to_declarations.get(value)) |posting| {
+                try expected.appendSlice(allocator, posting.slice(store.postings));
+            }
+        }
+
+        var scratch: std.ArrayList(Declaration.Index) = .empty;
+        defer scratch.deinit(allocator);
+        const actual = try store.declarationSliceForQuery(allocator, query_text, &scratch);
+        try std.testing.expectEqualSlices(Declaration.Index, expected.items, actual);
+        try std.testing.expectEqual(@as(usize, 0), scratch.items.len);
+        expected.clearRetainingCapacity();
     }
 }
 
