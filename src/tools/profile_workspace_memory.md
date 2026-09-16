@@ -66,7 +66,13 @@ regression; the useful conclusion is that the position optimization adds no
 allocations and does not materially change resident memory.
 
 An orthogonal run on `5b60bf2f` used 100 cycles with `--rounds 0`. It reached a
-20,304 KiB peak and closed-document RSS increased from 5,448 to 16,140 KiB. A
+20,304 KiB peak and closed-document RSS increased from 3,396 to 10,388 KiB. A
 single cycle with 2,000 rounds (8,000 queries) reached only 13,008 KiB and had no
 cross-cycle growth. This isolates the gradual RSS retention to repeated document
 parse/open/close lifecycles rather than workspace-symbol query arenas.
+
+At 1,000 zero-query cycles, RSS was still increasing: the observed peak was
+54,076 KiB and closed-document RSS rose from 5,056 to 39,128 KiB, with no swap.
+In contrast, repeating the same test with a 77-byte Zig file changed closed RSS
+by only 8 KiB and stabilized in the first 100 cycles. The retention therefore
+depends on document parse/storage allocation sizes, not just message count.
