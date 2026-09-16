@@ -14,8 +14,10 @@ const Uri = @import("../Uri.zig");
 pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspace.Symbol.Params) error{ OutOfMemory, Canceled }!?types.workspace.Symbol.Result {
     if (request.query.len == 0) return null;
 
-    var workspace_uris: std.ArrayList(Uri.SchemeAndPath) = try .initCapacity(arena, server.workspaces.items.len);
-    defer workspace_uris.deinit(arena);
+    var workspace_uri_stack = std.heap.stackFallback(512, server.document_store.allocator);
+    const workspace_uri_allocator = workspace_uri_stack.get();
+    var workspace_uris: std.ArrayList(Uri.SchemeAndPath) = try .initCapacity(workspace_uri_allocator, server.workspaces.items.len);
+    defer workspace_uris.deinit(workspace_uri_allocator);
 
     for (server.workspaces.items) |workspace| {
         workspace_uris.appendAssumeCapacity(workspace.uri.schemeAndPath());
