@@ -176,7 +176,7 @@ pub const Query = struct {
         var iterator: TrigramIterator = .init(text);
         while (iterator.next()) |trigram| {
             if (query.len == inline_capacity) {
-                const heap_trigrams = try allocator.alloc(PreparedTrigram, text.len);
+                const heap_trigrams = try allocator.alloc(PreparedTrigram, text.len - 2);
                 @memcpy(heap_trigrams[0..query.len], &query.inline_trigrams);
                 query.heap_trigrams = heap_trigrams;
             }
@@ -847,6 +847,7 @@ test Query {
 
         try std.testing.expect(query.heap_trigrams != null);
         try std.testing.expectEqual(Query.inline_capacity + 1, query.trigrams().len);
+        try std.testing.expectEqual(text.len - 2, query.heap_trigrams.?.len);
 
         try std.testing.checkAllAllocationFailures(allocator, struct {
             fn init(allocator_: std.mem.Allocator, text_: []const u8) !void {
@@ -854,6 +855,15 @@ test Query {
                 defer result.deinit(allocator_);
             }
         }.init, .{text});
+    }
+
+    {
+        const text = "abcdefghijklmnopqr__";
+        var query = try Query.init(allocator, text);
+        defer query.deinit(allocator);
+
+        try std.testing.expect(query.heap_trigrams == null);
+        try std.testing.expectEqual(Query.inline_capacity, query.trigrams().len);
     }
 }
 
