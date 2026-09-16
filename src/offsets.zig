@@ -96,12 +96,26 @@ pub fn advancePosition(
                 }
             }
         },
-        .@"utf-32" => for (text[from_index..to_index]) |c| {
-            if (c == '\n') {
-                result.line += 1;
-                result.character = 0;
-            } else if (c < 0x80 or c >= 0xC0) {
-                result.character += 1;
+        .@"utf-32" => {
+            const slice = text[from_index..to_index];
+            if (slice.len >= 64) {
+                const line_count = std.mem.countScalar(u8, slice, '\n');
+                const relevant_slice = if (line_count == 0) slice else blk: {
+                    result.line += @intCast(line_count);
+                    result.character = 0;
+                    break :blk slice[std.mem.findScalarLast(u8, slice, '\n').? + 1 ..];
+                };
+                // No newlines remain, so the codepoint count can be vectorized.
+                var characters: usize = 0;
+                for (relevant_slice) |c| characters += @intFromBool(c < 0x80 or c >= 0xC0);
+                result.character += @intCast(characters);
+            } else for (slice) |c| {
+                if (c == '\n') {
+                    result.line += 1;
+                    result.character = 0;
+                } else if (c < 0x80 or c >= 0xC0) {
+                    result.character += 1;
+                }
             }
         },
     }
@@ -111,7 +125,26 @@ pub const countCodeUnits = offsets.countCodeUnits;
 pub const getNCodeUnitByteCount = offsets.getNCodeUnitByteCount;
 
 test advancePosition {
-    const text = "a¶↉🠁\r\nxy\n🇺🇸 end";
+    try testAdvancePositionBoundaries("a¶↉🠁\r\nxy\n🇺🇸 end");
+
+    const long_text = "a" ** 62 ++ "\n" ++ "b" ** 64 ++ "\ntrailer";
+    inline for (.{ 63, 64, 65, 127, 128, long_text.len }) |to_index| {
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            const expected = offsets.advancePosition(long_text, .{ .line = 0, .character = 0 }, 0, to_index, encoding);
+            const actual = advancePosition(long_text, .{ .line = 0, .character = 0 }, 0, to_index, encoding);
+            try std.testing.expectEqual(expected, actual);
+        }
+    }
+}
+
+test "advancePosition long Unicode spans" {
+    try testAdvancePositionBoundaries("a" ** 64 ++ "\ntrailer¶↉🠁");
+    try testAdvancePositionBoundaries("¶↉🠁" ** 16 ++ "end");
+    try testAdvancePositionBoundaries("prefix¶\r\n" ++ "¶↉🠁\r\n" ** 16 ++ "end🇺🇸");
+    try testAdvancePositionBoundaries("¶\n" ++ "\n" ** 64 ++ "\r\n🠁\n");
+}
+
+fn testAdvancePositionBoundaries(comptime text: []const u8) !void {
     var boundaries: [text.len + 1]usize = undefined;
     var boundary_count: usize = 1;
     boundaries[0] = 0;
@@ -132,20 +165,6 @@ test advancePosition {
             }
         }
     }
-
-    const long_text = "a" ** 62 ++ "\n" ++ "b" ** 64 ++ "\ntrailer";
-    inline for (.{ 63, 64, 127, 128, long_text.len }) |to_index| {
-        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16" }) |encoding| {
-            const expected = offsets.advancePosition(long_text, .{ .line = 0, .character = 0 }, 0, to_index, encoding);
-            const actual = advancePosition(long_text, .{ .line = 0, .character = 0 }, 0, to_index, encoding);
-            try std.testing.expectEqual(expected, actual);
-        }
-    }
-
-    const unicode_text = "a" ** 64 ++ "\ntrailer¶↉🠁";
-    const expected = offsets.advancePosition(unicode_text, .{ .line = 0, .character = 0 }, 0, unicode_text.len, .@"utf-16");
-    const actual = advancePosition(unicode_text, .{ .line = 0, .character = 0 }, 0, unicode_text.len, .@"utf-16");
-    try std.testing.expectEqual(expected, actual);
 }
 
 pub const SourceIndexToTokenIndexResult = union(enum) {
