@@ -490,15 +490,15 @@ pub fn declarationSliceForQuery(
         }
     }
 
-    try declaration_buffer.resize(allocator, first.len);
+    const second = (store.trigram_to_declarations.get(second_trigram) orelse return &.{}).slice(store.postings);
+    try declaration_buffer.appendSlice(allocator, first);
+    var len = mergeIntersection(second, declaration_buffer.items);
+    declaration_buffer.shrinkRetainingCapacity(len);
+    if (len == 0) return declaration_buffer.items;
 
-    var len = first.len;
-    @memcpy(declaration_buffer.items[0..len], first);
-
-    var trigram: ?Trigram = second_trigram;
-    while (trigram) |value| : (trigram = ti.next()) {
+    while (ti.next()) |trigram| {
         len = mergeIntersection(
-            (store.trigram_to_declarations.get(value) orelse {
+            (store.trigram_to_declarations.get(trigram) orelse {
                 declaration_buffer.clearRetainingCapacity();
                 return &.{};
             }).slice(store.postings),
