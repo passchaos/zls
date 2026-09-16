@@ -124,3 +124,26 @@ Values below are median nanoseconds per query.
 All result counts and checksums matched. Removing adjacent duplicate trigrams
 while preparing a reusable query improved the repeated hit by 90%, avoided its
 otherwise unnecessary heap allocation, and left all other cases within 1.6%.
+
+## Bounded prepared-trigram deduplication, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
+declarations per generated symbol family, and 1,024 rounds per sample. The
+baseline was `42231aab`; both executables were pinned to the same CPU for 16
+counterbalanced runs. The benchmark adds an 18-character periodic-trigram hit.
+Values below are median nanoseconds per query.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 10,600 | 10,615 | 10,521 | 10,539 |
+| late-selective | 855 | 856 | 673 | 674 |
+| early-selective | 497 | 500 | 406 | 409 |
+| equal near-miss | 16,781 | 16,795 | 16,759 | 16,758 |
+| repeated hit | 16,300 | 16,321 | 1,581 | 1,582 |
+| periodic hit | 97,024 | 97,772 | 96,921 | 17,125 |
+| repeated miss | 128 | 127 | 82 | 82 |
+| missing suffix | 128 | 127 | 82 | 82 |
+
+All result counts and checksums matched. Scanning at most the first 32 retained
+trigrams for duplicates improved the periodic hit by 82%. Adjacent duplicates
+are still removed at any query length. Other changes stayed within 0.8%.

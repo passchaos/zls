@@ -152,6 +152,7 @@ const PreparedTrigramContext = struct {
 /// multiple stores. Queries of up to 18 non-underscore characters stay inline.
 pub const Query = struct {
     const inline_capacity = 16;
+    const deduplicate_scan_limit = 32;
 
     inline_trigrams: [inline_capacity]PreparedTrigram = undefined,
     heap_trigrams: ?[]PreparedTrigram = null,
@@ -175,29 +176,36 @@ pub const Query = struct {
         errdefer query.deinit(allocator);
         var iterator: TrigramIterator = .init(text);
         while (iterator.next()) |trigram| {
-            if (query.len != 0) {
-                const previous = if (query.heap_trigrams) |items|
-                    items[query.len - 1].value
-                else
-                    query.inline_trigrams[query.len - 1].value;
-                if (TrigramContext.toInt(previous) == TrigramContext.toInt(trigram)) continue;
-            }
-            if (query.len == inline_capacity) {
-                const heap_trigrams = try allocator.alloc(PreparedTrigram, text.len - 2);
-                @memcpy(heap_trigrams[0..query.len], &query.inline_trigrams);
-                query.heap_trigrams = heap_trigrams;
-            }
-
-            const prepared: PreparedTrigram = .{
-                .value = trigram,
-                .map_hash = TrigramContext.hash(.{}, trigram),
-            };
-            if (query.heap_trigrams) |heap_trigrams| {
-                heap_trigrams[query.len] = prepared;
+            const trigram_value = TrigramContext.toInt(trigram);
+            const items = if (query.heap_trigrams) |heap_trigrams|
+                heap_trigrams[0..query.len]
+            else
+                query.inline_trigrams[0..query.len];
+            for (items[0..@min(query.len, deduplicate_scan_limit)]) |existing| {
+                if (TrigramContext.toInt(existing.value) == trigram_value) break;
             } else {
-                query.inline_trigrams[query.len] = prepared;
+                if (query.len > deduplicate_scan_limit and
+                    TrigramContext.toInt(items[query.len - 1].value) == trigram_value)
+                {
+                    continue;
+                }
+                if (query.len == inline_capacity) {
+                    const heap_trigrams = try allocator.alloc(PreparedTrigram, text.len - 2);
+                    @memcpy(heap_trigrams[0..query.len], &query.inline_trigrams);
+                    query.heap_trigrams = heap_trigrams;
+                }
+
+                const prepared: PreparedTrigram = .{
+                    .value = trigram,
+                    .map_hash = TrigramContext.hash(.{}, trigram),
+                };
+                if (query.heap_trigrams) |heap_trigrams| {
+                    heap_trigrams[query.len] = prepared;
+                } else {
+                    query.inline_trigrams[query.len] = prepared;
+                }
+                query.len += 1;
             }
-            query.len += 1;
         }
 
         return query;
@@ -1009,6 +1017,29 @@ test Query {
         try std.testing.expect(query.heap_trigrams == null);
         try std.testing.expectEqual(@as(usize, 1), query.trigrams().len);
         try std.testing.expectEqual("aaa".*, query.trigrams()[0].value);
+    }
+
+    {
+        var query = try Query.init(allocator, "abcabcabcabcabcabc");
+        defer query.deinit(allocator);
+
+        const expected = [_]Trigram{ "abc".*, "bca".*, "cab".* };
+        try std.testing.expect(query.heap_trigrams == null);
+        try std.testing.expectEqual(expected.len, query.trigrams().len);
+        for (query.trigrams(), expected) |actual, value| {
+            try std.testing.expectEqual(value, actual.value);
+        }
+    }
+
+    {
+        const unique_prefix = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var query = try Query.init(allocator, unique_prefix ++ "zzzzzzzzzz");
+        defer query.deinit(allocator);
+
+        try std.testing.expect(query.trigrams().len > Query.deduplicate_scan_limit);
+        const trigrams = query.trigrams();
+        try std.testing.expectEqual("zzz".*, trigrams[trigrams.len - 1].value);
+        try std.testing.expect(TrigramContext.toInt(trigrams[trigrams.len - 2].value) != TrigramContext.toInt("zzz".*));
     }
 }
 
