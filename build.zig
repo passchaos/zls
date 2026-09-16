@@ -207,6 +207,23 @@ pub fn build(b: *Build) !void {
         b.step("bench-offsets", "Benchmark source position conversion on Zig files").dependOn(&run.step);
     }
 
+    { // zig build bench-trigrams -Doptimize=ReleaseFast -- [declaration-count] [rounds]
+        const benchmark = b.addExecutable(.{
+            .name = "bench-trigrams",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tools/benchmark_trigrams.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "zls", .module = zls_module }},
+            }),
+            .use_llvm = use_llvm,
+            .use_lld = use_llvm,
+        });
+        const run = b.addRunArtifact(benchmark);
+        if (b.args) |args| run.addArgs(args);
+        b.step("bench-trigrams", "Benchmark workspace-symbol trigram queries").dependOn(&run.step);
+    }
+
     const known_folders_module = b.dependency("known_folders", .{
         .target = target,
         .optimize = optimize,
