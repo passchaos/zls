@@ -51,6 +51,22 @@ can consume orders of magnitude more memory than the resulting server process;
 use `-j1` to prevent concurrent compile steps from multiplying that peak. Disk
 usage under `.zig-cache` is a third, independent measurement.
 
+## Large handle-set scanning, 2026-09-16
+
+The `--extra-empty-documents` mode compared baseline `bc1a42e3` with a candidate
+that scans the document-store handle array under one mutex acquisition instead
+of locking once per handle. Twelve fixed-CPU runs used one `Sema.zig` document,
+256 empty documents, three cycles, and 100 query rounds per cycle. Median
+missing-symbol request time changed from 231.7 to 211.2 microseconds (-8.8%),
+the query phase from 318.7 to 312.8 milliseconds (-1.8%), and total runtime
+from 1.141 to 1.103 seconds (-3.3%). Symbol counts and checksums matched.
+
+A separate twelve-run workload used 20 cycles and `--rounds 0`. Both variants
+had exactly 136 KiB median closed-RSS growth and essentially identical final
+closed RSS. Median observed peaks, 15,974 and 16,494 KiB, stayed within heavily
+overlapping run-to-run ranges. The change adds no allocations or persistent
+state; it only coalesces the existing mutex critical sections.
+
 ## Reference run, 2026-09-16
 
 On aarch64 Linux with Zig 0.16.0 and ZLS baseline `90469930`, a cold, single-job

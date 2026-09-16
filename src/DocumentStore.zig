@@ -1215,14 +1215,20 @@ pub fn loadTrigramStoreList(
     var handles: std.ArrayList(*DocumentStore.Handle) = .empty;
     errdefer handles.deinit(list_allocator);
 
-    var it: HandleIterator = .{ .store = store };
-    while (it.next()) |handle| {
-        const uri = handle.uri.schemeAndPath();
-        if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
-        if (handles.capacity == 0 and capacity_hint != 0) {
-            try handles.ensureTotalCapacityPrecise(list_allocator, @min(it.initial_count, capacity_hint));
+    {
+        store.mutex.lockUncancelable(store.io);
+        defer store.mutex.unlock(store.io);
+
+        const futures = store.handles.values();
+        for (futures) |handle_future| {
+            const handle = handle_future.await(store.io) catch continue;
+            const uri = handle.uri.schemeAndPath();
+            if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
+            if (handles.capacity == 0 and capacity_hint != 0) {
+                try handles.ensureTotalCapacityPrecise(list_allocator, @min(futures.len, capacity_hint));
+            }
+            try handles.append(list_allocator, handle);
         }
-        try handles.append(list_allocator, handle);
     }
 
     const loadTrigramStore = struct {
