@@ -161,6 +161,17 @@ pub const Query = struct {
         assert(text.len != 0);
 
         var query: Query = .{};
+        if (text.len <= 3) {
+            if (shortQueryTrigram(text)) |trigram| {
+                query.inline_trigrams[0] = .{
+                    .value = trigram,
+                    .map_hash = TrigramContext.hash(.{}, trigram),
+                };
+                query.len = 1;
+            }
+            return query;
+        }
+
         errdefer query.deinit(allocator);
         var iterator: TrigramIterator = .init(text);
         while (iterator.next()) |trigram| {
@@ -515,6 +526,11 @@ fn declarationsForShortQuery(
     store: *const TrigramStore,
     query: []const u8,
 ) []const Declaration.Index {
+    const trigram = shortQueryTrigram(query) orelse return &.{};
+    return (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
+}
+
+fn shortQueryTrigram(query: []const u8) ?Trigram {
     assert(query.len != 0 and query.len <= 3);
     var trigram: Trigram = @splat(0);
     var len: u2 = 0;
@@ -523,8 +539,7 @@ fn declarationsForShortQuery(
         trigram[len] = std.ascii.toLower(c);
         len += 1;
     }
-    if (len == 0) return &.{};
-    return (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
+    return if (len == 0) null else trigram;
 }
 
 /// Asserts `declaration_buffer.items.len == 0`.
@@ -776,6 +791,34 @@ test TrigramIterator {
 test Query {
     const allocator = std.testing.allocator;
 
+    const ShortCase = struct {
+        text: []const u8,
+        expected: ?Trigram,
+    };
+    const short_cases = [_]ShortCase{
+        .{ .text = "a", .expected = "a\x00\x00".* },
+        .{ .text = "ab", .expected = "ab\x00".* },
+        .{ .text = "abc", .expected = "abc".* },
+        .{ .text = "ALP", .expected = "alp".* },
+        .{ .text = "_a", .expected = "a\x00\x00".* },
+        .{ .text = "a_", .expected = "a\x00\x00".* },
+        .{ .text = "a_b", .expected = "ab\x00".* },
+        .{ .text = "___", .expected = null },
+    };
+    for (short_cases) |case| {
+        var query = try Query.init(allocator, case.text);
+        defer query.deinit(allocator);
+
+        try std.testing.expect(query.heap_trigrams == null);
+        if (case.expected) |expected| {
+            try std.testing.expectEqual(@as(usize, 1), query.trigrams().len);
+            try std.testing.expectEqual(expected, query.trigrams()[0].value);
+            try std.testing.expectEqual(TrigramContext.hash(.{}, expected), query.trigrams()[0].map_hash);
+        } else {
+            try std.testing.expectEqual(@as(usize, 0), query.trigrams().len);
+        }
+    }
+
     {
         var query = try Query.init(allocator, "_Ab_cAb_");
         defer query.deinit(allocator);
@@ -811,13 +854,6 @@ test Query {
                 defer result.deinit(allocator_);
             }
         }.init, .{text});
-    }
-
-    {
-        var query = try Query.init(allocator, "___");
-        defer query.deinit(allocator);
-
-        try std.testing.expectEqual(@as(usize, 0), query.trigrams().len);
     }
 }
 
