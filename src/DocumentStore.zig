@@ -782,13 +782,16 @@ pub const Handle = struct {
 pub const HandleIterator = struct {
     store: *DocumentStore,
     i: usize = 0,
+    initial_count: usize = undefined,
 
     pub fn next(it: *HandleIterator) ?*Handle {
         it.store.mutex.lockUncancelable(it.store.io);
         defer it.store.mutex.unlock(it.store.io);
+        const handle_count = it.store.handles.count();
+        if (it.i == 0) it.initial_count = handle_count;
         while (true) {
             defer it.i += 1;
-            switch (std.math.order(it.i, it.store.handles.count())) {
+            switch (std.math.order(it.i, handle_count)) {
                 .lt => {},
                 .eq => return null,
                 .gt => unreachable, // handle count decreased
@@ -1175,7 +1178,7 @@ pub fn loadTrigramStoreList(
         const uri = handle.uri.schemeAndPath();
         if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
         if (handles.capacity == 0 and capacity_hint != 0) {
-            try handles.ensureTotalCapacityPrecise(list_allocator, @min(store.handles.count(), capacity_hint));
+            try handles.ensureTotalCapacityPrecise(list_allocator, @min(it.initial_count, capacity_hint));
         }
         try handles.append(list_allocator, handle);
     }
