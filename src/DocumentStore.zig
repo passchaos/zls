@@ -1151,17 +1151,18 @@ pub fn loadTrigramStores(
     store: *DocumentStore,
     filter_uris: []const Uri.SchemeAndPath,
 ) error{ OutOfMemory, Canceled }![]*DocumentStore.Handle {
-    var handles = try store.loadTrigramStoreList(filter_uris, store.allocator);
+    var handles = try store.loadTrigramStoreList(filter_uris, store.allocator, 0);
     defer handles.deinit(store.allocator);
     return try handles.toOwnedSlice(store.allocator);
 }
 
 /// The caller owns the returned list and must deinitialize it with
-/// `list_allocator`.
+/// `list_allocator`. `capacity_hint` is applied lazily after the first match.
 pub fn loadTrigramStoreList(
     store: *DocumentStore,
     filter_uris: []const Uri.SchemeAndPath,
     list_allocator: std.mem.Allocator,
+    capacity_hint: usize,
 ) error{ OutOfMemory, Canceled }!std.ArrayList(*DocumentStore.Handle) {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -1173,6 +1174,9 @@ pub fn loadTrigramStoreList(
     while (it.next()) |handle| {
         const uri = handle.uri.schemeAndPath();
         if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
+        if (handles.capacity == 0 and capacity_hint != 0) {
+            try handles.ensureTotalCapacityPrecise(list_allocator, @min(store.handles.count(), capacity_hint));
+        }
         try handles.append(list_allocator, handle);
     }
 

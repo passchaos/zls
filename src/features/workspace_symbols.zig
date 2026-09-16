@@ -23,9 +23,14 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         workspace_uris.appendAssumeCapacity(workspace.uri.schemeAndPath());
     }
 
-    var handle_stack = std.heap.stackFallback(512, server.document_store.allocator);
+    const handle_stack_size = 512;
+    var handle_stack = std.heap.stackFallback(handle_stack_size, server.document_store.allocator);
     const handle_allocator = handle_stack.get();
-    var handles = try server.document_store.loadTrigramStoreList(workspace_uris.items, handle_allocator);
+    var handles = try server.document_store.loadTrigramStoreList(
+        workspace_uris.items,
+        handle_allocator,
+        handle_stack_size / @sizeOf(*DocumentStore.Handle),
+    );
     defer handles.deinit(handle_allocator);
 
     var symbols: std.ArrayList(types.workspace.Symbol) = .empty;
