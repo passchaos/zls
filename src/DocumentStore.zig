@@ -1215,15 +1215,24 @@ fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri
         if (std.mem.startsWith(u8, uri.path, filter_uri.path)) break;
     } else return false;
 
-    var component_it = std.Io.Dir.path.componentIterator(uri.path);
-    while (component_it.next()) |component| {
-        // Keep in sync with `loadDirectoryRecursive`
-        if (std.mem.startsWith(u8, component.name, ".")) return false;
-        if (std.mem.eql(u8, component.name, "zig-cache")) return false;
-        if (std.mem.eql(u8, component.name, "zig-pkg")) return false;
-    }
+    return !hasExcludedWorkspaceComponent(uri.path);
+}
 
-    return true;
+fn hasExcludedWorkspaceComponent(path: []const u8) bool {
+    var index: usize = 0;
+    while (index < path.len) {
+        while (index < path.len and path[index] == '/') index += 1;
+        const start = index;
+        while (index < path.len and path[index] != '/') index += 1;
+        const component = path[start..index];
+        if (component.len == 0) break;
+
+        // Keep in sync with `loadDirectoryRecursive`.
+        if (component[0] == '.') return true;
+        if (std.mem.eql(u8, component, "zig-cache")) return true;
+        if (std.mem.eql(u8, component, "zig-pkg")) return true;
+    }
+    return false;
 }
 
 test "document declaration capacity sampling" {
@@ -1249,6 +1258,10 @@ test matchesWorkspaceSymbolFilter {
         .{ .{ .scheme = "file", .path = "/workspace/.git/main.zig" }, false },
         .{ .{ .scheme = "file", .path = "/workspace/zig-cache/main.zig" }, false },
         .{ .{ .scheme = "file", .path = "/workspace/zig-pkg/main.zig" }, false },
+        .{ .{ .scheme = "file", .path = "/workspace///src//main.zig/" }, true },
+        .{ .{ .scheme = "file", .path = "/workspace/src/.hidden/main.zig" }, false },
+        .{ .{ .scheme = "file", .path = "/workspace/src/zig-cache-other/main.zig" }, true },
+        .{ .{ .scheme = "file", .path = "/workspace/src/zig-pkg-other/main.zig" }, true },
         .{ .{ .scheme = "file", .path = "/other/main.zig" }, false },
         .{ .{ .scheme = "http", .path = "/workspace/main.zig" }, false },
         // Preserve the existing byte-prefix workspace matching semantics.
