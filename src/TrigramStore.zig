@@ -475,6 +475,37 @@ pub fn deinit(store: *TrigramStore, allocator: std.mem.Allocator) void {
     store.* = undefined;
 }
 
+pub const Statistics = struct {
+    declarations: usize,
+    trigrams: usize,
+    postings: usize,
+    singleton_postings: usize,
+    pair_postings: usize,
+    filtered_postings: usize,
+    longest_posting: usize,
+    filter_bytes: usize,
+};
+
+pub fn statistics(store: *const TrigramStore) Statistics {
+    var result: Statistics = .{
+        .declarations = store.declarations.len,
+        .trigrams = store.trigram_to_declarations.count(),
+        .postings = store.postings.len,
+        .singleton_postings = 0,
+        .pair_postings = 0,
+        .filtered_postings = 0,
+        .longest_posting = 0,
+        .filter_bytes = if (store.filter_buckets) |buckets| std.mem.sliceAsBytes(buckets).len else 0,
+    };
+    for (store.trigram_to_declarations.values()) |posting| {
+        result.singleton_postings += @intFromBool(posting.len == 1);
+        result.pair_postings += @intFromBool(posting.len == 2);
+        result.filtered_postings += @intFromBool(posting.len >= filter_min_posting_len);
+        result.longest_posting = @max(result.longest_posting, posting.len);
+    }
+    return result;
+}
+
 /// Asserts `query.len >= 1`. Asserts declaration_buffer.items.len == 0.
 pub fn declarationsForQuery(
     store: *const TrigramStore,

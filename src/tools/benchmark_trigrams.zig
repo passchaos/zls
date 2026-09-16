@@ -103,7 +103,26 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
     defer tree.deinit(allocator);
     if (tree.errors.len != 0) return error.InvalidZigSource;
     const init_ns = try measureStoreInit(io, allocator, &tree);
-    std.debug.print("{s}: {d} bytes parse={d} ns init={d} ns\n", .{ path, source.len, parse_ns, init_ns });
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+    const stats = store.statistics();
+    std.debug.print(
+        "{s}: {d} bytes parse={d} ns init={d} ns declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} filter-bytes={d}\n",
+        .{
+            path,
+            source.len,
+            parse_ns,
+            init_ns,
+            stats.declarations,
+            stats.trigrams,
+            stats.postings,
+            stats.singleton_postings,
+            stats.pair_postings,
+            stats.filtered_postings,
+            stats.longest_posting,
+            stats.filter_bytes,
+        },
+    );
 }
 
 fn measureParse(io: std.Io, allocator: std.mem.Allocator, source: [:0]const u8) !u64 {

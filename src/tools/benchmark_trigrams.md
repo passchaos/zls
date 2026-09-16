@@ -27,9 +27,10 @@ for repeated and periodic hits but regresses selective and missing queries.
 Workspace-symbol therefore keeps raw lookup for a single store.
 
 The `--files` mode separately reports median AST parse and TrigramStore init
-time for each real Zig source. It does not run query cases. This prevents parse
-time from masking changes to index construction. For example, a proposed
-per-name adjacent-trigram shortcut improved the synthetic mixed workload by
+time for each real Zig source, followed by declaration, trigram, posting-list,
+filter, and maximum-list-size statistics. It does not run query cases. This
+prevents parse time from masking changes to index construction. For example, a
+proposed per-name adjacent-trigram shortcut improved the synthetic workload by
 3.5%, but changed TrigramStore init by only -0.02% on `Sema.zig`, -0.32% on
 `array_list.zig`, and -0.19% on `unicode.zig` across 20 counterbalanced runs,
 so the production change was rejected.
