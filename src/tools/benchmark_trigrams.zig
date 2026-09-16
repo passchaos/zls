@@ -103,12 +103,15 @@ fn benchmarkCase(
 
     const raw_ns, const raw_sum = try measureRaw(io, allocator, store, case.query, rounds);
     const prepared_ns, const prepared_sum = try measurePrepared(io, allocator, store, &prepared, rounds);
-    if (raw_sum != prepared_sum or raw_sum != expected_checksum *% rounds *% sample_count) {
+    const transient_ns, const transient_sum = try measureTransientPrepared(io, allocator, store, case.query, rounds);
+    if (raw_sum != prepared_sum or raw_sum != transient_sum or
+        raw_sum != expected_checksum *% rounds *% sample_count)
+    {
         return error.UnstableChecksum;
     }
     std.debug.print(
-        "  {s}: {d} results raw={d} ns/query prepared={d} ns/query checksum={d}\n",
-        .{ case.name, raw.len, raw_ns, prepared_ns, raw_sum },
+        "  {s}: {d} results raw={d} ns/query prepared={d} ns/query transient={d} ns/query checksum={d}\n",
+        .{ case.name, raw.len, raw_ns, prepared_ns, transient_ns, raw_sum },
     );
 }
 
@@ -153,6 +156,33 @@ fn measurePrepared(
         for (0..rounds) |_| {
             buffer.clearRetainingCapacity();
             const result = try store.declarationSliceForPreparedQuery(allocator, query, &buffer);
+            sum +%= checksum(result);
+            std.mem.doNotOptimizeAway(result.ptr);
+        }
+        sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+    }
+    std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+    return .{ samples[sample_count / 2] / rounds, sum };
+}
+
+fn measureTransientPrepared(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    store: *const TrigramStore,
+    text: []const u8,
+    rounds: usize,
+) !struct { u64, u64 } {
+    var buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
+    defer buffer.deinit(allocator);
+    var samples: [sample_count]u64 = undefined;
+    var sum: u64 = 0;
+    for (&samples) |*sample| {
+        const before = std.Io.Clock.awake.now(io);
+        for (0..rounds) |_| {
+            var query = try TrigramStore.Query.init(allocator, text);
+            defer query.deinit(allocator);
+            buffer.clearRetainingCapacity();
+            const result = try store.declarationSliceForPreparedQuery(allocator, &query, &buffer);
             sum +%= checksum(result);
             std.mem.doNotOptimizeAway(result.ptr);
         }

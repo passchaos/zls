@@ -8,15 +8,22 @@ zig build bench-trigrams -Doptimize=ReleaseFast -Duse-llvm=true -- 8192 256
 
 The optional arguments select the number of generated common-prefix
 declarations and the number of queries in each sample. The benchmark reports
-the median of nine samples for raw and prepared queries. It covers a common
-query, rare suffix and prefix hits, a repeated-pattern miss, and a missing
-suffix. Before timing, raw and prepared result slices must have the expected
+the median of nine samples for raw queries, reusable prepared queries, and
+transient prepared queries whose construction and destruction are timed on
+every iteration. It covers common, rare, near-miss, repeated, and periodic
+patterns. Before timing, raw and prepared result slices must have the expected
 count and identical declaration indexes. Timed checksums must also remain
-identical across implementations and revisions.
+identical across all modes, implementations, and revisions.
 
 Use the same compiler options, declaration count, round count, and checksum
 when comparing revisions. This is a synthetic TrigramStore microbenchmark, not
 an end-to-end LSP latency measurement.
+
+The transient column models a single-store caller deciding whether to prepare
+one query just for that lookup. Measurements on 128, 1,024, and 4,096
+declarations show no general replacement for the raw path: preparation pays
+for repeated and periodic hits but regresses selective and missing queries.
+Workspace-symbol therefore keeps raw lookup for a single store.
 
 ## Adaptive skewed intersection, 2026-09-16
 
