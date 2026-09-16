@@ -93,11 +93,13 @@ def main():
     parser.add_argument('sources', type=Path, nargs='+')
     parser.add_argument('--cycles', type=int, default=5)
     parser.add_argument('--rounds', type=int, default=20)
+    parser.add_argument('--extra-empty-documents', type=int, default=0)
     parser.add_argument('--max-rss-mib', type=int, default=2048)
     args = parser.parse_args()
-    if min(args.cycles, args.max_rss_mib) < 1 or args.rounds < 0:
-        parser.error('cycles and max-rss-mib must be positive; rounds must be non-negative')
+    if min(args.cycles, args.max_rss_mib) < 1 or min(args.rounds, args.extra_empty_documents) < 0:
+        parser.error('cycles and max-rss-mib must be positive; rounds and extra-empty-documents must be non-negative')
     sources = [(path.name, path.read_text()) for path in args.sources]
+    documents = sources + [(f'empty-{index}.zig', '') for index in range(args.extra_empty_documents)]
     with tempfile.TemporaryDirectory(prefix='zls-memory-') as directory:
         root = Path(directory)
         config = root / 'zls.json'
@@ -122,7 +124,7 @@ def main():
                 client.checkpoint('initialized')
                 for cycle in range(args.cycles):
                     phase_started = time.monotonic_ns()
-                    for index, (name, source) in enumerate(sources):
+                    for index, (name, source) in enumerate(documents):
                         uri = (root / f'{index}-{name}').as_uri()
                         client.notify('textDocument/didOpen', dict(textDocument=dict(
                             uri=uri, languageId='zig', version=cycle + 1, text=source)))
@@ -147,7 +149,7 @@ def main():
                     phase_latencies['query'].append(time.monotonic_ns() - phase_started)
                     client.checkpoint(f'queried-{cycle}')
                     phase_started = time.monotonic_ns()
-                    for index, (name, _) in enumerate(sources):
+                    for index, (name, _) in enumerate(documents):
                         client.notify('textDocument/didClose', dict(
                             textDocument=dict(uri=(root / f'{index}-{name}').as_uri())))
                     remaining = client.request('workspace/symbol', dict(query='type'))
@@ -189,6 +191,7 @@ def main():
             )
             print(json.dumps(dict(
                 binary=str(args.binary.resolve()), cycles=args.cycles, rounds=args.rounds,
+                extra_empty_documents=args.extra_empty_documents,
                 sources=[dict(path=str(path.resolve()), bytes=path.stat().st_size,
                               sha256=hashlib.sha256(path.read_bytes()).hexdigest()) for path in args.sources],
                 elapsed_s=time.monotonic() - started, summary=summary,

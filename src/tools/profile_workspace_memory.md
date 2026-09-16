@@ -34,6 +34,9 @@ for measuring position conversion alone.
 
 `--cycles` and `--rounds` control repetition. Set `--rounds 0` to isolate
 document open/close costs without building or querying symbol indexes.
+`--extra-empty-documents N` adds N empty Zig documents to every lifecycle.
+This isolates per-handle workspace-symbol filtering, list construction, lazy
+index loading, and close bookkeeping without increasing symbol result size.
 `--max-rss-mib` defaults to 2048;
 the script checks ZLS memory while waiting for replies and after each phase and
 terminates its child on failure. This is a sampled safeguard, not an OS memory
