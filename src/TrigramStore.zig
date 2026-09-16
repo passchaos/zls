@@ -549,12 +549,13 @@ pub fn declarationSliceForPreparedQuery(
         }
     }
 
-    try declaration_buffer.resize(allocator, first.len);
+    const second = (store.trigram_to_declarations.getAdapted(trigrams[1], PreparedTrigramContext{}) orelse return &.{}).slice(store.postings);
+    try declaration_buffer.appendSlice(allocator, first);
+    var len = mergeIntersection(second, declaration_buffer.items);
+    declaration_buffer.shrinkRetainingCapacity(len);
+    if (len == 0) return declaration_buffer.items;
 
-    var len = first.len;
-    @memcpy(declaration_buffer.items[0..len], first);
-
-    for (trigrams[1..]) |trigram| {
+    for (trigrams[2..]) |trigram| {
         len = mergeIntersection(
             (store.trigram_to_declarations.getAdapted(trigram, PreparedTrigramContext{}) orelse {
                 declaration_buffer.clearRetainingCapacity();
@@ -964,7 +965,7 @@ test "prepared queries match string queries" {
         \\const @"alpha delta" = 3;
         \\const repeating_aaaaaaaaaaaaaaaaaaaa = 4;
     ;
-    const queries = [_][]const u8{ "a", "ALPHA", "alpha_beta", "alpha delta", "aaaaaaaaaaaaaaaaaaaa", "missing", "___" };
+    const queries = [_][]const u8{ "a", "ALPHA", "alpha_beta", "alpha delta", "aaaaaaaaaaaaaaaaaaaa", "alpz", "missing", "___" };
 
     var tree = try Ast.parse(allocator, source, .zig);
     defer tree.deinit(allocator);
