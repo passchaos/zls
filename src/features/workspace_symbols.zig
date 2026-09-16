@@ -34,11 +34,10 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         const trigram_store = handle.trigram_store.getCached();
 
         declaration_buffer.clearRetainingCapacity();
-        if (prepared_query) |*query| {
-            try trigram_store.declarationsForPreparedQuery(server.document_store.allocator, query, &declaration_buffer);
-        } else {
-            try trigram_store.declarationsForQuery(server.document_store.allocator, request.query, &declaration_buffer);
-        }
+        const declarations = if (prepared_query) |*query|
+            try trigram_store.declarationSliceForPreparedQuery(server.document_store.allocator, query, &declaration_buffer)
+        else
+            try trigram_store.declarationSliceForQuery(server.document_store.allocator, request.query, &declaration_buffer);
 
         const slice = trigram_store.declarations.slice();
         const names = slice.items(.name);
@@ -48,8 +47,8 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         var last_index: usize = 0;
         var last_position: offsets.Position = .{ .line = 0, .character = 0 };
 
-        try symbols.ensureUnusedCapacity(arena, declaration_buffer.items.len);
-        for (declaration_buffer.items) |declaration| {
+        try symbols.ensureUnusedCapacity(arena, declarations.len);
+        for (declarations) |declaration| {
             const name_token = names[@intFromEnum(declaration)];
             const name_len = name_lengths[@intFromEnum(declaration)];
             const kind = kinds[@intFromEnum(declaration)];

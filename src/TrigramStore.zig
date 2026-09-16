@@ -452,19 +452,36 @@ pub fn declarationsForQuery(
     query: []const u8,
     declaration_buffer: *std.ArrayList(Declaration.Index),
 ) error{OutOfMemory}!void {
+    const declarations = try store.declarationSliceForQuery(allocator, query, declaration_buffer);
+    if (declarations.len != 0 and declaration_buffer.items.len == 0) {
+        try declaration_buffer.appendSlice(allocator, declarations);
+    }
+}
+
+/// The returned declarations may borrow storage from `store` or
+/// `declaration_buffer` and remain valid while both are alive and unmodified.
+/// Asserts `query.len >= 1`. Asserts `declaration_buffer.items.len == 0`.
+pub fn declarationSliceForQuery(
+    store: *const TrigramStore,
+    allocator: std.mem.Allocator,
+    query: []const u8,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+) error{OutOfMemory}![]const Declaration.Index {
     assert(query.len >= 1);
     assert(declaration_buffer.items.len == 0);
 
     var ti: TrigramIterator = .init(query);
 
-    const first = (store.trigram_to_declarations.get(ti.next() orelse return) orelse return).slice(store.postings);
+    const first = (store.trigram_to_declarations.get(ti.next() orelse return &.{}) orelse return &.{}).slice(store.postings);
+    const second_trigram = ti.next() orelse return first;
 
     if (first.len >= filter_min_posting_len) {
         if (store.filter_buckets) |buckets| {
             const filter: CuckooFilter = .{ .buckets = buckets };
             var filter_ti = ti;
+            if (!filter.contains(second_trigram)) return &.{};
             while (filter_ti.next()) |trigram| {
-                if (!filter.contains(trigram)) return;
+                if (!filter.contains(trigram)) return &.{};
             }
         }
     }
@@ -474,17 +491,19 @@ pub fn declarationsForQuery(
     var len = first.len;
     @memcpy(declaration_buffer.items[0..len], first);
 
-    while (ti.next()) |trigram| {
+    var trigram: ?Trigram = second_trigram;
+    while (trigram) |value| : (trigram = ti.next()) {
         len = mergeIntersection(
-            (store.trigram_to_declarations.get(trigram) orelse {
+            (store.trigram_to_declarations.get(value) orelse {
                 declaration_buffer.clearRetainingCapacity();
-                return;
+                return &.{};
             }).slice(store.postings),
             declaration_buffer.items[0..len],
         );
         declaration_buffer.shrinkRetainingCapacity(len);
         if (len == 0) break;
     }
+    return declaration_buffer.items;
 }
 
 /// Asserts `declaration_buffer.items.len == 0`.
@@ -494,18 +513,34 @@ pub fn declarationsForPreparedQuery(
     query: *const Query,
     declaration_buffer: *std.ArrayList(Declaration.Index),
 ) error{OutOfMemory}!void {
+    const declarations = try store.declarationSliceForPreparedQuery(allocator, query, declaration_buffer);
+    if (declarations.len != 0 and declaration_buffer.items.len == 0) {
+        try declaration_buffer.appendSlice(allocator, declarations);
+    }
+}
+
+/// The returned declarations may borrow storage from `store` or
+/// `declaration_buffer` and remain valid while both are alive and unmodified.
+/// Asserts `declaration_buffer.items.len == 0`.
+pub fn declarationSliceForPreparedQuery(
+    store: *const TrigramStore,
+    allocator: std.mem.Allocator,
+    query: *const Query,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+) error{OutOfMemory}![]const Declaration.Index {
     assert(declaration_buffer.items.len == 0);
 
     const trigrams = query.trigrams();
-    if (trigrams.len == 0) return;
+    if (trigrams.len == 0) return &.{};
 
-    const first = (store.trigram_to_declarations.getAdapted(trigrams[0], PreparedTrigramContext{}) orelse return).slice(store.postings);
+    const first = (store.trigram_to_declarations.getAdapted(trigrams[0], PreparedTrigramContext{}) orelse return &.{}).slice(store.postings);
+    if (trigrams.len == 1) return first;
 
     if (first.len >= filter_min_posting_len) {
         if (store.filter_buckets) |buckets| {
             const filter: CuckooFilter = .{ .buckets = buckets };
             for (trigrams[1..]) |trigram| {
-                if (!filter.contains(trigram.value)) return;
+                if (!filter.contains(trigram.value)) return &.{};
             }
         }
     }
@@ -519,13 +554,14 @@ pub fn declarationsForPreparedQuery(
         len = mergeIntersection(
             (store.trigram_to_declarations.getAdapted(trigram, PreparedTrigramContext{}) orelse {
                 declaration_buffer.clearRetainingCapacity();
-                return;
+                return &.{};
             }).slice(store.postings),
             declaration_buffer.items[0..len],
         );
         declaration_buffer.shrinkRetainingCapacity(len);
         if (len == 0) break;
     }
+    return declaration_buffer.items;
 }
 
 fn appendDeclaration(
@@ -936,16 +972,30 @@ test "prepared queries match string queries" {
     defer string_results.deinit(allocator);
     var prepared_results: std.ArrayList(Declaration.Index) = .empty;
     defer prepared_results.deinit(allocator);
+    var raw_slice_buffer: std.ArrayList(Declaration.Index) = .empty;
+    defer raw_slice_buffer.deinit(allocator);
+    var prepared_slice_buffer: std.ArrayList(Declaration.Index) = .empty;
+    defer prepared_slice_buffer.deinit(allocator);
 
     for (queries) |text| {
         try store.declarationsForQuery(allocator, text, &string_results);
         var query = try Query.init(allocator, text);
         defer query.deinit(allocator);
         try store.declarationsForPreparedQuery(allocator, &query, &prepared_results);
+        const raw_slice = try store.declarationSliceForQuery(allocator, text, &raw_slice_buffer);
+        const prepared_slice = try store.declarationSliceForPreparedQuery(allocator, &query, &prepared_slice_buffer);
 
         try std.testing.expectEqualSlices(Declaration.Index, string_results.items, prepared_results.items);
+        try std.testing.expectEqualSlices(Declaration.Index, string_results.items, raw_slice);
+        try std.testing.expectEqualSlices(Declaration.Index, string_results.items, prepared_slice);
+        if (query.trigrams().len == 1 and string_results.items.len != 0) {
+            try std.testing.expectEqual(@as(usize, 0), raw_slice_buffer.items.len);
+            try std.testing.expectEqual(@as(usize, 0), prepared_slice_buffer.items.len);
+        }
         string_results.clearRetainingCapacity();
         prepared_results.clearRetainingCapacity();
+        raw_slice_buffer.clearRetainingCapacity();
+        prepared_slice_buffer.clearRetainingCapacity();
     }
 }
 
