@@ -16,11 +16,30 @@ const DocumentScope = @import("DocumentScope.zig");
 const DiagnosticsCollection = @import("DiagnosticsCollection.zig");
 const TrigramStore = @import("TrigramStore.zig");
 const multi_array_list = @import("multi_array_list.zig");
+const AnalysisArena = @import("document_store/AnalysisArena.zig");
 
 const DocumentStore = @This();
 
+// Small documents quickly stabilize in SmpAllocator's per-thread size classes.
+// Medium and large documents produce enough varied allocations to retain slabs,
+// so give their AST and derived indexes one reclaimable arena instead.
+const document_arena_min_source_size = @max(std.heap.page_size_max, 64 * 1024);
+
+fn useDocumentAnalysisArena(source_size: usize) bool {
+    return source_size >= document_arena_min_source_size;
+}
+
+test useDocumentAnalysisArena {
+    try std.testing.expect(!useDocumentAnalysisArena(document_arena_min_source_size - 1));
+    try std.testing.expect(useDocumentAnalysisArena(document_arena_min_source_size));
+}
+
 io: std.Io,
 allocator: std.mem.Allocator,
+/// When set, medium and large documents keep their AST and derived indexes in
+/// one arena backed by this allocator. Source text and import metadata continue
+/// to use `allocator`.
+document_arena_backing_allocator: ?std.mem.Allocator = null,
 /// the DocumentStore assumes that `config` is not modified while calling one of its functions.
 config: Config,
 mutex: std.Io.Mutex = .init,
@@ -180,6 +199,7 @@ pub const Handle = struct {
         store: *DocumentStore,
         lock: std.Io.Mutex = .init,
         has_tree_and_source: bool,
+        analysis_arena: AnalysisArena = .none,
 
         associated_build_file: AssociatedBuildFile.State = .init,
         associated_compilation_units: GetAssociatedCompilationUnitsResult = .unresolved,
@@ -197,6 +217,7 @@ pub const Handle = struct {
             .impl = .{
                 .store = original.impl.store,
                 .has_tree_and_source = false,
+                .analysis_arena = .none,
             },
         };
     }
@@ -210,6 +231,10 @@ pub const Handle = struct {
 
     pub fn getDocumentScope(self: *Handle) error{OutOfMemory}!*const DocumentScope {
         return try self.document_scope.get(self);
+    }
+
+    fn analysisAllocator(self: *Handle, fallback: std.mem.Allocator) std.mem.Allocator {
+        return self.impl.analysis_arena.allocator(fallback);
     }
 
     pub const AssociatedBuildFile = union(enum) {
@@ -434,13 +459,17 @@ pub const Handle = struct {
         /// Takes ownership.
         text: [:0]const u8,
         allocator: std.mem.Allocator,
+        arena_backing_allocator: ?std.mem.Allocator,
     ) error{OutOfMemory}!void {
         const tracy_zone = tracy.traceNamed(@src(), "Handle.refresh");
         defer tracy_zone.end();
 
         const mode: Ast.Mode = if (std.mem.eql(u8, std.Io.Dir.path.extension(handle.uri.raw), ".zon")) .zon else .zig;
-        var new_tree = try parseTree(allocator, text, mode);
-        errdefer new_tree.deinit(allocator);
+        var new_analysis_arena: AnalysisArena = try .init(allocator, arena_backing_allocator);
+        errdefer new_analysis_arena.deinit(allocator);
+        const tree_allocator = new_analysis_arena.allocator(allocator);
+        var new_tree = try parseTree(tree_allocator, text, mode, !new_analysis_arena.isActive());
+        errdefer new_tree.deinit(tree_allocator);
 
         var new_file_imports: std.ArrayList(Uri) = .empty;
         errdefer {
@@ -476,6 +505,7 @@ pub const Handle = struct {
         if (handle.impl.has_tree_and_source) {
             old_handle.tree = handle.tree;
             old_handle.impl.has_tree_and_source = true;
+            old_handle.impl.analysis_arena = handle.impl.analysis_arena;
         }
         old_handle.cimports = handle.cimports;
 
@@ -484,6 +514,7 @@ pub const Handle = struct {
         handle.file_imports = file_imports;
         handle.cimports = new_cimports;
         handle.impl.has_tree_and_source = true;
+        handle.impl.analysis_arena = new_analysis_arena;
 
         old_handle.document_scope = handle.document_scope;
         handle.document_scope = .unset;
@@ -502,12 +533,20 @@ pub const Handle = struct {
         return try file_imports.toOwnedSlice(allocator);
     }
 
-    fn parseTree(allocator: std.mem.Allocator, new_text: [:0]const u8, mode: Ast.Mode) error{OutOfMemory}!Ast {
+    fn parseTree(
+        allocator: std.mem.Allocator,
+        new_text: [:0]const u8,
+        mode: Ast.Mode,
+        compact: bool,
+    ) error{OutOfMemory}!Ast {
         const tracy_zone = tracy.traceNamed(@src(), "Ast.parse");
         defer tracy_zone.end();
 
         var tree = try Ast.parse(allocator, new_text, mode);
         errdefer tree.deinit(allocator);
+        // Arena frees are bulk operations. Compacting would allocate a second
+        // copy while retaining the original allocation until the arena dies.
+        if (!compact) return tree;
 
         // remove unused capacity
         var nodes = tree.nodes.toMultiArrayList();
@@ -617,6 +656,7 @@ pub const Handle = struct {
         .impl = .{
             .store = undefined,
             .has_tree_and_source = false,
+            .analysis_arena = .none,
         },
     };
 
@@ -626,12 +666,14 @@ pub const Handle = struct {
         const tracy_zone = tracy.trace(@src());
         defer tracy_zone.end();
 
+        const analysis_allocator = self.analysisAllocator(allocator);
+        self.document_scope.deinit(analysis_allocator);
+        self.trigram_store.deinit(analysis_allocator);
         if (self.impl.has_tree_and_source) {
             allocator.free(self.tree.source);
-            self.tree.deinit(allocator);
+            self.tree.deinit(analysis_allocator);
         }
-        self.document_scope.deinit(allocator);
-        self.trigram_store.deinit(allocator);
+        self.impl.analysis_arena.deinit(allocator);
         for (self.file_imports) |uri| uri.deinit(allocator);
         allocator.free(self.file_imports);
 
@@ -683,7 +725,7 @@ pub const Handle = struct {
                 lazy.mutex.lockUncancelable(io);
                 defer lazy.mutex.unlock(io);
                 if (lazy.value == null) {
-                    lazy.value = try Context.create(handle, store.allocator);
+                    lazy.value = try Context.create(handle, handle.analysisAllocator(store.allocator));
                 }
                 return &lazy.value.?;
             }
@@ -1829,6 +1871,7 @@ fn createAndStoreDocument(
                 .impl = .{
                     .store = store,
                     .has_tree_and_source = false,
+                    .analysis_arena = .none,
                 },
             },
             .err = previous_err,
@@ -1854,6 +1897,7 @@ fn createAndStoreDocument(
         &old_handle,
         text,
         store.allocator,
+        if (useDocumentAnalysisArena(text.len)) store.document_arena_backing_allocator else null,
     );
     old_handle.deinit(store.allocator);
 
@@ -1968,7 +2012,7 @@ test "Handle.refresh finalizes import metadata and handles allocation failure" {
         "const c = @cImport({ @cInclude(\"one.h\"); });\n";
 
     const Test = struct {
-        fn run(allocator: std.mem.Allocator, source_text: []const u8) !void {
+        fn run(allocator: std.mem.Allocator, source_text: []const u8, use_arena: bool) !void {
             const uri = try Uri.parse(allocator, "file:///project/main.zig");
             defer uri.deinit(allocator);
 
@@ -1992,7 +2036,7 @@ test "Handle.refresh finalizes import metadata and handles allocation failure" {
             var old_handle: Handle = .dead;
             defer old_handle.deinit(allocator);
 
-            try Handle.refresh(&handle, &old_handle, text, allocator);
+            try Handle.refresh(&handle, &old_handle, text, allocator, if (use_arena) allocator else null);
             text_owned_by_handle = true;
 
             try std.testing.expectEqual(@as(usize, 2), handle.file_imports.len);
@@ -2004,8 +2048,10 @@ test "Handle.refresh finalizes import metadata and handles allocation failure" {
         }
     };
 
-    try Test.run(std.testing.allocator, source);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{source});
+    try Test.run(std.testing.allocator, source, false);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{ source, false });
+    try Test.run(std.testing.allocator, source, true);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{ source, true });
 }
 
 test "Handle.refresh leaves module imports out of file metadata" {
@@ -2032,10 +2078,63 @@ test "Handle.refresh leaves module imports out of file metadata" {
     var old_handle: Handle = .dead;
     defer old_handle.deinit(allocator);
 
-    try Handle.refresh(&handle, &old_handle, text, allocator);
+    try Handle.refresh(&handle, &old_handle, text, allocator, null);
 
     try std.testing.expectEqual(@as(usize, 0), handle.file_imports.len);
     try std.testing.expectEqual(@as(usize, 0), handle.cimports.capacity);
+}
+
+test "Handle.refresh transfers and switches analysis arena ownership" {
+    const allocator = std.testing.allocator;
+    const uri = try Uri.parse(allocator, "file:///project/main.zig");
+    defer uri.deinit(allocator);
+
+    var handle: Handle = .{
+        .uri = uri,
+        .tree = undefined,
+        .file_imports = &.{},
+        .cimports = .empty,
+        .lsp_synced = true,
+        .impl = .{
+            .store = undefined,
+            .has_tree_and_source = false,
+        },
+    };
+    defer handle.deinit(allocator);
+
+    const first_text = try allocator.dupeSentinel(u8, "const first = 1;", 0);
+    var first_old_handle: Handle = .dead;
+    defer first_old_handle.deinit(allocator);
+    try Handle.refresh(&handle, &first_old_handle, first_text, allocator, allocator);
+    const first_arena = handle.impl.analysis_arena;
+    try std.testing.expect(!first_old_handle.impl.analysis_arena.isActive());
+
+    const second_text = try allocator.dupeSentinel(u8, "const second = 2;", 0);
+    var second_old_handle: Handle = .dead;
+    defer second_old_handle.deinit(allocator);
+    try Handle.refresh(&handle, &second_old_handle, second_text, allocator, null);
+
+    try std.testing.expect(!handle.impl.analysis_arena.isActive());
+    try std.testing.expect(second_old_handle.impl.analysis_arena.sameStorage(first_arena));
+    try std.testing.expectEqualStrings("const first = 1;", second_old_handle.tree.source);
+    try std.testing.expectEqualStrings("const second = 2;", handle.tree.source);
+
+    const third_text = try allocator.dupeSentinel(u8, "const third = 3;", 0);
+    var third_old_handle: Handle = .dead;
+    defer third_old_handle.deinit(allocator);
+    try Handle.refresh(&handle, &third_old_handle, third_text, allocator, allocator);
+
+    try std.testing.expect(handle.impl.analysis_arena.isActive());
+    try std.testing.expect(!third_old_handle.impl.analysis_arena.isActive());
+    try std.testing.expectEqualStrings("const second = 2;", third_old_handle.tree.source);
+    try std.testing.expectEqualStrings("const third = 3;", handle.tree.source);
+
+    var store: DocumentStore = undefined;
+    store.io = std.testing.io;
+    store.allocator = allocator;
+    handle.impl.store = &store;
+    _ = try handle.getDocumentScope();
+    _ = try handle.trigram_store.get(&handle);
 }
 
 /// returns `true` if all include paths could be collected

@@ -1720,6 +1720,8 @@ pub const CreateOptions = struct {
     io: std.Io,
     /// Must be thread-safe unless the ZLS module is in single_threaded mode or the Io implementation has no parallelism.
     allocator: std.mem.Allocator,
+    /// Optional backing allocator for medium and large document analysis arenas.
+    document_arena_backing_allocator: ?std.mem.Allocator = null,
     /// Must be set when running `loop`. Controls how the server will send and receive messages.
     transport: ?*lsp.Transport,
     config_manager: *configuration.Manager,
@@ -1742,6 +1744,7 @@ pub fn create(options: CreateOptions) std.mem.Allocator.Error!*Server {
         .document_store = .{
             .io = io,
             .allocator = allocator,
+            .document_arena_backing_allocator = options.document_arena_backing_allocator,
             .config = undefined, // set below
             .diagnostics_collection = &server.diagnostics_collection,
         },

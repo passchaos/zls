@@ -20,7 +20,9 @@ waiting for replies. Symbol counts and sorted result checksums must remain stabl
 across all cycles. A successful run also requires a clean LSP shutdown and
 process exit. A top-level summary reports the peak and the RSS change between
 the first and final closed-document checkpoints. Captured server stderr is also
-included so DebugAllocator leak reports and runtime errors are not lost.
+included so DebugAllocator leak reports and runtime errors are not lost. Median
+phase times separate opening/parsing, querying, and closing; each phase ends in
+a request/response synchronization point.
 
 The temporary workspace avoids starting the source project's build. Diagnostics
 are not advertised and build-on-save is disabled. Imports are not traversed for
@@ -76,3 +78,36 @@ At 1,000 zero-query cycles, RSS was still increasing: the observed peak was
 In contrast, repeating the same test with a 77-byte Zig file changed closed RSS
 by only 8 KiB and stabilized in the first 100 cycles. The retention therefore
 depends on document parse/storage allocation sizes, not just message count.
+
+## Reclaimable document analysis arenas, 2026-09-16
+
+In ordinary multithreaded Release builds using `SmpAllocator`, sources of at
+least `max(page_size_max, 64 KiB)` keep each document's AST, scope, and trigram
+index in a page-backed arena and return the arena when the document is refreshed
+or closed. Smaller files and diagnostic allocator modes retain the existing
+path. Three runs per executable in counterbalanced order used the 100-cycle,
+20-round workload above to compare runtime baseline `9e159ba1` with the candidate
+based on `7067e301`; the intervening commit changed only this profiling tool and
+its documentation. Median results were:
+
+| Metric | Baseline | Candidate | Change |
+| --- | ---: | ---: | ---: |
+| Observed peak RSS | 28,800 KiB | 21,668 KiB | -24.8% |
+| Final closed RSS | 19,340 KiB | 9,644 KiB | -50.1% |
+| Closed RSS growth | 12,176 KiB | 2,576 KiB | -78.8% |
+| Median open phase | 67.370 ms | 68.168 ms | +1.2% |
+| Median query phase | 66.504 ms | 68.401 ms | +2.9% |
+| Median close phase | 2.040 ms | 1.903 ms | -6.7% |
+| Total runtime | 13.353 s | 13.871 s | +3.9% |
+
+All result counts and checksums matched. The small open/query regressions are
+the measured cost of bulk-owned arenas. A
+1,000-cycle zero-query candidate run stabilized after cycle 300: closed RSS rose
+1,556 KiB (3,232 to 4,788 KiB) and the observed peak was 17,912 KiB. The last
+700 cycles had no further growth. The baseline did not stabilize over 1,000
+cycles and rose by 34,072 KiB, reaching a 54,076 KiB peak. A separate
+32-document resident-set comparison exposed the arena's transient index-build
+capacity: median peak RSS increased from 23,888 to 26,328 KiB (+10.2%), while
+RSS after closing fell from 14,544 to 11,864 KiB (-18.4%) and total runtime rose
+from 145 to 158 ms (+9.0%). This peak/latency tradeoff is separate from the
+repeated lifecycle stress result.

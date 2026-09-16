@@ -587,6 +587,14 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     const server: *zls.Server = try .create(.{
         .io = io,
         .allocator = allocator,
+        .document_arena_backing_allocator = if (!is_debug and
+            !zig_builtin.link_libc and
+            zig_builtin.target.os.tag != .wasi and
+            !tracy.enable_allocation and
+            !exe_options.enable_failing_allocator)
+            std.heap.page_allocator
+        else
+            null,
         .transport = transport,
         .config_manager = &config_manager,
     });

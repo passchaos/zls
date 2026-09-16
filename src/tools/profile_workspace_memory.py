@@ -109,6 +109,7 @@ def main():
             started = time.monotonic()
             checksums = {}
             latencies = {}
+            phase_latencies = dict(open=[], query=[], close=[])
             try:
                 result = client.request('initialize', dict(
                     processId=os.getpid(), rootUri=root.as_uri(),
@@ -120,12 +121,15 @@ def main():
                 client.request('workspace/symbol', dict(query=''))
                 client.checkpoint('initialized')
                 for cycle in range(args.cycles):
+                    phase_started = time.monotonic_ns()
                     for index, (name, source) in enumerate(sources):
                         uri = (root / f'{index}-{name}').as_uri()
                         client.notify('textDocument/didOpen', dict(textDocument=dict(
                             uri=uri, languageId='zig', version=cycle + 1, text=source)))
                     client.request('workspace/symbol', dict(query=''))
+                    phase_latencies['open'].append(time.monotonic_ns() - phase_started)
                     client.checkpoint(f'opened-{cycle}')
+                    phase_started = time.monotonic_ns()
                     for _ in range(args.rounds):
                         for query in ('allocator', 'type', 'parse', '__zls_memory_missing__'):
                             before = time.monotonic_ns()
@@ -140,13 +144,16 @@ def main():
                             if query in checksums and checksums[query] != value:
                                 raise RuntimeError(f'Unstable symbol results for {query}')
                             checksums[query] = value
+                    phase_latencies['query'].append(time.monotonic_ns() - phase_started)
                     client.checkpoint(f'queried-{cycle}')
+                    phase_started = time.monotonic_ns()
                     for index, (name, _) in enumerate(sources):
                         client.notify('textDocument/didClose', dict(
                             textDocument=dict(uri=(root / f'{index}-{name}').as_uri())))
                     remaining = client.request('workspace/symbol', dict(query='type'))
                     if remaining:
                         raise RuntimeError('Closed documents still returned workspace symbols')
+                    phase_latencies['close'].append(time.monotonic_ns() - phase_started)
                     client.checkpoint(f'closed-{cycle}')
                 if args.rounds != 0 and not any(value['count'] for value in checksums.values()):
                     raise RuntimeError('No workspace symbols were exercised')
@@ -186,6 +193,8 @@ def main():
                               sha256=hashlib.sha256(path.read_bytes()).hexdigest()) for path in args.sources],
                 elapsed_s=time.monotonic() - started, summary=summary,
                 samples=client.samples, results=checksums, stderr=stderr_output,
+                median_phase_us={phase: sorted(values)[len(values) // 2] / 1000
+                                 for phase, values in phase_latencies.items()},
                 median_request_us={query: sorted(values)[len(values) // 2] / 1000
                                    for query, values in latencies.items()}), indent=2))
 
