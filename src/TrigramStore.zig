@@ -206,6 +206,43 @@ trigram_to_declarations: PostingMap,
 postings: []Declaration.Index,
 declarations: std.MultiArrayList(Declaration),
 
+fn denseDeclarationCapacity(tree: *const Ast) usize {
+    return denseDeclarationCapacityFromTags(tree.nodes.items(.tag));
+}
+
+fn denseDeclarationCapacityFromTags(tags: []const Ast.Node.Tag) usize {
+    if (tags.len < 4096) return 0;
+
+    const sample_count = 64;
+    var declaration_tags: usize = 0;
+    for (0..sample_count) |sample_index| {
+        const index: usize = @intCast(
+            (@as(u64, @intCast(sample_index)) * @as(u64, @intCast(tags.len))) / sample_count,
+        );
+        switch (tags[index]) {
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            .fn_proto,
+            .fn_proto_multi,
+            .fn_proto_one,
+            .fn_proto_simple,
+            .fn_decl,
+            .test_decl,
+            .container_field,
+            .container_field_init,
+            .container_field_align,
+            => declaration_tags += 1,
+            else => {},
+        }
+    }
+    if (declaration_tags <= sample_count / 4) return 0;
+    return @intCast(
+        (@as(u64, @intCast(declaration_tags)) * @as(u64, @intCast(tags.len))) / sample_count + 16,
+    );
+}
+
 pub fn init(
     allocator: std.mem.Allocator,
     tree: *const Ast,
@@ -217,6 +254,7 @@ pub fn init(
         .declarations = .empty,
     };
     errdefer store.deinit(allocator);
+    try store.declarations.ensureTotalCapacity(allocator, denseDeclarationCapacity(tree));
 
     var posting_lists: PostingListBuilder = .empty;
     defer {
@@ -998,6 +1036,18 @@ test "TrigramStore.init handles every allocation failure" {
             defer store.deinit(allocator);
         }
     }.init, .{&tree});
+}
+
+test "dense declaration capacity sampling" {
+    const small = [_]Ast.Node.Tag{.container_field} ** 4095;
+    try std.testing.expectEqual(0, denseDeclarationCapacityFromTags(&small));
+
+    var ordinary = [_]Ast.Node.Tag{.identifier} ** 4096;
+    for (0..16) |index| ordinary[index * 64] = .container_field;
+    try std.testing.expectEqual(0, denseDeclarationCapacityFromTags(&ordinary));
+
+    const dense = [_]Ast.Node.Tag{.container_field} ** 4096;
+    try std.testing.expectEqual(dense.len + 16, denseDeclarationCapacityFromTags(&dense));
 }
 
 const CuckooFilter = struct {
