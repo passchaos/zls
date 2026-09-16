@@ -262,15 +262,17 @@ pub fn init(
         posting_lists.deinit(allocator);
     }
 
-    var walker: ast.Walker = try .init(allocator, tree, .root);
-    defer walker.deinit(allocator);
+    var walker_stack = std.heap.stackFallback(1024, allocator);
+    const walker_allocator = walker_stack.get();
+    var walker: ast.Walker = try .init(walker_allocator, tree, .root);
+    defer walker.deinit(walker_allocator);
 
     var stack_fallback = std.heap.stackFallback(16, allocator);
     const stack_allocator = stack_fallback.get();
     var in_function_stack: std.ArrayList(bool) = try .initCapacity(stack_allocator, 16);
     defer in_function_stack.deinit(stack_allocator);
 
-    while (try walker.next(allocator, tree)) |entry| {
+    while (try walker.next(walker_allocator, tree)) |entry| {
         switch (entry) {
             .open => |node| switch (tree.nodeTag(node)) {
                 .fn_decl => try in_function_stack.append(stack_allocator, true),
