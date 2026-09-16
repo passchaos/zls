@@ -37,3 +37,26 @@ counterbalanced. Values below are median nanoseconds per query.
 All result counts and checksums matched. The largest gain is the intended case:
 a tiny intermediate candidate set no longer scans a later 4,098-entry posting
 list linearly. Similar-sized inputs retain the linear merge path.
+
+## Rare-posting seed selection, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096 generated
+common declarations, and 256 rounds per sample. The baseline was `c8d48c0e`;
+the candidate scans long queries whose first two posting lists are large and
+starts intersection from the two shortest distinct lists when the shortest is
+at least 64 times smaller. The scan and replay live in non-inlined slow paths.
+Ten runs per executable were counterbalanced. Values below are median
+nanoseconds per query.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 31,590 | 31,016 | 30,177 | 30,196 |
+| late-selective | 28,912 | 868 | 28,810 | 682 |
+| early-selective | 500 | 506 | 414 | 416 |
+| repeated miss | 128 | 128 | 83 | 83 |
+| missing suffix | 128 | 128 | 83 | 83 |
+
+All result counts and checksums matched across every run. Late-selective
+queries improved by about 33 times raw and 42 times prepared. The common
+prepared path changed by +0.06%; the raw path improved by 1.82%. Other changes
+were within 1.3%.

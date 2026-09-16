@@ -488,7 +488,8 @@ pub fn declarationSliceForQuery(
 
     var ti: TrigramIterator = .init(query);
 
-    const first = (store.trigram_to_declarations.get(ti.next() orelse return &.{}) orelse return &.{}).slice(store.postings);
+    const first_trigram = ti.next() orelse return &.{};
+    const first = (store.trigram_to_declarations.get(first_trigram) orelse return &.{}).slice(store.postings);
     const second_trigram = ti.next() orelse return first;
 
     if (first.len >= filter_min_posting_len) {
@@ -503,6 +504,19 @@ pub fn declarationSliceForQuery(
     }
 
     const second = (store.trigram_to_declarations.get(second_trigram) orelse return &.{}).slice(store.postings);
+    if (query.len > Query.inline_capacity + 2 and
+        first.len >= filter_min_posting_len and second.len >= filter_min_posting_len)
+    {
+        if (try store.intersectRawQueryFromRarestPostings(
+            allocator,
+            query,
+            declaration_buffer,
+            first_trigram,
+            first,
+            second_trigram,
+            second,
+        )) |declarations| return declarations;
+    }
     try declaration_buffer.resize(allocator, @min(first.len, second.len));
     var len = mergeIntersectionInto(first, second, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
@@ -514,6 +528,74 @@ pub fn declarationSliceForQuery(
                 declaration_buffer.clearRetainingCapacity();
                 return &.{};
             }).slice(store.postings),
+            declaration_buffer.items[0..len],
+        );
+        declaration_buffer.shrinkRetainingCapacity(len);
+        if (len == 0) break;
+    }
+    return declaration_buffer.items;
+}
+
+const PostingSeed = struct {
+    trigram: Trigram,
+    declarations: []const Declaration.Index,
+};
+
+fn seedContainsTrigram(a: PostingSeed, b: ?PostingSeed, trigram: Trigram) bool {
+    const value = TrigramContext.toInt(trigram);
+    return TrigramContext.toInt(a.trigram) == value or
+        (b != null and TrigramContext.toInt(b.?.trigram) == value);
+}
+
+fn considerPostingSeed(a: *PostingSeed, b: *?PostingSeed, candidate: PostingSeed) void {
+    if (seedContainsTrigram(a.*, b.*, candidate.trigram)) return;
+    if (candidate.declarations.len < a.declarations.len) {
+        b.* = a.*;
+        a.* = candidate;
+    } else if (b.* == null or candidate.declarations.len < b.*.?.declarations.len) {
+        b.* = candidate;
+    }
+}
+
+// Keep the extra scan out of the ordinary query path. Long queries with a
+// rare suffix can avoid materializing a large common-prefix intersection.
+noinline fn intersectRawQueryFromRarestPostings(
+    store: *const TrigramStore,
+    allocator: std.mem.Allocator,
+    query: []const u8,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+    first_trigram: Trigram,
+    first_declarations: []const Declaration.Index,
+    second_trigram: Trigram,
+    second_declarations: []const Declaration.Index,
+) error{OutOfMemory}!?[]const Declaration.Index {
+    var iterator: TrigramIterator = .init(query);
+    _ = iterator.next();
+    _ = iterator.next();
+    var probe = iterator;
+    if (probe.next() == null) return null;
+
+    var first: PostingSeed = .{ .trigram = first_trigram, .declarations = first_declarations };
+    var second: ?PostingSeed = null;
+    considerPostingSeed(&first, &second, .{ .trigram = second_trigram, .declarations = second_declarations });
+    while (iterator.next()) |trigram| {
+        if (seedContainsTrigram(first, second, trigram)) continue;
+        const declarations = (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
+        considerPostingSeed(&first, &second, .{ .trigram = trigram, .declarations = declarations });
+    }
+    const other = second orelse return null;
+    if (!isSkewed(@min(first_declarations.len, second_declarations.len), first.declarations.len)) return null;
+
+    try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
+    var len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
+    declaration_buffer.shrinkRetainingCapacity(len);
+    if (len == 0) return declaration_buffer.items;
+
+    iterator = .init(query);
+    while (iterator.next()) |trigram| {
+        if (seedContainsTrigram(first, other, trigram)) continue;
+        len = mergeIntersection(
+            (store.trigram_to_declarations.get(trigram) orelse unreachable).slice(store.postings),
             declaration_buffer.items[0..len],
         );
         declaration_buffer.shrinkRetainingCapacity(len);
@@ -582,6 +664,17 @@ pub fn declarationSliceForPreparedQuery(
     }
 
     const second = (store.trigram_to_declarations.getAdapted(trigrams[1], PreparedTrigramContext{}) orelse return &.{}).slice(store.postings);
+    if (trigrams.len > Query.inline_capacity and
+        first.len >= filter_min_posting_len and second.len >= filter_min_posting_len)
+    {
+        if (try store.intersectPreparedQueryFromRarestPostings(
+            allocator,
+            trigrams,
+            declaration_buffer,
+            first,
+            second,
+        )) |declarations| return declarations;
+    }
     try declaration_buffer.resize(allocator, @min(first.len, second.len));
     var len = mergeIntersectionInto(first, second, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
@@ -593,6 +686,42 @@ pub fn declarationSliceForPreparedQuery(
                 declaration_buffer.clearRetainingCapacity();
                 return &.{};
             }).slice(store.postings),
+            declaration_buffer.items[0..len],
+        );
+        declaration_buffer.shrinkRetainingCapacity(len);
+        if (len == 0) break;
+    }
+    return declaration_buffer.items;
+}
+
+noinline fn intersectPreparedQueryFromRarestPostings(
+    store: *const TrigramStore,
+    allocator: std.mem.Allocator,
+    trigrams: []const PreparedTrigram,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+    first_declarations: []const Declaration.Index,
+    second_declarations: []const Declaration.Index,
+) error{OutOfMemory}!?[]const Declaration.Index {
+    var first: PostingSeed = .{ .trigram = trigrams[0].value, .declarations = first_declarations };
+    var second: ?PostingSeed = null;
+    considerPostingSeed(&first, &second, .{ .trigram = trigrams[1].value, .declarations = second_declarations });
+    for (trigrams[2..]) |trigram| {
+        if (seedContainsTrigram(first, second, trigram.value)) continue;
+        const declarations = (store.trigram_to_declarations.getAdapted(trigram, PreparedTrigramContext{}) orelse return &.{}).slice(store.postings);
+        considerPostingSeed(&first, &second, .{ .trigram = trigram.value, .declarations = declarations });
+    }
+    const other = second orelse return null;
+    if (!isSkewed(@min(first_declarations.len, second_declarations.len), first.declarations.len)) return null;
+
+    try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
+    var len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
+    declaration_buffer.shrinkRetainingCapacity(len);
+    if (len == 0) return declaration_buffer.items;
+
+    for (trigrams) |trigram| {
+        if (seedContainsTrigram(first, other, trigram.value)) continue;
+        len = mergeIntersection(
+            (store.trigram_to_declarations.getAdapted(trigram, PreparedTrigramContext{}) orelse unreachable).slice(store.postings),
             declaration_buffer.items[0..len],
         );
         declaration_buffer.shrinkRetainingCapacity(len);
@@ -1170,6 +1299,42 @@ test "prepared queries match string queries" {
         raw_slice_buffer.clearRetainingCapacity();
         prepared_slice_buffer.clearRetainingCapacity();
     }
+}
+
+test "long queries start with rare posting lists" {
+    const allocator = std.testing.allocator;
+
+    var source_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer source_writer.deinit();
+    for (0..filter_min_posting_len) |index| {
+        try source_writer.writer.print("const common_symbol_{d} = 0;\n", .{index});
+    }
+    try source_writer.writer.writeAll("const common_symbol_unique_tail = 0;\n");
+    const source = try source_writer.toOwnedSliceSentinel(0);
+    defer allocator.free(source);
+
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+
+    const query_text = "common_symbol_unique_tail";
+    var query = try Query.init(allocator, query_text);
+    defer query.deinit(allocator);
+    try std.testing.expect(query.trigrams().len > Query.inline_capacity);
+
+    var raw_buffer: std.ArrayList(Declaration.Index) = .empty;
+    defer raw_buffer.deinit(allocator);
+    const raw = try store.declarationSliceForQuery(allocator, query_text, &raw_buffer);
+    try std.testing.expectEqual(@as(usize, 1), raw.len);
+    try std.testing.expect(raw_buffer.capacity < filter_min_posting_len);
+
+    var prepared_buffer: std.ArrayList(Declaration.Index) = .empty;
+    defer prepared_buffer.deinit(allocator);
+    const prepared = try store.declarationSliceForPreparedQuery(allocator, &query, &prepared_buffer);
+    try std.testing.expectEqualSlices(Declaration.Index, raw, prepared);
+    try std.testing.expect(prepared_buffer.capacity < filter_min_posting_len);
 }
 
 test "short raw queries match trigram normalization" {
