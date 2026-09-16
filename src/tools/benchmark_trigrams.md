@@ -35,6 +35,27 @@ proposed per-name adjacent-trigram shortcut improved the synthetic workload by
 `array_list.zig`, and -0.19% on `unicode.zig` across 20 counterbalanced runs,
 so the production change was rejected.
 
+## Shared posting-builder nodes, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, and ReleaseFast. The baseline
+was `2d124343`; both executables were pinned to the same CPU for 24
+counterbalanced runs. The candidate replaces each trigram's 32-byte builder
+value and private tail allocation with a 12-byte value and one shared array of
+8-byte linked nodes. Final posting slices remain unchanged. Values below are
+median TrigramStore init times.
+
+| Source | Baseline | Candidate | Change |
+| --- | ---: | ---: | ---: |
+| `Sema.zig` | 5,319,063 ns | 5,249,109 ns | -1.3% |
+| `array_list.zig` | 375,058 ns | 362,692 ns | -3.3% |
+| `unicode.zig` | 356,507 ns | 343,424 ns | -3.7% |
+| `Ast.zig` | 567,693 ns | 531,040 ns | -6.5% |
+
+Declaration counts, unique trigram counts, posting counts, singleton and pair
+counts, filter counts, longest-list sizes, and filter bytes matched for every
+run. The shared pool removes per-posting-list tail allocations without a
+second name scan or a second hash-map lookup.
+
 ## Bounded raw-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
