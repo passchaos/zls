@@ -101,8 +101,9 @@ test "workspace symbol ranges across long Unicode spans" {
     const source = "// " ++ "¶↉🠁" ** 16 ++ "\r\n" ++
         "const @\"symbol¶↉🠁\" = struct {\r\n" ++
         "    // " ++ "¶↉🠁" ** 16 ++ "\r\n" ++
-        "    const symbol_ascii = 0;\r\n};";
-    const names = [_][]const u8{ "@\"symbol¶↉🠁\"", "symbol_ascii" };
+        "    const symbol_ascii = 0;\r\n};\r\n" ++
+        "const text = \"" ++ "¶↉🠁" ** 24 ++ "\"; const symbol_after_unicode = 0;";
+    const names = [_][]const u8{ "@\"symbol¶↉🠁\"", "symbol_ascii", "symbol_after_unicode" };
 
     for ([_]zls.offsets.Encoding{ .@"utf-8", .@"utf-16", .@"utf-32" }) |encoding| {
         var ctx: Context = try .init();

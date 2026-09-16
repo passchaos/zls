@@ -48,3 +48,21 @@ matching checksums across all six runs.
 These are position-conversion measurements on one host, not end-to-end LSP
 latencies. Short, dense spans change little. Workloads with long UTF-32 spans
 benefit most; the UTF-8 and UTF-16 implementations are unchanged.
+
+## UTF-16 long-span optimization, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, and ReleaseFast. The input was
+Zig revision `7056ba9a5c`'s 1,497,031-byte `src/Sema.zig`. The baseline was ZLS
+`90469930`; the candidate vectorizes UTF-16 code-unit counting after the last
+newline in long spans. Three runs per executable alternated their order. Values
+below are medians of the three reported times.
+
+| Token stride | Baseline (µs) | Optimized (µs) | Speedup |
+| ---: | ---: | ---: | ---: |
+| 1 | 2438.708 | 2399.600 | 1.02× |
+| 64 | 403.949 | 361.206 | 1.12× |
+| 1024 | 187.011 | 183.052 | 1.02× |
+
+Checksums matched for every encoding and stride. UTF-8 and UTF-32 were measured
+in the same runs as controls; their variation was small enough that no change
+is claimed. The optimization allocates no memory.
