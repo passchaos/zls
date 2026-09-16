@@ -75,16 +75,25 @@ pub fn advancePosition(
                 }
             }
         },
-        .@"utf-16" => for (text[from_index..to_index]) |c| {
-            if (c == '\n') {
-                result.line += 1;
+        .@"utf-16" => {
+            const slice = text[from_index..to_index];
+            const line_count = if (slice.len >= 64) std.mem.countScalar(u8, slice, '\n') else 0;
+            const relevant_slice = if (line_count == 0) slice else blk: {
+                result.line += @intCast(line_count);
                 result.character = 0;
-            } else if (c < 0x80) {
-                result.character += 1;
-            } else if (c >= 0xF0) {
-                result.character += 2;
-            } else if (c >= 0xC0) {
-                result.character += 1;
+                break :blk slice[std.mem.findScalarLast(u8, slice, '\n').? + 1 ..];
+            };
+            for (relevant_slice) |c| {
+                if (c == '\n') {
+                    result.line += 1;
+                    result.character = 0;
+                } else if (c < 0x80) {
+                    result.character += 1;
+                } else if (c >= 0xF0) {
+                    result.character += 2;
+                } else if (c >= 0xC0) {
+                    result.character += 1;
+                }
             }
         },
         .@"utf-32" => for (text[from_index..to_index]) |c| {
@@ -126,10 +135,17 @@ test advancePosition {
 
     const long_text = "a" ** 62 ++ "\n" ++ "b" ** 64 ++ "\ntrailer";
     inline for (.{ 63, 64, 127, 128, long_text.len }) |to_index| {
-        const expected = offsets.advancePosition(long_text, .{ .line = 5, .character = 7 }, 0, to_index, .@"utf-8");
-        const actual = advancePosition(long_text, .{ .line = 5, .character = 7 }, 0, to_index, .@"utf-8");
-        try std.testing.expectEqual(expected, actual);
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16" }) |encoding| {
+            const expected = offsets.advancePosition(long_text, .{ .line = 0, .character = 0 }, 0, to_index, encoding);
+            const actual = advancePosition(long_text, .{ .line = 0, .character = 0 }, 0, to_index, encoding);
+            try std.testing.expectEqual(expected, actual);
+        }
     }
+
+    const unicode_text = "a" ** 64 ++ "\ntrailer¶↉🠁";
+    const expected = offsets.advancePosition(unicode_text, .{ .line = 0, .character = 0 }, 0, unicode_text.len, .@"utf-16");
+    const actual = advancePosition(unicode_text, .{ .line = 0, .character = 0 }, 0, unicode_text.len, .@"utf-16");
+    try std.testing.expectEqual(expected, actual);
 }
 
 pub const SourceIndexToTokenIndexResult = union(enum) {
