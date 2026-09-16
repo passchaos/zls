@@ -1062,7 +1062,8 @@ noinline fn mergeEqualLengthIntersection(
     b: []Declaration.Index,
 ) u32 {
     assert(a.len == b.len);
-    const common_len = std.mem.indexOfDiff(Declaration.Index, a, b) orelse return @intCast(a.len);
+    const common_len = postingCommonPrefixLen(a, b);
+    if (common_len == a.len) return @intCast(a.len);
 
     var out_index: u32 = @intCast(common_len);
     var a_index = common_len;
@@ -1082,6 +1083,23 @@ noinline fn mergeEqualLengthIntersection(
         }
     }
     return out_index;
+}
+
+fn postingCommonPrefixLen(a: []const Declaration.Index, b: []const Declaration.Index) usize {
+    const len = @min(a.len, b.len);
+    var index: usize = 0;
+    if (@import("builtin").zig_backend == .stage2_llvm) {
+        if (std.simd.suggestVectorLength(u32)) |block_size| {
+            const Block = @Vector(block_size, u32);
+            while (len - index >= block_size) : (index += block_size) {
+                const a_values: Block = @bitCast(a[index..][0..block_size].*);
+                const b_values: Block = @bitCast(b[index..][0..block_size].*);
+                if (@reduce(.Or, a_values != b_values)) break;
+            }
+        }
+    }
+    while (index < len and a[index] == b[index]) : (index += 1) {}
+    return index;
 }
 
 fn mergeIntersectionInto(
@@ -1235,6 +1253,35 @@ test mergeIntersection {
     var direct_skewed: [short.len]I = undefined;
     const direct_skewed_len = mergeIntersectionInto(&long, &short, &direct_skewed);
     try std.testing.expectEqualSlices(I, &skewed_expected, direct_skewed[0..direct_skewed_len]);
+}
+
+test postingCommonPrefixLen {
+    const I = Declaration.Index;
+    var a: [65]I = undefined;
+    for (&a, 0..) |*item, value| item.* = @enumFromInt(value);
+
+    var b = a;
+    try std.testing.expectEqual(a.len, postingCommonPrefixLen(&a, &b));
+    inline for (.{ 0, 3, 4, 7, 8, 31, 32, 63, 64 }) |index| {
+        b = a;
+        b[index] = @enumFromInt(1000 + index);
+        try std.testing.expectEqual(index, postingCommonPrefixLen(&a, &b));
+    }
+    try std.testing.expectEqual(@as(usize, 32), postingCommonPrefixLen(a[0..32], a[0..33]));
+
+    var prng: std.Random.DefaultPrng = .init(0);
+    const random = prng.random();
+    for (0..1_000) |_| {
+        const a_len = random.intRangeAtMost(usize, 0, a.len);
+        const b_len = random.intRangeAtMost(usize, 0, b.len);
+        b = a;
+        if (b_len != 0 and random.boolean()) {
+            const different_index = random.intRangeLessThan(usize, 0, b_len);
+            b[different_index] = @enumFromInt(1000 + different_index);
+        }
+        const expected = std.mem.indexOfDiff(I, a[0..a_len], b[0..b_len]) orelse @min(a_len, b_len);
+        try std.testing.expectEqual(expected, postingCommonPrefixLen(a[0..a_len], b[0..b_len]));
+    }
 }
 
 test "declarations and query results stay in source order" {

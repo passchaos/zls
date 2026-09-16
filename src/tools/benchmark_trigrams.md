@@ -82,3 +82,23 @@ All result counts and checksums matched across every run. Common queries
 improved by 34% raw and 41% prepared, while the near-miss improved by about
 19%. Other changes stayed within 0.6%. At the 160-entry activation boundary,
 the common query improved by 34%; inputs below the threshold were unchanged.
+
+## Vectorized posting-prefix scan, 2026-09-16
+
+Measured with the same 4,096-declaration setup and ten counterbalanced runs.
+The baseline was `69d0ec02`. The candidate compares posting prefixes in native
+SIMD blocks before resuming the scalar merge at the first differing block.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 19,065 | 12,096 | 17,758 | 10,526 |
+| late-selective | 844 | 850 | 660 | 663 |
+| early-selective | 487 | 490 | 407 | 402 |
+| equal near-miss | 6,432 | 5,534 | 6,385 | 5,488 |
+| repeated miss | 128 | 128 | 83 | 83 |
+| missing suffix | 128 | 128 | 83 | 83 |
+
+Counts and checksums remained identical. Common queries improved by 37% raw
+and 41% prepared; the equal-length near-miss improved by 14%. Other changes
+stayed within 1.1%. At the 160-entry activation boundary, common queries
+improved by 31--33%; inputs below the threshold were unchanged within 1%.
