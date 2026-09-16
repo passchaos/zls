@@ -1224,6 +1224,7 @@ pub fn loadTrigramStoreList(
             const handle = handle_future.await(store.io) catch continue;
             const uri = handle.uri.schemeAndPath();
             if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
+            if (!mayHaveWorkspaceSymbols(&handle.tree)) continue;
             if (handle.trigram_store.getOrNull(handle)) |trigram_store| {
                 if (trigram_store.isEmpty()) continue;
             }
@@ -1275,6 +1276,10 @@ fn removeEmptyTrigramStores(handles: *std.ArrayList(*DocumentStore.Handle)) void
     handles.shrinkRetainingCapacity(write_index);
 }
 
+fn mayHaveWorkspaceSymbols(tree: *const Ast) bool {
+    return tree.rootDecls().len != 0;
+}
+
 test removeEmptyTrigramStores {
     const empty_store: TrigramStore = .{
         .filter_buckets = null,
@@ -1299,6 +1304,19 @@ test removeEmptyTrigramStores {
     try std.testing.expectEqual(@as(usize, 2), handles.items.len);
     try std.testing.expectEqual(&first, handles.items[0]);
     try std.testing.expectEqual(&second, handles.items[1]);
+}
+
+test mayHaveWorkspaceSymbols {
+    const allocator = std.testing.allocator;
+    inline for (.{ "", "// comment only\n" }) |source| {
+        var tree = try Ast.parse(allocator, source, .zig);
+        defer tree.deinit(allocator);
+        try std.testing.expect(!mayHaveWorkspaceSymbols(&tree));
+    }
+
+    var tree = try Ast.parse(allocator, "const symbol = 0;", .zig);
+    defer tree.deinit(allocator);
+    try std.testing.expect(mayHaveWorkspaceSymbols(&tree));
 }
 
 fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri.SchemeAndPath) bool {

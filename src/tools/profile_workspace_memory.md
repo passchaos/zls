@@ -83,6 +83,22 @@ Twelve additional 20-cycle runs with `--rounds 0` showed identical median
 closed-RSS growth of 136 KiB and effectively identical final closed RSS. The
 change adds no persistent cache or allocation.
 
+## Root-empty handle filtering, 2026-09-16
+
+Measured against `704823b2` with one `Sema.zig` document, 256 empty documents,
+three cycles, and 100 query rounds per cycle. Sixteen fixed-CPU
+counterbalanced runs showed that rejecting handles whose AST has no root
+declarations before lazy trigram-store loading changed median missing-symbol
+latency from 202.2 to 155.3 microseconds (-23.2%), parse-miss latency from
+203.7 to 179.6 microseconds (-11.8%), and the query phase from 308.7 to 297.6
+milliseconds (-3.6%). Result counts and checksums matched.
+
+Sixteen additional 20-cycle runs with `--rounds 0` changed median open time
+from 33.52 to 32.95 milliseconds and total runtime from 793 to 777
+milliseconds. Both variants had exactly 136 KiB median closed-RSS growth and
+the same 3,560 KiB median final closed RSS. Empty/comment-only ASTs and a
+minimal declaration are covered directly by unit tests.
+
 ## Reference run, 2026-09-16
 
 On aarch64 Linux with Zig 0.16.0 and ZLS baseline `90469930`, a cold, single-job
