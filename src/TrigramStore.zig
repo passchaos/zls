@@ -491,8 +491,8 @@ pub fn declarationSliceForQuery(
     }
 
     const second = (store.trigram_to_declarations.get(second_trigram) orelse return &.{}).slice(store.postings);
-    try declaration_buffer.appendSlice(allocator, first);
-    var len = mergeIntersection(second, declaration_buffer.items);
+    try declaration_buffer.resize(allocator, @min(first.len, second.len));
+    var len = mergeIntersectionInto(first, second, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
     if (len == 0) return declaration_buffer.items;
 
@@ -550,8 +550,8 @@ pub fn declarationSliceForPreparedQuery(
     }
 
     const second = (store.trigram_to_declarations.getAdapted(trigrams[1], PreparedTrigramContext{}) orelse return &.{}).slice(store.postings);
-    try declaration_buffer.appendSlice(allocator, first);
-    var len = mergeIntersection(second, declaration_buffer.items);
+    try declaration_buffer.resize(allocator, @min(first.len, second.len));
+    var len = mergeIntersectionInto(first, second, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
     if (len == 0) return declaration_buffer.items;
 
@@ -859,14 +859,43 @@ fn mergeIntersection(
     return out_idx;
 }
 
+fn mergeIntersectionInto(
+    a: []const Declaration.Index,
+    b: []const Declaration.Index,
+    output: []Declaration.Index,
+) u32 {
+    assert(output.len >= @min(a.len, b.len));
+    var out_index: u32 = 0;
+    var a_index: usize = 0;
+    var b_index: usize = 0;
+    while (a_index < a.len and b_index < b.len) {
+        const a_value = a[a_index];
+        const b_value = b[b_index];
+        if (a_value == b_value) {
+            output[out_index] = a_value;
+            out_index += 1;
+            a_index += 1;
+            b_index += 1;
+        } else if (@intFromEnum(a_value) < @intFromEnum(b_value)) {
+            a_index += 1;
+        } else {
+            b_index += 1;
+        }
+    }
+    return out_index;
+}
+
 test mergeIntersection {
     const I = Declaration.Index;
 
     const a = [_]I{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5), @enumFromInt(8) };
     var b = [_]I{ @enumFromInt(0), @enumFromInt(1), @enumFromInt(2), @enumFromInt(3), @enumFromInt(4), @enumFromInt(5) };
 
+    var direct: [@min(a.len, b.len)]I = undefined;
+    const direct_len = mergeIntersectionInto(&a, &b, &direct);
     const len = mergeIntersection(&a, &b);
     try std.testing.expectEqualSlices(I, &.{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5) }, b[0..len]);
+    try std.testing.expectEqualSlices(I, b[0..len], direct[0..direct_len]);
 
     var prng: std.Random.DefaultPrng = .init(0);
     const random = prng.random();
@@ -896,6 +925,9 @@ test mergeIntersection {
             }
         }
 
+        var direct_random: [64]I = undefined;
+        const direct_random_len = mergeIntersectionInto(random_a[0..a_len], random_b[0..b_len], &direct_random);
+        try std.testing.expectEqualSlices(I, expected[0..expected_len], direct_random[0..direct_random_len]);
         const random_len = mergeIntersection(random_a[0..a_len], random_b[0..b_len]);
         try std.testing.expectEqualSlices(I, expected[0..expected_len], random_b[0..random_len]);
     }
