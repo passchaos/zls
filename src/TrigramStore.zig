@@ -407,6 +407,10 @@ pub fn deinit(store: *TrigramStore, allocator: std.mem.Allocator) void {
     store.* = undefined;
 }
 
+pub fn isEmpty(store: *const TrigramStore) bool {
+    return store.declarations.len == 0;
+}
+
 pub const Statistics = struct {
     declarations: usize,
     trigrams: usize,
@@ -1617,6 +1621,7 @@ test "empty store has no postings" {
     try std.testing.expectEqual(@as(usize, 0), store.trigram_to_declarations.count());
     try std.testing.expectEqual(@as(usize, 0), store.postings.len);
     try std.testing.expect(store.filter_buckets == null);
+    try std.testing.expect(store.isEmpty());
 }
 
 test "deep container nesting overflows inline function stack" {

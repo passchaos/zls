@@ -67,6 +67,22 @@ closed RSS. Median observed peaks, 15,974 and 16,494 KiB, stayed within heavily
 overlapping run-to-run ranges. The change adds no allocations or persistent
 state; it only coalesces the existing mutex critical sections.
 
+## Empty trigram-store filtering, 2026-09-16
+
+Measured against `294e13da` with one `Sema.zig` document, 256 empty documents,
+three cycles, and 100 query rounds per cycle. Sixteen fixed-CPU
+counterbalanced runs showed that removing already-loaded empty trigram stores
+from the per-request handle list changed median missing-symbol latency from
+200.8 to 185.0 microseconds (-7.9%), the query phase from 312.8 to 292.4
+milliseconds (-6.5%), and total runtime from 1.132 to 1.085 seconds (-4.2%).
+Result counts and checksums matched. Empty stores are removed after their first
+lazy load and skipped directly on later requests; non-empty handle order is
+preserved.
+
+Twelve additional 20-cycle runs with `--rounds 0` showed identical median
+closed-RSS growth of 136 KiB and effectively identical final closed RSS. The
+change adds no persistent cache or allocation.
+
 ## Reference run, 2026-09-16
 
 On aarch64 Linux with Zig 0.16.0 and ZLS baseline `90469930`, a cold, single-job

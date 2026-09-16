@@ -1224,6 +1224,9 @@ pub fn loadTrigramStoreList(
             const handle = handle_future.await(store.io) catch continue;
             const uri = handle.uri.schemeAndPath();
             if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
+            if (handle.trigram_store.getOrNull(handle)) |trigram_store| {
+                if (trigram_store.isEmpty()) continue;
+            }
             if (handles.capacity == 0 and capacity_hint != 0) {
                 try handles.ensureTotalCapacityPrecise(list_allocator, @min(futures.len, capacity_hint));
             }
@@ -1257,7 +1260,45 @@ pub fn loadTrigramStoreList(
 
     if (did_out_of_memory.load(.acquire)) return error.OutOfMemory;
 
+    removeEmptyTrigramStores(&handles);
+
     return handles;
+}
+
+fn removeEmptyTrigramStores(handles: *std.ArrayList(*DocumentStore.Handle)) void {
+    var write_index: usize = 0;
+    for (handles.items) |handle| {
+        if (handle.trigram_store.getCached().isEmpty()) continue;
+        handles.items[write_index] = handle;
+        write_index += 1;
+    }
+    handles.shrinkRetainingCapacity(write_index);
+}
+
+test removeEmptyTrigramStores {
+    const empty_store: TrigramStore = .{
+        .filter_buckets = null,
+        .trigram_to_declarations = .empty,
+        .postings = &.{},
+        .declarations = .empty,
+    };
+    var nonempty_store = empty_store;
+    nonempty_store.declarations.len = 1;
+
+    var first: Handle = .dead;
+    first.trigram_store.value = nonempty_store;
+    var empty: Handle = .dead;
+    empty.trigram_store.value = empty_store;
+    var second: Handle = .dead;
+    second.trigram_store.value = nonempty_store;
+
+    var storage = [_]*Handle{ &first, &empty, &second };
+    var handles: std.ArrayList(*Handle) = .{ .items = &storage, .capacity = storage.len };
+    removeEmptyTrigramStores(&handles);
+
+    try std.testing.expectEqual(@as(usize, 2), handles.items.len);
+    try std.testing.expectEqual(&first, handles.items[0]);
+    try std.testing.expectEqual(&second, handles.items[1]);
 }
 
 fn matchesWorkspaceSymbolFilter(uri: Uri.SchemeAndPath, filter_uris: []const Uri.SchemeAndPath) bool {
