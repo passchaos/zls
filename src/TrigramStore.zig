@@ -156,6 +156,7 @@ pub const Query = struct {
 /// against ZLS and Zig standard-library sources put the break-even point at a
 /// first posting list of roughly this size.
 const filter_min_posting_len = 160;
+const filter_min_posting_count = 2;
 
 filter_buckets: ?[]CuckooFilter.Bucket,
 trigram_to_declarations: PostingMap,
@@ -358,11 +359,7 @@ pub fn init(
     for (store.trigram_to_declarations.values()) |*list| list.start -= list.len;
     assert(posting_count == store.postings.len);
 
-    const build_filter = for (store.trigram_to_declarations.values()) |list| {
-        if (list.len >= filter_min_posting_len) break true;
-    } else false;
-
-    if (build_filter) {
+    if (shouldBuildFilter(store.trigram_to_declarations.values())) {
         const trigrams = store.trigram_to_declarations.keys();
         var prng = std.Random.DefaultPrng.init(0);
 
@@ -392,6 +389,16 @@ pub fn init(
     return store;
 }
 
+fn shouldBuildFilter(posting_lists: []const PostingList) bool {
+    var long_posting_count: usize = 0;
+    for (posting_lists) |list| {
+        if (list.len < filter_min_posting_len) continue;
+        long_posting_count += 1;
+        if (long_posting_count == filter_min_posting_count) return true;
+    }
+    return false;
+}
+
 pub fn deinit(store: *TrigramStore, allocator: std.mem.Allocator) void {
     if (store.filter_buckets) |buckets| allocator.free(buckets);
     allocator.free(store.postings);
@@ -408,6 +415,7 @@ pub const Statistics = struct {
     pair_postings: usize,
     filtered_postings: usize,
     longest_posting: usize,
+    longest_trigram: u32,
     filter_bytes: usize,
 };
 
@@ -420,13 +428,17 @@ pub fn statistics(store: *const TrigramStore) Statistics {
         .pair_postings = 0,
         .filtered_postings = 0,
         .longest_posting = 0,
+        .longest_trigram = 0,
         .filter_bytes = if (store.filter_buckets) |buckets| std.mem.sliceAsBytes(buckets).len else 0,
     };
-    for (store.trigram_to_declarations.values()) |posting| {
+    for (store.trigram_to_declarations.keys(), store.trigram_to_declarations.values()) |trigram, posting| {
         result.singleton_postings += @intFromBool(posting.len == 1);
         result.pair_postings += @intFromBool(posting.len == 2);
         result.filtered_postings += @intFromBool(posting.len >= filter_min_posting_len);
-        result.longest_posting = @max(result.longest_posting, posting.len);
+        if (posting.len > result.longest_posting) {
+            result.longest_posting = posting.len;
+            result.longest_trigram = TrigramContext.toInt(trigram);
+        }
     }
     return result;
 }
@@ -1688,6 +1700,16 @@ test "Cuckoo filter is reserved for queries with long first postings" {
 
     try Test.run(allocator, filter_min_posting_len - 1, false);
     try Test.run(allocator, filter_min_posting_len, true);
+}
+
+test shouldBuildFilter {
+    const short: PostingList = .{ .start = 0, .len = filter_min_posting_len - 1 };
+    const long: PostingList = .{ .start = 0, .len = filter_min_posting_len };
+    try std.testing.expect(!shouldBuildFilter(&.{}));
+    try std.testing.expect(!shouldBuildFilter(&.{short}));
+    try std.testing.expect(!shouldBuildFilter(&.{long}));
+    try std.testing.expect(!shouldBuildFilter(&.{ long, short }));
+    try std.testing.expect(shouldBuildFilter(&.{ long, short, long }));
 }
 
 test "TrigramStore.init handles every allocation failure" {

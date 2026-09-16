@@ -94,6 +94,17 @@ runs also improved median open time from 44.05 ms to 42.66 ms and total time
 from 926.21 ms to 913.40 ms. Median observed peak was effectively unchanged
 (15,724 vs. 15,666 KiB), and both variants had 44 KiB closed-RSS growth.
 
+## Cuckoo-filter population threshold, 2026-09-16
+
+Measured on `Sema.zig` against a candidate that builds the filter after one
+long posting list. Forty fixed-CPU counterbalanced runs showed that requiring
+two long lists changed median TrigramStore init from 5,195,794 ns to 5,170,433
+ns (-0.5%), removed a 2,760-byte filter, and changed a verified longest-prefix
+miss from 43 ns to 42 ns. Files without long postings were unchanged. A single
+long list cannot produce the expensive large/large intersection that the
+filter is meant to avoid, so the filter is now reserved for stores with at
+least two 160-entry posting lists.
+
 ## Bounded raw-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096

@@ -106,13 +106,27 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
     var store = try TrigramStore.init(allocator, &tree);
     defer store.deinit(allocator);
     const stats = store.statistics();
+    var missing_query_buffer: [64]u8 = undefined;
+    missing_query_buffer[0] = @truncate(stats.longest_trigram);
+    missing_query_buffer[1] = @truncate(stats.longest_trigram >> 8);
+    missing_query_buffer[2] = @truncate(stats.longest_trigram >> 16);
+    const missing_suffix = "__zls_missing_suffix";
+    @memcpy(missing_query_buffer[3..][0..missing_suffix.len], missing_suffix);
+    const missing_query = missing_query_buffer[0 .. 3 + missing_suffix.len];
+    var missing_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
+    defer missing_buffer.deinit(allocator);
+    const missing_result = try store.declarationSliceForQuery(allocator, missing_query, &missing_buffer);
+    if (missing_result.len != 0) return error.UnexpectedResultCount;
+    const missing_ns, const missing_sum = try measureRaw(io, allocator, &store, missing_query, 1024);
+    if (missing_sum != 0) return error.UnstableChecksum;
     std.debug.print(
-        "{s}: {d} bytes parse={d} ns init={d} ns declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} filter-bytes={d}\n",
+        "{s}: {d} bytes parse={d} ns init={d} ns longest-miss={d} ns declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} longest-trigram={X:0>6} filter-bytes={d}\n",
         .{
             path,
             source.len,
             parse_ns,
             init_ns,
+            missing_ns,
             stats.declarations,
             stats.trigrams,
             stats.postings,
@@ -120,6 +134,7 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
             stats.pair_postings,
             stats.filtered_postings,
             stats.longest_posting,
+            stats.longest_trigram,
             stats.filter_bytes,
         },
     );
