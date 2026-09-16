@@ -30,7 +30,9 @@ analysis, diagnostics, a full Zig workspace, or build subprocesses. Request
 times include protocol transport and Python decoding. Use the position benchmark
 for measuring position conversion alone.
 
-`--cycles` and `--rounds` control repetition. `--max-rss-mib` defaults to 2048;
+`--cycles` and `--rounds` control repetition. Set `--rounds 0` to isolate
+document open/close costs without building or querying symbol indexes.
+`--max-rss-mib` defaults to 2048;
 the script checks ZLS memory while waiting for replies and after each phase and
 terminates its child on failure. This is a sampled safeguard, not an OS memory
 limit. Each request has a 60-second response deadline. RSS includes allocator
@@ -62,3 +64,9 @@ freed pages in thread-local caches rather than live document objects leaking. Th
 small difference between revisions is not treated as a memory optimization or a
 regression; the useful conclusion is that the position optimization adds no
 allocations and does not materially change resident memory.
+
+An orthogonal run on `5b60bf2f` used 100 cycles with `--rounds 0`. It reached a
+20,304 KiB peak and closed-document RSS increased from 5,448 to 16,140 KiB. A
+single cycle with 2,000 rounds (8,000 queries) reached only 13,008 KiB and had no
+cross-cycle growth. This isolates the gradual RSS retention to repeated document
+parse/open/close lifecycles rather than workspace-symbol query arenas.

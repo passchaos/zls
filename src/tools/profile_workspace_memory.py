@@ -95,8 +95,8 @@ def main():
     parser.add_argument('--rounds', type=int, default=20)
     parser.add_argument('--max-rss-mib', type=int, default=2048)
     args = parser.parse_args()
-    if min(args.cycles, args.rounds, args.max_rss_mib) < 1:
-        parser.error('cycles, rounds, and max-rss-mib must be positive')
+    if min(args.cycles, args.max_rss_mib) < 1 or args.rounds < 0:
+        parser.error('cycles and max-rss-mib must be positive; rounds must be non-negative')
     sources = [(path.name, path.read_text()) for path in args.sources]
     with tempfile.TemporaryDirectory(prefix='zls-memory-') as directory:
         root = Path(directory)
@@ -148,7 +148,7 @@ def main():
                     if remaining:
                         raise RuntimeError('Closed documents still returned workspace symbols')
                     client.checkpoint(f'closed-{cycle}')
-                if not any(value['count'] for value in checksums.values()):
+                if args.rounds != 0 and not any(value['count'] for value in checksums.values()):
                     raise RuntimeError('No workspace symbols were exercised')
                 client.request('shutdown', None)
                 client.notify('exit', None)
