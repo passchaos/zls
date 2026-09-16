@@ -1028,11 +1028,13 @@ fn mergeIntersection(
     b: []Declaration.Index,
 ) u32 {
     if (a.len == 0 or b.len == 0) return 0;
+    if (a.len == b.len and a.len >= filter_min_posting_len) {
+        return mergeEqualLengthIntersection(a, b);
+    }
     if (isSkewed(a.len, b.len)) return binaryIntersectionInto(b, a, b);
     if (isSkewed(b.len, a.len)) return binaryIntersectionInto(a, b, b);
 
     var out_idx: u32 = 0;
-
     var a_idx: u32 = 0;
     var b_idx: u32 = 0;
 
@@ -1053,6 +1055,33 @@ fn mergeIntersection(
     }
 
     return out_idx;
+}
+
+noinline fn mergeEqualLengthIntersection(
+    a: []const Declaration.Index,
+    b: []Declaration.Index,
+) u32 {
+    assert(a.len == b.len);
+    const common_len = std.mem.indexOfDiff(Declaration.Index, a, b) orelse return @intCast(a.len);
+
+    var out_index: u32 = @intCast(common_len);
+    var a_index = common_len;
+    var b_index = common_len;
+    while (a_index < a.len and b_index < b.len) {
+        const a_value = a[a_index];
+        const b_value = b[b_index];
+        if (a_value == b_value) {
+            b[out_index] = a_value;
+            out_index += 1;
+            a_index += 1;
+            b_index += 1;
+        } else if (@intFromEnum(a_value) < @intFromEnum(b_value)) {
+            a_index += 1;
+        } else {
+            b_index += 1;
+        }
+    }
+    return out_index;
 }
 
 fn mergeIntersectionInto(
@@ -1140,7 +1169,6 @@ test mergeIntersection {
 
     const a = [_]I{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5), @enumFromInt(8) };
     var b = [_]I{ @enumFromInt(0), @enumFromInt(1), @enumFromInt(2), @enumFromInt(3), @enumFromInt(4), @enumFromInt(5) };
-
     var direct: [@min(a.len, b.len)]I = undefined;
     const direct_len = mergeIntersectionInto(&a, &b, &direct);
     const len = mergeIntersection(&a, &b);
@@ -1184,6 +1212,17 @@ test mergeIntersection {
 
     var long: [4096]I = undefined;
     for (&long, 0..) |*item, value| item.* = @enumFromInt(value * 2);
+    var same = long;
+    try std.testing.expectEqual(long.len, mergeIntersection(&long, &same));
+    try std.testing.expectEqualSlices(I, &long, &same);
+    var common_prefix = long;
+    common_prefix[common_prefix.len - 1] = @enumFromInt(9000);
+    try std.testing.expectEqual(long.len - 1, mergeIntersection(&long, &common_prefix));
+    try std.testing.expectEqualSlices(I, long[0 .. long.len - 1], common_prefix[0 .. long.len - 1]);
+    var odd: [filter_min_posting_len]I = undefined;
+    for (&odd, 0..) |*item, value| item.* = @enumFromInt(value * 2 + 1);
+    try std.testing.expectEqual(@as(u32, 0), mergeIntersection(long[0..odd.len], &odd));
+
     const short = [_]I{ @enumFromInt(0), @enumFromInt(2048), @enumFromInt(4095), @enumFromInt(8190), @enumFromInt(9000) };
     const skewed_expected = [_]I{ @enumFromInt(0), @enumFromInt(2048), @enumFromInt(8190) };
     var long_copy = long;

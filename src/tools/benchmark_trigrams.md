@@ -60,3 +60,25 @@ All result counts and checksums matched across every run. Late-selective
 queries improved by about 33 times raw and 42 times prepared. The common
 prepared path changed by +0.06%; the raw path improved by 1.82%. Other changes
 were within 1.3%.
+
+## Equal-length posting prefixes, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
+declarations per generated symbol family, and 256 rounds per sample. The
+baseline was `3569929b`. The benchmark adds an equal-length near-miss whose
+posting lists differ only at the end. Ten runs per executable were
+counterbalanced. Values below are median nanoseconds per query.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 30,724 | 20,208 | 30,268 | 17,743 |
+| late-selective | 851 | 846 | 663 | 660 |
+| early-selective | 489 | 489 | 408 | 407 |
+| equal near-miss | 7,988 | 6,438 | 7,942 | 6,382 |
+| repeated miss | 128 | 128 | 83 | 83 |
+| missing suffix | 128 | 128 | 83 | 83 |
+
+All result counts and checksums matched across every run. Common queries
+improved by 34% raw and 41% prepared, while the near-miss improved by about
+19%. Other changes stayed within 0.6%. At the 160-entry activation boundary,
+the common query improved by 34%; inputs below the threshold were unchanged.
