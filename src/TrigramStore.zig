@@ -61,81 +61,12 @@ comptime {
 }
 
 const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
-const PostingNode = struct {
+const PostingOccurrence = struct {
     declaration: Declaration.Index,
-    previous: OptionalNodeIndex,
-};
-const OptionalNodeIndex = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-
-    fn from(index: usize) OptionalNodeIndex {
-        assert(index < std.math.maxInt(u32));
-        return @enumFromInt(index);
-    }
-
-    fn unwrap(index: OptionalNodeIndex) ?usize {
-        return if (index == .none) null else @intFromEnum(index);
-    }
-};
-const PostingListBuilderValue = struct {
-    first: Declaration.Index,
-    tail: OptionalNodeIndex = .none,
-    count: u32 = 1,
-
-    fn len(list: PostingListBuilderValue) usize {
-        return list.count;
-    }
-
-    fn last(list: PostingListBuilderValue, nodes: []const PostingNode) Declaration.Index {
-        return if (list.tail.unwrap()) |tail| nodes[tail].declaration else list.first;
-    }
-
-    fn append(
-        list: *PostingListBuilderValue,
-        nodes: *std.ArrayList(PostingNode),
-        allocator: std.mem.Allocator,
-        index: Declaration.Index,
-    ) error{OutOfMemory}!void {
-        if (list.last(nodes.items) == index) return;
-        if (nodes.items.len == std.math.maxInt(u32)) return error.OutOfMemory;
-        try nodes.append(allocator, .{ .declaration = index, .previous = list.tail });
-        list.tail = .from(nodes.items.len - 1);
-        list.count = std.math.add(u32, list.count, 1) catch return error.OutOfMemory;
-    }
+    entry: u32,
 };
 comptime {
-    assert(@sizeOf(PostingNode) == 8);
-    assert(@sizeOf(PostingListBuilderValue) == 12);
-}
-const PostingListBuilder = std.array_hash_map.Custom(Trigram, PostingListBuilderValue, TrigramContext, false);
-
-test PostingListBuilderValue {
-    const first: Declaration.Index = @enumFromInt(3);
-    const second: Declaration.Index = @enumFromInt(7);
-    var list: PostingListBuilderValue = .{ .first = first };
-    var nodes: std.ArrayList(PostingNode) = .empty;
-    defer nodes.deinit(std.testing.allocator);
-
-    try std.testing.expectEqual(@as(usize, 1), list.len());
-    try std.testing.expectEqual(first, list.last(nodes.items));
-
-    try list.append(&nodes, std.testing.allocator, first);
-    try std.testing.expectEqual(@as(usize, 1), list.len());
-    try std.testing.expectEqual(@as(usize, 0), nodes.items.len);
-
-    try list.append(&nodes, std.testing.allocator, second);
-    try std.testing.expectEqual(@as(usize, 2), list.len());
-    try std.testing.expectEqual(second, list.last(nodes.items));
-
-    const third: Declaration.Index = @enumFromInt(11);
-    try list.append(&nodes, std.testing.allocator, third);
-    try std.testing.expectEqual(@as(usize, 3), list.len());
-    try std.testing.expectEqual(third, list.last(nodes.items));
-    try std.testing.expectEqualSlices(PostingNode, &.{
-        .{ .declaration = second, .previous = .none },
-        .{ .declaration = third, .previous = .from(0) },
-    }, nodes.items);
+    assert(@sizeOf(PostingOccurrence) == 8);
 }
 
 const PreparedTrigram = struct {
@@ -287,10 +218,8 @@ pub fn init(
     errdefer store.deinit(allocator);
     try store.declarations.ensureTotalCapacity(allocator, denseDeclarationCapacity(tree));
 
-    var posting_lists: PostingListBuilder = .empty;
-    defer posting_lists.deinit(allocator);
-    var posting_nodes: std.ArrayList(PostingNode) = .empty;
-    defer posting_nodes.deinit(allocator);
+    var posting_occurrences: std.ArrayList(PostingOccurrence) = .empty;
+    defer posting_occurrences.deinit(allocator);
 
     var walker_stack = std.heap.stackFallback(1024, allocator);
     const walker_allocator = walker_stack.get();
@@ -315,8 +244,7 @@ pub fn init(
                     if (tree.tokenTag(fn_token + 1) != .identifier) continue;
 
                     try store.appendDeclaration(
-                        &posting_lists,
-                        &posting_nodes,
+                        &posting_occurrences,
                         allocator,
                         tree,
                         fn_token + 1,
@@ -328,8 +256,7 @@ pub fn init(
                     const test_name_token = tree.nodeData(node).opt_token_and_node[0].unwrap() orelse continue;
 
                     try store.appendDeclaration(
-                        &posting_lists,
-                        &posting_nodes,
+                        &posting_occurrences,
                         allocator,
                         tree,
                         test_name_token,
@@ -369,8 +296,7 @@ pub fn init(
                     if (isVarDeclAlias(tree, node)) continue;
 
                     try store.appendDeclaration(
-                        &posting_lists,
-                        &posting_nodes,
+                        &posting_occurrences,
                         allocator,
                         tree,
                         main_token + 1,
@@ -385,8 +311,7 @@ pub fn init(
                     if (tree.tokenTag(name_token) != .identifier) continue;
 
                     try store.appendDeclaration(
-                        &posting_lists,
-                        &posting_nodes,
+                        &posting_occurrences,
                         allocator,
                         tree,
                         name_token,
@@ -415,35 +340,26 @@ pub fn init(
         }
     }
 
-    const lists = posting_lists.values();
+    // During collection, `start` stores the last declaration index seen for
+    // duplicate suppression. Convert it to each final posting's exclusive end.
     var posting_count: usize = 0;
-    for (lists) |list| {
-        posting_count = std.math.add(usize, posting_count, list.len()) catch return error.OutOfMemory;
+    for (store.trigram_to_declarations.values()) |*list| {
+        posting_count = std.math.add(usize, posting_count, list.len) catch return error.OutOfMemory;
+        list.start = @intCast(posting_count);
     }
     if (posting_count > std.math.maxInt(u32)) return error.OutOfMemory;
 
     store.postings = try allocator.alloc(Declaration.Index, posting_count);
-    try store.trigram_to_declarations.ensureTotalCapacity(allocator, posting_lists.count());
-
-    var posting_start: usize = 0;
-    for (posting_lists.keys(), posting_lists.values()) |trigram, list| {
-        store.postings[posting_start] = list.first;
-        var output_index = posting_start + list.len();
-        var node_index = list.tail;
-        while (node_index.unwrap()) |index| {
-            const node = posting_nodes.items[index];
-            output_index -= 1;
-            store.postings[output_index] = node.declaration;
-            node_index = node.previous;
-        }
-        assert(output_index == posting_start + 1);
-        store.trigram_to_declarations.putAssumeCapacityNoClobber(trigram, .{
-            .start = @intCast(posting_start),
-            .len = @intCast(list.len()),
-        });
-        posting_start += list.len();
+    assert(posting_occurrences.items.len == posting_count);
+    // Occurrences were appended in declaration order. Scattering backwards
+    // preserves that order inside every posting range.
+    var occurrence_iterator = std.mem.reverseIterator(posting_occurrences.items);
+    while (occurrence_iterator.next()) |occurrence| {
+        const list = &store.trigram_to_declarations.values()[occurrence.entry];
+        list.start -= 1;
+        store.postings[list.start] = occurrence.declaration;
     }
-    assert(posting_start == store.postings.len);
+    assert(posting_count == store.postings.len);
 
     const build_filter = for (store.trigram_to_declarations.values()) |list| {
         if (list.len >= filter_min_posting_len) break true;
@@ -877,8 +793,7 @@ noinline fn intersectPreparedQueryFromRarestPostings(
 
 fn appendDeclaration(
     store: *TrigramStore,
-    posting_lists: *PostingListBuilder,
-    posting_nodes: *std.ArrayList(PostingNode),
+    posting_occurrences: *std.ArrayList(PostingOccurrence),
     allocator: std.mem.Allocator,
     tree: *const Ast,
     name_token: Ast.TokenIndex,
@@ -907,13 +822,13 @@ fn appendDeclaration(
             for (0..name.len - 2) |index| {
                 var trigram = name[index..][0..3].*;
                 for (&trigram) |*char| char.* = std.ascii.toLower(char.*);
-                try store.appendOneTrigram(posting_lists, posting_nodes, allocator, trigram);
+                try store.appendOneTrigram(posting_occurrences, allocator, trigram);
             }
         },
         .smart => {
             var it: TrigramIterator = .init(name);
             while (it.next()) |trigram| {
-                try store.appendOneTrigram(posting_lists, posting_nodes, allocator, trigram);
+                try store.appendOneTrigram(posting_occurrences, allocator, trigram);
             }
         },
     }
@@ -935,19 +850,25 @@ fn appendDeclaration(
 
 fn appendOneTrigram(
     store: *TrigramStore,
-    posting_lists: *PostingListBuilder,
-    posting_nodes: *std.ArrayList(PostingNode),
+    posting_occurrences: *std.ArrayList(PostingOccurrence),
     allocator: std.mem.Allocator,
     trigram: Trigram,
 ) error{OutOfMemory}!void {
     const declaration_index: Declaration.Index = @enumFromInt(store.declarations.len);
 
-    const gop = try posting_lists.getOrPut(allocator, trigram);
+    const gop = try store.trigram_to_declarations.getOrPut(allocator, trigram);
     if (!gop.found_existing) {
-        gop.value_ptr.* = .{ .first = declaration_index };
-    } else {
-        try gop.value_ptr.append(posting_nodes, allocator, declaration_index);
+        gop.value_ptr.* = .{ .start = @intFromEnum(declaration_index), .len = 0 };
+    } else if (gop.value_ptr.start == @intFromEnum(declaration_index)) {
+        return;
     }
+    if (gop.index > std.math.maxInt(u32)) return error.OutOfMemory;
+    try posting_occurrences.append(allocator, .{
+        .declaration = declaration_index,
+        .entry = @intCast(gop.index),
+    });
+    gop.value_ptr.start = @intFromEnum(declaration_index);
+    gop.value_ptr.len = std.math.add(u32, gop.value_ptr.len, 1) catch return error.OutOfMemory;
 }
 
 /// Check if the init expression is a sequence of field accesses

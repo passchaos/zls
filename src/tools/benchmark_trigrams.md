@@ -56,6 +56,25 @@ counts, filter counts, longest-list sizes, and filter bytes matched for every
 run. The shared pool removes per-posting-list tail allocations without a
 second name scan or a second hash-map lookup.
 
+## Direct posting-map construction, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, and ReleaseFast. The baseline
+was `54b6a0d5`; both executables were pinned to the same CPU for 24
+counterbalanced runs. The candidate reuses the final posting map while
+collecting `{entry, declaration}` occurrences, then fills each posting range
+backwards in one pass. Values below are median TrigramStore init times.
+
+| Source | Baseline | Candidate | Change |
+| --- | ---: | ---: | ---: |
+| `Sema.zig` | 5,278,744 ns | 5,200,596 ns | -1.5% |
+| `array_list.zig` | 362,637 ns | 359,400 ns | -0.9% |
+| `unicode.zig` | 344,525 ns | 340,270 ns | -1.2% |
+| `Ast.zig` | 530,744 ns | 518,027 ns | -2.4% |
+
+All reported index statistics matched. This removes the temporary builder map,
+the second map insertion pass, and linked-node traversal while preserving the
+final posting map and posting-array layout.
+
 ## Bounded raw-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
