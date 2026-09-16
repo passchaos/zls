@@ -7,6 +7,83 @@ const default_declaration_count = 8192;
 const default_rounds = 256;
 const sample_count = 9;
 
+const AllocationStats = struct {
+    allocations: usize,
+    resizes: usize,
+    remaps: usize,
+    frees: usize,
+    requested_bytes: usize,
+    peak_live_bytes: usize,
+};
+
+const CountingAllocator = struct {
+    child: std.mem.Allocator,
+    allocations: usize = 0,
+    resizes: usize = 0,
+    remaps: usize = 0,
+    frees: usize = 0,
+    requested_bytes: usize = 0,
+    live_bytes: usize = 0,
+    peak_live_bytes: usize = 0,
+
+    fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(context: *anyopaque, len: usize, alignment: std.mem.Alignment, return_address: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(context));
+        const result = self.child.rawAlloc(len, alignment, return_address) orelse return null;
+        self.allocations += 1;
+        self.requested_bytes += len;
+        self.live_bytes += len;
+        self.peak_live_bytes = @max(self.peak_live_bytes, self.live_bytes);
+        return result;
+    }
+
+    fn resize(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) bool {
+        const self: *CountingAllocator = @ptrCast(@alignCast(context));
+        if (!self.child.rawResize(memory, alignment, new_len, return_address)) return false;
+        self.resizes += 1;
+        self.live_bytes = self.live_bytes - memory.len + new_len;
+        self.peak_live_bytes = @max(self.peak_live_bytes, self.live_bytes);
+        return true;
+    }
+
+    fn remap(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) ?[*]u8 {
+        const self: *CountingAllocator = @ptrCast(@alignCast(context));
+        const result = self.child.rawRemap(memory, alignment, new_len, return_address) orelse return null;
+        self.remaps += 1;
+        self.live_bytes = self.live_bytes - memory.len + new_len;
+        self.peak_live_bytes = @max(self.peak_live_bytes, self.live_bytes);
+        return result;
+    }
+
+    fn free(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, return_address: usize) void {
+        const self: *CountingAllocator = @ptrCast(@alignCast(context));
+        self.child.rawFree(memory, alignment, return_address);
+        self.frees += 1;
+        self.live_bytes -= memory.len;
+    }
+
+    fn stats(self: *const CountingAllocator) AllocationStats {
+        return .{
+            .allocations = self.allocations,
+            .resizes = self.resizes,
+            .remaps = self.remaps,
+            .frees = self.frees,
+            .requested_bytes = self.requested_bytes,
+            .peak_live_bytes = self.peak_live_bytes,
+        };
+    }
+};
+
 const Case = struct {
     name: []const u8,
     query: []const u8,
@@ -103,6 +180,7 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
     defer tree.deinit(allocator);
     if (tree.errors.len != 0) return error.InvalidZigSource;
     const init_ns = try measureStoreInit(io, allocator, &tree);
+    const allocation_stats = try measureStoreAllocations(allocator, &tree);
     var store = try TrigramStore.init(allocator, &tree);
     defer store.deinit(allocator);
     const stats = store.statistics();
@@ -120,13 +198,19 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
     const missing_ns, const missing_sum = try measureRaw(io, allocator, &store, missing_query, 1024);
     if (missing_sum != 0) return error.UnstableChecksum;
     std.debug.print(
-        "{s}: {d} bytes parse={d} ns init={d} ns longest-miss={d} ns root-decls={d} declaration-hint={d} declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} longest-trigram={X:0>6} filter-bytes={d}\n",
+        "{s}: {d} bytes parse={d} ns init={d} ns longest-miss={d} ns allocs={d} resizes={d} remaps={d} frees={d} requested-bytes={d} peak-live-bytes={d} root-decls={d} declaration-hint={d} declarations={d} trigrams={d} postings={d} singleton={d} pair={d} filtered={d} longest={d} longest-trigram={X:0>6} filter-bytes={d}\n",
         .{
             path,
             source.len,
             parse_ns,
             init_ns,
             missing_ns,
+            allocation_stats.allocations,
+            allocation_stats.resizes,
+            allocation_stats.remaps,
+            allocation_stats.frees,
+            allocation_stats.requested_bytes,
+            allocation_stats.peak_live_bytes,
             tree.rootDecls().len,
             TrigramStore.estimatedDeclarationCapacity(&tree),
             stats.declarations,
@@ -167,6 +251,15 @@ fn measureStoreInit(io: std.Io, allocator: std.mem.Allocator, tree: *const std.z
     }
     std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
     return samples[sample_count / 2];
+}
+
+fn measureStoreAllocations(allocator: std.mem.Allocator, tree: *const std.zig.Ast) !AllocationStats {
+    var counter: CountingAllocator = .{ .child = allocator };
+    const counting_allocator = counter.allocator();
+    var store = try TrigramStore.init(counting_allocator, tree);
+    store.deinit(counting_allocator);
+    if (counter.live_bytes != 0) return error.UnreleasedMemory;
+    return counter.stats();
 }
 
 fn usage() error{InvalidArguments} {
