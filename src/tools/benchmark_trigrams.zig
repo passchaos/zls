@@ -18,6 +18,11 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const args = try init.minimal.args.toSlice(allocator);
     defer allocator.free(args);
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "--files")) {
+        if (args.len == 2) return usage();
+        for (args[2..]) |path| try benchmarkFile(io, allocator, path);
+        return;
+    }
     if (args.len > 3) return usage();
 
     const declaration_count = if (args.len >= 2)
@@ -55,9 +60,11 @@ pub fn main(init: std.process.Init) !void {
     const source = try source_writer.toOwnedSliceSentinel(0);
     defer allocator.free(source);
 
+    const parse_ns = try measureParse(io, allocator, source);
     var tree = try std.zig.Ast.parse(allocator, source, .zig);
     defer tree.deinit(allocator);
     if (tree.errors.len != 0) return error.InvalidGeneratedSource;
+    const init_ns = try measureStoreInit(io, allocator, &tree);
     var store = try TrigramStore.init(allocator, &tree);
     defer store.deinit(allocator);
 
@@ -73,12 +80,65 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "missing", .query = "common_symbol_missing_tail", .expected_count = 0 },
     };
 
-    std.debug.print("{d} generated declarations, {d} rounds per sample\n", .{ 4 * declaration_count + 4, rounds });
+    std.debug.print(
+        "{d} generated declarations, {d} source bytes, parse={d} ns init={d} ns, {d} rounds per query sample\n",
+        .{ 4 * declaration_count + 4, source.len, parse_ns, init_ns, rounds },
+    );
     for (cases) |case| try benchmarkCase(io, allocator, &store, case, rounds);
 }
 
+fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
+    const source = try std.Io.Dir.cwd().readFileAllocOptions(
+        io,
+        path,
+        allocator,
+        .limited(std.zig.max_src_size),
+        .of(u8),
+        0,
+    );
+    defer allocator.free(source);
+
+    const parse_ns = try measureParse(io, allocator, source);
+    var tree = try std.zig.Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    if (tree.errors.len != 0) return error.InvalidZigSource;
+    const init_ns = try measureStoreInit(io, allocator, &tree);
+    std.debug.print("{s}: {d} bytes parse={d} ns init={d} ns\n", .{ path, source.len, parse_ns, init_ns });
+}
+
+fn measureParse(io: std.Io, allocator: std.mem.Allocator, source: [:0]const u8) !u64 {
+    var samples: [sample_count]u64 = undefined;
+    for (&samples) |*sample| {
+        const before = std.Io.Clock.awake.now(io);
+        var tree = try std.zig.Ast.parse(allocator, source, .zig);
+        sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+        defer tree.deinit(allocator);
+        if (tree.errors.len != 0) return error.InvalidGeneratedSource;
+        std.mem.doNotOptimizeAway(&tree);
+    }
+    std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+    return samples[sample_count / 2];
+}
+
+fn measureStoreInit(io: std.Io, allocator: std.mem.Allocator, tree: *const std.zig.Ast) !u64 {
+    var samples: [sample_count]u64 = undefined;
+    for (&samples) |*sample| {
+        const before = std.Io.Clock.awake.now(io);
+        var store = try TrigramStore.init(allocator, tree);
+        sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+        defer store.deinit(allocator);
+        std.mem.doNotOptimizeAway(&store);
+    }
+    std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+    return samples[sample_count / 2];
+}
+
 fn usage() error{InvalidArguments} {
-    std.debug.print("Usage: zig build bench-trigrams -Doptimize=ReleaseFast -- [declarations] [rounds]\n", .{});
+    std.debug.print(
+        "Usage: zig build bench-trigrams -Doptimize=ReleaseFast -- [declarations] [rounds]\n" ++
+            "       zig build bench-trigrams -Doptimize=ReleaseFast -- --files file.zig ...\n",
+        .{},
+    );
     return error.InvalidArguments;
 }
 

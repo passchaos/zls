@@ -4,6 +4,7 @@ Run from the repository root with Zig 0.16.0:
 
 ```sh
 zig build bench-trigrams -Doptimize=ReleaseFast -Duse-llvm=true -- 8192 256
+zig build bench-trigrams -Doptimize=ReleaseFast -Duse-llvm=true -- --files file.zig ...
 ```
 
 The optional arguments select the number of generated common-prefix
@@ -24,6 +25,14 @@ one query just for that lookup. Measurements on 128, 1,024, and 4,096
 declarations show no general replacement for the raw path: preparation pays
 for repeated and periodic hits but regresses selective and missing queries.
 Workspace-symbol therefore keeps raw lookup for a single store.
+
+The `--files` mode separately reports median AST parse and TrigramStore init
+time for each real Zig source. It does not run query cases. This prevents parse
+time from masking changes to index construction. For example, a proposed
+per-name adjacent-trigram shortcut improved the synthetic mixed workload by
+3.5%, but changed TrigramStore init by only -0.02% on `Sema.zig`, -0.32% on
+`array_list.zig`, and -0.19% on `unicode.zig` across 20 counterbalanced runs,
+so the production change was rejected.
 
 ## Bounded raw-trigram deduplication, 2026-09-16
 
