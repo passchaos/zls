@@ -21,16 +21,16 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         workspace_uris.appendAssumeCapacity(workspace.uri.schemeAndPath());
     }
 
-    const handles = try server.document_store.loadTrigramStores(workspace_uris.items);
-    defer server.document_store.allocator.free(handles);
+    var handles = try server.document_store.loadTrigramStoreList(workspace_uris.items);
+    defer handles.deinit(server.document_store.allocator);
 
     var symbols: std.ArrayList(types.workspace.Symbol) = .empty;
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
     defer declaration_buffer.deinit(server.document_store.allocator);
-    var prepared_query: ?TrigramStore.Query = if (handles.len > 1) try .init(arena, request.query) else null;
+    var prepared_query: ?TrigramStore.Query = if (handles.items.len > 1) try .init(arena, request.query) else null;
     defer if (prepared_query) |*query| query.deinit(arena);
 
-    for (handles) |handle| {
+    for (handles.items) |handle| {
         const trigram_store = handle.trigram_store.getCached();
 
         declaration_buffer.clearRetainingCapacity();
