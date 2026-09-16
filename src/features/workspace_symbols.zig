@@ -25,8 +25,10 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     defer handles.deinit(server.document_store.allocator);
 
     var symbols: std.ArrayList(types.workspace.Symbol) = .empty;
+    var declaration_stack = std.heap.stackFallback(512, server.document_store.allocator);
+    const declaration_allocator = declaration_stack.get();
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
-    defer declaration_buffer.deinit(server.document_store.allocator);
+    defer declaration_buffer.deinit(declaration_allocator);
     var prepared_query: ?TrigramStore.Query = if (handles.items.len > 1) try .init(arena, request.query) else null;
     defer if (prepared_query) |*query| query.deinit(arena);
 
@@ -35,9 +37,9 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
 
         declaration_buffer.clearRetainingCapacity();
         const declarations = if (prepared_query) |*query|
-            try trigram_store.declarationSliceForPreparedQuery(server.document_store.allocator, query, &declaration_buffer)
+            try trigram_store.declarationSliceForPreparedQuery(declaration_allocator, query, &declaration_buffer)
         else
-            try trigram_store.declarationSliceForQuery(server.document_store.allocator, request.query, &declaration_buffer);
+            try trigram_store.declarationSliceForQuery(declaration_allocator, request.query, &declaration_buffer);
 
         const slice = trigram_store.declarations.slice();
         const names = slice.items(.name);
