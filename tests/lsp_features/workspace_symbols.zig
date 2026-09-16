@@ -87,6 +87,14 @@ test "workspace symbols" {
         },
         unicode_response.workspace_symbols[0].location.location.range,
     );
+
+    for (0..64) |_| {
+        _ = try ctx.addDocument(.{
+            .source = "",
+            .base_directory = "/animal_shelter/",
+        });
+    }
+    try testDocumentSymbol(&ctx, "no_such_symbol", "");
 }
 
 fn testDocumentSymbol(ctx: *Context, query: []const u8, expected: []const u8) !void {

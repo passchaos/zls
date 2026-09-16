@@ -1151,26 +1151,29 @@ pub fn loadTrigramStores(
     store: *DocumentStore,
     filter_uris: []const Uri.SchemeAndPath,
 ) error{ OutOfMemory, Canceled }![]*DocumentStore.Handle {
-    var handles = try store.loadTrigramStoreList(filter_uris);
+    var handles = try store.loadTrigramStoreList(filter_uris, store.allocator);
     defer handles.deinit(store.allocator);
     return try handles.toOwnedSlice(store.allocator);
 }
 
+/// The caller owns the returned list and must deinitialize it with
+/// `list_allocator`.
 pub fn loadTrigramStoreList(
     store: *DocumentStore,
     filter_uris: []const Uri.SchemeAndPath,
+    list_allocator: std.mem.Allocator,
 ) error{ OutOfMemory, Canceled }!std.ArrayList(*DocumentStore.Handle) {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
     var handles: std.ArrayList(*DocumentStore.Handle) = .empty;
-    errdefer handles.deinit(store.allocator);
+    errdefer handles.deinit(list_allocator);
 
     var it: HandleIterator = .{ .store = store };
     while (it.next()) |handle| {
         const uri = handle.uri.schemeAndPath();
         if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
-        try handles.append(store.allocator, handle);
+        try handles.append(list_allocator, handle);
     }
 
     const loadTrigramStore = struct {
