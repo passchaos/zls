@@ -75,6 +75,25 @@ All reported index statistics matched. This removes the temporary builder map,
 the second map insertion pass, and linked-node traversal while preserving the
 final posting map and posting-array layout.
 
+## Compact posting occurrences, 2026-09-16
+
+Measured against `afae667c` with 40 fixed-CPU runs per real source. The
+candidate stores one 4-byte posting-map entry per occurrence plus declaration
+boundary markers, reuses each `PostingList.start` as its fill cursor, and then
+restores the final starts. Median TrigramStore init changed as follows.
+
+| Source | Baseline | Candidate | Change |
+| --- | ---: | ---: | ---: |
+| `Sema.zig` | 5,258,364 ns | 5,199,854 ns | -1.1% |
+| `array_list.zig` | 363,350 ns | 363,336 ns | 0.0% |
+| `unicode.zig` | 344,854 ns | 345,062 ns | +0.1% |
+| `Ast.zig` | 530,818 ns | 522,383 ns | -1.6% |
+
+All index statistics matched. Eight 20-cycle, query-free workspace lifecycle
+runs also improved median open time from 44.05 ms to 42.66 ms and total time
+from 926.21 ms to 913.40 ms. Median observed peak was effectively unchanged
+(15,724 vs. 15,666 KiB), and both variants had 44 KiB closed-RSS growth.
+
 ## Bounded raw-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096

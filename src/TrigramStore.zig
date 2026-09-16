@@ -61,13 +61,7 @@ comptime {
 }
 
 const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
-const PostingOccurrence = struct {
-    declaration: Declaration.Index,
-    entry: u32,
-};
-comptime {
-    assert(@sizeOf(PostingOccurrence) == 8);
-}
+const declaration_end_marker = std.math.maxInt(u32);
 
 const PreparedTrigram = struct {
     value: Trigram,
@@ -218,7 +212,7 @@ pub fn init(
     errdefer store.deinit(allocator);
     try store.declarations.ensureTotalCapacity(allocator, denseDeclarationCapacity(tree));
 
-    var posting_occurrences: std.ArrayList(PostingOccurrence) = .empty;
+    var posting_occurrences: std.ArrayList(u32) = .empty;
     defer posting_occurrences.deinit(allocator);
 
     var walker_stack = std.heap.stackFallback(1024, allocator);
@@ -341,24 +335,27 @@ pub fn init(
     }
 
     // During collection, `start` stores the last declaration index seen for
-    // duplicate suppression. Convert it to each final posting's exclusive end.
+    // duplicate suppression. Convert it to each final posting's write cursor.
     var posting_count: usize = 0;
     for (store.trigram_to_declarations.values()) |*list| {
         posting_count = std.math.add(usize, posting_count, list.len) catch return error.OutOfMemory;
-        list.start = @intCast(posting_count);
+        if (posting_count > std.math.maxInt(u32)) return error.OutOfMemory;
+        list.start = @intCast(posting_count - list.len);
     }
-    if (posting_count > std.math.maxInt(u32)) return error.OutOfMemory;
 
     store.postings = try allocator.alloc(Declaration.Index, posting_count);
-    assert(posting_occurrences.items.len == posting_count);
-    // Occurrences were appended in declaration order. Scattering backwards
-    // preserves that order inside every posting range.
-    var occurrence_iterator = std.mem.reverseIterator(posting_occurrences.items);
-    while (occurrence_iterator.next()) |occurrence| {
-        const list = &store.trigram_to_declarations.values()[occurrence.entry];
-        list.start -= 1;
-        store.postings[list.start] = occurrence.declaration;
+    var declaration_index: usize = 0;
+    for (posting_occurrences.items) |entry| {
+        if (entry == declaration_end_marker) {
+            declaration_index += 1;
+            continue;
+        }
+        const list = &store.trigram_to_declarations.values()[entry];
+        store.postings[list.start] = @enumFromInt(declaration_index);
+        list.start += 1;
     }
+    assert(declaration_index == store.declarations.len);
+    for (store.trigram_to_declarations.values()) |*list| list.start -= list.len;
     assert(posting_count == store.postings.len);
 
     const build_filter = for (store.trigram_to_declarations.values()) |list| {
@@ -793,7 +790,7 @@ noinline fn intersectPreparedQueryFromRarestPostings(
 
 fn appendDeclaration(
     store: *TrigramStore,
-    posting_occurrences: *std.ArrayList(PostingOccurrence),
+    posting_occurrences: *std.ArrayList(u32),
     allocator: std.mem.Allocator,
     tree: *const Ast,
     name_token: Ast.TokenIndex,
@@ -846,11 +843,12 @@ fn appendDeclaration(
         },
         .kind = kind,
     });
+    try posting_occurrences.append(allocator, declaration_end_marker);
 }
 
 fn appendOneTrigram(
     store: *TrigramStore,
-    posting_occurrences: *std.ArrayList(PostingOccurrence),
+    posting_occurrences: *std.ArrayList(u32),
     allocator: std.mem.Allocator,
     trigram: Trigram,
 ) error{OutOfMemory}!void {
@@ -862,11 +860,8 @@ fn appendOneTrigram(
     } else if (gop.value_ptr.start == @intFromEnum(declaration_index)) {
         return;
     }
-    if (gop.index > std.math.maxInt(u32)) return error.OutOfMemory;
-    try posting_occurrences.append(allocator, .{
-        .declaration = declaration_index,
-        .entry = @intCast(gop.index),
-    });
+    if (gop.index >= declaration_end_marker) return error.OutOfMemory;
+    try posting_occurrences.append(allocator, @intCast(gop.index));
     gop.value_ptr.start = @intFromEnum(declaration_index);
     gop.value_ptr.len = std.math.add(u32, gop.value_ptr.len, 1) catch return error.OutOfMemory;
 }
