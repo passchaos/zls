@@ -265,13 +265,15 @@ pub fn init(
     var walker: ast.Walker = try .init(allocator, tree, .root);
     defer walker.deinit(allocator);
 
-    var in_function_stack: std.ArrayList(bool) = try .initCapacity(allocator, 16);
-    defer in_function_stack.deinit(allocator);
+    var stack_fallback = std.heap.stackFallback(16, allocator);
+    const stack_allocator = stack_fallback.get();
+    var in_function_stack: std.ArrayList(bool) = try .initCapacity(stack_allocator, 16);
+    defer in_function_stack.deinit(stack_allocator);
 
     while (try walker.next(allocator, tree)) |entry| {
         switch (entry) {
             .open => |node| switch (tree.nodeTag(node)) {
-                .fn_decl => try in_function_stack.append(allocator, true),
+                .fn_decl => try in_function_stack.append(stack_allocator, true),
                 .fn_proto,
                 .fn_proto_multi,
                 .fn_proto_one,
@@ -289,7 +291,7 @@ pub fn init(
                     );
                 },
                 .test_decl => {
-                    try in_function_stack.append(allocator, true);
+                    try in_function_stack.append(stack_allocator, true);
                     const test_name_token = tree.nodeData(node).opt_token_and_node[0].unwrap() orelse continue;
 
                     try store.appendDeclaration(
@@ -312,7 +314,7 @@ pub fn init(
                 .tagged_union_enum_tag_trailing,
                 .tagged_union_two,
                 .tagged_union_two_trailing,
-                => try in_function_stack.append(allocator, false),
+                => try in_function_stack.append(stack_allocator, false),
 
                 .global_var_decl,
                 .local_var_decl,
@@ -1010,6 +1012,33 @@ test "empty store has no postings" {
     try std.testing.expectEqual(@as(usize, 0), store.trigram_to_declarations.count());
     try std.testing.expectEqual(@as(usize, 0), store.postings.len);
     try std.testing.expect(store.filter_buckets == null);
+}
+
+test "deep container nesting overflows inline function stack" {
+    const allocator = std.testing.allocator;
+    var source_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer source_writer.deinit();
+
+    for (0..20) |_| {
+        try source_writer.writer.writeAll("const Nested = struct {\n");
+    }
+    try source_writer.writer.writeAll("const deepest_symbol = 0;\n");
+    for (0..20) |_| {
+        try source_writer.writer.writeAll("};\n");
+    }
+    const source = try source_writer.toOwnedSliceSentinel(0);
+    defer allocator.free(source);
+
+    var tree = try Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+
+    var store = try TrigramStore.init(allocator, &tree);
+    defer store.deinit(allocator);
+    var declarations: std.ArrayList(Declaration.Index) = .empty;
+    defer declarations.deinit(allocator);
+    try store.declarationsForQuery(allocator, "deepest_symbol", &declarations);
+    try std.testing.expectEqual(@as(usize, 1), declarations.items.len);
 }
 
 test "Cuckoo filter is reserved for queries with long first postings" {
