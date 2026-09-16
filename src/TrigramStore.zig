@@ -587,34 +587,81 @@ noinline fn intersectRawQueryFromRarestPostings(
     var iterator: TrigramIterator = .init(query);
     _ = iterator.next();
     _ = iterator.next();
-    var probe = iterator;
-    if (probe.next() == null) return null;
-
+    var unique: [Query.deduplicate_scan_limit]PostingSeed = undefined;
+    unique[0] = .{ .trigram = first_trigram, .declarations = first_declarations };
+    var unique_len: usize = 1;
+    var unique_overflow = false;
+    var saw_duplicate = false;
     var first: PostingSeed = .{ .trigram = first_trigram, .declarations = first_declarations };
     var second: ?PostingSeed = null;
-    considerPostingSeed(&first, &second, .{ .trigram = second_trigram, .declarations = second_declarations });
+    if (TrigramContext.toInt(second_trigram) == TrigramContext.toInt(first_trigram)) {
+        saw_duplicate = true;
+    } else {
+        unique[1] = .{ .trigram = second_trigram, .declarations = second_declarations };
+        unique_len = 2;
+        considerPostingSeed(&first, &second, unique[1]);
+    }
     while (iterator.next()) |trigram| {
+        if (!unique_overflow) {
+            const value = TrigramContext.toInt(trigram);
+            var is_duplicate = false;
+            for (unique[0..unique_len]) |existing| {
+                if (TrigramContext.toInt(existing.trigram) == value) {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+            if (is_duplicate) {
+                saw_duplicate = true;
+                continue;
+            }
+            if (unique_len != unique.len) {
+                const declarations = (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
+                const candidate: PostingSeed = .{ .trigram = trigram, .declarations = declarations };
+                unique[unique_len] = candidate;
+                unique_len += 1;
+                considerPostingSeed(&first, &second, candidate);
+                continue;
+            }
+            unique_overflow = true;
+        }
+
         if (seedContainsTrigram(first, second, trigram)) continue;
         const declarations = (store.trigram_to_declarations.get(trigram) orelse return &.{}).slice(store.postings);
         considerPostingSeed(&first, &second, .{ .trigram = trigram, .declarations = declarations });
     }
+    if (!unique_overflow and unique_len == 1) return unique[0].declarations;
+
     const other = second orelse return null;
-    if (!isSkewed(@min(first_declarations.len, second_declarations.len), first.declarations.len)) return null;
+    if ((unique_overflow or !saw_duplicate) and
+        !isSkewed(@min(first_declarations.len, second_declarations.len), first.declarations.len))
+    {
+        return null;
+    }
 
     try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
     var len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
     if (len == 0) return declaration_buffer.items;
 
-    iterator = .init(query);
-    while (iterator.next()) |trigram| {
-        if (seedContainsTrigram(first, other, trigram)) continue;
-        len = mergeIntersection(
-            (store.trigram_to_declarations.get(trigram) orelse unreachable).slice(store.postings),
-            declaration_buffer.items[0..len],
-        );
-        declaration_buffer.shrinkRetainingCapacity(len);
-        if (len == 0) break;
+    if (!unique_overflow) {
+        for (unique[0..unique_len]) |posting| {
+            if (seedContainsTrigram(first, other, posting.trigram)) continue;
+            len = mergeIntersection(posting.declarations, declaration_buffer.items[0..len]);
+            declaration_buffer.shrinkRetainingCapacity(len);
+            if (len == 0) break;
+        }
+    } else {
+        iterator = .init(query);
+        while (iterator.next()) |trigram| {
+            if (seedContainsTrigram(first, other, trigram)) continue;
+            len = mergeIntersection(
+                (store.trigram_to_declarations.get(trigram) orelse unreachable).slice(store.postings),
+                declaration_buffer.items[0..len],
+            );
+            declaration_buffer.shrinkRetainingCapacity(len);
+            if (len == 0) break;
+        }
     }
     return declaration_buffer.items;
 }
@@ -1446,6 +1493,8 @@ test "long queries start with rare posting lists" {
     defer source_writer.deinit();
     for (0..filter_min_posting_len) |index| {
         try source_writer.writer.print("const common_symbol_{d} = 0;\n", .{index});
+        try source_writer.writer.print("const periodic_abcabcabcabcabcabcabc_{d} = 0;\n", .{index});
+        try source_writer.writer.print("const abcdefghijklmnopqrstuvwxyz0123456789_{d} = 0;\n", .{index});
     }
     try source_writer.writer.writeAll("const common_symbol_unique_tail = 0;\n");
     const source = try source_writer.toOwnedSliceSentinel(0);
@@ -1473,6 +1522,29 @@ test "long queries start with rare posting lists" {
     const prepared = try store.declarationSliceForPreparedQuery(allocator, &query, &prepared_buffer);
     try std.testing.expectEqualSlices(Declaration.Index, raw, prepared);
     try std.testing.expect(prepared_buffer.capacity < filter_min_posting_len);
+
+    raw_buffer.clearRetainingCapacity();
+    const periodic_text = "abcabcabcabcabcabcabc";
+    const periodic_raw = try store.declarationSliceForQuery(allocator, periodic_text, &raw_buffer);
+    try std.testing.expectEqual(filter_min_posting_len, periodic_raw.len);
+
+    var periodic_query = try Query.init(allocator, periodic_text);
+    defer periodic_query.deinit(allocator);
+    prepared_buffer.clearRetainingCapacity();
+    const periodic_prepared = try store.declarationSliceForPreparedQuery(allocator, &periodic_query, &prepared_buffer);
+    try std.testing.expectEqualSlices(Declaration.Index, periodic_raw, periodic_prepared);
+
+    raw_buffer.clearRetainingCapacity();
+    const overflow_text = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const overflow_raw = try store.declarationSliceForQuery(allocator, overflow_text, &raw_buffer);
+    try std.testing.expectEqual(filter_min_posting_len, overflow_raw.len);
+
+    var overflow_query = try Query.init(allocator, overflow_text);
+    defer overflow_query.deinit(allocator);
+    try std.testing.expect(overflow_query.trigrams().len > Query.deduplicate_scan_limit);
+    prepared_buffer.clearRetainingCapacity();
+    const overflow_prepared = try store.declarationSliceForPreparedQuery(allocator, &overflow_query, &prepared_buffer);
+    try std.testing.expectEqualSlices(Declaration.Index, overflow_raw, overflow_prepared);
 }
 
 test "short raw queries match trigram normalization" {

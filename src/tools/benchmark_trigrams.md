@@ -25,6 +25,32 @@ declarations show no general replacement for the raw path: preparation pays
 for repeated and periodic hits but regresses selective and missing queries.
 Workspace-symbol therefore keeps raw lookup for a single store.
 
+## Bounded raw-trigram deduplication, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
+declarations per generated symbol family, and 512 rounds per sample. The
+baseline was `e34a2b38`; both executables were pinned to the same CPU for 12
+counterbalanced runs. The periodic query has 21 characters so the raw path
+enters the existing long-query slow path. Values below are median nanoseconds
+per query; prepared and transient columns are included to detect collateral
+code-layout effects.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 12,559 | 11,053 | 12,106 | 10,523 |
+| late-selective | 855 | 815 | 674 | 665 |
+| early-selective | 500 | 499 | 408 | 406 |
+| equal near-miss | 18,733 | 16,820 | 18,497 | 16,755 |
+| repeated hit | 17,909 | 1,838 | 1,582 | 1,582 |
+| periodic hit | 117,493 | 19,849 | 18,976 | 17,044 |
+| repeated miss | 128 | 128 | 82 | 82 |
+| missing suffix | 127 | 128 | 82 | 82 |
+
+All result counts and checksums matched. The bounded unique-posting scan
+improved raw repeated and periodic hits by 90% and 83%, respectively. It falls
+back to the prior replay algorithm after 32 unique trigrams. Other raw and
+reusable-prepared cases did not regress.
+
 ## Adaptive skewed intersection, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096 generated
