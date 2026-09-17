@@ -1222,9 +1222,9 @@ pub fn loadTrigramStoreList(
         const futures = store.handles.values();
         for (futures) |handle_future| {
             const handle = handle_future.await(store.io) catch continue;
+            if (!mayHaveWorkspaceSymbols(&handle.tree)) continue;
             const uri = handle.uri.schemeAndPath();
             if (!matchesWorkspaceSymbolFilter(uri, filter_uris)) continue;
-            if (!mayHaveWorkspaceSymbols(&handle.tree)) continue;
             if (handle.trigram_store.getOrNull(handle)) |trigram_store| {
                 if (trigram_store.isEmpty()) continue;
             }

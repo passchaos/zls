@@ -99,6 +99,14 @@ milliseconds. Both variants had exactly 136 KiB median closed-RSS growth and
 the same 3,560 KiB median final closed RSS. Empty/comment-only ASTs and a
 minimal declaration are covered directly by unit tests.
 
+Checking root emptiness before URI scheme/path filtering removes the remaining
+per-handle URI work for empty documents. Against `0908e767`, sixteen fixed-CPU
+runs with the same 256-empty-document query workload changed median missing
+latency from 115.4 to 86.1 microseconds (-25%), query-phase time from 184.6 to
+162.9 milliseconds (-11.8%), and total runtime from 735 to 660 milliseconds
+(-10.2%). Median closed-RSS growth was unchanged at 2,080 KiB and the observed
+peak decreased slightly.
+
 ## Reference run, 2026-09-16
 
 On aarch64 Linux with Zig 0.16.0 and ZLS baseline `90469930`, a cold, single-job
