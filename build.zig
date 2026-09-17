@@ -241,6 +241,23 @@ pub fn build(b: *Build) !void {
         b.step("bench-responses", "Benchmark JSON-RPC response serialization").dependOn(&run.step);
     }
 
+    { // zig build bench-message-parsing -Doptimize=ReleaseFast -- path/to/source.zig [rounds]
+        const benchmark = b.addExecutable(.{
+            .name = "bench-message-parsing",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tools/benchmark_message_parsing.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "zls", .module = zls_module }},
+            }),
+            .use_llvm = use_llvm,
+            .use_lld = use_llvm,
+        });
+        const run = b.addRunArtifact(benchmark);
+        if (b.args) |args| run.addArgs(args);
+        b.step("bench-message-parsing", "Benchmark inbound LSP message parsing").dependOn(&run.step);
+    }
+
     const known_folders_module = b.dependency("known_folders", .{
         .target = target,
         .optimize = optimize,
