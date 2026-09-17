@@ -17,6 +17,37 @@ approximately 16 MiB, with a minimum of one file scan. Input memory barriers
 prevent the compiler from reusing a previous scan's result. The printed checksum
 must match when comparing the same inputs and benchmark harness across revisions.
 
+The same executable also measures 256 byte-uniform `(line, character)` to byte
+index queries against the frozen lsp-kit implementation. It includes one long
+ASCII line and a dense-newline synthetic input as regression guards.
+
+## SIMD position-to-index scanning, 2026-09-17
+
+LSP requests supply `(line, character)` positions, while ZLS analysis uses byte
+indices. The lsp-kit baseline examines every byte before the target line. ZLS
+now counts newlines one SIMD block at a time, skipping blocks whose newline
+count is below the remaining target, then resolves the target character with
+the existing UTF-8/16/32 conversion. Non-LLVM builds retain the scalar path.
+
+On AArch64 Linux, Zig 0.16.0, `ReleaseFast`, LLVM, one paired run measured:
+
+| source | baseline | SIMD production | change |
+| --- | ---: | ---: | ---: |
+| `Sema.zig`, 1,497,031 B | 440–441 µs/query | 88–89 µs/query | about -80% |
+| `x86_64/CodeGen.zig`, 10,945,979 B | 3.216–3.221 ms/query | 0.638–0.643 ms/query | about -80% |
+| 2 MiB of newlines | 617 µs/query | 123 µs/query | about -80% |
+| one 256 KiB ASCII line | 23 µs/query | 23 µs/query | unchanged |
+
+Checksums matched for UTF-8, UTF-16, and UTF-32 in every case. The dense
+newline input guards against an earlier per-newline `findScalarPos` prototype
+that was roughly 24 times slower than the baseline and was rejected.
+
+Eight fixed-CPU ABBA pairs opened the complete `Sema.zig`, synchronized the
+document, and issued 200 `textDocument/hover` requests for a local variable near
+the end of the 34,840-line file. Median request-batch time changed from 239.67
+to 95.72 ms (-60.1%). Every response was non-null; all pairs returned the same
+hover-result hash and completed clean LSP shutdown with status zero.
+
 ## UTF-32 long-span optimization, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, and ReleaseFast. Source inputs

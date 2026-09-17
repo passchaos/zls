@@ -1,7 +1,11 @@
 //! Run with `zig build bench-offsets -Doptimize=ReleaseFast -- file.zig ...`.
 //! Compare identical inputs, compiler options, and checksums across revisions.
 const std = @import("std");
-const offsets = @import("zls").offsets;
+const zls = @import("zls");
+const offsets = zls.offsets;
+const baseline_offsets = zls.lsp.offsets;
+
+const PositionToIndexMode = enum { baseline, production };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -46,6 +50,62 @@ pub fn main(init: std.process.Init) !void {
                     encoding, stride, samples[samples.len / 2] / rounds, checksum,
                 });
             }
+        }
+
+        try benchmarkPositionToIndex(io, allocator, path, source);
+    }
+
+    const long_line = try allocator.alloc(u8, 256 * 1024);
+    defer allocator.free(long_line);
+    @memset(long_line, 'a');
+    try benchmarkPositionToIndex(io, allocator, "synthetic-long-line", long_line);
+
+    const dense_newlines = try allocator.alloc(u8, 2 * 1024 * 1024);
+    defer allocator.free(dense_newlines);
+    @memset(dense_newlines, '\n');
+    try benchmarkPositionToIndex(io, allocator, "synthetic-dense-newlines", dense_newlines);
+}
+
+fn benchmarkPositionToIndex(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    source: []const u8,
+) !void {
+    const query_count = 256;
+    const positions = try allocator.alloc(offsets.Position, query_count);
+    defer allocator.free(positions);
+    std.debug.print("{s}: {d} bytes, {d} position queries\n", .{ name, source.len, positions.len });
+
+    for ([_]offsets.Encoding{ .@"utf-8", .@"utf-16", .@"utf-32" }) |encoding| {
+        for (positions, 0..) |*position, query_index| {
+            const source_index = (source.len * query_index) / query_count;
+            position.* = offsets.indexToPosition(source, source_index, encoding);
+            if (offsets.positionToIndex(source, position.*, encoding) != baseline_offsets.positionToIndex(source, position.*, encoding)) {
+                return error.PositionToIndexMismatch;
+            }
+        }
+
+        inline for ([_]PositionToIndexMode{ .baseline, .production }) |mode| {
+            var samples: [7]u64 = undefined;
+            var checksum: usize = 0;
+            for (&samples) |*sample| {
+                const before = std.Io.Clock.awake.now(io);
+                for (positions) |position| {
+                    checksum +%= switch (mode) {
+                        .baseline => baseline_offsets.positionToIndex(source, position, encoding),
+                        .production => offsets.positionToIndex(source, position, encoding),
+                    };
+                }
+                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+            }
+            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+            std.debug.print("  position-to-index {t} {t}: {d} ns/query checksum={d}\n", .{
+                mode,
+                encoding,
+                samples[samples.len / 2] / positions.len,
+                checksum,
+            });
         }
     }
 }

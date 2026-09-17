@@ -17,7 +17,42 @@ pub const Position = offsets.Position;
 pub const Range = offsets.Range;
 
 pub const indexToPosition = offsets.indexToPosition;
-pub const positionToIndex = offsets.positionToIndex;
+
+/// Converts an LSP position to a byte index while counting newline blocks in
+/// parallel. Out-of-range lines and characters retain the lsp-kit clamping
+/// behavior.
+pub fn positionToIndex(text: []const u8, position: Position, encoding: Encoding) usize {
+    var line_start: usize = 0;
+    var lines_remaining = position.line;
+    if (lines_remaining != 0) {
+        if (@import("builtin").zig_backend == .stage2_llvm) {
+            if (std.simd.suggestVectorLength(u8)) |block_size| {
+                const Block = @Vector(block_size, u8);
+                const newlines: Block = @splat('\n');
+                while (text.len - line_start >= block_size) {
+                    const bytes: Block = text[line_start..][0..block_size].*;
+                    const line_count: u32 = @intCast(std.simd.countTrues(bytes == newlines));
+                    if (line_count >= lines_remaining) break;
+                    lines_remaining -= line_count;
+                    line_start += block_size;
+                }
+            }
+        }
+
+        while (line_start < text.len) : (line_start += 1) {
+            if (text[line_start] != '\n') continue;
+            lines_remaining -= 1;
+            if (lines_remaining == 0) {
+                line_start += 1;
+                break;
+            }
+        }
+        if (lines_remaining != 0) return text.len;
+    }
+
+    const line_text = std.mem.sliceTo(text[line_start..], '\n');
+    return line_start + getNCodeUnitByteCount(line_text, position.character, encoding);
+}
 
 pub const orderPosition = offsets.orderPosition;
 
@@ -45,6 +80,53 @@ pub const convertRangeEncoding = offsets.convertRangeEncoding;
 pub const advancePosition = @import("offsets/advance_position.zig").advancePosition;
 pub const countCodeUnits = offsets.countCodeUnits;
 pub const getNCodeUnitByteCount = offsets.getNCodeUnitByteCount;
+
+test "positionToIndex matches lsp offsets" {
+    const texts = [_][]const u8{
+        "",
+        "hello",
+        "\n\n\n",
+        "a¶↉🠁\r\nsecond line\nthird",
+        "a" ** 63 ++ "\n" ++ "b" ** 64 ++ "\ntrailer",
+        "\n" ** 129 ++ "end",
+    };
+    const positions = [_]Position{
+        .{ .line = 0, .character = 0 },
+        .{ .line = 0, .character = 1 },
+        .{ .line = 0, .character = 99 },
+        .{ .line = 1, .character = 0 },
+        .{ .line = 1, .character = 3 },
+        .{ .line = 2, .character = 2 },
+        .{ .line = 64, .character = 0 },
+        .{ .line = 130, .character = 99 },
+    };
+
+    for (texts) |text| {
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            for (positions) |position| {
+                try std.testing.expectEqual(
+                    offsets.positionToIndex(text, position, encoding),
+                    positionToIndex(text, position, encoding),
+                );
+            }
+        }
+    }
+}
+
+test "positionToIndex matches random valid positions" {
+    const text = "a¶↉🠁\r\nsecond line\n" ** 32 ++ "tail🇺🇸";
+    var state: u64 = 0x706f_7369_7469_6f6e;
+
+    inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+        for (0..512) |_| {
+            state = state *% 6_364_136_223_846_793_005 +% 1_442_695_040_888_963_407;
+            var index: usize = @intCast(state % (text.len + 1));
+            while (index < text.len and text[index] & 0xc0 == 0x80) index -= 1;
+            const position = offsets.indexToPosition(text, index, encoding);
+            try std.testing.expectEqual(index, positionToIndex(text, position, encoding));
+        }
+    }
+}
 
 pub const SourceIndexToTokenIndexResult = union(enum) {
     /// The source index is inside of whitespace.
