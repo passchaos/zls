@@ -6,6 +6,7 @@ const Ast = std.zig.Ast;
 const assert = std.debug.assert;
 const offsets = @import("offsets.zig");
 const multi_array_list = @import("multi_array_list.zig");
+const PostingOccurrenceStream = @import("trigram_store/PostingOccurrenceStream.zig");
 
 pub const TrigramStore = @This();
 
@@ -61,7 +62,6 @@ comptime {
 }
 
 const PostingMap = std.array_hash_map.Custom(Trigram, PostingList, TrigramContext, false);
-const declaration_end_marker = std.math.maxInt(u32);
 
 const PreparedTrigram = struct {
     value: Trigram,
@@ -227,7 +227,7 @@ pub fn initWithDeclarationCapacity(
         estimatedDeclarationCapacity(tree),
     ));
 
-    var posting_occurrences: std.ArrayList(u32) = .empty;
+    var posting_occurrences: PostingOccurrenceStream = .{};
     defer posting_occurrences.deinit(allocator);
 
     var walker_stack = std.heap.stackFallback(1024, allocator);
@@ -360,18 +360,31 @@ pub fn initWithDeclarationCapacity(
 
     store.postings = try allocator.alloc(Declaration.Index, posting_count);
     var declaration_index: usize = 0;
-    for (posting_occurrences.items) |entry| {
-        if (entry == declaration_end_marker) {
-            declaration_index += 1;
-            continue;
+    if (posting_occurrences.large) |large| {
+        for (large.items) |entry| {
+            if (entry == PostingOccurrenceStream.large_end_marker) {
+                declaration_index += 1;
+                continue;
+            }
+            const list = &store.trigram_to_declarations.values()[entry];
+            store.postings[list.start] = @enumFromInt(declaration_index);
+            list.start += 1;
         }
-        const list = &store.trigram_to_declarations.values()[entry];
-        store.postings[list.start] = @enumFromInt(declaration_index);
-        list.start += 1;
+    } else {
+        for (posting_occurrences.small.items) |entry| {
+            if (entry == PostingOccurrenceStream.small_end_marker) {
+                declaration_index += 1;
+                continue;
+            }
+            const list = &store.trigram_to_declarations.values()[entry];
+            store.postings[list.start] = @enumFromInt(declaration_index);
+            list.start += 1;
+        }
     }
     assert(declaration_index == store.declarations.len);
     for (store.trigram_to_declarations.values()) |*list| list.start -= list.len;
     assert(posting_count == store.postings.len);
+    posting_occurrences.clearAndFree(allocator);
 
     if (shouldBuildFilter(store.trigram_to_declarations.values())) {
         const trigrams = store.trigram_to_declarations.keys();
@@ -820,7 +833,7 @@ noinline fn intersectPreparedQueryFromRarestPostings(
 
 fn appendDeclaration(
     store: *TrigramStore,
-    posting_occurrences: *std.ArrayList(u32),
+    posting_occurrences: *PostingOccurrenceStream,
     allocator: std.mem.Allocator,
     tree: *const Ast,
     name_token: Ast.TokenIndex,
@@ -873,12 +886,12 @@ fn appendDeclaration(
         },
         .kind = kind,
     });
-    try posting_occurrences.append(allocator, declaration_end_marker);
+    try posting_occurrences.appendDeclarationEnd(allocator);
 }
 
 fn appendOneTrigram(
     store: *TrigramStore,
-    posting_occurrences: *std.ArrayList(u32),
+    posting_occurrences: *PostingOccurrenceStream,
     allocator: std.mem.Allocator,
     trigram: Trigram,
 ) error{OutOfMemory}!void {
@@ -890,8 +903,7 @@ fn appendOneTrigram(
     } else if (gop.value_ptr.start == @intFromEnum(declaration_index)) {
         return;
     }
-    if (gop.index >= declaration_end_marker) return error.OutOfMemory;
-    try posting_occurrences.append(allocator, @intCast(gop.index));
+    try posting_occurrences.appendPostingIndex(allocator, gop.index);
     gop.value_ptr.start = @intFromEnum(declaration_index);
     gop.value_ptr.len = std.math.add(u32, gop.value_ptr.len, 1) catch return error.OutOfMemory;
 }

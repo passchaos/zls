@@ -96,6 +96,29 @@ runs also improved median open time from 44.05 ms to 42.66 ms and total time
 from 926.21 ms to 913.40 ms. Median observed peak was effectively unchanged
 (15,724 vs. 15,666 KiB), and both variants had 44 KiB closed-RSS growth.
 
+## Narrow posting occurrence stream, 2026-09-16
+
+Measured against `c3e59f0d` on aarch64 Linux with Zig 0.16.0, LLVM, and
+ReleaseFast. The candidate stores temporary posting-map indexes and declaration
+boundaries as `u16`, automatically upgrading the complete stream to `u32` if
+a file exceeds 65,535 unique trigrams. Sixty-four fixed-CPU counterbalanced
+runs produced these median TrigramStore init times.
+
+| Source | Baseline | Candidate | Change | Baseline peak | Candidate peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `Sema.zig` | 5,353,643 ns | 5,313,440 ns | -0.8% | 179,440 B | 135,764 B |
+| `Ast.zig` | 522,687 ns | 511,975 ns | -2.0% | 93,497 B | 70,891 B |
+| `array_list.zig` | 363,706 ns | 364,788 ns | +0.3% | 38,073 B | 28,704 B |
+| `unicode.zig` | 345,650 ns | 346,242 ns | +0.2% | 38,028 B | 28,956 B |
+
+All declaration, trigram, posting, filter, and longest-list statistics matched.
+Peak live allocation fell by 21--25%. Sema and Ast init improved, while the
+two small-file paired medians changed by +0.10% and -0.03%, respectively.
+Small files also removed one or two allocation calls; Sema kept the same 35
+allocations and removed two remaps. The occurrence stream is freed immediately
+after it fills the final postings array so it cannot overlap later filter or
+compaction work.
+
 ## Cuckoo-filter population threshold, 2026-09-16
 
 Measured on `Sema.zig` against a candidate that builds the filter after one
