@@ -241,6 +241,41 @@ fn benchmarkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
             stats.filter_bytes,
         },
     );
+
+    const query_rounds = 1024;
+    for ([_][]const u8{ "allocator", "type", "parse" }) |query| {
+        try benchmarkFileQuery(io, allocator, &store, query, query_rounds);
+    }
+}
+
+fn benchmarkFileQuery(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    store: *const TrigramStore,
+    text: []const u8,
+    rounds: usize,
+) !void {
+    var query = try TrigramStore.Query.init(allocator, text);
+    defer query.deinit(allocator);
+
+    var raw_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
+    defer raw_buffer.deinit(allocator);
+    const raw = try store.declarationSliceForQuery(allocator, text, &raw_buffer);
+    var prepared_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
+    defer prepared_buffer.deinit(allocator);
+    const prepared = try store.declarationSliceForPreparedQuery(allocator, &query, &prepared_buffer);
+    if (!std.mem.eql(TrigramStore.Declaration.Index, raw, prepared)) return error.ResultMismatch;
+
+    const expected_checksum = checksum(raw);
+    const raw_ns, const raw_sum = try measureRaw(io, allocator, store, text, rounds);
+    const prepared_ns, const prepared_sum = try measurePrepared(io, allocator, store, &query, rounds);
+    if (raw_sum != prepared_sum or raw_sum != expected_checksum *% rounds *% sample_count) {
+        return error.UnstableChecksum;
+    }
+    std.debug.print(
+        "  query {s}: {d} results raw={d} ns/query prepared={d} ns/query checksum={d}\n",
+        .{ text, raw.len, raw_ns, prepared_ns, raw_sum },
+    );
 }
 
 fn measureParse(io: std.Io, allocator: std.mem.Allocator, source: [:0]const u8) !u64 {

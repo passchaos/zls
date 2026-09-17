@@ -28,9 +28,11 @@ Workspace-symbol therefore keeps raw lookup for a single store.
 
 The `--files` mode separately reports median AST parse and TrigramStore init
 time for each real Zig source, followed by declaration, trigram, posting-list,
-filter, maximum-list-size, and allocator statistics. Allocation metrics cover
-one isolated TrigramStore init/deinit and assert zero live bytes afterward. It
-does not run the synthetic query cases. This
+filter, maximum-list-size, and allocator statistics. It also measures raw and
+reusable prepared lookups for `allocator`, `type`, and `parse` against the real
+index, checking equal result slices and stable checksums. Allocation metrics
+cover one isolated TrigramStore init/deinit and assert zero live bytes
+afterward. It does not run the synthetic query cases. This
 prevents parse time from masking changes to index construction. For example, a
 proposed per-name adjacent-trigram shortcut improved the synthetic workload by
 3.5%, but changed TrigramStore init by only -0.02% on `Sema.zig`, -0.32% on
