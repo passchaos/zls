@@ -149,6 +149,14 @@ pub fn main(init: std.process.Init) !void {
         try benchmarkCase(io, allocator, "did-open", did_open_json, case_rounds, .alloc_if_needed);
     }
 
+    const flat_source = try allocator.alloc(u8, source.len);
+    defer allocator.free(flat_source);
+    @memset(flat_source, 'a');
+    const flat_did_open_json = try makeDidOpenJson(allocator, flat_source);
+    defer allocator.free(flat_did_open_json);
+    try benchmarkCase(io, allocator, "did-open-flat", flat_did_open_json, rounds, .alloc_always);
+    try benchmarkCase(io, allocator, "did-open-flat", flat_did_open_json, rounds, .production_policy);
+
     const did_change_json = try makeDidChangeJson(allocator, source);
     defer allocator.free(did_change_json);
     const small_did_change_json = try makeDidChangeJson(allocator, source[0..@min(source.len, 64)]);

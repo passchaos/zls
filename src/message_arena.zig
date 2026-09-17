@@ -89,6 +89,16 @@ test preheatForMessage {
     preheatForMessage(&arena, message);
     try std.testing.expect(arena.queryCapacity() >= message.len);
 
+    var change_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer change_arena.deinit();
+    const change_message = try std.testing.allocator.alloc(u8, min_preheat_bytes);
+    defer std.testing.allocator.free(change_message);
+    @memset(change_message, ' ');
+    const change_prefix = "{\"method\":\"textDocument/didChange\",\"params\":null}";
+    @memcpy(change_message[0..change_prefix.len], change_prefix);
+    preheatForMessage(&change_arena, change_message);
+    try std.testing.expect(change_arena.queryCapacity() >= change_message.len);
+
     var unrelated_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer unrelated_arena.deinit();
     const unrelated = try std.testing.allocator.alloc(u8, min_preheat_bytes);

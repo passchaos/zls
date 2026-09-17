@@ -44,11 +44,14 @@ the live set; the parser-only figures above do not count that extra lifetime.
 ## Large document-sync arena preheating
 
 For JSON frames from 64 KiB through 16 MiB, a bounded, non-allocating top-level
-method probe now recognizes `textDocument/didOpen`. It preheats the existing
-message arena with the frame length, immediately releases that temporary
-allocation inside the arena, and then retains the existing `alloc_always`
-parsing semantics. Smaller messages, larger messages, unrecognized methods,
-unusual field ordering, and failed probes retain the old behavior.
+method probe now recognizes `textDocument/didOpen` and
+`textDocument/didChange`. It preheats the existing message arena, immediately
+releases that temporary allocation inside the arena, and then retains the
+existing `alloc_always` parsing semantics. The full frame length is used: a
+four-fifths experiment worked for escape-heavy `Sema.zig` but caused a second
+large arena node and a large peak-memory regression for an equally sized plain
+ASCII source. Smaller messages, larger messages, unrecognized methods, unusual
+field ordering, and failed probes retain the old behavior.
 
 Repeated 16-round runs over the complete `Sema.zig` payload, including the
 bounded method probe, measured:
