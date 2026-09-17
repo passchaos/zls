@@ -1192,10 +1192,60 @@ noinline fn mergeEqualLengthIntersection(
     const common_len = postingCommonPrefixLen(a, b);
     if (output.ptr != b.ptr) @memcpy(output[0..common_len], b[0..common_len]);
     if (common_len == a.len) return @intCast(a.len);
-
+    if (@import("builtin").zig_backend == .stage2_llvm and
+        a.len - common_len >= filter_min_posting_len)
+    {
+        return mergeEqualLengthTailSimd(a, b, output, common_len);
+    }
     var out_index: u32 = @intCast(common_len);
     var a_index = common_len;
     var b_index = common_len;
+    while (a_index < a.len and b_index < b.len) {
+        const a_value = a[a_index];
+        const b_value = b[b_index];
+        if (a_value == b_value) {
+            output[out_index] = a_value;
+            out_index += 1;
+            a_index += 1;
+            b_index += 1;
+        } else if (@intFromEnum(a_value) < @intFromEnum(b_value)) {
+            a_index += 1;
+        } else {
+            b_index += 1;
+        }
+    }
+    return out_index;
+}
+
+noinline fn mergeEqualLengthTailSimd(
+    a: []const Declaration.Index,
+    b: []const Declaration.Index,
+    output: []Declaration.Index,
+    common_len: usize,
+) u32 {
+    // Compare every pair in two sorted four-item blocks. Once one block's
+    // maximum is no greater than the other's, that block cannot match any
+    // later item and can be consumed as a unit.
+    const lanes = 4;
+    const Values = @Vector(lanes, u32);
+    var out_index: u32 = @intCast(common_len);
+    var a_index = common_len;
+    var b_index = common_len;
+    while (a.len - a_index >= lanes and b.len - b_index >= lanes) {
+        const a_values: Values = @bitCast(a[a_index..][0..lanes].*);
+        const b_values: Values = @bitCast(b[b_index..][0..lanes].*);
+        inline for (0..lanes) |a_lane| {
+            const matches = @as(Values, @splat(a_values[a_lane])) == b_values;
+            if (@reduce(.Or, matches)) {
+                output[out_index] = @enumFromInt(a_values[a_lane]);
+                out_index += 1;
+            }
+        }
+        const a_last = a_values[lanes - 1];
+        const b_last = b_values[lanes - 1];
+        if (a_last <= b_last) a_index += lanes;
+        if (b_last <= a_last) b_index += lanes;
+    }
     while (a_index < a.len and b_index < b.len) {
         const a_value = a[a_index];
         const b_value = b[b_index];
@@ -1408,6 +1458,20 @@ test mergeIntersection {
 
     for (&initial_b, 0..) |*item, value| item.* = @enumFromInt(value * 2 + 1);
     try std.testing.expectEqual(@as(u32, 0), mergeInitialIntersectionInto(&initial_a, &initial_b, &initial_output));
+
+    for (&initial_b, 0..) |*item, value| {
+        item.* = if (value % 7 == 0) initial_a[value] else @enumFromInt(value * 2 + 1);
+    }
+    var expected_initial_len: usize = 0;
+    for (initial_a) |item| {
+        if (std.mem.indexOfScalar(I, &initial_b, item) != null) {
+            initial_output[expected_initial_len] = item;
+            expected_initial_len += 1;
+        }
+    }
+    var partial_output: [initial_prefix_min_posting_len]I = undefined;
+    const partial_len = mergeInitialIntersectionInto(&initial_a, &initial_b, &partial_output);
+    try std.testing.expectEqualSlices(I, initial_output[0..expected_initial_len], partial_output[0..partial_len]);
 }
 
 test postingCommonPrefixLen {

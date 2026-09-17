@@ -275,6 +275,34 @@ large postings share a long prefix. Other cases stayed within 1.2%. A separate
 and disjoint controls stayed within 0.6%; smaller first intersections retain
 the existing merge path.
 
+## SIMD balanced posting intersections, 2026-09-16
+
+Measured against `7f6077b8` on aarch64 Linux with Zig 0.16.0, LLVM,
+ReleaseFast, 4,096 declarations per generated symbol family, and 512 rounds
+per sample. Both executables were pinned to the same CPU for 24
+counterbalanced runs. The candidate compares all pairs in two sorted
+four-entry SIMD blocks and advances the block whose maximum has been
+exhausted. The benchmark adds equal-length disjoint and one-in-seven partial
+intersection controls. Values below are median nanoseconds per query.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 8,345 | 8,346 | 8,259 | 8,256 |
+| inline late-selective | 6,888 | 6,889 | 6,794 | 6,792 |
+| late-selective | 846 | 848 | 679 | 678 |
+| early-selective | 518 | 519 | 412 | 412 |
+| equal near-miss | 16,866 | 15,236 | 16,812 | 15,196 |
+| equal disjoint | 23,539 | 14,553 | 23,509 | 15,074 |
+| equal partial | 19,450 | 13,928 | 19,410 | 13,875 |
+| repeated hit | 1,836 | 1,837 | 1,581 | 1,581 |
+| periodic hit | 19,927 | 19,887 | 17,110 | 15,190 |
+
+All result counts and checksums matched. Disjoint intersections improved by
+36--38%, partial intersections by 28%, and equal near-misses by about 10%.
+Other cases stayed within 0.2%. The SIMD path is LLVM-only and requires at
+least 160 entries after the common prefix; 159- and 160-declaration boundary
+runs kept non-target cases within 1.5%.
+
 ## Adjacent prepared-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096

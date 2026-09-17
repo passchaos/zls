@@ -135,6 +135,15 @@ pub fn main(init: std.process.Init) !void {
         try source_writer.writer.print("const left_xyz_{d} = 0;\n", .{index});
         try source_writer.writer.print("const right_yzq_{d} = 0;\n", .{index});
     }
+    const partial_count = (declaration_count + 6) / 7;
+    for (0..declaration_count) |index| {
+        if (index % 7 == 0) {
+            try source_writer.writer.print("const partial_pqrt_{d} = 0;\n", .{index});
+        } else {
+            try source_writer.writer.print("const partial_pqr_{d} = 0;\n", .{index});
+            try source_writer.writer.print("const partial_qrt_{d} = 0;\n", .{index});
+        }
+    }
     try source_writer.writer.writeAll(
         "const equal_posting_abcd_only = 0;\n" ++
             "const equal_posting_cde_only = 0;\n",
@@ -157,6 +166,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "early-selective", .query = "unique_tail_common_symbol", .expected_count = 1 },
         .{ .name = "equal-near-miss", .query = "abcde", .expected_count = declaration_count },
         .{ .name = "equal-disjoint", .query = "xyzq", .expected_count = 0 },
+        .{ .name = "equal-partial", .query = "pqrt", .expected_count = partial_count },
         .{ .name = "short-repeated-hit", .query = "aaaaaaaa", .expected_count = declaration_count },
         .{ .name = "repeated-hit", .query = "aaaaaaaaaaaaaaaaaaaa", .expected_count = declaration_count },
         .{ .name = "periodic-hit", .query = "abcabcabcabcabcabcabc", .expected_count = declaration_count },
@@ -166,7 +176,7 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print(
         "{d} generated declarations, {d} source bytes, parse={d} ns init={d} ns, {d} rounds per query sample\n",
-        .{ 6 * declaration_count + 5, source.len, parse_ns, init_ns, rounds },
+        .{ 8 * declaration_count + 5 - partial_count, source.len, parse_ns, init_ns, rounds },
     );
     for (cases) |case| try benchmarkCase(io, allocator, &store, case, rounds);
 }
