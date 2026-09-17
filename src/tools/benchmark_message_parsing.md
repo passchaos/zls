@@ -13,8 +13,9 @@ parses them through the same generated `lsp.Message` parser used by the server.
 It compares always copying JSON strings, the production arena-preheat policy,
 and borrowing unescaped strings when possible. Reported allocations belong to
 the parser arena's backing allocator; they are not process RSS, compiler memory,
-or cache disk usage. The final case separately measures applying a parsed
-full-document change; those counters cover only `applyContentChanges`.
+or cache disk usage. The final cases separately measure applying parsed
+full-document, single-edit, forward-edit, and reverse-edit changes; those
+counters cover only `applyContentChanges`.
 
 Checksums must match across modes. The borrowed-field count establishes whether
 a result retains pointers into the input JSON and therefore constrains the
@@ -99,6 +100,35 @@ runs applied 40 full-document changes each; median synchronized change latency
 was 29.68 ms for the baseline and 29.55 ms for the candidate, with identical
 successful protocol results. Sampled process-RSS ranges overlapped, so the
 accepted benefit is the deterministic transient allocation reduction.
+
+## Incremental position cursor
+
+Applying every partial change previously converted its range by scanning from
+the beginning of the current document. A batch of edits ordered from the start
+of the document toward the end therefore repeatedly traversed the same prefix.
+`applyContentChanges` now retains the byte index and LSP position reached by the
+previous edit, scans forward from there, and resets to the document start when
+an edit moves backward. After a replacement, the cursor advances across the
+inserted text, including Unicode code units and newlines. Differential tests
+compare the cursor with `rangeToLoc` for UTF-8, UTF-16, and UTF-32, forward and
+backward ranges, CRLF text, and out-of-range positions.
+
+With 4,096 valid single-character edits over the complete `Sema.zig`, repeated
+paired microbenchmarks measured forward application at 355.6–364.2 ms for the
+frozen baseline and 141.0–145.8 ms for the cursor path, about 60% faster. The
+reverse-order guard case measured 353.0–371.9 ms versus 287.7–291.4 ms, a
+19–22% improvement even though every edit forces a reset. Four repeated
+single-edit measurements had overlapping ranges of 483–503 microseconds for
+the baseline and 483–502 microseconds for the cursor path, with the paired
+difference ranging from -0.7% to +0.15%; there is no stable common-path
+regression. Output lengths, checksums, allocation counts, and peak live bytes
+matched in every partial-edit comparison.
+
+Four end-to-end ABBA pairs sent the 4,096-edit notification to baseline and
+candidate ZLS binaries. Per-pair candidate medians were 146.3–150.5 ms versus
+373.8–378.7 ms for the baseline; the aggregate median changed from about 376.0
+to 150.2 ms (-60%). Every run synchronized successfully, shut down cleanly, and
+returned status zero.
 
 ## Streaming document-change parser
 
