@@ -90,7 +90,13 @@ test "raw didChange messages update document text" {
     try std.testing.expect((try server.sendJsonMessageSync(
         "{\"params\":{\"contentChanges\":[{\"text\":\"other\",\"rangeLength\":5,\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}}}],\"textDocument\":{\"version\":3,\"uri\":\"untitled:///change.zig\"}},\"method\":\"textDocument/didChange\",\"jsonrpc\":\"2.0\"}",
     )) == null);
-    try std.testing.expectEqualStrings("const other = 2;", server.document_store.getHandle(document_uri).?.tree.source);
+    const changed_source = server.document_store.getHandle(document_uri).?.tree.source;
+    try std.testing.expectEqualStrings("const other = 2;", changed_source);
+
+    try std.testing.expect((try server.sendJsonMessageSync(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"untitled:///change.zig\",\"version\":4},\"contentChanges\":[{\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}},\"text\":\"other\"}]}}",
+    )) == null);
+    try std.testing.expectEqual(changed_source.ptr, server.document_store.getHandle(document_uri).?.tree.source.ptr);
 
     _ = try server.sendRequestSync(arena, "shutdown", {});
     try server.sendNotificationSync(arena, "exit", {});

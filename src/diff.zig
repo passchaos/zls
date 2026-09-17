@@ -6,6 +6,8 @@ const offsets = @import("offsets.zig");
 const tracy = @import("tracy");
 const DiffMatchPatch = @import("diffz");
 
+const max_noop_change_text_len = 64 * 1024;
+
 pub fn edits(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -72,6 +74,18 @@ pub fn applyContentChanges(
     content_changes: []const types.TextDocument.ContentChangeEvent,
     encoding: offsets.Encoding,
 ) error{OutOfMemory}![:0]const u8 {
+    return try applyContentChangesIfChanged(allocator, text, content_changes, encoding) orelse
+        allocator.dupeSentinel(u8, text, 0);
+}
+
+/// Returns independently owned changed text, or `null` if the changes provably
+/// leave `text` unchanged.
+pub fn applyContentChangesIfChanged(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    content_changes: []const types.TextDocument.ContentChangeEvent,
+    encoding: offsets.Encoding,
+) error{OutOfMemory}!?[:0]const u8 {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
@@ -94,10 +108,13 @@ pub fn applyContentChanges(
 
     // don't even bother applying changes before a full text change
     const changes = content_changes[if (last_full_text_index) |index| index + 1 else 0..];
-    if (changes.len == 0) return try allocator.dupeSentinel(u8, last_full_text, 0);
+    if (changes.len == 0) return null;
     if (changes.len == 1) {
         const change = changes[0].text_document_content_change_partial;
         const loc = offsets.rangeToLoc(last_full_text, change.range, encoding);
+        if (last_full_text_index == null and
+            change.text.len <= max_noop_change_text_len and
+            std.mem.eql(u8, last_full_text[loc.start..loc.end], change.text)) return null;
         const result_len = std.math.add(usize, last_full_text.len - (loc.end - loc.start), change.text.len) catch
             return error.OutOfMemory;
         const result = try allocator.allocSentinel(u8, result_len, 0);
@@ -407,6 +424,85 @@ test "applyContentChanges constructs a single partial change exactly" {
             try std.testing.expect(result.ptr != case.replacement.ptr);
         }
     }
+}
+
+test "applyContentChangesIfChanged detects provable no-op changes" {
+    const partial_changes = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_partial = .{
+            .range = undefined,
+            .text = "🠁",
+        },
+    }};
+    inline for (.{ offsets.Encoding.@"utf-8", offsets.Encoding.@"utf-16", offsets.Encoding.@"utf-32" }) |encoding| {
+        var changes = partial_changes;
+        changes[0].text_document_content_change_partial.range = offsets.locToRange("a🠁z", .{ .start = 1, .end = 5 }, encoding);
+        try std.testing.expect((try applyContentChangesIfChanged(
+            std.testing.failing_allocator,
+            "a🠁z",
+            &changes,
+            encoding,
+        )) == null);
+    }
+
+    try std.testing.expect((try applyContentChangesIfChanged(
+        std.testing.failing_allocator,
+        "same",
+        &.{},
+        .@"utf-8",
+    )) == null);
+
+    const whole_change = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_whole_document = .{ .text = "same" },
+    }};
+    const copied = try applyContentChangesIfChanged(std.testing.allocator, "same", &whole_change, .@"utf-8");
+    defer std.testing.allocator.free(copied.?);
+    try std.testing.expectEqualStrings("same", copied.?);
+
+    const large_text = "a" ** (max_noop_change_text_len + 1);
+    const bounded_text = large_text[0..max_noop_change_text_len];
+    const bounded_partial = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = bounded_text.len },
+            },
+            .text = bounded_text,
+        },
+    }};
+    try std.testing.expect((try applyContentChangesIfChanged(
+        std.testing.failing_allocator,
+        bounded_text,
+        &bounded_partial,
+        .@"utf-8",
+    )) == null);
+
+    const large_partial = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = large_text.len },
+            },
+            .text = large_text,
+        },
+    }};
+    const large_result = try applyContentChangesIfChanged(std.testing.allocator, large_text, &large_partial, .@"utf-8");
+    defer std.testing.allocator.free(large_result.?);
+    try std.testing.expectEqualStrings(large_text, large_result.?);
+
+    const original = "abc";
+    const aliased_full_then_partial = [_]types.TextDocument.ContentChangeEvent{
+        .{ .text_document_content_change_whole_document = .{ .text = original[0..2] } },
+        .{ .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 1 },
+                .end = .{ .line = 0, .character = 2 },
+            },
+            .text = "b",
+        } },
+    };
+    const shortened = try applyContentChangesIfChanged(std.testing.allocator, original, &aliased_full_then_partial, .@"utf-8");
+    defer std.testing.allocator.free(shortened.?);
+    try std.testing.expectEqualStrings("ab", shortened.?);
 }
 
 test "applyContentChanges single partial handles every allocation failure" {

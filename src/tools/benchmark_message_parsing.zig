@@ -180,6 +180,34 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkContentChanges(io, allocator, "apply-one-edit", source, &one_partial_change, rounds * 256, .baseline);
     try benchmarkContentChanges(io, allocator, "apply-one-edit", source, &one_partial_change, rounds * 256, .production);
 
+    const one_noop_text = try allocator.dupe(u8, source[0..1]);
+    defer allocator.free(one_noop_text);
+    const one_noop_change = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = 1 },
+            },
+            .text = one_noop_text,
+        },
+    }};
+    try benchmarkNoopContentChanges(io, allocator, "apply-one-noop-edit", source, &one_noop_change, rounds * 64, .baseline);
+    try benchmarkNoopContentChanges(io, allocator, "apply-one-noop-edit", source, &one_noop_change, rounds * 64, .production);
+
+    const bounded_noop_len = @min(source.len, 64 * 1024);
+    const bounded_noop_text = try allocator.dupe(u8, source[0..bounded_noop_len]);
+    defer allocator.free(bounded_noop_text);
+    const bounded_noop_range = zls.offsets.locToRange(source, .{ .start = 0, .end = bounded_noop_len }, .@"utf-8");
+    const bounded_noop_change = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_partial = .{ .range = bounded_noop_range, .text = bounded_noop_text },
+    }};
+    try benchmarkNoopContentChanges(io, allocator, "apply-bounded-noop-edit", source, &bounded_noop_change, rounds * 64, .baseline);
+    try benchmarkNoopContentChanges(io, allocator, "apply-bounded-noop-edit", source, &bounded_noop_change, rounds * 64, .production);
+
+    bounded_noop_text[bounded_noop_text.len - 1] ^= 1;
+    try benchmarkContentChanges(io, allocator, "apply-bounded-late-edit", source, &bounded_noop_change, rounds * 64, .baseline);
+    try benchmarkContentChanges(io, allocator, "apply-bounded-late-edit", source, &bounded_noop_change, rounds * 64, .production);
+
     try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .alloc_always);
     try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .production_policy);
     try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .streaming_unpreheated);
@@ -465,6 +493,89 @@ fn benchmarkContentChanges(
             stats.peak_live_bytes,
         },
     );
+}
+
+fn benchmarkNoopContentChanges(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    initial_text: []const u8,
+    changes: []const types.TextDocument.ContentChangeEvent,
+    rounds: usize,
+    mode: ApplyMode,
+) !void {
+    var counter: CountingAllocator = .{ .child = allocator };
+    const counting_allocator = counter.allocator();
+    const measured = switch (mode) {
+        .baseline => try applySingleContentChangeBaseline(counting_allocator, initial_text, changes[0], .@"utf-8"),
+        .production => (try zls.diff.applyContentChangesIfChanged(counting_allocator, initial_text, changes, .@"utf-8")) orelse null,
+    };
+    if (measured) |result| {
+        if (!std.mem.eql(u8, initial_text, result)) return error.ResultMismatch;
+        counting_allocator.free(result);
+    } else if (mode == .baseline) {
+        return error.ExpectedOwnedResult;
+    }
+    if (counter.live_bytes != 0) return error.UnreleasedMemory;
+
+    var samples: [sample_count]u64 = undefined;
+    var checksum: usize = 0;
+    for (&samples) |*sample| {
+        const before = std.Io.Clock.awake.now(io);
+        for (0..rounds) |_| {
+            const result = switch (mode) {
+                .baseline => try applySingleContentChangeBaseline(allocator, initial_text, changes[0], .@"utf-8"),
+                .production => (try zls.diff.applyContentChangesIfChanged(allocator, initial_text, changes, .@"utf-8")) orelse null,
+            };
+            if (result) |owned| {
+                checksum +%= owned.len;
+                allocator.free(owned);
+            } else {
+                checksum +%= initial_text.len;
+            }
+        }
+        const elapsed_ns = before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds();
+        sample.* = @intCast(@divTrunc(elapsed_ns, @as(i96, @intCast(rounds))));
+    }
+    const expected_checksum = initial_text.len *% rounds *% sample_count;
+    if (checksum != expected_checksum) return error.UnstableChecksum;
+    std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+
+    const stats = counter.stats();
+    std.debug.print(
+        "{s} {t}: {d} result bytes, {d} ns/application, checksum={d}\n" ++
+            "  allocations={d} remap-attempts={d} remaps={d} frees={d} allocated={d} peak-live={d}\n",
+        .{
+            name,
+            mode,
+            initial_text.len,
+            samples[sample_count / 2],
+            checksum,
+            stats.allocations,
+            stats.remap_attempts,
+            stats.remaps,
+            stats.frees,
+            stats.allocated_bytes,
+            stats.peak_live_bytes,
+        },
+    );
+}
+
+fn applySingleContentChangeBaseline(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    item: types.TextDocument.ContentChangeEvent,
+    encoding: zls.offsets.Encoding,
+) error{OutOfMemory}![:0]const u8 {
+    const change = item.text_document_content_change_partial;
+    const loc = zls.offsets.rangeToLoc(text, change.range, encoding);
+    const result_len = std.math.add(usize, text.len - (loc.end - loc.start), change.text.len) catch
+        return error.OutOfMemory;
+    const result = try allocator.allocSentinel(u8, result_len, 0);
+    @memcpy(result[0..loc.start], text[0..loc.start]);
+    @memcpy(result[loc.start..][0..change.text.len], change.text);
+    @memcpy(result[loc.start + change.text.len ..], text[loc.end..]);
+    return result;
 }
 
 fn applyContentChanges(

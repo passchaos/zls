@@ -156,6 +156,31 @@ successful shutdown response, exited cleanly, and returned status zero.
 A final rebuild containing the exact single-partial path repeated two ABBA
 pairs at 315.7 ms versus 32.6 ms (-89.7%), confirming the same result.
 
+## No-op partial changes
+
+Some clients can send an incremental change whose replacement already matches
+the document. For a single partial change of at most 64 KiB, the server now
+compares the resolved source range with the replacement and skips document
+allocation, AST parsing, import collection, and derived-index invalidation when
+they are equal. The bound limits worst-case comparison work, and full-document
+changes retain their prior path. The public `applyContentChanges` API continues
+to return independently owned text; only the server uses the optional internal
+result to skip a proven no-op refresh. Tests cover UTF-8, UTF-16, UTF-32, raw
+JSON lifecycle behavior, empty change lists, ownership, and the size boundary.
+
+With an independently allocated replacement over the 1,497,031-byte
+`Sema.zig`, a one-byte no-op changed from 405–423 microseconds and one
+1,497,032-byte allocation to 29 nanoseconds and zero allocations. A 64 KiB
+no-op changed from 444–470 to 44 microseconds and zero allocations. A 64 KiB
+replacement differing only in its last byte remained faster than the existing
+changed-text path in all three paired runs.
+
+Eight fixed-CPU ABBA pairs applied 40 one-byte notifications in each process.
+For alternating real changes, median time was 404.8 ms for the baseline and
+400.6 ms for the candidate, with overlapping samples. For repeated no-op
+changes, median time fell from 409.6 to 0.77 ms (-99.8%). Every run completed
+document synchronization and protocol shutdown with status zero.
+
 ## Streaming document-change parser
 
 The generated `ContentChangeEvent` union parser first constructs a full

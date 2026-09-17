@@ -1228,7 +1228,12 @@ fn changeDocumentHandler(server: *Server, arena: std.mem.Allocator, notification
     };
     const handle = server.document_store.getHandle(document_uri) orelse return;
 
-    const new_text = try diff.applyContentChanges(server.allocator, handle.tree.source, notification.contentChanges, server.offset_encoding);
+    const new_text = try diff.applyContentChangesIfChanged(
+        server.allocator,
+        handle.tree.source,
+        notification.contentChanges,
+        server.offset_encoding,
+    ) orelse return;
 
     if (new_text.len > std.zig.max_src_size) {
         log.err("change document '{s}' failed: text size ({d}) is above maximum length ({d})", .{
