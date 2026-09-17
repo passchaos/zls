@@ -131,6 +131,10 @@ pub fn main(init: std.process.Init) !void {
     for (0..declaration_count) |index| {
         try source_writer.writer.print("const periodic_abcabcabcabcabcabcabc_{d} = 0;\n", .{index});
     }
+    for (0..declaration_count) |index| {
+        try source_writer.writer.print("const left_xyz_{d} = 0;\n", .{index});
+        try source_writer.writer.print("const right_yzq_{d} = 0;\n", .{index});
+    }
     try source_writer.writer.writeAll(
         "const equal_posting_abcd_only = 0;\n" ++
             "const equal_posting_cde_only = 0;\n",
@@ -152,6 +156,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "late-selective", .query = "common_symbol_unique_tail", .expected_count = 1 },
         .{ .name = "early-selective", .query = "unique_tail_common_symbol", .expected_count = 1 },
         .{ .name = "equal-near-miss", .query = "abcde", .expected_count = declaration_count },
+        .{ .name = "equal-disjoint", .query = "xyzq", .expected_count = 0 },
         .{ .name = "short-repeated-hit", .query = "aaaaaaaa", .expected_count = declaration_count },
         .{ .name = "repeated-hit", .query = "aaaaaaaaaaaaaaaaaaaa", .expected_count = declaration_count },
         .{ .name = "periodic-hit", .query = "abcabcabcabcabcabcabc", .expected_count = declaration_count },
@@ -161,7 +166,7 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print(
         "{d} generated declarations, {d} source bytes, parse={d} ns init={d} ns, {d} rounds per query sample\n",
-        .{ 4 * declaration_count + 5, source.len, parse_ns, init_ns, rounds },
+        .{ 6 * declaration_count + 5, source.len, parse_ns, init_ns, rounds },
     );
     for (cases) |case| try benchmarkCase(io, allocator, &store, case, rounds);
 }

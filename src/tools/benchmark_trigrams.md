@@ -247,6 +247,34 @@ and 41% prepared; the equal-length near-miss improved by 14%. Other changes
 stayed within 1.1%. At the 160-entry activation boundary, common queries
 improved by 31--33%; inputs below the threshold were unchanged within 1%.
 
+## Initial equal-length posting prefixes, 2026-09-16
+
+Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096
+declarations per generated symbol family, and 512 rounds per sample. The
+baseline was `4550010b`; both executables were pinned to the same CPU for 24
+counterbalanced runs. The candidate reuses the existing SIMD prefix scan for
+the first intersection, copying only the verified common prefix into the
+separate result buffer. An equal-length disjoint case guards the worst-case
+merge path. Values below are median nanoseconds per query.
+
+| Case | Baseline raw | Candidate raw | Baseline prepared | Candidate prepared |
+| --- | ---: | ---: | ---: | ---: |
+| common | 10,614 | 8,343 | 10,515 | 8,254 |
+| inline late-selective | 9,151 | 6,887 | 9,053 | 6,791 |
+| late-selective | 847 | 847 | 673 | 677 |
+| early-selective | 511 | 515 | 409 | 414 |
+| equal near-miss | 16,809 | 16,798 | 16,754 | 16,738 |
+| equal disjoint | 23,544 | 23,546 | 23,510 | 23,526 |
+| repeated hit | 1,838 | 1,837 | 1,582 | 1,574 |
+| periodic hit | 19,564 | 19,577 | 16,780 | 16,815 |
+
+All result counts and checksums matched. Common queries improved by 21%, and
+the inline-capacity late-selective case improved by 25% because its first two
+large postings share a long prefix. Other cases stayed within 1.2%. A separate
+512-entry threshold run improved common queries by 17--20%, while near-miss
+and disjoint controls stayed within 0.6%; smaller first intersections retain
+the existing merge path.
+
 ## Adjacent prepared-trigram deduplication, 2026-09-16
 
 Measured on aarch64 Linux with Zig 0.16.0, LLVM, ReleaseFast, 4,096

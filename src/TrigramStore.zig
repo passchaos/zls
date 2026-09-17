@@ -157,6 +157,9 @@ pub const Query = struct {
 /// first posting list of roughly this size.
 const filter_min_posting_len = 160;
 const filter_min_posting_count = 2;
+// The first intersection must copy its common prefix into separate output,
+// so its SIMD-prefix shortcut breaks even later than the in-place variant.
+const initial_prefix_min_posting_len = 512;
 
 filter_buckets: ?[]CuckooFilter.Bucket,
 trigram_to_declarations: PostingMap,
@@ -521,7 +524,7 @@ pub fn declarationSliceForQuery(
         )) |declarations| return declarations;
     }
     try declaration_buffer.resize(allocator, @min(first.len, second.len));
-    var len = mergeIntersectionInto(first, second, declaration_buffer.items);
+    var len = mergeInitialIntersectionInto(first, second, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
     if (len == 0) return declaration_buffer.items;
 
@@ -761,7 +764,7 @@ pub fn declarationSliceForPreparedQuery(
         )) |declarations| return declarations;
     }
     try declaration_buffer.resize(allocator, @min(first.len, second.len));
-    var len = mergeIntersectionInto(first, second, declaration_buffer.items);
+    var len = mergeInitialIntersectionInto(first, second, declaration_buffer.items);
     declaration_buffer.shrinkRetainingCapacity(len);
     if (len == 0) return declaration_buffer.items;
 
@@ -1151,7 +1154,7 @@ fn mergeIntersection(
 ) u32 {
     if (a.len == 0 or b.len == 0) return 0;
     if (a.len == b.len and a.len >= filter_min_posting_len) {
-        return mergeEqualLengthIntersection(a, b);
+        return mergeEqualLengthIntersection(a, b, b);
     }
     if (isSkewed(a.len, b.len)) return binaryIntersectionInto(b, a, b);
     if (isSkewed(b.len, a.len)) return binaryIntersectionInto(a, b, b);
@@ -1181,10 +1184,13 @@ fn mergeIntersection(
 
 noinline fn mergeEqualLengthIntersection(
     a: []const Declaration.Index,
-    b: []Declaration.Index,
+    b: []const Declaration.Index,
+    output: []Declaration.Index,
 ) u32 {
     assert(a.len == b.len);
+    assert(output.len >= b.len);
     const common_len = postingCommonPrefixLen(a, b);
+    if (output.ptr != b.ptr) @memcpy(output[0..common_len], b[0..common_len]);
     if (common_len == a.len) return @intCast(a.len);
 
     var out_index: u32 = @intCast(common_len);
@@ -1194,7 +1200,7 @@ noinline fn mergeEqualLengthIntersection(
         const a_value = a[a_index];
         const b_value = b[b_index];
         if (a_value == b_value) {
-            b[out_index] = a_value;
+            output[out_index] = a_value;
             out_index += 1;
             a_index += 1;
             b_index += 1;
@@ -1252,6 +1258,17 @@ fn mergeIntersectionInto(
         }
     }
     return out_index;
+}
+
+noinline fn mergeInitialIntersectionInto(
+    a: []const Declaration.Index,
+    b: []const Declaration.Index,
+    output: []Declaration.Index,
+) u32 {
+    if (a.len >= initial_prefix_min_posting_len and a.len == b.len) {
+        return mergeEqualLengthIntersection(a, b, output);
+    }
+    return mergeIntersectionInto(a, b, output);
 }
 
 // Benchmarks with uniformly distributed sorted indexes put the crossover near
@@ -1375,6 +1392,22 @@ test mergeIntersection {
     var direct_skewed: [short.len]I = undefined;
     const direct_skewed_len = mergeIntersectionInto(&long, &short, &direct_skewed);
     try std.testing.expectEqualSlices(I, &skewed_expected, direct_skewed[0..direct_skewed_len]);
+
+    var initial_a: [initial_prefix_min_posting_len]I = undefined;
+    for (&initial_a, 0..) |*item, value| item.* = @enumFromInt(value * 2);
+    var initial_b = initial_a;
+    var initial_output: [initial_prefix_min_posting_len]I = undefined;
+    const initial_equal_len = mergeInitialIntersectionInto(&initial_a, &initial_b, &initial_output);
+    try std.testing.expectEqual(initial_a.len, initial_equal_len);
+    try std.testing.expectEqualSlices(I, &initial_a, initial_output[0..initial_equal_len]);
+
+    initial_b[initial_b.len - 1] = @enumFromInt(initial_b.len * 2 + 1);
+    const initial_near_len = mergeInitialIntersectionInto(&initial_a, &initial_b, &initial_output);
+    try std.testing.expectEqual(initial_a.len - 1, initial_near_len);
+    try std.testing.expectEqualSlices(I, initial_a[0 .. initial_a.len - 1], initial_output[0..initial_near_len]);
+
+    for (&initial_b, 0..) |*item, value| item.* = @enumFromInt(value * 2 + 1);
+    try std.testing.expectEqual(@as(u32, 0), mergeInitialIntersectionInto(&initial_a, &initial_b, &initial_output));
 }
 
 test postingCommonPrefixLen {
