@@ -813,7 +813,11 @@ pub const Handle = struct {
 
     const TrigramStoreContext = struct {
         fn create(handle: *Handle, allocator: std.mem.Allocator) error{OutOfMemory}!TrigramStore {
-            return try .init(allocator, &handle.tree);
+            const capacity_hint = if (handle.impl.analysis_arena.isActive())
+                handle.tree.rootDecls().len
+            else
+                0;
+            return try .initWithDeclarationCapacity(allocator, &handle.tree, capacity_hint);
         }
         fn deinit(trigram_store: *TrigramStore, allocator: std.mem.Allocator) void {
             trigram_store.deinit(allocator);

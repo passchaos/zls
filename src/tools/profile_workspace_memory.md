@@ -170,3 +170,19 @@ capacity: median peak RSS increased from 23,888 to 26,328 KiB (+10.2%), while
 RSS after closing fell from 14,544 to 11,864 KiB (-18.4%) and total runtime rose
 from 145 to 158 ms (+9.0%). This peak/latency tradeoff is separate from the
 repeated lifecycle stress result.
+
+## Arena-backed trigram declaration capacity, 2026-09-16
+
+The ordinary allocator path keeps its existing adaptive declaration estimate.
+When a document already owns a page-backed analysis arena, TrigramStore now
+uses the AST root-declaration count as an additional capacity lower bound. Old
+growth allocations cannot be individually reclaimed from an arena, so avoiding
+them improves both construction time and transient memory without affecting the
+final compacted index.
+
+Twelve fixed-CPU counterbalanced runs compared baseline `fffd817b` with the
+candidate over 20 open/close cycles and `--rounds 0`, using `Sema.zig`,
+`array_list.zig`, and `unicode.zig`. Median open time changed from 60.21 to
+49.47 ms (-17.8%) and total runtime from 1,194 to 1,025 ms (-14.1%). Median
+observed peak changed from 15,720 to 15,624 KiB, while both variants had exactly
+44 KiB closed-RSS growth.

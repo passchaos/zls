@@ -204,6 +204,14 @@ pub fn init(
     allocator: std.mem.Allocator,
     tree: *const Ast,
 ) error{OutOfMemory}!TrigramStore {
+    return initWithDeclarationCapacity(allocator, tree, 0);
+}
+
+pub fn initWithDeclarationCapacity(
+    allocator: std.mem.Allocator,
+    tree: *const Ast,
+    declaration_capacity_hint: usize,
+) error{OutOfMemory}!TrigramStore {
     var store: TrigramStore = .{
         .filter_buckets = null,
         .trigram_to_declarations = .empty,
@@ -211,7 +219,10 @@ pub fn init(
         .declarations = .empty,
     };
     errdefer store.deinit(allocator);
-    try store.declarations.ensureTotalCapacity(allocator, estimatedDeclarationCapacity(tree));
+    try store.declarations.ensureTotalCapacity(allocator, @max(
+        declaration_capacity_hint,
+        estimatedDeclarationCapacity(tree),
+    ));
 
     var posting_occurrences: std.ArrayList(u32) = .empty;
     defer posting_occurrences.deinit(allocator);
