@@ -17,6 +17,7 @@ const usage =
     \\  env                       Print config path, log path and version
     \\
     \\General Options:
+    \\  --working-directory [path] Set the working directory for relative paths
     \\  --config-path [path]      Set path to the 'zls.json' configuration file
     \\  --log-file [path]         Set path to the 'zls.log' log file
     \\  --log-level [enum]        The Log Level to be used.
@@ -423,6 +424,7 @@ fn loadConfiguration(
 }
 
 const ParseArgsResult = struct {
+    working_directory: ?[]const u8 = null,
     config_path: ?[]const u8 = null,
     log_level: ?std.log.Level = null,
     log_file_path: ?[]const u8 = null,
@@ -431,6 +433,7 @@ const ParseArgsResult = struct {
     disable_lsp_logs: bool = false,
 
     fn deinit(self: ParseArgsResult, allocator: std.mem.Allocator) void {
+        defer if (self.working_directory) |path| allocator.free(path);
         defer if (self.config_path) |path| allocator.free(path);
         defer if (self.log_file_path) |path| allocator.free(path);
         defer allocator.free(self.zls_exe_path);
@@ -469,7 +472,14 @@ fn parseArgs(
             try @"zls env"(io, allocator, environ_map);
         }
 
-        if (std.mem.eql(u8, arg, "--config-path")) { // --config-path
+        if (std.mem.eql(u8, arg, "--working-directory")) {
+            const path = args_it.next() orelse {
+                log.err("Expected directory path after --working-directory argument.", .{});
+                std.process.exit(1);
+            };
+            if (result.working_directory) |old_path| allocator.free(old_path);
+            result.working_directory = try allocator.dupe(u8, path);
+        } else if (std.mem.eql(u8, arg, "--config-path")) { // --config-path
             const path = args_it.next() orelse {
                 log.err("Expected configuration file path after --config-path argument.", .{});
                 std.process.exit(1);
@@ -548,6 +558,21 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
 
     const result = try parseArgs(io, allocator, &environ_map, init.args);
     defer result.deinit(allocator);
+
+    const working_directory: ?std.Io.Dir = if (result.working_directory) |path|
+        std.Io.Dir.cwd().openDir(io, path, .{}) catch |err| {
+            log.err("Failed to open working directory '{s}': {}", .{ path, err });
+            return 1;
+        }
+    else
+        null;
+    defer if (working_directory) |dir| dir.close(io);
+    if (working_directory) |dir| {
+        std.process.setCurrentDir(io, dir) catch |err| {
+            log.err("Failed to set working directory '{s}': {}", .{ result.working_directory.?, err });
+            return 1;
+        };
+    }
 
     log_file, const log_file_path = try createLogFile(io, allocator, &environ_map, result.log_file_path) orelse .{ null, null };
     defer if (log_file_path) |path| allocator.free(path);
