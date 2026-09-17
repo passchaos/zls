@@ -37,6 +37,9 @@ document open/close costs without building or querying symbol indexes.
 `--extra-empty-documents N` adds N empty Zig documents to every lifecycle.
 This isolates per-handle workspace-symbol filtering, list construction, lazy
 index loading, and close bookkeeping without increasing symbol result size.
+`--copies-per-source N` opens N uniquely named copies of every supplied source.
+This measures many non-empty, cached indexes while preserving per-copy result
+identity in the checksum.
 `--max-rss-mib` defaults to 2048;
 the script checks ZLS memory while waiting for replies and after each phase and
 terminates its child on failure. This is a sampled safeguard, not an OS memory
