@@ -424,7 +424,7 @@ fn loadConfiguration(
 }
 
 const ParseArgsResult = struct {
-    working_directory: ?[]const u8 = null,
+    working_directory: ?std.Io.Dir = null,
     config_path: ?[]const u8 = null,
     log_level: ?std.log.Level = null,
     log_file_path: ?[]const u8 = null,
@@ -432,8 +432,8 @@ const ParseArgsResult = struct {
     enable_stderr_logs: bool = false,
     disable_lsp_logs: bool = false,
 
-    fn deinit(self: ParseArgsResult, allocator: std.mem.Allocator) void {
-        defer if (self.working_directory) |path| allocator.free(path);
+    fn deinit(self: ParseArgsResult, io: std.Io, allocator: std.mem.Allocator) void {
+        defer if (self.working_directory) |dir| dir.close(io);
         defer if (self.config_path) |path| allocator.free(path);
         defer if (self.log_file_path) |path| allocator.free(path);
         defer allocator.free(self.zls_exe_path);
@@ -449,7 +449,7 @@ fn parseArgs(
     args: std.process.Args,
 ) ParseArgsError!ParseArgsResult {
     var result: ParseArgsResult = .{};
-    errdefer result.deinit(allocator);
+    errdefer result.deinit(io, allocator);
 
     var args_it = try args.iterateAllocator(allocator);
     defer args_it.deinit();
@@ -477,8 +477,12 @@ fn parseArgs(
                 log.err("Expected directory path after --working-directory argument.", .{});
                 std.process.exit(1);
             };
-            if (result.working_directory) |old_path| allocator.free(old_path);
-            result.working_directory = try allocator.dupe(u8, path);
+            const working_directory = std.Io.Dir.cwd().openDir(io, path, .{}) catch |err| {
+                log.err("Failed to open working directory '{s}': {}", .{ path, err });
+                std.process.exit(1);
+            };
+            if (result.working_directory) |old_dir| old_dir.close(io);
+            result.working_directory = working_directory;
         } else if (std.mem.eql(u8, arg, "--config-path")) { // --config-path
             const path = args_it.next() orelse {
                 log.err("Expected configuration file path after --config-path argument.", .{});
@@ -557,19 +561,11 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     defer environ_map.deinit();
 
     const result = try parseArgs(io, allocator, &environ_map, init.args);
-    defer result.deinit(allocator);
+    defer result.deinit(io, allocator);
 
-    const working_directory: ?std.Io.Dir = if (result.working_directory) |path|
-        std.Io.Dir.cwd().openDir(io, path, .{}) catch |err| {
-            log.err("Failed to open working directory '{s}': {}", .{ path, err });
-            return 1;
-        }
-    else
-        null;
-    defer if (working_directory) |dir| dir.close(io);
-    if (working_directory) |dir| {
+    if (result.working_directory) |dir| {
         std.process.setCurrentDir(io, dir) catch |err| {
-            log.err("Failed to set working directory '{s}': {}", .{ result.working_directory.?, err });
+            log.err("Failed to set working directory: {}", .{err});
             return 1;
         };
     }
