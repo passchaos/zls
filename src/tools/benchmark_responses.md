@@ -3,14 +3,18 @@
 Run the benchmark with an optimized build:
 
 ```sh
-zig build bench-responses -j1 -Doptimize=ReleaseFast -Duse-llvm=true -- 128 2048
+zig build bench-responses -j1 -Doptimize=ReleaseFast -Duse-llvm=true -- 128 2048 512
 ```
 
 The benchmark serializes representative empty, small, and result-heavy
-`workspace/symbol` JSON-RPC responses. It reports the median time from nine
-samples along with the serialized size, a checksum, and allocation activity for
-one response. Serialization includes allocation and returning an exactly sized
-owned slice; it does not include transport I/O.
+`workspace/symbol` JSON-RPC responses and `textDocument/publishDiagnostics`
+notifications. It directly compares the standard library allocation path, a
+4 KiB stack-backed prefix, and capacity hints for large payloads. It reports the
+median time from nine samples along with serialized size, a checksum, and
+allocation activity for one message. Serialization includes allocation and
+returning an exactly sized owned slice; it does not include transport I/O.
+The large diagnostic case includes tags and related information on one quarter
+of its diagnostics.
 
 Compare identical round counts, large-result counts, response byte sizes, and
 checksums across revisions. The allocation counters describe allocator requests
@@ -65,3 +69,22 @@ query phase changed from 1,446 to 1,433 milliseconds (-0.9%). One-copy runs
 showed no stable regression for small, empty, or missing-result responses. RSS
 varied within the same overlapping range; the allocator counters above, rather
 than sampled process RSS, are the evidence for reduced transient response memory.
+
+## Diagnostic notifications
+
+The benchmark also compares the standard allocator path and the 4 KiB stack
+prefix for `textDocument/publishDiagnostics`. The representative large case has
+512 diagnostics, with tags and related information on one quarter of them. Five
+consecutive 128-round runs measured:
+
+| case | standard ns | stack-prefix ns | allocations | peak live bytes |
+| --- | ---: | ---: | ---: | ---: |
+| empty, 137 B | 258–262 | 211–215 | 3 → 1 | 467 → 137 |
+| 8 diagnostics, 2,216 B | 3,288–3,308 | 3,165–3,183 | 5 → 1 | 4,657 → 2,216 |
+| 512 diagnostics, 135,084 B | 241,108–246,429 | 236,476–238,471 | 9 → 4 | 186,153 → 186,153 |
+
+A diagnostic-count-only capacity hint was rejected. Diagnostic messages, codes,
+tags, related locations, and arbitrary `data` make a cheap estimate unreliable;
+an underestimated large hint raised peak live memory from 186,153 bytes. The
+stack prefix is retained as the bounded candidate because it improves all three
+timings and allocation counts without increasing peak live memory.
