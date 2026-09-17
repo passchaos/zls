@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const Uri = @import("Uri.zig");
 const analysis = @import("analysis.zig");
 const offsets = @import("offsets.zig");
+const response_buffer = @import("response_buffer.zig");
 const log = std.log.scoped(.store);
 const lsp = @import("lsp");
 const Ast = std.zig.Ast;
@@ -1399,7 +1400,7 @@ fn sendMessageToClient(
     transport: *lsp.Transport,
     message: anytype,
 ) !void {
-    const json_message = try std.json.Stringify.valueAlloc(
+    const json_message = try response_buffer.stringifyAlloc(
         allocator,
         message,
         .{ .emit_null_optional_fields = false },

@@ -2,6 +2,7 @@ const std = @import("std");
 const lsp = @import("lsp");
 const tracy = @import("tracy");
 const offsets = @import("offsets.zig");
+const response_buffer = @import("response_buffer.zig");
 const Uri = @import("Uri.zig");
 
 io: std.Io,
@@ -293,7 +294,7 @@ pub fn publishDiagnostics(collection: *DiagnosticsCollection) (std.mem.Allocator
             };
 
             // TODO make the diagnostics serializable without requiring the mutex to be locked
-            break :blk try std.json.Stringify.valueAlloc(collection.allocator, notification, .{ .emit_null_optional_fields = false });
+            break :blk try response_buffer.stringifyAlloc(collection.allocator, notification, .{ .emit_null_optional_fields = false });
         };
         defer collection.allocator.free(json_message);
 
