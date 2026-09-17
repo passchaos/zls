@@ -12,6 +12,7 @@ pub const DiagnosticsCollection = @import("DiagnosticsCollection.zig");
 pub const diff = @import("diff.zig");
 pub const DocumentScope = @import("DocumentScope.zig");
 pub const DocumentStore = @import("DocumentStore.zig");
+pub const message_arena = @import("message_arena.zig");
 pub const offsets = @import("offsets.zig");
 pub const print_ast = @import("print_ast.zig");
 pub const response_buffer = @import("response_buffer.zig");

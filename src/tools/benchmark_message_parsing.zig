@@ -1,7 +1,8 @@
 //! Run with `zig build bench-message-parsing -Doptimize=ReleaseFast -- source.zig [rounds]`.
 //! Compare identical inputs, options, checksums, and borrowed-field counts across revisions.
 const std = @import("std");
-const lsp = @import("zls").lsp;
+const zls = @import("zls");
+const lsp = zls.lsp;
 const types = lsp.types;
 
 const default_rounds = 16;
@@ -14,6 +15,7 @@ const RequestParams = union(enum) {
 
 const NotificationParams = union(enum) {
     @"textDocument/didOpen": types.TextDocument.DidOpenParams,
+    @"textDocument/didChange": types.TextDocument.DidChangeParams,
     other: lsp.MethodWithParams,
 };
 
@@ -96,7 +98,11 @@ const CountingAllocator = struct {
     }
 };
 
-const ParseMode = enum { alloc_always, alloc_if_needed };
+const ParseMode = enum {
+    alloc_always,
+    production_policy,
+    alloc_if_needed,
+};
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -131,8 +137,34 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(did_open_json);
         const case_rounds = @max(rounds, (rounds * source.len) / @max(1, bounded_source.len));
         try benchmarkCase(io, allocator, "did-open", did_open_json, case_rounds, .alloc_always);
+        try benchmarkCase(io, allocator, "did-open", did_open_json, case_rounds, .production_policy);
         try benchmarkCase(io, allocator, "did-open", did_open_json, case_rounds, .alloc_if_needed);
     }
+
+    const did_change_json = try makeDidChangeJson(allocator, source);
+    defer allocator.free(did_change_json);
+    try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .alloc_always);
+    try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .production_policy);
+    try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .alloc_if_needed);
+
+    const edit_count = 4096;
+    const edits = try allocator.alloc(types.TextDocument.ContentChangeEvent, edit_count);
+    defer allocator.free(edits);
+    for (edits, 0..) |*edit, index| {
+        const line: u32 = @intCast(index);
+        edit.* = .{ .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = line, .character = 0 },
+                .end = .{ .line = line, .character = 1 },
+            },
+            .text = "x",
+        } };
+    }
+    const many_changes_json = try makeDidChangeJsonWithChanges(allocator, edits);
+    defer allocator.free(many_changes_json);
+    try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .alloc_always);
+    try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .production_policy);
+    try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .alloc_if_needed);
 }
 
 fn makeDidOpenJson(allocator: std.mem.Allocator, source: []const u8) error{OutOfMemory}![]u8 {
@@ -144,6 +176,26 @@ fn makeDidOpenJson(allocator: std.mem.Allocator, source: []const u8) error{OutOf
             .version = 1,
             .text = source,
         } },
+    }, .{});
+}
+
+fn makeDidChangeJson(allocator: std.mem.Allocator, source: []const u8) error{OutOfMemory}![]u8 {
+    const changes = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_whole_document = .{ .text = source },
+    }};
+    return makeDidChangeJsonWithChanges(allocator, &changes);
+}
+
+fn makeDidChangeJsonWithChanges(
+    allocator: std.mem.Allocator,
+    changes: []const types.TextDocument.ContentChangeEvent,
+) error{OutOfMemory}![]u8 {
+    return try std.json.Stringify.valueAlloc(allocator, lsp.TypedJsonRPCNotification(types.TextDocument.DidChangeParams){
+        .method = "textDocument/didChange",
+        .params = .{
+            .textDocument = .{ .uri = "file:///workspace/source.zig", .version = 2 },
+            .contentChanges = changes,
+        },
     }, .{});
 }
 
@@ -206,11 +258,12 @@ fn parseOnce(
 ) !usize {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
+    if (mode == .production_policy) zls.message_arena.preheatForMessage(&arena, input);
     const message = try Message.parseFromSliceLeaky(arena.allocator(), input, .{
         .ignore_unknown_fields = true,
         .max_value_len = null,
         .allocate = switch (mode) {
-            .alloc_always => .alloc_always,
+            .alloc_always, .production_policy => .alloc_always,
             .alloc_if_needed => .alloc_if_needed,
         },
     });
@@ -230,6 +283,17 @@ fn parseOnce(
                     count.* += @intFromBool(isBorrowed(input, params.textDocument.text));
                 }
                 break :blk params.textDocument.uri.len + params.textDocument.text.len;
+            },
+            .@"textDocument/didChange" => |params| blk: {
+                var checksum = params.textDocument.uri.len + params.contentChanges.len;
+                if (borrowed_fields) |count| count.* += @intFromBool(isBorrowed(input, params.textDocument.uri));
+                for (params.contentChanges) |change| switch (change) {
+                    inline else => |item| {
+                        checksum +%= item.text.len;
+                        if (borrowed_fields) |count| count.* += @intFromBool(isBorrowed(input, item.text));
+                    },
+                };
+                break :blk checksum;
             },
             .other => return error.UnexpectedMessage,
         },

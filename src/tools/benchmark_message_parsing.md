@@ -7,10 +7,11 @@ zig build bench-message-parsing -j1 -Doptimize=ReleaseFast -Duse-llvm=true -- \
   ~/Work/zig/src/Sema.zig 16
 ```
 
-The benchmark constructs a `textDocument/didOpen` notification containing the
-source and a representative `workspace/symbol` request, then parses them through
-the same generated `lsp.Message` parser used by the server. It compares always
-copying JSON strings with borrowing unescaped strings when possible. Reported
+The benchmark constructs `textDocument/didOpen` and `didChange` notifications
+containing the source, plus a representative `workspace/symbol` request, then
+parses them through the same generated `lsp.Message` parser used by the server.
+It compares always copying JSON strings, the production arena-preheat policy,
+and borrowing unescaped strings when possible. Reported
 allocations belong to the parser arena's backing allocator; they are not process
 RSS, compiler memory, or cache disk usage.
 
@@ -38,3 +39,38 @@ becomes less favorable, increasing large-message peak allocation by about 50%.
 A global switch to `alloc_if_needed` is therefore rejected. Retaining the input
 frame for asynchronously processed borrowed fields would also add its size to
 the live set; the parser-only figures above do not count that extra lifetime.
+
+## Large document-sync arena preheating
+
+For JSON frames from 64 KiB through 16 MiB, a bounded, non-allocating top-level
+method probe now recognizes `textDocument/didOpen`. It preheats the existing
+message arena with the frame length, immediately releases that temporary
+allocation inside the arena, and then retains the existing `alloc_always`
+parsing semantics. Smaller messages, larger messages, unrecognized methods,
+unusual field ordering, and failed probes retain the old behavior.
+
+Repeated 16-round runs over the complete `Sema.zig` payload, including the
+bounded method probe, measured:
+
+| message | baseline | preheated | backing allocations | peak live bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `didOpen` (1,535,201 B) | 4.50–4.77 ms | 4.22–4.32 ms | 9 → 1 | 4,446,272 → 2,302,864 |
+| full `didChange` prototype (1,535,205 B) | 5.28–6.02 ms | 4.73–5.06 ms | 10 → 2 | 11,383,854 → 8,002,748 |
+
+A separate 4,096-edit `didChange` case exercises arrays whose decoded storage
+is large relative to the frame. Although preheating changed backing allocations
+from 18 to 5 and peak live bytes from 9,354,838 to 9,126,766, a final run
+regressed from 7.24 to 7.66 milliseconds. The `didChange` production path is
+therefore excluded from preheating. The 64 KiB lower threshold leaves all
+measured small messages on the original path, avoiding their preheat overhead.
+The 16 MiB upper bound caps speculative allocation for unusually large or
+invalid frames.
+
+The complete server path was checked separately with fixed CPU affinity. Eight
+ABBA runs repeatedly opened and closed one `Sema.zig` document for 50 cycles.
+The median open phase changed from 27.09 to 26.14 milliseconds (-3.5%), and the
+median observed process peak changed from 15,980 to 13,792 KiB (-13.7%); both
+variants had zero closed-RSS growth. A full-document `didChange` prototype also
+improved, but it was not accepted because the many-edit guard case above did not
+meet the regression gate. Response validation and clean shutdown succeeded in
+every end-to-end run.

@@ -15,6 +15,7 @@ const lsp = @import("lsp");
 const types = lsp.types;
 const Analyser = @import("analysis.zig");
 const offsets = @import("offsets.zig");
+const message_arena = @import("message_arena.zig");
 const response_buffer = @import("response_buffer.zig");
 const tracy = @import("tracy");
 const diff = @import("diff.zig");
@@ -1818,6 +1819,7 @@ pub fn loop(server: *Server) LoopError!void {
 
         var arena_allocator: std.heap.ArenaAllocator = .init(server.allocator);
         errdefer arena_allocator.deinit();
+        message_arena.preheatForMessage(&arena_allocator, json_message);
 
         const message = message: {
             const tracy_zone = tracy.traceNamed(@src(), "Message.parse");
