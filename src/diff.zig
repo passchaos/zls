@@ -92,20 +92,37 @@ pub fn applyContentChanges(
         }
     }
 
+    // don't even bother applying changes before a full text change
+    const changes = content_changes[if (last_full_text_index) |index| index + 1 else 0..];
+    if (changes.len == 0) return try allocator.dupeSentinel(u8, last_full_text, 0);
+    if (changes.len == 1) {
+        const change = changes[0].text_document_content_change_partial;
+        const loc = offsets.rangeToLoc(last_full_text, change.range, encoding);
+        const result_len = std.math.add(usize, last_full_text.len - (loc.end - loc.start), change.text.len) catch
+            return error.OutOfMemory;
+        const result = try allocator.allocSentinel(u8, result_len, 0);
+        @memcpy(result[0..loc.start], last_full_text[0..loc.start]);
+        @memcpy(result[loc.start..][0..change.text.len], change.text);
+        @memcpy(result[loc.start + change.text.len ..], last_full_text[loc.end..]);
+        return result;
+    }
+
     var text_array: std.ArrayList(u8) = .empty;
     errdefer text_array.deinit(allocator);
 
     try text_array.appendSlice(allocator, last_full_text);
-
-    // don't even bother applying changes before a full text change
-    const changes = content_changes[if (last_full_text_index) |index| index + 1 else 0..];
     var cursor: PositionToIndexCursor = .{};
 
     for (changes) |item| {
         const content_change = item.text_document_content_change_partial;
 
         const edit = cursor.rangeToLoc(text_array.items, content_change.range, encoding);
-        try text_array.replaceRange(allocator, edit.loc.start, edit.loc.end - edit.loc.start, content_change.text);
+        const replaced_length = edit.loc.end - edit.loc.start;
+        if (replaced_length == content_change.text.len) {
+            @memcpy(text_array.items[edit.loc.start..edit.loc.end], content_change.text);
+        } else {
+            try text_array.replaceRange(allocator, edit.loc.start, replaced_length, content_change.text);
+        }
         cursor.index = edit.loc.start + content_change.text.len;
         cursor.position = offsets.advancePosition(
             content_change.text,
@@ -114,6 +131,10 @@ pub fn applyContentChanges(
             content_change.text.len,
             encoding,
         );
+        cursor.line_start_index = if (cursor.position.line == edit.start_position.line)
+            edit.start_line_index
+        else
+            edit.loc.start + std.mem.findScalarLast(u8, content_change.text, '\n').? + 1;
     }
 
     return try text_array.toOwnedSliceSentinel(allocator, 0);
@@ -121,17 +142,20 @@ pub fn applyContentChanges(
 
 const PositionToIndexCursor = struct {
     index: usize = 0,
+    line_start_index: usize = 0,
     position: offsets.Position = .{ .line = 0, .character = 0 },
 
     const ResolvedRange = struct {
         loc: offsets.Loc,
         start_position: offsets.Position,
+        start_line_index: usize,
     };
 
     fn rangeToLoc(cursor: *PositionToIndexCursor, text: []const u8, range: offsets.Range, encoding: offsets.Encoding) ResolvedRange {
         std.debug.assert(offsets.orderPosition(range.start, range.end) != .gt);
         const start = cursor.seek(text, range.start, encoding);
         const start_position = cursor.position;
+        const start_line_index = cursor.line_start_index;
         const end = cursor.advance(text, .{
             .line = range.end.line - range.start.line,
             .character = if (range.start.line == range.end.line)
@@ -139,11 +163,21 @@ const PositionToIndexCursor = struct {
             else
                 range.end.character,
         }, encoding);
-        return .{ .loc = .{ .start = start, .end = end }, .start_position = start_position };
+        return .{
+            .loc = .{ .start = start, .end = end },
+            .start_position = start_position,
+            .start_line_index = start_line_index,
+        };
     }
 
     fn seek(cursor: *PositionToIndexCursor, text: []const u8, target: offsets.Position, encoding: offsets.Encoding) usize {
-        if (offsets.orderPosition(target, cursor.position) == .lt) cursor.* = .{};
+        if (offsets.orderPosition(target, cursor.position) == .lt) {
+            if (target.line <= cursor.position.line / 2) {
+                cursor.* = .{};
+            } else {
+                cursor.retreatToLine(text, target.line);
+            }
+        }
 
         return cursor.advance(text, .{
             .line = target.line - cursor.position.line,
@@ -152,6 +186,17 @@ const PositionToIndexCursor = struct {
             else
                 target.character,
         }, encoding);
+    }
+
+    fn retreatToLine(cursor: *PositionToIndexCursor, text: []const u8, target_line: u32) void {
+        while (cursor.position.line > target_line) {
+            std.debug.assert(cursor.line_start_index != 0);
+            const preceding_text = text[0 .. cursor.line_start_index - 1];
+            cursor.line_start_index = if (std.mem.findScalarLast(u8, preceding_text, '\n')) |newline| newline + 1 else 0;
+            cursor.position.line -= 1;
+        }
+        cursor.index = cursor.line_start_index;
+        cursor.position.character = 0;
     }
 
     fn advance(cursor: *PositionToIndexCursor, text: []const u8, relative: offsets.Position, encoding: offsets.Encoding) usize {
@@ -163,6 +208,7 @@ const PositionToIndexCursor = struct {
                 return cursor.index;
             };
             cursor.index = newline + 1;
+            cursor.line_start_index = cursor.index;
             cursor.position.line += 1;
             cursor.position.character = 0;
         }
@@ -224,9 +270,10 @@ test applyContentChanges {
     const unchanged = try applyContentChanges(allocator, "old", &.{}, .@"utf-8");
     defer allocator.free(unchanged);
     try std.testing.expectEqualStrings("old", unchanged);
+    try std.testing.expect(unchanged.ptr != @as([]const u8, "old").ptr);
 }
 
-test "applyContentChanges advances and resets its position cursor" {
+test "applyContentChanges advances and retreats its position cursor" {
     const allocator = std.testing.allocator;
     const changes = [_]types.TextDocument.ContentChangeEvent{
         .{ .text_document_content_change_partial = .{
@@ -250,12 +297,19 @@ test "applyContentChanges advances and resets its position cursor" {
             },
             .text = "Y",
         } },
+        .{ .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 2, .character = 0 },
+                .end = .{ .line = 2, .character = 1 },
+            },
+            .text = "Z",
+        } },
     };
 
     inline for (.{ offsets.Encoding.@"utf-8", offsets.Encoding.@"utf-16", offsets.Encoding.@"utf-32" }) |encoding| {
         const result = try applyContentChanges(allocator, "ab\ncd\nef", &changes, encoding);
         defer allocator.free(result);
-        try std.testing.expectEqualStrings("aY\n🠁\nqX\nef", result);
+        try std.testing.expectEqualStrings("aY\n🠁\nZX\nef", result);
     }
 }
 
@@ -266,6 +320,8 @@ test "PositionToIndexCursor matches rangeToLoc" {
         .{ .start = .{ .line = 0, .character = 1 }, .end = .{ .line = 0, .character = 3 } },
         .{ .start = .{ .line = 1, .character = 2 }, .end = .{ .line = 1, .character = 8 } },
         .{ .start = .{ .line = 2, .character = 1 }, .end = .{ .line = 9, .character = 99 } },
+        .{ .start = .{ .line = 1, .character = 3 }, .end = .{ .line = 1, .character = 5 } },
+        .{ .start = .{ .line = 1, .character = 1 }, .end = .{ .line = 1, .character = 2 } },
         .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 1 } },
     };
 
@@ -288,6 +344,100 @@ test "PositionToIndexCursor matches rangeToLoc" {
         offsets.rangeToLoc("🠁X", split_surrogate_range, .@"utf-16"),
         utf16_cursor.rangeToLoc("🠁X", split_surrogate_range, .@"utf-16").loc,
     );
+}
+
+test "applyContentChanges matches mixed byte replacements" {
+    const allocator = std.testing.allocator;
+    const initial_text = "alpha¶\r\nbeta↉\ngamma🠁\ndelta\nepsilon🇺🇸\n";
+    const replacements = [_][]const u8{ "", "x", "🠁", "\n", "q\n¶", "xy" };
+
+    inline for (.{ offsets.Encoding.@"utf-8", offsets.Encoding.@"utf-16", offsets.Encoding.@"utf-32" }) |encoding| {
+        var expected: std.ArrayList(u8) = .empty;
+        defer expected.deinit(allocator);
+        try expected.appendSlice(allocator, initial_text);
+
+        var state: u64 = 0xd1ff_c0de_5eed_1234;
+        var changes: [128]types.TextDocument.ContentChangeEvent = undefined;
+        for (&changes) |*change| {
+            var start = pseudoRandomIndex(&state, expected.items.len + 1);
+            var end = pseudoRandomIndex(&state, expected.items.len + 1);
+            if (start > end) std.mem.swap(usize, &start, &end);
+            start = utf8BoundaryAtOrBefore(expected.items, start);
+            end = utf8BoundaryAtOrBefore(expected.items, end);
+
+            const replacement = replacements[pseudoRandomIndex(&state, replacements.len)];
+            change.* = .{ .text_document_content_change_partial = .{
+                .range = offsets.locToRange(expected.items, .{ .start = start, .end = end }, encoding),
+                .text = replacement,
+            } };
+            try expected.replaceRange(allocator, start, end - start, replacement);
+        }
+
+        const actual = try applyContentChanges(allocator, initial_text, &changes, encoding);
+        defer allocator.free(actual);
+        try std.testing.expectEqualStrings(expected.items, actual);
+    }
+}
+
+test "applyContentChanges constructs a single partial change exactly" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct {
+        text: []const u8,
+        replacement: []const u8,
+        loc: offsets.Loc,
+        expected: []const u8,
+    }{
+        .{ .text = "abcdef", .replacement = "XYZ", .loc = .{ .start = 2, .end = 4 }, .expected = "abXYZef" },
+        .{ .text = "abcdef", .replacement = "", .loc = .{ .start = 1, .end = 5 }, .expected = "af" },
+        .{ .text = "a¶↉🠁z", .replacement = "🇺🇸\nq", .loc = .{ .start = 1, .end = 6 }, .expected = "a🇺🇸\nq🠁z" },
+    };
+
+    inline for (.{ offsets.Encoding.@"utf-8", offsets.Encoding.@"utf-16", offsets.Encoding.@"utf-32" }) |encoding| {
+        for (cases) |case| {
+            const changes = [_]types.TextDocument.ContentChangeEvent{.{
+                .text_document_content_change_partial = .{
+                    .range = offsets.locToRange(case.text, case.loc, encoding),
+                    .text = case.replacement,
+                },
+            }};
+            const result = try applyContentChanges(allocator, case.text, &changes, encoding);
+            defer allocator.free(result);
+            try std.testing.expectEqualStrings(case.expected, result);
+            try std.testing.expect(result.ptr != case.text.ptr);
+            try std.testing.expect(result.ptr != case.replacement.ptr);
+        }
+    }
+}
+
+test "applyContentChanges single partial handles every allocation failure" {
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            const changes = [_]types.TextDocument.ContentChangeEvent{.{
+                .text_document_content_change_partial = .{
+                    .range = .{
+                        .start = .{ .line = 0, .character = 1 },
+                        .end = .{ .line = 0, .character = 3 },
+                    },
+                    .text = "longer",
+                },
+            }};
+            const result = try applyContentChanges(allocator, "abcd", &changes, .@"utf-8");
+            defer allocator.free(result);
+            try std.testing.expectEqualStrings("alongerd", result);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Test.run, .{});
+}
+
+fn pseudoRandomIndex(state: *u64, upper_bound: usize) usize {
+    state.* = state.* *% 6_364_136_223_846_793_005 +% 1_442_695_040_888_963_407;
+    return @intCast(state.* % @as(u64, @intCast(upper_bound)));
+}
+
+fn utf8BoundaryAtOrBefore(text: []const u8, index: usize) usize {
+    var boundary = index;
+    while (boundary < text.len and text[boundary] & 0xc0 == 0x80) boundary -= 1;
+    return boundary;
 }
 
 // https://cs.opensource.google/go/x/tools/+/master:internal/lsp/diff/diff.go;l=40

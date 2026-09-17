@@ -14,8 +14,8 @@ It compares always copying JSON strings, the production arena-preheat policy,
 and borrowing unescaped strings when possible. Reported allocations belong to
 the parser arena's backing allocator; they are not process RSS, compiler memory,
 or cache disk usage. The final cases separately measure applying parsed
-full-document, single-edit, forward-edit, and reverse-edit changes; those
-counters cover only `applyContentChanges`.
+full-document, single-edit, forward-edit, reverse-edit, and zigzag-edit
+changes; those counters cover only `applyContentChanges`.
 
 Checksums must match across modes. The borrowed-field count establishes whether
 a result retains pointers into the input JSON and therefore constrains the
@@ -87,9 +87,9 @@ every end-to-end run.
 When the last content change replaces the complete document, earlier changes are
 irrelevant and no later partial edit needs spare capacity. `applyContentChanges`
 therefore copies that final text directly into an exactly sized sentinel slice.
-The general ArrayList path remains in use for partial-only changes and for a full
-replacement followed by partial changes. Tests cover all three cases and verify
-that the fast-path result is independently owned.
+The general ArrayList path remains in use when multiple partial changes follow.
+Tests cover each combination and verify that fast-path results are independently
+owned.
 
 With the complete 1,497,031-byte `Sema.zig`, the precise path changed one
 allocation plus one successful shrink remap into one exact allocation. Peak
@@ -101,17 +101,23 @@ was 29.68 ms for the baseline and 29.55 ms for the candidate, with identical
 successful protocol results. Sampled process-RSS ranges overlapped, so the
 accepted benefit is the deterministic transient allocation reduction.
 
-## Incremental position cursor
+## Bidirectional position cursor and exact edit paths
 
 Applying every partial change previously converted its range by scanning from
 the beginning of the current document. A batch of edits ordered from the start
 of the document toward the end therefore repeatedly traversed the same prefix.
 `applyContentChanges` now retains the byte index and LSP position reached by the
-previous edit, scans forward from there, and resets to the document start when
-an edit moves backward. After a replacement, the cursor advances across the
-inserted text, including Unicode code units and newlines. Differential tests
-compare the cursor with `rangeToLoc` for UTF-8, UTF-16, and UTF-32, forward and
-backward ranges, CRLF text, and out-of-range positions.
+previous edit and scans in either direction from the nearer known point. After
+a replacement, the cursor advances across the inserted text, including Unicode
+code units and newlines. Differential tests compare the cursor with
+`rangeToLoc` for UTF-8, UTF-16, and UTF-32, forward and backward ranges, CRLF
+text, out-of-range positions, and 128 deterministic mixed replacements.
+
+Two copying paths avoid unnecessary ArrayList work. Equal-byte-length edits
+overwrite their target slice directly because no tail movement is required. A
+single partial change constructs its final sentinel slice at the exact size,
+copying the prefix, replacement, and suffix once. Tests cover equal, growing,
+shrinking, Unicode, newline, independent ownership, and allocation failures.
 
 With 4,096 valid single-character edits over the complete `Sema.zig`, repeated
 paired microbenchmarks measured forward application at 355.6–364.2 ms for the
@@ -129,6 +135,26 @@ candidate ZLS binaries. Per-pair candidate medians were 146.3–150.5 ms versus
 373.8–378.7 ms for the baseline; the aggregate median changed from about 376.0
 to 150.2 ms (-60%). Every run synchronized successfully, shut down cleanly, and
 returned status zero.
+
+The follow-up bidirectional cursor reduced reverse-order application to
+140.8–147.1 ms and a pairwise zigzag order to 140.8–146.0 ms before copy-path
+changes. The equal-length overwrite then reduced forward, reverse, and zigzag
+application to 13.4–14.8 ms in repeated runs. This is about 96% below the
+frozen 360–386 ms baseline while preserving its output checksum and its one
+allocation, one shrink remap, and 2,245,674-byte peak live allocation profile.
+
+The exact single-partial path changed one allocation plus one shrink remap into
+one exact allocation. On the 1,497,031-byte source, peak live bytes fell from
+2,245,674 to 1,497,032 (-33.3%), while three paired runs improved from
+474–496 to 429–450 microseconds.
+
+Four fixed-CPU ABBA pairs exercised the complete server path with one 4,096
+reverse-order edit notification. The previous production binary had a 281.0 ms
+median and the final candidate a 27.7 ms median (-90.1%). Every process
+initialized, synchronized the open document, applied the change, returned a
+successful shutdown response, exited cleanly, and returned status zero.
+A final rebuild containing the exact single-partial path repeated two ABBA
+pairs at 315.7 ms versus 32.6 ms (-89.7%), confirming the same result.
 
 ## Streaming document-change parser
 

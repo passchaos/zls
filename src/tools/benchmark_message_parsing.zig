@@ -219,6 +219,20 @@ pub fn main(init: std.process.Init) !void {
     std.mem.reverse(types.TextDocument.ContentChangeEvent, reverse_edits);
     try benchmarkContentChanges(io, allocator, "apply-reverse-edits", source, reverse_edits, 1, .baseline);
     try benchmarkContentChanges(io, allocator, "apply-reverse-edits", source, reverse_edits, 1, .production);
+
+    const zigzag_edits = try allocator.alloc(types.TextDocument.ContentChangeEvent, edits.len);
+    defer allocator.free(zigzag_edits);
+    for (zigzag_edits, 0..) |*edit, index| {
+        const source_index = if (index == 0 or index + 1 == edits.len)
+            index
+        else if (index % 2 == 1)
+            index + 1
+        else
+            index - 1;
+        edit.* = edits[source_index];
+    }
+    try benchmarkContentChanges(io, allocator, "apply-zigzag-edits", source, zigzag_edits, 1, .baseline);
+    try benchmarkContentChanges(io, allocator, "apply-zigzag-edits", source, zigzag_edits, 1, .production);
 }
 
 fn makeDidOpenJson(allocator: std.mem.Allocator, source: []const u8) error{OutOfMemory}![]u8 {
@@ -435,7 +449,7 @@ fn benchmarkContentChanges(
 
     const stats = counter.stats();
     std.debug.print(
-        "{s} {t}: {d} result bytes, {d} ns/change, checksum={d}\n" ++
+        "{s} {t}: {d} result bytes, {d} ns/application, checksum={d}\n" ++
             "  allocations={d} remap-attempts={d} remaps={d} frees={d} allocated={d} peak-live={d}\n",
         .{
             name,
