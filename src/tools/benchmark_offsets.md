@@ -18,8 +18,9 @@ prevent the compiler from reusing a previous scan's result. The printed checksum
 must match when comparing the same inputs and benchmark harness across revisions.
 
 The same executable also measures 256 byte-uniform `(line, character)` to byte
-index queries against the frozen lsp-kit implementation. It includes one long
-ASCII line and a dense-newline synthetic input as regression guards.
+index queries and short range conversions against the frozen lsp-kit
+implementation. It includes one long ASCII line and a dense-newline synthetic
+input as regression guards.
 
 ## SIMD position-to-index scanning, 2026-09-17
 
@@ -31,12 +32,14 @@ the existing UTF-8/16/32 conversion. Non-LLVM builds retain the scalar path.
 
 On AArch64 Linux, Zig 0.16.0, `ReleaseFast`, LLVM, one paired run measured:
 
-| source | baseline | SIMD production | change |
+| source / operation | baseline | SIMD production | change |
 | --- | ---: | ---: | ---: |
-| `Sema.zig`, 1,497,031 B | 440–441 µs/query | 88–89 µs/query | about -80% |
-| `x86_64/CodeGen.zig`, 10,945,979 B | 3.216–3.221 ms/query | 0.638–0.643 ms/query | about -80% |
-| 2 MiB of newlines | 617 µs/query | 123 µs/query | about -80% |
-| one 256 KiB ASCII line | 23 µs/query | 23 µs/query | unchanged |
+| `Sema.zig`, position | 440–442 µs/query | 95–96 µs/query | about -78% |
+| `Sema.zig`, short range | 441–442 µs/query | 95–97 µs/query | about -78% |
+| `x86_64/CodeGen.zig`, position | 3.218–3.223 ms/query | 0.703–0.709 ms/query | about -78% |
+| `x86_64/CodeGen.zig`, short range | 3.215–3.228 ms/query | 0.705–0.710 ms/query | about -78% |
+| 2 MiB of newlines, range | 616 µs/query | 134 µs/query | about -78% |
+| one 256 KiB ASCII line, range | 35 µs/query | 35 µs/query | unchanged |
 
 Checksums matched for UTF-8, UTF-16, and UTF-32 in every case. The dense
 newline input guards against an earlier per-newline `findScalarPos` prototype
@@ -47,6 +50,11 @@ document, and issued 200 `textDocument/hover` requests for a local variable near
 the end of the 34,840-line file. Median request-batch time changed from 239.67
 to 95.72 ms (-60.1%). Every response was non-null; all pairs returned the same
 hover-result hash and completed clean LSP shutdown with status zero.
+
+Another eight ABBA pairs issued 200 `textDocument/semanticTokens/range`
+requests over the final 20 lines. Median request-batch time changed from
+1,021.12 to 882.66 ms (-13.6%). Token data was non-empty, response hashes
+matched across variants, and every process shut down cleanly.
 
 ## UTF-32 long-span optimization, 2026-09-16
 

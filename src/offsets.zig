@@ -61,8 +61,26 @@ pub const rangeLength = offsets.rangeLength;
 
 pub const locToSlice = offsets.locToSlice;
 pub const locToRange = offsets.locToRange;
-pub const rangeToSlice = offsets.rangeToSlice;
-pub const rangeToLoc = offsets.rangeToLoc;
+
+pub fn rangeToLoc(text: []const u8, range: Range, encoding: Encoding) Loc {
+    std.debug.assert(orderPosition(range.start, range.end) != .gt);
+    const start = positionToIndex(text, range.start, encoding);
+    const relative_end_position: Position = .{
+        .line = range.end.line - range.start.line,
+        .character = if (range.start.line == range.end.line)
+            range.end.character - range.start.character
+        else
+            range.end.character,
+    };
+    return .{
+        .start = start,
+        .end = start + positionToIndex(text[start..], relative_end_position, encoding),
+    };
+}
+
+pub fn rangeToSlice(text: []const u8, range: Range, encoding: Encoding) []const u8 {
+    return locToSlice(text, rangeToLoc(text, range, encoding));
+}
 
 pub const lineLocAtIndex = offsets.lineLocAtIndex;
 pub const lineSliceAtIndex = offsets.lineSliceAtIndex;
@@ -126,6 +144,34 @@ test "positionToIndex matches random valid positions" {
             try std.testing.expectEqual(index, positionToIndex(text, position, encoding));
         }
     }
+}
+
+test "rangeToLoc matches lsp offsets" {
+    const text = "a¶↉🠁\r\nsecond line\nthird";
+    const ranges = [_]Range{
+        .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } },
+        .{ .start = .{ .line = 0, .character = 1 }, .end = .{ .line = 0, .character = 3 } },
+        .{ .start = .{ .line = 1, .character = 2 }, .end = .{ .line = 1, .character = 8 } },
+        .{ .start = .{ .line = 1, .character = 3 }, .end = .{ .line = 2, .character = 2 } },
+        .{ .start = .{ .line = 2, .character = 1 }, .end = .{ .line = 99, .character = 99 } },
+    };
+    inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+        for (ranges) |range| {
+            try std.testing.expectEqual(
+                offsets.rangeToLoc(text, range, encoding),
+                rangeToLoc(text, range, encoding),
+            );
+        }
+    }
+
+    const split_surrogate: Range = .{
+        .start = .{ .line = 0, .character = 1 },
+        .end = .{ .line = 0, .character = 2 },
+    };
+    try std.testing.expectEqual(
+        offsets.rangeToLoc("🠁X", split_surrogate, .@"utf-16"),
+        rangeToLoc("🠁X", split_surrogate, .@"utf-16"),
+    );
 }
 
 pub const SourceIndexToTokenIndexResult = union(enum) {

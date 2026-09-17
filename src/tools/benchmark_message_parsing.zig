@@ -568,7 +568,7 @@ fn applySingleContentChangeBaseline(
     encoding: zls.offsets.Encoding,
 ) error{OutOfMemory}![:0]const u8 {
     const change = item.text_document_content_change_partial;
-    const loc = zls.offsets.rangeToLoc(text, change.range, encoding);
+    const loc = lsp.offsets.rangeToLoc(text, change.range, encoding);
     const result_len = std.math.add(usize, text.len - (loc.end - loc.start), change.text.len) catch
         return error.OutOfMemory;
     const result = try allocator.allocSentinel(u8, result_len, 0);
@@ -611,7 +611,7 @@ fn applyContentChangesBaseline(
     const changes = content_changes[if (last_full_text_index) |index| index + 1 else 0..];
     for (changes) |item| {
         const change = item.text_document_content_change_partial;
-        const loc = zls.offsets.rangeToLoc(text_array.items, change.range, encoding);
+        const loc = lsp.offsets.rangeToLoc(text_array.items, change.range, encoding);
         try text_array.replaceRange(allocator, loc.start, loc.end - loc.start, change.text);
     }
     return try text_array.toOwnedSliceSentinel(allocator, 0);

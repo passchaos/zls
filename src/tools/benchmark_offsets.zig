@@ -6,6 +6,7 @@ const offsets = zls.offsets;
 const baseline_offsets = zls.lsp.offsets;
 
 const PositionToIndexMode = enum { baseline, production };
+const RangeToLocMode = enum { baseline, production };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -104,6 +105,41 @@ fn benchmarkPositionToIndex(
                 mode,
                 encoding,
                 samples[samples.len / 2] / positions.len,
+                checksum,
+            });
+        }
+
+        const ranges = try allocator.alloc(offsets.Range, positions.len);
+        defer allocator.free(ranges);
+        for (ranges, positions, 0..) |*range, start, query_index| {
+            const end_index = @min(source.len, (source.len * query_index) / query_count + 32);
+            range.* = .{
+                .start = start,
+                .end = offsets.indexToPosition(source, end_index, encoding),
+            };
+            const actual = offsets.rangeToLoc(source, range.*, encoding);
+            const expected = baseline_offsets.rangeToLoc(source, range.*, encoding);
+            if (actual.start != expected.start or actual.end != expected.end) return error.RangeToLocMismatch;
+        }
+        inline for ([_]RangeToLocMode{ .baseline, .production }) |mode| {
+            var samples: [7]u64 = undefined;
+            var checksum: usize = 0;
+            for (&samples) |*sample| {
+                const before = std.Io.Clock.awake.now(io);
+                for (ranges) |range| {
+                    const loc = switch (mode) {
+                        .baseline => baseline_offsets.rangeToLoc(source, range, encoding),
+                        .production => offsets.rangeToLoc(source, range, encoding),
+                    };
+                    checksum +%= loc.start + loc.end;
+                }
+                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+            }
+            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+            std.debug.print("  range-to-loc {t} {t}: {d} ns/query checksum={d}\n", .{
+                mode,
+                encoding,
+                samples[samples.len / 2] / ranges.len,
                 checksum,
             });
         }
