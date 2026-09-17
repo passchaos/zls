@@ -11,9 +11,10 @@ The benchmark constructs `textDocument/didOpen` and `didChange` notifications
 containing the source, plus a representative `workspace/symbol` request, then
 parses them through the same generated `lsp.Message` parser used by the server.
 It compares always copying JSON strings, the production arena-preheat policy,
-and borrowing unescaped strings when possible. Reported
-allocations belong to the parser arena's backing allocator; they are not process
-RSS, compiler memory, or cache disk usage.
+and borrowing unescaped strings when possible. Reported allocations belong to
+the parser arena's backing allocator; they are not process RSS, compiler memory,
+or cache disk usage. The final case separately measures applying a parsed
+full-document change; those counters cover only `applyContentChanges`.
 
 Checksums must match across modes. The borrowed-field count establishes whether
 a result retains pointers into the input JSON and therefore constrains the
@@ -74,3 +75,22 @@ variants had zero closed-RSS growth. A full-document `didChange` prototype also
 improved, but it was not accepted because the many-edit guard case above did not
 meet the regression gate. Response validation and clean shutdown succeeded in
 every end-to-end run.
+
+## Exact full-document change copy
+
+When the last content change replaces the complete document, earlier changes are
+irrelevant and no later partial edit needs spare capacity. `applyContentChanges`
+therefore copies that final text directly into an exactly sized sentinel slice.
+The general ArrayList path remains in use for partial-only changes and for a full
+replacement followed by partial changes. Tests cover all three cases and verify
+that the fast-path result is independently owned.
+
+With the complete 1,497,031-byte `Sema.zig`, the precise path changed one
+allocation plus one successful shrink remap into one exact allocation. Peak
+live bytes fell from 2,245,674 to 1,497,032 (-33.3%). Five 32-round paired
+microbenchmarks placed the standard path at 430–450 microseconds and the exact
+path at 433–452 microseconds, an overlapping range. Eight fixed-CPU ABBA server
+runs applied 40 full-document changes each; median synchronized change latency
+was 29.68 ms for the baseline and 29.55 ms for the candidate, with identical
+successful protocol results. Sampled process-RSS ranges overlapped, so the
+accepted benefit is the deterministic transient allocation reduction.

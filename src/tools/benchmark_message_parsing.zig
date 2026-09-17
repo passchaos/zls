@@ -103,6 +103,7 @@ const ParseMode = enum {
     production_policy,
     alloc_if_needed,
 };
+const ApplyMode = enum { standard, precise };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -165,6 +166,12 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .alloc_always);
     try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .production_policy);
     try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .alloc_if_needed);
+
+    const full_change = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_whole_document = .{ .text = source },
+    }};
+    try benchmarkContentChanges(io, allocator, source, &full_change, rounds, .standard);
+    try benchmarkContentChanges(io, allocator, source, &full_change, rounds, .precise);
 }
 
 fn makeDidOpenJson(allocator: std.mem.Allocator, source: []const u8) error{OutOfMemory}![]u8 {
@@ -305,6 +312,74 @@ fn isBorrowed(input: []const u8, value: []const u8) bool {
     const input_start = @intFromPtr(input.ptr);
     const value_start = @intFromPtr(value.ptr);
     return value_start >= input_start and value_start + value.len <= input_start + input.len;
+}
+
+fn benchmarkContentChanges(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    changes: []const types.TextDocument.ContentChangeEvent,
+    rounds: usize,
+    mode: ApplyMode,
+) !void {
+    var counter: CountingAllocator = .{ .child = allocator };
+    const counting_allocator = counter.allocator();
+    const expected = try applyContentChanges(counting_allocator, "old", changes, mode);
+    if (!std.mem.eql(u8, expected, source)) return error.ResultMismatch;
+    counting_allocator.free(expected);
+    if (counter.live_bytes != 0) return error.UnreleasedMemory;
+
+    var samples: [sample_count]u64 = undefined;
+    var checksum: usize = 0;
+    for (&samples) |*sample| {
+        const before = std.Io.Clock.awake.now(io);
+        for (0..rounds) |_| {
+            const result = try applyContentChanges(allocator, "old", changes, mode);
+            checksum +%= result.len;
+            allocator.free(result);
+        }
+        const elapsed_ns = before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds();
+        sample.* = @intCast(@divTrunc(elapsed_ns, @as(i96, @intCast(rounds))));
+    }
+    const expected_checksum = source.len *% rounds *% sample_count;
+    if (checksum != expected_checksum) return error.UnstableChecksum;
+    std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+
+    const stats = counter.stats();
+    std.debug.print(
+        "apply-full-change {t}: {d} result bytes, {d} ns/change, checksum={d}\n" ++
+            "  allocations={d} remap-attempts={d} remaps={d} frees={d} allocated={d} peak-live={d}\n",
+        .{
+            mode,
+            source.len,
+            samples[sample_count / 2],
+            checksum,
+            stats.allocations,
+            stats.remap_attempts,
+            stats.remaps,
+            stats.frees,
+            stats.allocated_bytes,
+            stats.peak_live_bytes,
+        },
+    );
+}
+
+fn applyContentChanges(
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    changes: []const types.TextDocument.ContentChangeEvent,
+    mode: ApplyMode,
+) error{OutOfMemory}![:0]const u8 {
+    if (mode == .precise) {
+        const change = changes[changes.len - 1].text_document_content_change_whole_document;
+        return try allocator.dupeSentinel(u8, change.text, 0);
+    }
+
+    var text_array: std.ArrayList(u8) = .empty;
+    errdefer text_array.deinit(allocator);
+    const change = changes[changes.len - 1].text_document_content_change_whole_document;
+    try text_array.appendSlice(allocator, change.text);
+    return try text_array.toOwnedSliceSentinel(allocator, 0);
 }
 
 fn usage() error{InvalidArguments} {

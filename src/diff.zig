@@ -86,6 +86,11 @@ pub fn applyContentChanges(
         }
         break :blk .{ null, text };
     };
+    if (last_full_text_index) |index| {
+        if (index + 1 == content_changes.len) {
+            return try allocator.dupeSentinel(u8, last_full_text, 0);
+        }
+    }
 
     var text_array: std.ArrayList(u8) = .empty;
     errdefer text_array.deinit(allocator);
@@ -103,6 +108,57 @@ pub fn applyContentChanges(
     }
 
     return try text_array.toOwnedSliceSentinel(allocator, 0);
+}
+
+test applyContentChanges {
+    const allocator = std.testing.allocator;
+
+    const full_change = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_whole_document = .{ .text = "replacement" },
+    }};
+    const replaced = try applyContentChanges(allocator, "old", &full_change, .@"utf-8");
+    defer allocator.free(replaced);
+    try std.testing.expectEqualStrings("replacement", replaced);
+    try std.testing.expect(replaced.ptr != full_change[0].text_document_content_change_whole_document.text.ptr);
+
+    const final_full_change = [_]types.TextDocument.ContentChangeEvent{
+        .{ .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = 1 },
+            },
+            .text = "ignored",
+        } },
+        .{ .text_document_content_change_whole_document = .{ .text = "final" } },
+    };
+    const final = try applyContentChanges(allocator, "old", &final_full_change, .@"utf-8");
+    defer allocator.free(final);
+    try std.testing.expectEqualStrings("final", final);
+
+    const mixed_changes = [_]types.TextDocument.ContentChangeEvent{
+        .{ .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = 1 },
+            },
+            .text = "ignored",
+        } },
+        .{ .text_document_content_change_whole_document = .{ .text = "abc" } },
+        .{ .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 1 },
+                .end = .{ .line = 0, .character = 2 },
+            },
+            .text = "XY",
+        } },
+    };
+    const mixed = try applyContentChanges(allocator, "old", &mixed_changes, .@"utf-8");
+    defer allocator.free(mixed);
+    try std.testing.expectEqualStrings("aXYc", mixed);
+
+    const unchanged = try applyContentChanges(allocator, "old", &.{}, .@"utf-8");
+    defer allocator.free(unchanged);
+    try std.testing.expectEqualStrings("old", unchanged);
 }
 
 // https://cs.opensource.google/go/x/tools/+/master:internal/lsp/diff/diff.go;l=40
