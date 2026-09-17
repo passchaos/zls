@@ -189,3 +189,31 @@ candidate over 20 open/close cycles and `--rounds 0`, using `Sema.zig`,
 49.47 ms (-17.8%) and total runtime from 1,194 to 1,025 ms (-14.1%). Median
 observed peak changed from 15,720 to 15,624 KiB, while both variants had exactly
 44 KiB closed-RSS growth.
+
+## Lazy workspace-symbol declaration lines, 2026-09-17
+
+Measured against `91dd1006` with one and sixteen copies of `Sema.zig`. The
+candidate reuses the existing four-byte declaration metadata slot: before a
+declaration is returned it stores the token byte length and ASCII flag; after
+the first result it atomically replaces the length with the immutable source
+line while preserving the ASCII flag. Later requests scan only the token's
+current line instead of rescanning from the beginning of the file.
+
+Twelve fixed-CPU counterbalanced runs used three lifecycle cycles and 60 rounds
+per cycle. Median request times were:
+
+| Workload | Metric | Baseline | Candidate | Change |
+| --- | --- | ---: | ---: | ---: |
+| 16 copies | `type` request | 8,010 us | 3,406 us | -57.5% |
+| 16 copies | query phase | 1,177,216 us | 865,592 us | -26.5% |
+| 1 copy | `type` request | 431 us | 217 us | -49.7% |
+| 1 copy | query phase | 81,428 us | 67,036 us | -17.7% |
+
+All result counts and checksums matched and stderr stayed empty. A separate
+64-run real-file index-build comparison kept initialization within -0.08% to
+-0.39% across `Sema.zig`, `Ast.zig`, `array_list.zig`, and `unicode.zig`;
+allocation counts, requested bytes, peak live bytes, and index shapes were
+identical. Cold-cache requests with one round per lifecycle had paired median
+changes within 0.4% for `type` and `allocator`; noisier sixteen-copy runs kept
+the complete query phase within +0.2%. Twelve ten-cycle, zero-query runs had
+identical 2,732 KiB first/final closed RSS and zero closed-RSS growth.

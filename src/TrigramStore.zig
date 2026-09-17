@@ -41,12 +41,23 @@ pub const Declaration = struct {
 
     /// Either `.identifier` or `.string_literal`.
     name: Ast.TokenIndex,
-    name_len: packed struct(u32) {
-        bytes: u31,
-        is_ascii: bool,
-    },
+    position_cache: std.atomic.Value(u32),
     kind: Kind,
 };
+
+const declaration_payload_mask: u32 = std.math.maxInt(u30);
+const declaration_cached_line_bit: u32 = 1 << 30;
+const declaration_ascii_bit: u32 = 1 << 31;
+
+pub const DeclarationPosition = struct {
+    line: ?u32,
+    name_len: ?u32,
+    is_ascii: bool,
+};
+
+comptime {
+    assert(@sizeOf(Declaration) == 3 * @sizeOf(u32));
+}
 
 const PostingList = struct {
     start: u32,
@@ -436,6 +447,26 @@ pub fn deinit(store: *TrigramStore, allocator: std.mem.Allocator) void {
 
 pub fn isEmpty(store: *const TrigramStore) bool {
     return store.declarations.len == 0;
+}
+
+pub fn declarationPosition(store: *const TrigramStore, declaration: Declaration.Index) DeclarationPosition {
+    const value = store.declarations.items(.position_cache)[@intFromEnum(declaration)].load(.monotonic);
+    const payload = value & declaration_payload_mask;
+    const has_cached_line = value & declaration_cached_line_bit != 0;
+    return .{
+        .line = if (has_cached_line) payload else null,
+        .name_len = if (has_cached_line) null else payload,
+        .is_ascii = value & declaration_ascii_bit != 0,
+    };
+}
+
+pub fn cacheDeclarationLine(store: *const TrigramStore, declaration: Declaration.Index, line: u32) void {
+    assert(line <= declaration_payload_mask);
+    // Workspace-symbol requests may run concurrently. Every writer derives the
+    // same immutable source line, so a monotonic store is sufficient.
+    const cached = @constCast(&store.declarations.items(.position_cache)[@intFromEnum(declaration)]);
+    const is_ascii = cached.load(.monotonic) & declaration_ascii_bit;
+    cached.store(is_ascii | declaration_cached_line_bit | line, .monotonic);
 }
 
 pub const Statistics = struct {
@@ -878,12 +909,11 @@ fn appendDeclaration(
     if (store.declarations.len != 0) {
         assert(store.declarations.items(.name)[store.declarations.len - 1] < name_token);
     }
+    assert(raw_name.len <= declaration_payload_mask);
     try store.declarations.append(allocator, .{
         .name = name_token,
-        .name_len = .{
-            .bytes = @intCast(raw_name.len),
-            .is_ascii = is_ascii,
-        },
+        .position_cache = .init(@as(u32, @intCast(raw_name.len)) |
+            (@as(u32, @intFromBool(is_ascii)) << 31)),
         .kind = kind,
     });
     try posting_occurrences.appendDeclarationEnd(allocator);
@@ -1535,19 +1565,30 @@ test "declarations and query results stay in source order" {
     defer store.deinit(allocator);
 
     const names = store.declarations.items(.name);
-    const name_lengths = store.declarations.items(.name_len);
+    const position_cache = store.declarations.items(.position_cache);
     try std.testing.expectEqual(@as(usize, 7), names.len);
     try std.testing.expectEqual(store.declarations.len, store.declarations.capacity);
     for (names[1..], names[0 .. names.len - 1]) |current, previous| {
         try std.testing.expect(previous < current);
     }
-    for (names, name_lengths) |name_token, name_len| {
+    for (names, position_cache) |name_token, position| {
         const loc = offsets.tokenToLoc(&tree, name_token);
         const token_slice = tree.tokenSlice(name_token);
-        try std.testing.expectEqual(loc.end - loc.start, name_len.bytes);
-        try std.testing.expectEqual(token_slice.len, name_len.bytes);
-        try std.testing.expectEqual(std.unicode.utf8CountCodepoints(token_slice) catch unreachable == token_slice.len, name_len.is_ascii);
+        const cached = position.load(.monotonic);
+        try std.testing.expectEqual(token_slice.len, loc.end - loc.start);
+        try std.testing.expectEqual(token_slice.len, cached & declaration_payload_mask);
+        try std.testing.expectEqual(@as(u32, 0), cached & declaration_cached_line_bit);
+        try std.testing.expectEqual(std.unicode.utf8CountCodepoints(token_slice) catch unreachable == token_slice.len, cached & declaration_ascii_bit != 0);
     }
+
+    const first: Declaration.Index = @enumFromInt(0);
+    const initial_position = store.declarationPosition(first);
+    try std.testing.expect(initial_position.line == null);
+    try std.testing.expect(initial_position.name_len != null);
+    store.cacheDeclarationLine(first, 123);
+    try std.testing.expectEqual(@as(?u32, 123), store.declarationPosition(first).line);
+    try std.testing.expect(store.declarationPosition(first).name_len == null);
+    try std.testing.expectEqual(initial_position.is_ascii, store.declarationPosition(first).is_ascii);
 
     var declarations: std.ArrayList(Declaration.Index) = .empty;
     defer declarations.deinit(allocator);

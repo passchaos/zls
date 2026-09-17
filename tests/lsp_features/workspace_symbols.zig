@@ -111,21 +111,25 @@ test "workspace symbol ranges across long Unicode spans" {
         ctx.server.offset_encoding = encoding;
         try ctx.addWorkspace("Unicode", "/unicode/");
         const uri = try ctx.addDocument(.{ .source = source, .base_directory = "/unicode/" });
-        const response = try ctx.server.sendRequestSync(
-            ctx.arena.allocator(),
-            "workspace/symbol",
-            .{ .query = "symbol" },
-        ) orelse return error.InvalidResponse;
+        // The first request populates declaration line caches. The second
+        // exercises the cached path against the same authoritative positions.
+        for (0..2) |_| {
+            const response = try ctx.server.sendRequestSync(
+                ctx.arena.allocator(),
+                "workspace/symbol",
+                .{ .query = "symbol" },
+            ) orelse return error.InvalidResponse;
 
-        try std.testing.expectEqual(names.len, response.workspace_symbols.len);
-        for (response.workspace_symbols, names) |symbol, name| {
-            const start = std.mem.find(u8, source, name).?;
-            const location = symbol.location.location;
-            try std.testing.expectEqualStrings(uri.raw, location.uri);
-            try std.testing.expectEqualDeep(types.Range{
-                .start = zls.offsets.indexToPosition(source, start, encoding),
-                .end = zls.offsets.indexToPosition(source, start + name.len, encoding),
-            }, location.range);
+            try std.testing.expectEqual(names.len, response.workspace_symbols.len);
+            for (response.workspace_symbols, names) |symbol, name| {
+                const start = std.mem.find(u8, source, name).?;
+                const location = symbol.location.location;
+                try std.testing.expectEqualStrings(uri.raw, location.uri);
+                try std.testing.expectEqualDeep(types.Range{
+                    .start = zls.offsets.indexToPosition(source, start, encoding),
+                    .end = zls.offsets.indexToPosition(source, start + name.len, encoding),
+                }, location.range);
+            }
         }
     }
 }

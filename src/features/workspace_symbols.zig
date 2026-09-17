@@ -52,7 +52,6 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
 
         const slice = trigram_store.declarations.slice();
         const names = slice.items(.name);
-        const name_lengths = slice.items(.name_len);
         const kinds = slice.items(.kind);
 
         var last_index: usize = 0;
@@ -61,19 +60,36 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         try symbols.ensureUnusedCapacity(arena, declarations.len);
         for (declarations) |declaration| {
             const name_token = names[@intFromEnum(declaration)];
-            const name_len = name_lengths[@intFromEnum(declaration)];
+            const cached_position = trigram_store.declarationPosition(declaration);
             const kind = kinds[@intFromEnum(declaration)];
 
             const start = handle.tree.tokenStart(name_token);
-            const loc: offsets.Loc = .{ .start = start, .end = start + name_len.bytes };
+            const raw_name = if (cached_position.name_len) |name_len|
+                handle.tree.source[start..][0..name_len]
+            else
+                handle.tree.tokenSlice(name_token);
+            const loc: offsets.Loc = .{ .start = start, .end = start + raw_name.len };
             const name = @import("document_symbol.zig").tokenNameFromSlice(
-                handle.tree.source[loc.start..loc.end],
+                raw_name,
                 handle.tree.tokenTag(name_token),
             );
 
-            const start_position = offsets.advancePosition(handle.tree.source, last_position, last_index, loc.start, server.offset_encoding);
-            const end_position: offsets.Position = if (server.offset_encoding == .@"utf-8" or name_len.is_ascii)
-                .{ .line = start_position.line, .character = start_position.character + name_len.bytes }
+            const start_position: offsets.Position = if (cached_position.line) |line| blk: {
+                const line_start = if (std.mem.findScalarLast(u8, handle.tree.source[0..loc.start], '\n')) |newline| newline + 1 else 0;
+                break :blk offsets.advancePosition(
+                    handle.tree.source,
+                    .{ .line = line, .character = 0 },
+                    line_start,
+                    loc.start,
+                    server.offset_encoding,
+                );
+            } else blk: {
+                const position = offsets.advancePosition(handle.tree.source, last_position, last_index, loc.start, server.offset_encoding);
+                trigram_store.cacheDeclarationLine(declaration, position.line);
+                break :blk position;
+            };
+            const end_position: offsets.Position = if (server.offset_encoding == .@"utf-8" or cached_position.is_ascii)
+                .{ .line = start_position.line, .character = start_position.character + @as(u32, @intCast(raw_name.len)) }
             else
                 offsets.advancePosition(handle.tree.source, start_position, loc.start, loc.end, server.offset_encoding);
             last_index = loc.end;
