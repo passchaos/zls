@@ -119,7 +119,8 @@ pub fn main(init: std.process.Init) !void {
     }
     try source_writer.writer.writeAll(
         "const common_symbol_unique_tail = 0;\n" ++
-            "const unique_tail_common_symbol = 0;\n",
+            "const unique_tail_common_symbol = 0;\n" ++
+            "const common_symbol_rare = 0;\n",
     );
     for (0..declaration_count) |index| {
         try source_writer.writer.print("const equal_posting_{d}_abcde = 0;\n", .{index});
@@ -146,7 +147,8 @@ pub fn main(init: std.process.Init) !void {
     defer store.deinit(allocator);
 
     const cases = [_]Case{
-        .{ .name = "common", .query = "common_symbol", .expected_count = declaration_count + 2 },
+        .{ .name = "common", .query = "common_symbol", .expected_count = declaration_count + 3 },
+        .{ .name = "inline-late", .query = "common_symbol_rare", .expected_count = 1 },
         .{ .name = "late-selective", .query = "common_symbol_unique_tail", .expected_count = 1 },
         .{ .name = "early-selective", .query = "unique_tail_common_symbol", .expected_count = 1 },
         .{ .name = "equal-near-miss", .query = "abcde", .expected_count = declaration_count },
@@ -159,7 +161,7 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print(
         "{d} generated declarations, {d} source bytes, parse={d} ns init={d} ns, {d} rounds per query sample\n",
-        .{ 4 * declaration_count + 4, source.len, parse_ns, init_ns, rounds },
+        .{ 4 * declaration_count + 5, source.len, parse_ns, init_ns, rounds },
     );
     for (cases) |case| try benchmarkCase(io, allocator, &store, case, rounds);
 }
