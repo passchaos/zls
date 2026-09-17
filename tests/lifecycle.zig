@@ -45,6 +45,57 @@ test "LSP lifecycle" {
     try std.testing.expectEqual(zls.Server.Status.exiting_success, server.status);
 }
 
+test "raw didChange messages update document text" {
+    var environ_map: std.process.Environ.Map = .init(std.testing.failing_allocator);
+    var config_manager: zls.configuration.Manager = try .init(io, allocator, &environ_map);
+    defer config_manager.deinit();
+
+    var arena_allocator: std.heap.ArenaAllocator = .init(allocator);
+    defer arena_allocator.deinit();
+    const arena = arena_allocator.allocator();
+    if (builtin.target.os.tag != .wasi) {
+        const cwd = try std.process.currentPathAlloc(io, allocator);
+        defer allocator.free(cwd);
+        try config_manager.setConfiguration(.frontend, &.{
+            .zig_exe_path = try std.Io.Dir.path.resolve(arena, &.{ cwd, test_options.zig_exe_path }),
+            .zig_lib_path = try std.Io.Dir.path.resolve(arena, &.{ cwd, test_options.zig_lib_path }),
+            .global_cache_path = try std.Io.Dir.path.resolve(arena, &.{ cwd, test_options.global_cache_path }),
+        });
+    }
+
+    const server: *zls.Server = try .create(.{
+        .io = io,
+        .allocator = allocator,
+        .transport = null,
+        .config_manager = &config_manager,
+    });
+    defer server.destroy();
+    _ = try server.sendRequestSync(arena, "initialize", .{ .capabilities = .{} });
+    try server.sendNotificationSync(arena, "initialized", .{});
+
+    const uri = "untitled:///change.zig";
+    const document_uri = try zls.Uri.parse(arena, uri);
+    try server.sendNotificationSync(arena, "textDocument/didOpen", .{ .textDocument = .{
+        .uri = uri,
+        .languageId = .{ .custom_value = "zig" },
+        .version = 1,
+        .text = "const value = 1;",
+    } });
+
+    try std.testing.expect((try server.sendJsonMessageSync(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"untitled:///change.zig\",\"version\":2},\"contentChanges\":[{\"text\":\"const value = 2;\"}]}}",
+    )) == null);
+    try std.testing.expectEqualStrings("const value = 2;", server.document_store.getHandle(document_uri).?.tree.source);
+
+    try std.testing.expect((try server.sendJsonMessageSync(
+        "{\"params\":{\"contentChanges\":[{\"text\":\"other\",\"rangeLength\":5,\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}}}],\"textDocument\":{\"version\":3,\"uri\":\"untitled:///change.zig\"}},\"method\":\"textDocument/didChange\",\"jsonrpc\":\"2.0\"}",
+    )) == null);
+    try std.testing.expectEqualStrings("const other = 2;", server.document_store.getHandle(document_uri).?.tree.source);
+
+    _ = try server.sendRequestSync(arena, "shutdown", {});
+    try server.sendNotificationSync(arena, "exit", {});
+}
+
 test "file workspace during initialization" {
     try testFileWorkspace(.initialize);
 }

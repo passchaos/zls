@@ -61,11 +61,13 @@ bounded method probe, measured:
 A separate 4,096-edit `didChange` case exercises arrays whose decoded storage
 is large relative to the frame. Although preheating changed backing allocations
 from 18 to 5 and peak live bytes from 9,354,838 to 9,126,766, a final run
-regressed from 7.24 to 7.66 milliseconds. The `didChange` production path is
-therefore excluded from preheating. The 64 KiB lower threshold leaves all
+regressed from 7.24 to 7.66 milliseconds. Preheating the generated `didChange`
+parser was therefore rejected on its own. The 64 KiB lower threshold leaves all
 measured small messages on the original path, avoiding their preheat overhead.
 The 16 MiB upper bound caps speculative allocation for unusually large or
-invalid frames.
+invalid frames. The later streaming parser removes the dynamic JSON tree that
+caused this regression, allowing the combined streaming-plus-preheat path to
+pass both full-change and many-edit gates.
 
 The complete server path was checked separately with fixed CPU affinity. Eight
 ABBA runs repeatedly opened and closed one `Sema.zig` document for 50 cycles.
@@ -94,3 +96,34 @@ runs applied 40 full-document changes each; median synchronized change latency
 was 29.68 ms for the baseline and 29.55 ms for the candidate, with identical
 successful protocol results. Sampled process-RSS ranges overlapped, so the
 accepted benefit is the deterministic transient allocation reduction.
+
+## Streaming document-change parser
+
+The generated `ContentChangeEvent` union parser first constructs a full
+`std.json.Value` tree for every change and then converts that tree to the typed
+union. ZLS now parses the three content-change fields directly from the token
+stream while retaining the generated `Range`, `Position`, and string parsers.
+The public handler still receives the standard LSP `DidChangeParams`; the
+internal wrapper converts to it with a slice view and no allocation. Tests cover
+whole and partial changes, null ranges, unknown fields, malformed and duplicate
+fields, both top-level `method`/`params` orders, and every allocator failure
+point.
+
+Five 16-round runs over the complete `Sema.zig` payload measured full-change
+parsing at 5.39–5.82 ms and 11,383,854 peak live bytes on the generated parser,
+versus 4.20–4.49 ms and 2,302,870 bytes with streaming parsing plus the bounded
+arena preheat. Backing allocations fell from 10 to 1. A separate 4,096-edit
+message changed from 6.97–8.49 ms and 9,354,838 bytes to 2.31–2.33 ms and
+685,080 bytes, with backing allocations falling from 18 to 1.
+For small messages, a 224-byte whole-document change improved from 1,061–1,073
+to 867–875 nanoseconds, and a 253-byte single partial edit improved from
+1,951–1,982 to 1,199–1,208 nanoseconds. Their peak arena allocations fell from
+2,734 and 2,950 bytes respectively to 864 bytes, so the optimization does not
+trade large-message gains for a small-edit regression.
+
+Eight fixed-CPU ABBA server runs applied 40 full-document changes each. Median
+synchronized change latency changed from 26.4 to 25.7 milliseconds (-2.7%), and
+median observed peak RSS from about 25.7 to 21.2 MiB (-17.5%). Another eight
+runs applied 4,096 valid partial edits ten times; median change latency changed
+from 383.9 to 369.6 milliseconds (-3.7%). All runs completed request
+synchronization and clean shutdown successfully.

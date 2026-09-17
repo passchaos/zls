@@ -10,6 +10,7 @@ pub const Config = @import("Config.zig");
 pub const configuration = @import("configuration.zig");
 pub const DiagnosticsCollection = @import("DiagnosticsCollection.zig");
 pub const diff = @import("diff.zig");
+pub const document_sync = @import("document_sync.zig");
 pub const DocumentScope = @import("DocumentScope.zig");
 pub const DocumentStore = @import("DocumentStore.zig");
 pub const message_arena = @import("message_arena.zig");

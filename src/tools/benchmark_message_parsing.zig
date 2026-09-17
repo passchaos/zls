@@ -20,6 +20,12 @@ const NotificationParams = union(enum) {
 };
 
 const Message = lsp.Message(RequestParams, NotificationParams, .{});
+const StreamingNotificationParams = union(enum) {
+    @"textDocument/didOpen": types.TextDocument.DidOpenParams,
+    @"textDocument/didChange": zls.document_sync.DidChangeParams,
+    other: lsp.MethodWithParams,
+};
+const StreamingMessage = lsp.Message(RequestParams, StreamingNotificationParams, .{});
 
 const AllocationStats = struct {
     allocations: usize,
@@ -101,6 +107,7 @@ const CountingAllocator = struct {
 const ParseMode = enum {
     alloc_always,
     production_policy,
+    streaming_unpreheated,
     alloc_if_needed,
 };
 const ApplyMode = enum { standard, precise };
@@ -144,8 +151,28 @@ pub fn main(init: std.process.Init) !void {
 
     const did_change_json = try makeDidChangeJson(allocator, source);
     defer allocator.free(did_change_json);
+    const small_did_change_json = try makeDidChangeJson(allocator, source[0..@min(source.len, 64)]);
+    defer allocator.free(small_did_change_json);
+    try benchmarkCase(io, allocator, "did-change-small", small_did_change_json, rounds * 256, .alloc_always);
+    try benchmarkCase(io, allocator, "did-change-small", small_did_change_json, rounds * 256, .production_policy);
+
+    const one_partial_change = [_]types.TextDocument.ContentChangeEvent{.{
+        .text_document_content_change_partial = .{
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = 1 },
+            },
+            .text = "x",
+        },
+    }};
+    const one_partial_json = try makeDidChangeJsonWithChanges(allocator, &one_partial_change);
+    defer allocator.free(one_partial_json);
+    try benchmarkCase(io, allocator, "did-change-one-edit", one_partial_json, rounds * 256, .alloc_always);
+    try benchmarkCase(io, allocator, "did-change-one-edit", one_partial_json, rounds * 256, .production_policy);
+
     try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .alloc_always);
     try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .production_policy);
+    try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .streaming_unpreheated);
     try benchmarkCase(io, allocator, "did-change", did_change_json, rounds, .alloc_if_needed);
 
     const edit_count = 4096;
@@ -165,6 +192,7 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(many_changes_json);
     try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .alloc_always);
     try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .production_policy);
+    try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .streaming_unpreheated);
     try benchmarkCase(io, allocator, "did-change-many", many_changes_json, rounds, .alloc_if_needed);
 
     const full_change = [_]types.TextDocument.ContentChangeEvent{.{
@@ -266,11 +294,21 @@ fn parseOnce(
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     if (mode == .production_policy) zls.message_arena.preheatForMessage(&arena, input);
+    if (mode == .production_policy or mode == .streaming_unpreheated) {
+        const message = try StreamingMessage.parseFromSliceLeaky(arena.allocator(), input, .{
+            .ignore_unknown_fields = true,
+            .max_value_len = null,
+            .allocate = .alloc_always,
+        });
+        return checksumStreamingMessage(message, input, borrowed_fields);
+    }
+
     const message = try Message.parseFromSliceLeaky(arena.allocator(), input, .{
         .ignore_unknown_fields = true,
         .max_value_len = null,
         .allocate = switch (mode) {
             .alloc_always, .production_policy => .alloc_always,
+            .streaming_unpreheated => unreachable,
             .alloc_if_needed => .alloc_if_needed,
         },
     });
@@ -305,6 +343,33 @@ fn parseOnce(
             .other => return error.UnexpectedMessage,
         },
         .response => return error.UnexpectedMessage,
+    };
+}
+
+fn checksumStreamingMessage(message: StreamingMessage, input: []const u8, borrowed_fields: ?*usize) !usize {
+    return switch (message) {
+        .notification => |notification| switch (notification.params) {
+            .@"textDocument/didOpen" => |params| blk: {
+                if (borrowed_fields) |count| {
+                    count.* += @intFromBool(isBorrowed(input, params.textDocument.uri));
+                    count.* += @intFromBool(isBorrowed(input, params.textDocument.text));
+                }
+                break :blk params.textDocument.uri.len + params.textDocument.text.len;
+            },
+            .@"textDocument/didChange" => |params| blk: {
+                var checksum = params.textDocument.uri.len + params.contentChanges.items.len;
+                if (borrowed_fields) |count| count.* += @intFromBool(isBorrowed(input, params.textDocument.uri));
+                for (params.contentChanges.items) |change| switch (change) {
+                    inline else => |item| {
+                        checksum +%= item.text.len;
+                        if (borrowed_fields) |count| count.* += @intFromBool(isBorrowed(input, item.text));
+                    },
+                };
+                break :blk checksum;
+            },
+            else => return error.UnexpectedMessage,
+        },
+        else => return error.UnexpectedMessage,
     };
 }
 

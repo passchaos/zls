@@ -41,7 +41,8 @@ fn isDocumentSyncMessage(json_message: []const u8) bool {
                 else => return false,
             };
             defer if (method_token == .allocated_string) allocator.free(@constCast(method));
-            return std.mem.eql(u8, method, "textDocument/didOpen");
+            return std.mem.eql(u8, method, "textDocument/didOpen") or
+                std.mem.eql(u8, method, "textDocument/didChange");
         }
 
         // Avoid scanning a potentially huge value when fields arrive in an
@@ -57,7 +58,7 @@ fn isDocumentSyncMessage(json_message: []const u8) bool {
 
 test isDocumentSyncMessage {
     try std.testing.expect(isDocumentSyncMessage("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{}}"));
-    try std.testing.expect(!isDocumentSyncMessage("{ \"jsonrpc\": \"2.0\", \"method\": \"textDocument/didChange\", \"params\": {} }"));
+    try std.testing.expect(isDocumentSyncMessage("{ \"jsonrpc\": \"2.0\", \"method\": \"textDocument/didChange\", \"params\": {} }"));
     try std.testing.expect(!isDocumentSyncMessage("{ \"id\": 1, \"method\": \"textDocument/didChange\", \"params\": {} }"));
     try std.testing.expect(!isDocumentSyncMessage("{\"method\":\"textDocument/didSave\",\"params\":null}"));
     try std.testing.expect(!isDocumentSyncMessage("{\"jsonrpc\":\"1.0\",\"method\":\"textDocument/didOpen\",\"params\":{}}"));

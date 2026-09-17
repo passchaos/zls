@@ -22,6 +22,7 @@ const diff = @import("diff.zig");
 const Uri = @import("Uri.zig");
 const InternPool = @import("analyser/analyser.zig").InternPool;
 const DiagnosticsCollection = @import("DiagnosticsCollection.zig");
+const document_sync = @import("document_sync.zig");
 const build_runner_shared = @import("build_runner/shared.zig");
 
 const signature_help = @import("features/signature_help.zig");
@@ -1672,7 +1673,7 @@ const HandledNotificationParams = union(enum) {
     initialized: types.InitializedParams,
     exit,
     @"textDocument/didOpen": types.TextDocument.DidOpenParams,
-    @"textDocument/didChange": types.TextDocument.DidChangeParams,
+    @"textDocument/didChange": document_sync.DidChangeParams,
     @"textDocument/didSave": types.TextDocument.DidSaveParams,
     @"textDocument/didClose": types.TextDocument.DidCloseParams,
     @"workspace/didChangeWatchedFiles": types.workspace.did_change_watched_files.Params,
@@ -1937,7 +1938,13 @@ fn processMessage(server: *Server, arena: std.mem.Allocator, message: Message) E
         },
         .notification => |notification| switch (notification.params) {
             .other => {},
-            inline else => |params, method| try server.sendNotificationSync(arena, @tagName(method), params),
+            inline else => |params, method| {
+                if (comptime method == .@"textDocument/didChange") {
+                    try server.sendNotificationSync(arena, @tagName(method), params.toLsp());
+                } else {
+                    try server.sendNotificationSync(arena, @tagName(method), params);
+                }
+            },
         },
         .response => |response| try server.handleResponse(response),
     }
