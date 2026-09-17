@@ -79,13 +79,13 @@ test "workspace symbols" {
         "workspace/symbol",
         .{ .query = "国際" },
     ) orelse return error.InvalidResponse;
-    try std.testing.expectEqual(@as(usize, 1), unicode_response.workspace_symbols.len);
+    try std.testing.expectEqual(@as(usize, 1), unicode_response.symbol_informations.len);
     try std.testing.expectEqualDeep(
         types.Range{
             .start = .{ .line = 3, .character = 5 },
             .end = .{ .line = 3, .character = 10 },
         },
-        unicode_response.workspace_symbols[0].location.location.range,
+        unicode_response.symbol_informations[0].location.range,
     );
 
     for (0..64) |_| {
@@ -120,10 +120,10 @@ test "workspace symbol ranges across long Unicode spans" {
                 .{ .query = "symbol" },
             ) orelse return error.InvalidResponse;
 
-            try std.testing.expectEqual(names.len, response.workspace_symbols.len);
-            for (response.workspace_symbols, names) |symbol, name| {
+            try std.testing.expectEqual(names.len, response.symbol_informations.len);
+            for (response.symbol_informations, names) |symbol, name| {
                 const start = std.mem.find(u8, source, name).?;
-                const location = symbol.location.location;
+                const location = symbol.location;
                 try std.testing.expectEqualStrings(uri.raw, location.uri);
                 try std.testing.expectEqualDeep(types.Range{
                     .start = zls.offsets.indexToPosition(source, start, encoding),
@@ -147,7 +147,7 @@ fn testDocumentSymbol(ctx: *Context, query: []const u8, expected: []const u8) !v
     var actual: std.ArrayList(u8) = .empty;
     defer actual.deinit(allocator);
 
-    for (response.workspace_symbols) |workspace_symbol| {
+    for (response.symbol_informations) |workspace_symbol| {
         std.debug.assert(workspace_symbol.tags == null); // unsupported for now
         std.debug.assert(workspace_symbol.containerName == null); // unsupported for now
         try actual.print(allocator, "{t} {s}\n", .{

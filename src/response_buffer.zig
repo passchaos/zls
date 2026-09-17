@@ -39,18 +39,18 @@ pub fn stringifyAllocCapacity(
 
 pub fn workspaceSymbolCapacityHint(result: ?types.workspace.Symbol.Result) usize {
     const symbol_result = result orelse return 0;
-    const symbols = switch (symbol_result) {
-        .workspace_symbols => |symbols| symbols,
-        .symbol_informations => return 0,
-    };
-
     var capacity: usize = 64;
-    for (symbols) |symbol| {
-        const uri = switch (symbol.location) {
-            .location => |location| location.uri,
-            .location_uri_only => |location| location.uri,
-        };
-        capacity +|= 128 +| symbol.name.len +| uri.len;
+    switch (symbol_result) {
+        .workspace_symbols => |symbols| for (symbols) |symbol| {
+            const uri = switch (symbol.location) {
+                .location => |location| location.uri,
+                .location_uri_only => |location| location.uri,
+            };
+            capacity +|= 128 +| symbol.name.len +| uri.len;
+        },
+        .symbol_informations => |symbols| for (symbols) |symbol| {
+            capacity +|= 128 +| symbol.name.len +| symbol.location.uri.len;
+        },
     }
     return capacity;
 }
@@ -101,6 +101,55 @@ test workspaceSymbolCapacityHint {
         64 + 128 + "first".len + uri.len + 128 + "second".len + uri.len,
         workspaceSymbolCapacityHint(result),
     );
+    const symbol_information = [_]types.SymbolInformation{.{
+        .name = "legacy",
+        .kind = .Function,
+        .location = .{
+            .uri = uri,
+            .range = .{
+                .start = .{ .line = 0, .character = 0 },
+                .end = .{ .line = 0, .character = 6 },
+            },
+        },
+    }};
+    try std.testing.expectEqual(
+        64 + 128 + "legacy".len + uri.len,
+        workspaceSymbolCapacityHint(.{ .symbol_informations = &symbol_information }),
+    );
     try std.testing.expectEqual(0, workspaceSymbolCapacityHint(null));
-    try std.testing.expectEqual(0, workspaceSymbolCapacityHint(.{ .symbol_informations = &.{} }));
+    try std.testing.expectEqual(64, workspaceSymbolCapacityHint(.{ .symbol_informations = &.{} }));
+}
+
+test "workspace symbol result representations serialize identically" {
+    const allocator = std.testing.allocator;
+    const uri = "file:///workspace/example.zig";
+    const location: types.Location = .{
+        .uri = uri,
+        .range = .{
+            .start = .{ .line = 123, .character = 45 },
+            .end = .{ .line = 123, .character = 51 },
+        },
+    };
+    const workspace_symbols = [_]types.workspace.Symbol{.{
+        .name = "symbol",
+        .kind = .Function,
+        .location = .{ .location = location },
+    }};
+    const symbol_informations = [_]types.SymbolInformation{.{
+        .name = "symbol",
+        .kind = .Function,
+        .location = location,
+    }};
+
+    const workspace_json = try stringifyAlloc(allocator, types.workspace.Symbol.Result{ .workspace_symbols = &workspace_symbols }, .{
+        .emit_null_optional_fields = false,
+    });
+    defer allocator.free(workspace_json);
+    const information_json = try stringifyAlloc(allocator, types.workspace.Symbol.Result{ .symbol_informations = &symbol_informations }, .{
+        .emit_null_optional_fields = false,
+    });
+    defer allocator.free(information_json);
+
+    try std.testing.expectEqualStrings(workspace_json, information_json);
+    try std.testing.expect(@sizeOf(types.SymbolInformation) < @sizeOf(types.workspace.Symbol));
 }

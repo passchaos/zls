@@ -217,3 +217,22 @@ identical. Cold-cache requests with one round per lifecycle had paired median
 changes within 0.4% for `type` and `allocator`; noisier sixteen-copy runs kept
 the complete query phase within +0.2%. Twelve ten-cycle, zero-query runs had
 identical 2,732 KiB first/final closed RSS and zero closed-RSS growth.
+
+## Compact workspace-symbol result records, 2026-09-17
+
+ZLS does not currently attach resolve data to workspace symbols and always
+returns complete locations. The handler therefore uses the protocol-equivalent
+`SymbolInformation` result variant rather than `WorkspaceSymbol`. With null
+optional fields omitted, a unit test verifies that both representations produce
+identical JSON. On AArch64, the in-memory result record decreases from 152 to
+88 bytes, saving 64 bytes per result in the request arena; a 1,904-result query
+therefore saves approximately 119 KiB before serialization.
+
+Eight fixed-CPU ABBA runs used the four documented Zig sources, three cycles,
+60 query rounds, and 16 copies per source. Result counts and sorted JSON-derived
+checksums matched. The paired median `type` request changed by approximately
+-1.1%, and the complete query phase by approximately -0.5%. A second eight-run
+comparison used one copy and 100 rounds; the `type` request improved about 0.3%
+and the complete query phase about 0.2%. These small timing changes are treated
+as confirmation that the deterministic arena-memory reduction has no material
+latency cost, not as a primary speed claim.

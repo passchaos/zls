@@ -33,7 +33,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     );
     defer handles.deinit(handle_allocator);
 
-    var symbols: std.ArrayList(types.workspace.Symbol) = .empty;
+    var symbols: std.ArrayList(types.SymbolInformation) = .empty;
     var declaration_stack = std.heap.stackFallback(512, server.document_store.allocator);
     const declaration_allocator = declaration_stack.get();
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
@@ -105,17 +105,15 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                     .test_function => .Method, // there is no SymbolKind that represents a tests,
                 },
                 .location = .{
-                    .location = .{
-                        .uri = handle.uri.raw,
-                        .range = .{
-                            .start = start_position,
-                            .end = end_position,
-                        },
+                    .uri = handle.uri.raw,
+                    .range = .{
+                        .start = start_position,
+                        .end = end_position,
                     },
                 },
             });
         }
     }
 
-    return .{ .workspace_symbols = symbols.items };
+    return .{ .symbol_informations = symbols.items };
 }

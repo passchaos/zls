@@ -116,7 +116,10 @@ pub fn main(init: std.process.Init) !void {
         default_large_diagnostic_count;
     if (rounds == 0 or large_symbol_count == 0 or large_diagnostic_count == 0) return usage();
 
-    std.debug.print("{d} rounds per response sample, {d} samples\n", .{ rounds, sample_count });
+    std.debug.print(
+        "{d} rounds per response sample, {d} samples; workspace symbol structs: {d} byte WorkspaceSymbol, {d} byte SymbolInformation\n",
+        .{ rounds, sample_count, @sizeOf(types.workspace.Symbol), @sizeOf(types.SymbolInformation) },
+    );
     try benchmarkWorkspaceSymbols(io, allocator, "empty-standard", 0, rounds, .standard);
     try benchmarkWorkspaceSymbols(io, allocator, "empty-stack", 0, rounds, .stack_prefix);
     try benchmarkWorkspaceSymbols(io, allocator, "small-standard", 8, rounds, .standard);
