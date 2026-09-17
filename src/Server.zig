@@ -15,6 +15,7 @@ const lsp = @import("lsp");
 const types = lsp.types;
 const Analyser = @import("analysis.zig");
 const offsets = @import("offsets.zig");
+const response_buffer = @import("response_buffer.zig");
 const tracy = @import("tracy");
 const diff = @import("diff.zig");
 const Uri = @import("Uri.zig");
@@ -158,7 +159,11 @@ fn sendToClientResponse(server: *Server, id: lsp.JsonRPCMessage.ID, result: anyt
         .id = id,
         .result_or_error = .{ .result = result },
     };
-    return try sendToClientInternal(server.io, server.allocator, server.transport, response);
+    const capacity_hint = if (@TypeOf(result) == ?types.workspace.Symbol.Result)
+        response_buffer.workspaceSymbolCapacityHint(result)
+    else
+        0;
+    return try sendToClientInternal(server.io, server.allocator, server.transport, response, capacity_hint);
 }
 
 fn sendToClientRequest(server: *Server, id: lsp.JsonRPCMessage.ID, method: []const u8, params: anytype) error{ Canceled, OutOfMemory }![]u8 {
@@ -174,7 +179,7 @@ fn sendToClientRequest(server: *Server, id: lsp.JsonRPCMessage.ID, method: []con
         .method = method,
         .params = params,
     };
-    return try sendToClientInternal(server.io, server.allocator, server.transport, request);
+    return try sendToClientInternal(server.io, server.allocator, server.transport, request, 0);
 }
 
 fn sendToClientNotification(server: *Server, method: []const u8, params: anytype) error{ Canceled, OutOfMemory }![]u8 {
@@ -189,7 +194,7 @@ fn sendToClientNotification(server: *Server, method: []const u8, params: anytype
         .method = method,
         .params = params,
     };
-    return try sendToClientInternal(server.io, server.allocator, server.transport, notification);
+    return try sendToClientInternal(server.io, server.allocator, server.transport, notification, 0);
 }
 
 fn sendToClientResponseError(server: *Server, id: lsp.JsonRPCMessage.ID, err: lsp.JsonRPCMessage.Response.Error) error{ Canceled, OutOfMemory }![]u8 {
@@ -200,13 +205,22 @@ fn sendToClientResponseError(server: *Server, id: lsp.JsonRPCMessage.ID, err: ls
         .response = .{ .id = id, .result_or_error = .{ .@"error" = err } },
     };
 
-    return try sendToClientInternal(server.io, server.allocator, server.transport, response);
+    return try sendToClientInternal(server.io, server.allocator, server.transport, response, 0);
 }
 
-fn sendToClientInternal(io: std.Io, allocator: std.mem.Allocator, transport: ?*lsp.Transport, message: anytype) error{ Canceled, OutOfMemory }![]u8 {
-    const message_stringified = try std.json.Stringify.valueAlloc(allocator, message, .{
-        .emit_null_optional_fields = false,
-    });
+fn sendToClientInternal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    transport: ?*lsp.Transport,
+    message: anytype,
+    capacity_hint: usize,
+) error{ Canceled, OutOfMemory }![]u8 {
+    const message_stringified = try response_buffer.stringifyAllocCapacity(
+        allocator,
+        message,
+        .{ .emit_null_optional_fields = false },
+        capacity_hint,
+    );
     errdefer allocator.free(message_stringified);
 
     if (transport) |t| {

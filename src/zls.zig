@@ -14,6 +14,7 @@ pub const DocumentScope = @import("DocumentScope.zig");
 pub const DocumentStore = @import("DocumentStore.zig");
 pub const offsets = @import("offsets.zig");
 pub const print_ast = @import("print_ast.zig");
+pub const response_buffer = @import("response_buffer.zig");
 pub const Server = @import("Server.zig");
 pub const snippets = @import("snippets.zig");
 pub const testing = @import("testing.zig");

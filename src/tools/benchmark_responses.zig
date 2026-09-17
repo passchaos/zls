@@ -1,7 +1,8 @@
 //! Run with `zig build bench-responses -Doptimize=ReleaseFast -- [rounds] [large-symbol-count]`.
 //! Compare identical response sizes, options, result counts, and checksums across revisions.
 const std = @import("std");
-const lsp = @import("zls").lsp;
+const zls = @import("zls");
+const lsp = zls.lsp;
 const types = lsp.types;
 
 const default_rounds = 128;
@@ -109,9 +110,10 @@ pub fn main(init: std.process.Init) !void {
     if (rounds == 0 or large_symbol_count == 0) return usage();
 
     std.debug.print("{d} rounds per response sample, {d} samples\n", .{ rounds, sample_count });
-    try benchmarkCase(io, allocator, "empty", 0, rounds);
-    try benchmarkCase(io, allocator, "small", 8, rounds);
-    try benchmarkCase(io, allocator, "large", large_symbol_count, rounds);
+    try benchmarkCase(io, allocator, "empty", 0, rounds, true);
+    try benchmarkCase(io, allocator, "small", 8, rounds, true);
+    try benchmarkCase(io, allocator, "large-unhinted", large_symbol_count, rounds, false);
+    try benchmarkCase(io, allocator, "large-hinted", large_symbol_count, rounds, true);
 }
 
 fn benchmarkCase(
@@ -120,6 +122,7 @@ fn benchmarkCase(
     name: []const u8,
     symbol_count: usize,
     rounds: usize,
+    use_capacity_hint: bool,
 ) !void {
     const symbols = try allocator.alloc(types.workspace.Symbol, symbol_count);
     defer allocator.free(symbols);
@@ -145,8 +148,8 @@ fn benchmarkCase(
         .result_or_error = .{ .result = .{ .workspace_symbols = symbols } },
     };
 
-    const allocation_stats, const response_bytes = try measureAllocations(allocator, response);
-    const time_ns, const checksum_value = try measureTime(io, allocator, response, rounds);
+    const allocation_stats, const response_bytes = try measureAllocations(allocator, response, use_capacity_hint);
+    const time_ns, const checksum_value = try measureTime(io, allocator, response, rounds, use_capacity_hint);
     const expected_checksum = response_bytes *% rounds *% sample_count;
     if (checksum_value != expected_checksum) return error.UnstableChecksum;
 
@@ -170,24 +173,30 @@ fn benchmarkCase(
     );
 }
 
-fn measureAllocations(allocator: std.mem.Allocator, response: Response) !struct { AllocationStats, usize } {
+fn measureAllocations(allocator: std.mem.Allocator, response: Response, use_capacity_hint: bool) !struct { AllocationStats, usize } {
     var counter: CountingAllocator = .{ .child = allocator };
     const counting_allocator = counter.allocator();
-    const json = try stringifyResponse(counting_allocator, response);
+    const json = try stringifyResponse(counting_allocator, response, use_capacity_hint);
     const response_bytes = json.len;
     counting_allocator.free(json);
     if (counter.live_bytes != 0) return error.UnreleasedMemory;
     return .{ counter.stats(), response_bytes };
 }
 
-fn measureTime(io: std.Io, allocator: std.mem.Allocator, response: Response, rounds: usize) !struct { u64, usize } {
+fn measureTime(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    response: Response,
+    rounds: usize,
+    use_capacity_hint: bool,
+) !struct { u64, usize } {
     var samples: [sample_count]u64 = undefined;
     var total_checksum: usize = 0;
     for (&samples) |*sample| {
         var checksum_value: usize = 0;
         const before = std.Io.Clock.awake.now(io);
         for (0..rounds) |_| {
-            const json = try stringifyResponse(allocator, response);
+            const json = try stringifyResponse(allocator, response, use_capacity_hint);
             checksum_value +%= json.len;
             allocator.free(json);
         }
@@ -199,10 +208,16 @@ fn measureTime(io: std.Io, allocator: std.mem.Allocator, response: Response, rou
     return .{ samples[sample_count / 2], total_checksum };
 }
 
-fn stringifyResponse(allocator: std.mem.Allocator, response: Response) error{OutOfMemory}![]u8 {
-    return try std.json.Stringify.valueAlloc(allocator, response, .{
-        .emit_null_optional_fields = false,
-    });
+fn stringifyResponse(allocator: std.mem.Allocator, response: Response, use_capacity_hint: bool) error{OutOfMemory}![]u8 {
+    return try zls.response_buffer.stringifyAllocCapacity(
+        allocator,
+        response,
+        .{ .emit_null_optional_fields = false },
+        if (use_capacity_hint)
+            zls.response_buffer.workspaceSymbolCapacityHint(response.result_or_error.result)
+        else
+            0,
+    );
 }
 
 fn usage() error{InvalidArguments} {
