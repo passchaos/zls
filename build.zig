@@ -224,6 +224,23 @@ pub fn build(b: *Build) !void {
         b.step("bench-trigrams", "Benchmark workspace-symbol trigram queries").dependOn(&run.step);
     }
 
+    { // zig build bench-responses -Doptimize=ReleaseFast -- [rounds] [large-symbol-count]
+        const benchmark = b.addExecutable(.{
+            .name = "bench-responses",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tools/benchmark_responses.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "zls", .module = zls_module }},
+            }),
+            .use_llvm = use_llvm,
+            .use_lld = use_llvm,
+        });
+        const run = b.addRunArtifact(benchmark);
+        if (b.args) |args| run.addArgs(args);
+        b.step("bench-responses", "Benchmark JSON-RPC response serialization").dependOn(&run.step);
+    }
+
     const known_folders_module = b.dependency("known_folders", .{
         .target = target,
         .optimize = optimize,
