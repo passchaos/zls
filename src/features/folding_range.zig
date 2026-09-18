@@ -14,9 +14,9 @@ const FoldingRange = struct {
 };
 
 const PositionTarget = struct {
-    source_index: usize,
+    source_index: u32,
     /// `result index * 2`, plus one for an end position.
-    output_slot: usize,
+    output_slot: u32,
 
     fn lessThan(_: void, lhs: PositionTarget, rhs: PositionTarget) bool {
         return lhs.source_index < rhs.source_index;
@@ -24,6 +24,10 @@ const PositionTarget = struct {
 };
 
 const stack_mapping_capacity = 64;
+
+comptime {
+    std.debug.assert(@sizeOf(PositionTarget) == 8);
+}
 
 const Inclusivity = enum {
     /// Include the token itself as part of the folding range.
@@ -140,7 +144,8 @@ fn convertRanges(
     locations: []const FoldingRange,
     encoding: offsets.Encoding,
 ) error{OutOfMemory}![]types.FoldingRange {
-    const mapping_count = locations.len * 2;
+    const mapping_count = std.math.mul(usize, locations.len, 2) catch return error.OutOfMemory;
+    if (mapping_count > std.math.maxInt(u32)) return error.OutOfMemory;
     var stack_mappings: [stack_mapping_capacity]PositionTarget = undefined;
     const heap_mappings = if (mapping_count > stack_mappings.len)
         try allocator.alloc(PositionTarget, mapping_count)
@@ -162,8 +167,8 @@ fn convertRanges(
             // TODO this should be simplified https://codeberg.org/ziglang/zig/issues/30627
             .collapsedText = if (location.kind != null and location.kind.? == .imports) "@import(...)" else null,
         };
-        mappings[2 * index + 0] = .{ .source_index = location.loc.start, .output_slot = 2 * index + 0 };
-        mappings[2 * index + 1] = .{ .source_index = location.loc.end, .output_slot = 2 * index + 1 };
+        mappings[2 * index + 0] = .{ .source_index = @intCast(location.loc.start), .output_slot = @intCast(2 * index + 0) };
+        mappings[2 * index + 1] = .{ .source_index = @intCast(location.loc.end), .output_slot = @intCast(2 * index + 1) };
     }
 
     if (!std.sort.isSorted(PositionTarget, mappings, {}, PositionTarget.lessThan)) {
@@ -173,8 +178,9 @@ fn convertRanges(
     var last_index: usize = 0;
     var last_position: offsets.Position = .{ .line = 0, .character = 0 };
     for (mappings) |mapping| {
-        const position = offsets.advancePosition(source, last_position, last_index, mapping.source_index, encoding);
-        last_index = mapping.source_index;
+        const source_index: usize = mapping.source_index;
+        const position = offsets.advancePosition(source, last_position, last_index, source_index, encoding);
+        last_index = source_index;
         last_position = position;
         const output = &results.items[mapping.output_slot / 2];
         if (mapping.output_slot & 1 == 0) {

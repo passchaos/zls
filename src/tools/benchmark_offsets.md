@@ -90,11 +90,17 @@ and compacts single-line ranges in place. Compact integer mapping slots preserve
 the original output order without keeping a parallel `Range` array. This reduces
 the conversion from three allocations to one for up to 32 candidate ranges and
 to two for larger batches. Failing-allocator tests enforce both bounds.
+Each mapping now stores two `u32` values, reducing its size from 16 to 8 bytes;
+Zig source offsets are already limited to `u32`, and the output slot is checked
+before conversion.
 
 A fixed-CPU LSP benchmark generated 4,096 functions with nested blocks and
 requested 8,192 folding ranges. Across eight alternating baseline/candidate
 processes, each timed over 80 warmed requests, median request time was 7.96 ms
 versus 7.91 ms. Every run returned the same range count and response SHA-256.
+An additional 300-request run after mapping compaction measured 9.43 ms versus
+8.28 ms, though cross-process variance was high enough that only the allocation
+and mapping-size reductions are treated as deterministic gains.
 
 ## Document symbol mapping compaction, 2026-09-18
 
