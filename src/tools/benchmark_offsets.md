@@ -61,6 +61,15 @@ for both batch helpers. At 128 items, location-to-range fell from 9,628 ns to
 Reversed and interleaved controls remained within 1% of the baseline. Checksums
 matched for every order and batch size.
 
+The public batch helpers additionally bypass mapping construction when their
+native inputs are ordered: nondecreasing indices for `indexToPosition`, or
+non-overlapping locations for `locToRange`. This makes ordered batches of any
+size allocation-free. Tests exercise 65 indices and 33 locations with a failing
+allocator under all three encodings. On `build.zig`, the 128-item mapping
+baseline versus direct production path measured 7,068 versus 7,027 ns for
+indices and 9,001 versus 8,818 ns for locations. Reversed, interleaved, and
+last-pair-swapped inputs preserve the mapping fallback and remained within 2%.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte

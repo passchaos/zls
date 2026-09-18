@@ -7,8 +7,9 @@ const baseline_offsets = zls.lsp.offsets;
 
 const PositionToIndexMode = enum { baseline, production };
 const RangeToLocMode = enum { baseline, production };
-const MultipleMode = enum { baseline, production };
-const BatchOrder = enum { ordered, reversed, interleaved };
+const MultipleMode = enum { allocation_baseline, mapping_baseline, production };
+const BatchOrder = enum { ordered, reversed, interleaved, last_swapped };
+const stack_mapping_capacity = 64;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -85,12 +86,16 @@ fn benchmarkMultipleConversions(
         defer allocator.free(locs);
         const ranges = try allocator.alloc(offsets.Range, range_count);
         defer allocator.free(ranges);
-        inline for ([_]BatchOrder{ .ordered, .reversed, .interleaved }) |order| {
+        inline for ([_]BatchOrder{ .ordered, .reversed, .interleaved, .last_swapped }) |order| {
             for (locs, indices, 0..) |*loc, *source_index, index| {
                 const rank = switch (order) {
                     .ordered => index,
                     .reversed => range_count - index - 1,
                     .interleaved => (index * 5) % range_count,
+                    .last_swapped => if (range_count < 2 or index < range_count - 2)
+                        index
+                    else
+                        2 * range_count - index - 3,
                 };
                 const start = (source.len * rank) / range_count;
                 loc.* = .{ .start = start, .end = @min(source.len, start + 32) };
@@ -114,14 +119,15 @@ fn benchmarkBatchLocToRange(
     order: BatchOrder,
     rounds: usize,
 ) !void {
-    inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
+    inline for ([_]MultipleMode{ .allocation_baseline, .mapping_baseline, .production }) |mode| {
         var samples: [7]u64 = undefined;
         var checksum: u64 = 0;
         for (&samples) |*sample| {
             const before = std.Io.Clock.awake.now(io);
             for (0..rounds) |_| {
                 switch (mode) {
-                    .baseline => try multipleLocToRangeBaseline(allocator, source, locs, ranges, .@"utf-16"),
+                    .allocation_baseline => try multipleLocToRangeAllocationBaseline(allocator, source, locs, ranges, .@"utf-16"),
+                    .mapping_baseline => try multipleLocToRangeMappingBaseline(allocator, source, locs, ranges, .@"utf-16"),
                     .production => try offsets.multiple.locToRange(allocator, source, locs, ranges, .@"utf-16"),
                 }
                 for (ranges) |range| {
@@ -148,14 +154,15 @@ fn benchmarkBatchIndexToPosition(
     order: BatchOrder,
     rounds: usize,
 ) !void {
-    inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
+    inline for ([_]MultipleMode{ .allocation_baseline, .mapping_baseline, .production }) |mode| {
         var samples: [7]u64 = undefined;
         var checksum: u64 = 0;
         for (&samples) |*sample| {
             const before = std.Io.Clock.awake.now(io);
             for (0..rounds) |_| {
                 switch (mode) {
-                    .baseline => try multipleIndexToPositionBaseline(allocator, source, indices, positions, .@"utf-16"),
+                    .allocation_baseline => try multipleIndexToPositionAllocationBaseline(allocator, source, indices, positions, .@"utf-16"),
+                    .mapping_baseline => try multipleIndexToPositionMappingBaseline(allocator, source, indices, positions, .@"utf-16"),
                     .production => try offsets.multiple.indexToPosition(allocator, source, indices, positions, .@"utf-16"),
                 }
                 for (positions) |position| {
@@ -171,7 +178,7 @@ fn benchmarkBatchIndexToPosition(
     }
 }
 
-fn multipleIndexToPositionBaseline(
+fn multipleIndexToPositionAllocationBaseline(
     allocator: std.mem.Allocator,
     text: []const u8,
     indices: []const usize,
@@ -187,7 +194,28 @@ fn multipleIndexToPositionBaseline(
     indexToPositionWithMappingsBaseline(text, mappings, encoding);
 }
 
-fn multipleLocToRangeBaseline(
+fn multipleIndexToPositionMappingBaseline(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    indices: []const usize,
+    positions: []offsets.Position,
+    encoding: offsets.Encoding,
+) error{OutOfMemory}!void {
+    var stack_mappings: [stack_mapping_capacity]offsets.multiple.IndexToPositionMapping = undefined;
+    const heap_mappings = if (indices.len > stack_mappings.len)
+        try allocator.alloc(offsets.multiple.IndexToPositionMapping, indices.len)
+    else
+        null;
+    defer if (heap_mappings) |mappings| allocator.free(mappings);
+    const mappings = heap_mappings orelse stack_mappings[0..indices.len];
+
+    for (mappings, indices, positions) |*mapping, index, *position| {
+        mapping.* = .{ .output = position, .source_index = index };
+    }
+    offsets.multiple.indexToPositionWithMappings(text, mappings, encoding);
+}
+
+fn multipleLocToRangeAllocationBaseline(
     allocator: std.mem.Allocator,
     text: []const u8,
     locs: []const offsets.Loc,
@@ -202,6 +230,29 @@ fn multipleLocToRangeBaseline(
         mappings[2 * index + 1] = .{ .output = &range.end, .source_index = loc.end };
     }
     indexToPositionWithMappingsBaseline(text, mappings, encoding);
+}
+
+fn multipleLocToRangeMappingBaseline(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    locs: []const offsets.Loc,
+    ranges: []offsets.Range,
+    encoding: offsets.Encoding,
+) error{OutOfMemory}!void {
+    const mapping_count = locs.len * 2;
+    var stack_mappings: [stack_mapping_capacity]offsets.multiple.IndexToPositionMapping = undefined;
+    const heap_mappings = if (mapping_count > stack_mappings.len)
+        try allocator.alloc(offsets.multiple.IndexToPositionMapping, mapping_count)
+    else
+        null;
+    defer if (heap_mappings) |mappings| allocator.free(mappings);
+    const mappings = heap_mappings orelse stack_mappings[0..mapping_count];
+
+    for (locs, ranges, 0..) |loc, *range, index| {
+        mappings[2 * index + 0] = .{ .output = &range.start, .source_index = loc.start };
+        mappings[2 * index + 1] = .{ .output = &range.end, .source_index = loc.end };
+    }
+    offsets.multiple.indexToPositionWithMappings(text, mappings, encoding);
 }
 
 fn indexToPositionWithMappingsBaseline(

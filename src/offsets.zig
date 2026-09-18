@@ -838,9 +838,25 @@ pub const multiple = struct {
         encoding: Encoding,
     ) void {
         if (!std.sort.isSorted(IndexToPositionMapping, mappings, {}, IndexToPositionMapping.lessThan)) {
-            std.mem.sort(IndexToPositionMapping, mappings, {}, IndexToPositionMapping.lessThan);
+            return indexToPositionWithUnsortedMappings(text, mappings, encoding);
         }
+        indexToPositionWithOrderedMappings(text, mappings, encoding);
+    }
 
+    fn indexToPositionWithUnsortedMappings(
+        text: []const u8,
+        mappings: []IndexToPositionMapping,
+        encoding: Encoding,
+    ) void {
+        std.mem.sort(IndexToPositionMapping, mappings, {}, IndexToPositionMapping.lessThan);
+        indexToPositionWithOrderedMappings(text, mappings, encoding);
+    }
+
+    fn indexToPositionWithOrderedMappings(
+        text: []const u8,
+        mappings: []const IndexToPositionMapping,
+        encoding: Encoding,
+    ) void {
         var last_index: usize = 0;
         var last_position: Position = .{ .line = 0, .character = 0 };
         for (mappings) |mapping| {
@@ -862,6 +878,17 @@ pub const multiple = struct {
     ) error{OutOfMemory}!void {
         std.debug.assert(source_indices.len == result_positions.len);
 
+        if (std.sort.isSorted(usize, source_indices, {}, std.sort.asc(usize))) {
+            var last_index: usize = 0;
+            var last_position: Position = .{ .line = 0, .character = 0 };
+            for (source_indices, result_positions) |index, *position| {
+                position.* = advancePosition(text, last_position, last_index, index, encoding);
+                last_index = index;
+                last_position = position.*;
+            }
+            return;
+        }
+
         var stack_mappings: [stack_mapping_capacity]IndexToPositionMapping = undefined;
         const heap_mappings = if (source_indices.len > stack_mappings.len)
             try allocator.alloc(IndexToPositionMapping, source_indices.len)
@@ -874,7 +901,7 @@ pub const multiple = struct {
             mapping.* = .{ .output = position, .source_index = index };
         }
 
-        indexToPositionWithMappings(text, mappings, encoding);
+        indexToPositionWithUnsortedMappings(text, mappings, encoding);
     }
 
     test "indexToPosition" {
@@ -899,6 +926,22 @@ pub const multiple = struct {
         try multiple.indexToPosition(std.testing.allocator, text, ordered_indices, &ordered_positions, .@"utf-16");
         for (ordered_indices, ordered_positions) |index, position| {
             try std.testing.expectEqual(offsets.indexToPosition(text, index, .@"utf-16"), position);
+        }
+
+        var ordered_large_indices: [stack_mapping_capacity + 1]usize = undefined;
+        for (&ordered_large_indices, 0..) |*index, i| index.* = text.len * i / stack_mapping_capacity;
+        var ordered_large_positions: [stack_mapping_capacity + 1]Position = undefined;
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            try multiple.indexToPosition(
+                std.testing.failing_allocator,
+                text,
+                &ordered_large_indices,
+                &ordered_large_positions,
+                encoding,
+            );
+            for (ordered_large_indices, ordered_large_positions) |index, position| {
+                try std.testing.expectEqual(offsets.indexToPosition(text, index, encoding), position);
+            }
         }
 
         const unicode_text = "a¶↉🠁\r\nsecond line\nthird";
@@ -948,6 +991,18 @@ pub const multiple = struct {
     ) error{OutOfMemory}!void {
         std.debug.assert(locs.len == ranges.len);
 
+        if (locsAreOrdered(locs)) {
+            var last_index: usize = 0;
+            var last_position: Position = .{ .line = 0, .character = 0 };
+            for (locs, ranges) |loc, *range| {
+                range.start = advancePosition(text, last_position, last_index, loc.start, encoding);
+                range.end = advancePosition(text, range.start, loc.start, loc.end, encoding);
+                last_index = loc.end;
+                last_position = range.end;
+            }
+            return;
+        }
+
         // one mapping for every start and end position
         var stack_mappings: [stack_mapping_capacity]IndexToPositionMapping = undefined;
         const mapping_count = locs.len * 2;
@@ -963,7 +1018,7 @@ pub const multiple = struct {
             mappings[2 * i + 1] = .{ .output = &range.end, .source_index = loc.end };
         }
 
-        indexToPositionWithMappings(text, mappings, encoding);
+        indexToPositionWithUnsortedMappings(text, mappings, encoding);
     }
 
     test "locToRange" {
@@ -983,6 +1038,25 @@ pub const multiple = struct {
             .{ .start = .{ .line = 0, .character = 3 }, .end = .{ .line = 1, .character = 3 } },
             .{ .start = .{ .line = 1, .character = 0 }, .end = .{ .line = 0, .character = 0 } },
         }, &result_ranges);
+
+        var ordered_large_locs: [stack_mapping_capacity / 2 + 1]Loc = undefined;
+        for (&ordered_large_locs, 0..) |*loc, i| {
+            const index = text.len * i / (ordered_large_locs.len - 1);
+            loc.* = .{ .start = index, .end = index };
+        }
+        var ordered_large_ranges: [stack_mapping_capacity / 2 + 1]Range = undefined;
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            try multiple.locToRange(
+                std.testing.failing_allocator,
+                text,
+                &ordered_large_locs,
+                &ordered_large_ranges,
+                encoding,
+            );
+            for (ordered_large_locs, ordered_large_ranges) |loc, range| {
+                try std.testing.expectEqual(offsets.locToRange(text, loc, encoding), range);
+            }
+        }
 
         const unicode_text = "a¶↉🠁\r\nsecond line\nthird";
         const valid_indices = [_]usize{ 0, 1, 3, 6, 10, 11, 12, 18, 23, unicode_text.len };
@@ -1027,6 +1101,15 @@ pub const multiple = struct {
             &boundary_ranges,
             .@"utf-16",
         ));
+    }
+
+    fn locsAreOrdered(locs: []const Loc) bool {
+        var previous_end: usize = 0;
+        for (locs) |loc| {
+            if (loc.start < previous_end or loc.end < loc.start) return false;
+            previous_end = loc.end;
+        }
+        return true;
     }
 };
 
