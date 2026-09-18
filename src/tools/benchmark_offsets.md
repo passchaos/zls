@@ -83,6 +83,19 @@ resulting 8,192 hints. Across eight alternating baseline/candidate processes,
 each timed over 40 warmed requests, the median request time changed from 27.65 ms
 to 27.10 ms (-2.0%). Every run returned the same hint count and response SHA-256.
 
+## Folding range output conversion, 2026-09-18
+
+Folding range conversion now writes positions into the final protocol objects
+and compacts single-line ranges in place. Compact integer mapping slots preserve
+the original output order without keeping a parallel `Range` array. This reduces
+the conversion from three allocations to one for up to 32 candidate ranges and
+to two for larger batches. Failing-allocator tests enforce both bounds.
+
+A fixed-CPU LSP benchmark generated 4,096 functions with nested blocks and
+requested 8,192 folding ranges. Across eight alternating baseline/candidate
+processes, each timed over 80 warmed requests, median request time was 7.96 ms
+versus 7.91 ms. Every run returned the same range count and response SHA-256.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte

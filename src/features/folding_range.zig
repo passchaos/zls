@@ -13,6 +13,18 @@ const FoldingRange = struct {
     kind: ?types.FoldingRange.Kind = null,
 };
 
+const PositionTarget = struct {
+    source_index: usize,
+    /// `result index * 2`, plus one for an end position.
+    output_slot: usize,
+
+    fn lessThan(_: void, lhs: PositionTarget, rhs: PositionTarget) bool {
+        return lhs.source_index < rhs.source_index;
+    }
+};
+
+const stack_mapping_capacity = 64;
+
 const Inclusivity = enum {
     /// Include the token itself as part of the folding range.
     inclusive,
@@ -113,39 +125,118 @@ const Builder = struct {
         const tracy_zone = tracy.trace(@src());
         defer tracy_zone.end();
 
-        const result_ranges = try builder.allocator.alloc(types.Range, builder.locations.items.len);
-        errdefer builder.allocator.free(result_ranges);
-
-        // one mapping for every start and end position
-        var mappings = try builder.allocator.alloc(offsets.multiple.IndexToPositionMapping, builder.locations.items.len * 2);
-        defer builder.allocator.free(mappings);
-
-        for (builder.locations.items, result_ranges, 0..) |folding_range, *result, i| {
-            mappings[2 * i + 0] = .{ .output = &result.start, .source_index = folding_range.loc.start };
-            mappings[2 * i + 1] = .{ .output = &result.end, .source_index = folding_range.loc.end };
-        }
-
-        offsets.multiple.indexToPositionWithMappings(builder.tree.source, mappings, builder.encoding);
-
-        var result_locations: std.ArrayList(types.FoldingRange) = try .initCapacity(builder.allocator, builder.locations.items.len);
-        errdefer result_locations.deinit(builder.allocator);
-
-        for (builder.locations.items, result_ranges) |folding_range, range| {
-            if (range.start.line == range.end.line) continue;
-            result_locations.appendAssumeCapacity(.{
-                .startLine = range.start.line,
-                .startCharacter = range.start.character,
-                .endLine = range.end.line,
-                .endCharacter = range.end.character,
-                .kind = folding_range.kind,
-                // TODO this should be simplified https://codeberg.org/ziglang/zig/issues/30627
-                .collapsedText = if (folding_range.kind != null and folding_range.kind.? == .imports) "@import(...)" else null,
-            });
-        }
-
-        return try result_locations.toOwnedSlice(builder.allocator);
+        return convertRanges(
+            builder.allocator,
+            builder.tree.source,
+            builder.locations.items,
+            builder.encoding,
+        );
     }
 };
+
+fn convertRanges(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    locations: []const FoldingRange,
+    encoding: offsets.Encoding,
+) error{OutOfMemory}![]types.FoldingRange {
+    const mapping_count = locations.len * 2;
+    var stack_mappings: [stack_mapping_capacity]PositionTarget = undefined;
+    const heap_mappings = if (mapping_count > stack_mappings.len)
+        try allocator.alloc(PositionTarget, mapping_count)
+    else
+        null;
+    defer if (heap_mappings) |mappings| allocator.free(mappings);
+    const mappings = heap_mappings orelse stack_mappings[0..mapping_count];
+
+    var results: std.ArrayList(types.FoldingRange) = try .initCapacity(allocator, locations.len);
+    errdefer results.deinit(allocator);
+    for (locations, 0..) |location, index| {
+        const result = results.addOneAssumeCapacity();
+        result.* = .{
+            .startLine = undefined,
+            .startCharacter = undefined,
+            .endLine = undefined,
+            .endCharacter = undefined,
+            .kind = location.kind,
+            // TODO this should be simplified https://codeberg.org/ziglang/zig/issues/30627
+            .collapsedText = if (location.kind != null and location.kind.? == .imports) "@import(...)" else null,
+        };
+        mappings[2 * index + 0] = .{ .source_index = location.loc.start, .output_slot = 2 * index + 0 };
+        mappings[2 * index + 1] = .{ .source_index = location.loc.end, .output_slot = 2 * index + 1 };
+    }
+
+    if (!std.sort.isSorted(PositionTarget, mappings, {}, PositionTarget.lessThan)) {
+        std.mem.sort(PositionTarget, mappings, {}, PositionTarget.lessThan);
+    }
+
+    var last_index: usize = 0;
+    var last_position: offsets.Position = .{ .line = 0, .character = 0 };
+    for (mappings) |mapping| {
+        const position = offsets.advancePosition(source, last_position, last_index, mapping.source_index, encoding);
+        last_index = mapping.source_index;
+        last_position = position;
+        const output = &results.items[mapping.output_slot / 2];
+        if (mapping.output_slot & 1 == 0) {
+            output.startLine = position.line;
+            output.startCharacter = position.character;
+        } else {
+            output.endLine = position.line;
+            output.endCharacter = position.character;
+        }
+    }
+
+    var result_count: usize = 0;
+    for (results.items) |result| {
+        if (result.startLine == result.endLine) continue;
+        results.items[result_count] = result;
+        result_count += 1;
+    }
+    results.shrinkRetainingCapacity(result_count);
+    return try results.toOwnedSlice(allocator);
+}
+
+test "convert folding ranges uses one allocation for small batches" {
+    const source = "one\ntwo\nthree";
+    const locations = [_]FoldingRange{
+        .{ .loc = .{ .start = 4, .end = source.len }, .kind = .region },
+        .{ .loc = .{ .start = 0, .end = 3 } },
+        .{ .loc = .{ .start = 0, .end = 7 }, .kind = .imports },
+    };
+    var failing_allocator: std.testing.FailingAllocator = .init(std.testing.allocator, .{ .fail_index = 1 });
+    const allocator = failing_allocator.allocator();
+    const result = try convertRanges(allocator, source, &locations, .@"utf-16");
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 1), failing_allocator.allocations);
+    try std.testing.expectEqual(@as(usize, 2), result.len);
+    try std.testing.expectEqual(@as(u32, 1), result[0].startLine);
+    try std.testing.expectEqual(@as(u32, 2), result[0].endLine);
+    try std.testing.expectEqual(types.FoldingRange.Kind.region, result[0].kind.?);
+    try std.testing.expectEqual(@as(u32, 0), result[1].startLine);
+    try std.testing.expectEqual(@as(u32, 1), result[1].endLine);
+    try std.testing.expectEqualStrings("@import(...)", result[1].collapsedText.?);
+}
+
+test "convert folding ranges uses two allocations for large batches" {
+    const source = "a\n" ** 33;
+    var locations: [33]FoldingRange = undefined;
+    for (&locations, 0..) |*location, index| {
+        location.* = .{ .loc = .{ .start = index * 2, .end = index * 2 + 2 } };
+    }
+
+    var failing_allocator: std.testing.FailingAllocator = .init(std.testing.allocator, .{ .fail_index = 2 });
+    const allocator = failing_allocator.allocator();
+    const result = try convertRanges(allocator, source, &locations, .@"utf-16");
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 2), failing_allocator.allocations);
+    try std.testing.expectEqual(locations.len, result.len);
+    for (result, 0..) |range, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(index)), range.startLine);
+        try std.testing.expectEqual(@as(u32, @intCast(index + 1)), range.endLine);
+    }
+}
 
 pub fn generateFoldingRanges(allocator: std.mem.Allocator, tree: *const Ast, encoding: offsets.Encoding) error{OutOfMemory}![]types.FoldingRange {
     var builder: Builder = .{
