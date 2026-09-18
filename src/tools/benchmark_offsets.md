@@ -96,6 +96,20 @@ requested 8,192 folding ranges. Across eight alternating baseline/candidate
 processes, each timed over 80 warmed requests, median request time was 7.96 ms
 versus 7.91 ms. Every run returned the same range count and response SHA-256.
 
+## Document symbol mapping compaction, 2026-09-18
+
+Document symbol conversion now stores each position target as two `u32` values:
+the source index and an output slot. This halves mapping storage from 16 to 8
+bytes, or from 64 to 32 bytes per symbol, while preserving the hierarchical
+output layout. Mapping storage for up to 16 symbols stays on the stack; a
+failing-allocator test enforces that small-document behavior.
+
+A fixed-CPU LSP benchmark generated 8,192 declarations and requested their
+hierarchical document symbols. Across eight alternating baseline/candidate
+processes, each timed over 50 warmed requests, median request time changed from
+44.94 ms to 44.20 ms (-1.6%). Every run returned the same root symbol count and
+full response SHA-256.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte

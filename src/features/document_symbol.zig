@@ -18,6 +18,22 @@ const Symbol = struct {
     children: std.ArrayList(Symbol),
 };
 
+const PositionTarget = struct {
+    source_index: u32,
+    /// `document symbol index * 4`, plus the position field index.
+    output_slot: u32,
+
+    fn lessThan(_: void, lhs: PositionTarget, rhs: PositionTarget) bool {
+        return lhs.source_index < rhs.source_index;
+    }
+};
+
+const stack_mapping_capacity = 64;
+
+comptime {
+    std.debug.assert(@sizeOf(PositionTarget) == 8);
+}
+
 pub fn tokenNameMaybeQuotes(tree: *const Ast, token: Ast.TokenIndex) []const u8 {
     return tokenNameFromSlice(tree.tokenSlice(token), tree.tokenTag(token));
 }
@@ -258,23 +274,34 @@ fn convertSymbols(
     var symbol_buffer: std.ArrayList(types.DocumentSymbol) = .empty;
     try symbol_buffer.ensureTotalCapacityPrecise(arena, total_symbol_count);
 
-    // instead of converting every `offsets.Loc` to `types.Range` by calling `offsets.locToRange`
-    // we instead store a mapping from source indices to their desired position, sort them by their source index
-    // and then iterate through them which avoids having to re-iterate through the source file to find out the line number
-    var mappings: std.ArrayList(offsets.multiple.IndexToPositionMapping) = .empty;
-    try mappings.ensureTotalCapacityPrecise(arena, total_symbol_count * 4);
+    const mapping_count = std.math.mul(usize, total_symbol_count, 4) catch return error.OutOfMemory;
+    if (mapping_count > std.math.maxInt(u32)) return error.OutOfMemory;
+    var stack_mappings: [stack_mapping_capacity]PositionTarget = undefined;
+    const heap_mappings = if (mapping_count > stack_mappings.len)
+        try arena.alloc(PositionTarget, mapping_count)
+    else
+        null;
+    defer if (heap_mappings) |mappings| arena.free(mappings);
+    const mappings = heap_mappings orelse stack_mappings[0..mapping_count];
+    var mapping_index: usize = 0;
 
     const root_document_symbols = symbol_buffer.addManyAsSliceAssumeCapacity(root_symbols.len);
 
-    var queue: std.ArrayList(struct { []const Symbol, []types.DocumentSymbol }) = .empty;
-    try queue.append(arena, .{ root_symbols, root_document_symbols });
+    const QueueEntry = struct { symbols: []const Symbol, outputs: []types.DocumentSymbol, output_start: usize };
+    var queue: std.ArrayList(QueueEntry) = .empty;
+    defer queue.deinit(arena);
+    try queue.append(arena, .{ .symbols = root_symbols, .outputs = root_document_symbols, .output_start = 0 });
 
     while (queue.pop()) |item| {
-        const symbols, const document_symbols = item;
-        for (symbols, document_symbols) |symbol, *document_symbol| {
+        for (item.symbols, item.outputs, 0..) |symbol, *document_symbol, sibling_index| {
             const symbol_children = symbol.children.items;
+            const children_start = symbol_buffer.items.len;
             const document_symbol_children = symbol_buffer.addManyAsSliceAssumeCapacity(symbol_children.len);
-            try queue.append(arena, .{ symbol.children.items, document_symbol_children });
+            try queue.append(arena, .{
+                .symbols = symbol_children,
+                .outputs = document_symbol_children,
+                .output_start = children_start,
+            });
 
             document_symbol.* = .{
                 .name = tokenNameMaybeQuotes(tree, symbol.name_token),
@@ -285,17 +312,82 @@ fn convertSymbols(
                 .selectionRange = undefined,
                 .children = document_symbol_children,
             };
-            mappings.appendSliceAssumeCapacity(&.{
-                .{ .output = &document_symbol.range.start, .source_index = symbol.loc.start },
-                .{ .output = &document_symbol.selectionRange.start, .source_index = symbol.selection_loc.start },
-                .{ .output = &document_symbol.selectionRange.end, .source_index = symbol.selection_loc.end },
-                .{ .output = &document_symbol.range.end, .source_index = symbol.loc.end },
-            });
+            const output_slot: u32 = @intCast((item.output_start + sibling_index) * 4);
+            mappings[mapping_index..][0..4].* = .{
+                .{ .source_index = @intCast(symbol.loc.start), .output_slot = output_slot + 0 },
+                .{ .source_index = @intCast(symbol.selection_loc.start), .output_slot = output_slot + 1 },
+                .{ .source_index = @intCast(symbol.selection_loc.end), .output_slot = output_slot + 2 },
+                .{ .source_index = @intCast(symbol.loc.end), .output_slot = output_slot + 3 },
+            };
+            mapping_index += 4;
         }
     }
     std.debug.assert(symbol_buffer.items.len == total_symbol_count);
+    std.debug.assert(mapping_index == mappings.len);
 
-    offsets.multiple.indexToPositionWithMappings(tree.source, mappings.items, encoding);
+    writePositions(tree.source, symbol_buffer.items, mappings, encoding);
 
     return root_document_symbols;
+}
+
+fn writePositions(
+    source: []const u8,
+    symbols: []types.DocumentSymbol,
+    mappings: []PositionTarget,
+    encoding: offsets.Encoding,
+) void {
+    if (!std.sort.isSorted(PositionTarget, mappings, {}, PositionTarget.lessThan)) {
+        std.mem.sort(PositionTarget, mappings, {}, PositionTarget.lessThan);
+    }
+
+    var last_index: usize = 0;
+    var last_position: offsets.Position = .{ .line = 0, .character = 0 };
+    for (mappings) |mapping| {
+        const source_index: usize = mapping.source_index;
+        const position = offsets.advancePosition(source, last_position, last_index, source_index, encoding);
+        last_index = source_index;
+        last_position = position;
+
+        const symbol = &symbols[mapping.output_slot / 4];
+        switch (mapping.output_slot % 4) {
+            0 => symbol.range.start = position,
+            1 => symbol.selectionRange.start = position,
+            2 => symbol.selectionRange.end = position,
+            3 => symbol.range.end = position,
+            else => unreachable,
+        }
+    }
+}
+
+test "convert document symbols uses stack mappings for small batches" {
+    const source = "const foo = 1;";
+    var tree = try Ast.parse(std.testing.allocator, source, .zig);
+    defer tree.deinit(std.testing.allocator);
+
+    const node = tree.rootDecls()[0];
+    const name_token = tree.fullVarDecl(node).?.ast.mut_token + 1;
+    const symbols = [_]Symbol{.{
+        .name_token = name_token,
+        .kind = .Constant,
+        .loc = offsets.nodeToLoc(&tree, node),
+        .selection_loc = offsets.tokenToLoc(&tree, name_token),
+        .children = .empty,
+    }};
+
+    var failing_allocator: std.testing.FailingAllocator = .init(std.testing.allocator, .{ .fail_index = 2 });
+    const allocator = failing_allocator.allocator();
+    const result = try convertSymbols(allocator, &tree, &symbols, symbols.len, .@"utf-16");
+    defer allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 2), failing_allocator.allocations);
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqualStrings("foo", result[0].name);
+    try std.testing.expectEqual(
+        offsets.locToRange(source, symbols[0].loc, .@"utf-16"),
+        result[0].range,
+    );
+    try std.testing.expectEqual(
+        offsets.locToRange(source, symbols[0].selection_loc, .@"utf-16"),
+        result[0].selectionRange,
+    );
 }
