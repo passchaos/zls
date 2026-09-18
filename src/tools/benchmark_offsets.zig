@@ -7,6 +7,7 @@ const baseline_offsets = zls.lsp.offsets;
 
 const PositionToIndexMode = enum { baseline, production };
 const RangeToLocMode = enum { baseline, production };
+const MultipleMode = enum { baseline, production };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -54,6 +55,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         try benchmarkPositionToIndex(io, allocator, path, source);
+        try benchmarkMultipleConversions(io, allocator, path, source);
     }
 
     const long_line = try allocator.alloc(u8, 256 * 1024);
@@ -65,6 +67,110 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(dense_newlines);
     @memset(dense_newlines, '\n');
     try benchmarkPositionToIndex(io, allocator, "synthetic-dense-newlines", dense_newlines);
+}
+
+fn benchmarkMultipleConversions(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    source: []const u8,
+) !void {
+    for ([_]usize{ 1, 8, 32, 64, 128 }) |range_count| {
+        const indices = try allocator.alloc(usize, range_count);
+        defer allocator.free(indices);
+        const positions = try allocator.alloc(offsets.Position, range_count);
+        defer allocator.free(positions);
+        const locs = try allocator.alloc(offsets.Loc, range_count);
+        defer allocator.free(locs);
+        const ranges = try allocator.alloc(offsets.Range, range_count);
+        defer allocator.free(ranges);
+        for (locs, 0..) |*loc, index| {
+            const start = (source.len * index) / range_count;
+            loc.* = .{ .start = start, .end = @min(source.len, start + 32) };
+            indices[index] = start;
+        }
+
+        const rounds = @max(1, (16 * 1024 * 1024) / @max(1, source.len));
+        inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
+            var samples: [7]u64 = undefined;
+            var checksum: u64 = 0;
+            for (&samples) |*sample| {
+                const before = std.Io.Clock.awake.now(io);
+                for (0..rounds) |_| {
+                    switch (mode) {
+                        .baseline => try multipleLocToRangeBaseline(allocator, source, locs, ranges, .@"utf-16"),
+                        .production => try offsets.multiple.locToRange(allocator, source, locs, ranges, .@"utf-16"),
+                    }
+                    for (ranges) |range| {
+                        checksum +%= (@as(u64, range.start.line) << 32) | range.start.character;
+                        checksum +%= (@as(u64, range.end.line) << 32) | range.end.character;
+                    }
+                }
+                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+            }
+            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+            std.debug.print("{s}: batch-loc-to-range {t} count={d}: {d} ns/batch checksum={d}\n", .{
+                name,                              mode,     range_count,
+                samples[samples.len / 2] / rounds, checksum,
+            });
+        }
+
+        inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
+            var samples: [7]u64 = undefined;
+            var checksum: u64 = 0;
+            for (&samples) |*sample| {
+                const before = std.Io.Clock.awake.now(io);
+                for (0..rounds) |_| {
+                    switch (mode) {
+                        .baseline => try multipleIndexToPositionBaseline(allocator, source, indices, positions, .@"utf-16"),
+                        .production => try offsets.multiple.indexToPosition(allocator, source, indices, positions, .@"utf-16"),
+                    }
+                    for (positions) |position| {
+                        checksum +%= (@as(u64, position.line) << 32) | position.character;
+                    }
+                }
+                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+            }
+            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+            std.debug.print("{s}: batch-index-to-position {t} count={d}: {d} ns/batch checksum={d}\n", .{
+                name,                              mode,     range_count,
+                samples[samples.len / 2] / rounds, checksum,
+            });
+        }
+    }
+}
+
+fn multipleIndexToPositionBaseline(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    indices: []const usize,
+    positions: []offsets.Position,
+    encoding: offsets.Encoding,
+) error{OutOfMemory}!void {
+    const mappings = try allocator.alloc(offsets.multiple.IndexToPositionMapping, indices.len);
+    defer allocator.free(mappings);
+
+    for (mappings, indices, positions) |*mapping, index, *position| {
+        mapping.* = .{ .output = position, .source_index = index };
+    }
+    offsets.multiple.indexToPositionWithMappings(text, mappings, encoding);
+}
+
+fn multipleLocToRangeBaseline(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    locs: []const offsets.Loc,
+    ranges: []offsets.Range,
+    encoding: offsets.Encoding,
+) error{OutOfMemory}!void {
+    const mappings = try allocator.alloc(offsets.multiple.IndexToPositionMapping, locs.len * 2);
+    defer allocator.free(mappings);
+
+    for (locs, ranges, 0..) |loc, *range, index| {
+        mappings[2 * index + 0] = .{ .output = &range.start, .source_index = loc.start };
+        mappings[2 * index + 1] = .{ .output = &range.end, .source_index = loc.end };
+    }
+    offsets.multiple.indexToPositionWithMappings(text, mappings, encoding);
 }
 
 fn benchmarkPositionToIndex(

@@ -820,6 +820,8 @@ test positionInsideRange {
 
 /// More efficient conversion functions that operate on multiple elements.
 pub const multiple = struct {
+    const stack_mapping_capacity = 64;
+
     /// a mapping from a source index to a line character pair
     pub const IndexToPositionMapping = struct {
         output: *Position,
@@ -858,9 +860,13 @@ pub const multiple = struct {
     ) error{OutOfMemory}!void {
         std.debug.assert(source_indices.len == result_positions.len);
 
-        // one mapping for every start and end position
-        const mappings = try allocator.alloc(IndexToPositionMapping, source_indices.len);
-        defer allocator.free(mappings);
+        var stack_mappings: [stack_mapping_capacity]IndexToPositionMapping = undefined;
+        const heap_mappings = if (source_indices.len > stack_mappings.len)
+            try allocator.alloc(IndexToPositionMapping, source_indices.len)
+        else
+            null;
+        defer if (heap_mappings) |mappings| allocator.free(mappings);
+        const mappings = heap_mappings orelse stack_mappings[0..source_indices.len];
 
         for (mappings, source_indices, result_positions) |*mapping, index, *position| {
             mapping.* = .{ .output = position, .source_index = index };
@@ -885,6 +891,43 @@ pub const multiple = struct {
             .{ .line = 1, .character = 0 },
             .{ .line = 0, .character = 0 },
         }, &result_positions);
+
+        const unicode_text = "a¶↉🠁\r\nsecond line\nthird";
+        const valid_indices = [_]usize{ 0, 1, 3, 6, 10, 11, 12, 18, 23, unicode_text.len };
+        var indices: [stack_mapping_capacity + 1]usize = undefined;
+        for (&indices, 0..) |*index, i| index.* = valid_indices[(i * 7) % valid_indices.len];
+        var positions: [stack_mapping_capacity + 1]Position = undefined;
+
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            for ([_]usize{ stack_mapping_capacity, stack_mapping_capacity + 1 }) |count| {
+                try multiple.indexToPosition(
+                    std.testing.allocator,
+                    unicode_text,
+                    indices[0..count],
+                    positions[0..count],
+                    encoding,
+                );
+                for (indices[0..count], positions[0..count]) |index, position| {
+                    try std.testing.expectEqual(offsets.indexToPosition(unicode_text, index, encoding), position);
+                }
+            }
+        }
+
+        try multiple.indexToPosition(
+            std.testing.failing_allocator,
+            unicode_text,
+            indices[0..stack_mapping_capacity],
+            positions[0..stack_mapping_capacity],
+            .@"utf-16",
+        );
+
+        try std.testing.expectError(error.OutOfMemory, multiple.indexToPosition(
+            std.testing.failing_allocator,
+            unicode_text,
+            &indices,
+            &positions,
+            .@"utf-16",
+        ));
     }
 
     pub fn locToRange(
@@ -897,8 +940,14 @@ pub const multiple = struct {
         std.debug.assert(locs.len == ranges.len);
 
         // one mapping for every start and end position
-        var mappings = try allocator.alloc(IndexToPositionMapping, locs.len * 2);
-        defer allocator.free(mappings);
+        var stack_mappings: [stack_mapping_capacity]IndexToPositionMapping = undefined;
+        const mapping_count = locs.len * 2;
+        const heap_mappings = if (mapping_count > stack_mappings.len)
+            try allocator.alloc(IndexToPositionMapping, mapping_count)
+        else
+            null;
+        defer if (heap_mappings) |mappings| allocator.free(mappings);
+        const mappings = heap_mappings orelse stack_mappings[0..mapping_count];
 
         for (locs, ranges, 0..) |loc, *range, i| {
             mappings[2 * i + 0] = .{ .output = &range.start, .source_index = loc.start };
@@ -925,6 +974,50 @@ pub const multiple = struct {
             .{ .start = .{ .line = 0, .character = 3 }, .end = .{ .line = 1, .character = 3 } },
             .{ .start = .{ .line = 1, .character = 0 }, .end = .{ .line = 0, .character = 0 } },
         }, &result_ranges);
+
+        const unicode_text = "a¶↉🠁\r\nsecond line\nthird";
+        const valid_indices = [_]usize{ 0, 1, 3, 6, 10, 11, 12, 18, 23, unicode_text.len };
+        var boundary_locs: [stack_mapping_capacity / 2 + 1]Loc = undefined;
+        for (&boundary_locs, 0..) |*loc, i| {
+            const first = valid_indices[(i * 7) % valid_indices.len];
+            const second = valid_indices[(i * 3 + 1) % valid_indices.len];
+            loc.* = .{
+                .start = @min(first, second),
+                .end = @max(first, second),
+            };
+        }
+        var boundary_ranges: [stack_mapping_capacity / 2 + 1]Range = undefined;
+
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            for ([_]usize{ stack_mapping_capacity / 2, stack_mapping_capacity / 2 + 1 }) |count| {
+                try multiple.locToRange(
+                    std.testing.allocator,
+                    unicode_text,
+                    boundary_locs[0..count],
+                    boundary_ranges[0..count],
+                    encoding,
+                );
+                for (boundary_locs[0..count], boundary_ranges[0..count]) |loc, range| {
+                    try std.testing.expectEqual(offsets.locToRange(unicode_text, loc, encoding), range);
+                }
+            }
+        }
+
+        try multiple.locToRange(
+            std.testing.failing_allocator,
+            unicode_text,
+            boundary_locs[0 .. stack_mapping_capacity / 2],
+            boundary_ranges[0 .. stack_mapping_capacity / 2],
+            .@"utf-16",
+        );
+
+        try std.testing.expectError(error.OutOfMemory, multiple.locToRange(
+            std.testing.failing_allocator,
+            unicode_text,
+            &boundary_locs,
+            &boundary_ranges,
+            .@"utf-16",
+        ));
     }
 };
 

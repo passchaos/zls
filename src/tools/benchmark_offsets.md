@@ -22,6 +22,32 @@ index queries and short range conversions against the frozen lsp-kit
 implementation. It includes one long ASCII line and a dense-newline synthetic
 input as regression guards.
 
+It also compares batched index and location conversions against allocation-based
+copies of the previous implementations. Batch sizes straddle the stack-buffer
+cutoffs, and checksums must match between baseline and production.
+
+## Small batch allocation removal, 2026-09-18
+
+The batched `indexToPosition` and `locToRange` helpers now keep up to 64 mapping
+records on the stack. This covers up to 64 indices or 32 locations without a
+temporary allocator call; larger batches retain the prior heap path. Tests use a
+failing allocator to prove the small paths do not allocate, exercise both sides
+of each cutoff, and compare UTF-8, UTF-16, and UTF-32 results with the single-item
+conversions.
+
+On AArch64 Linux, Zig 0.16.0, `ReleaseFast`, LLVM, the `build.zig` benchmark
+measured the one-item allocation-dominated cases as follows:
+
+| operation | allocation baseline | stack production | change |
+| --- | ---: | ---: | ---: |
+| batch index to position | 26 ns | 6 ns | -77% |
+| batch location to range | 39 ns | 22 ns | -44% |
+
+For batches of 8 through 128, source scanning and sorting dominate: production
+was within 1% of baseline in this run. Checksums matched at every measured batch
+size. In the arena-backed feature call sites, the fast path also avoids retaining
+up to 1 KiB of temporary mapping storage until the request arena is released.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte
