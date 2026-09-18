@@ -2,6 +2,7 @@ const std = @import("std");
 
 const min_preheat_bytes = 64 * 1024;
 const max_preheat_bytes = 16 * 1024 * 1024;
+const escape_probe_bytes = 4 * 1024;
 
 /// Pre-size the arena used to parse large document-sync messages. The temporary
 /// allocation is immediately released, retaining only the arena's backing node.
@@ -9,11 +10,28 @@ const max_preheat_bytes = 16 * 1024 * 1024;
 /// growth during JSON unescaping. A failed preheat is only a missed
 /// optimization; normal parsing can still attempt its smaller allocations.
 pub fn preheatForMessage(arena: *std.heap.ArenaAllocator, json_message: []const u8) void {
-    if (json_message.len < min_preheat_bytes or json_message.len > max_preheat_bytes) return;
-    if (!isDocumentSyncMessage(json_message)) return;
+    const capacity = preheatCapacityForMessage(json_message);
+    if (capacity == 0) return;
 
-    const allocation = arena.allocator().alloc(u8, json_message.len) catch return;
+    const allocation = arena.allocator().alloc(u8, capacity) catch return;
     arena.allocator().free(allocation);
+}
+
+fn preheatCapacityForMessage(json_message: []const u8) usize {
+    if (json_message.len < min_preheat_bytes or json_message.len > max_preheat_bytes) return 0;
+    if (!isDocumentSyncMessage(json_message)) return 0;
+
+    // A large JSON string without escapes in its prefix can make the generated
+    // alloc-always parser briefly request more than the frame size. Leave
+    // headroom so it stays in the first arena node. Typical source contains an
+    // escaped newline early and already fits in the frame-sized preheat.
+    const enlarged_capacity = json_message.len + json_message.len / 4;
+    if (enlarged_capacity <= max_preheat_bytes and
+        std.mem.findScalar(u8, json_message[0..@min(json_message.len, escape_probe_bytes)], '\\') == null)
+    {
+        return enlarged_capacity;
+    }
+    return json_message.len;
 }
 
 fn isDocumentSyncMessage(json_message: []const u8) bool {
@@ -86,8 +104,16 @@ test preheatForMessage {
     defer std.testing.allocator.free(message);
     @memset(message, ' ');
     @memcpy(message[0..prefix.len], prefix);
+    try std.testing.expectEqual(min_preheat_bytes + min_preheat_bytes / 4, preheatCapacityForMessage(message));
     preheatForMessage(&arena, message);
-    try std.testing.expect(arena.queryCapacity() >= message.len);
+    try std.testing.expect(arena.queryCapacity() >= preheatCapacityForMessage(message));
+
+    const escaped_message = try std.testing.allocator.dupe(u8, message);
+    defer std.testing.allocator.free(escaped_message);
+    escaped_message[escaped_message.len - 1] = '\\';
+    try std.testing.expectEqual(preheatCapacityForMessage(message), preheatCapacityForMessage(escaped_message));
+    escaped_message[prefix.len] = '\\';
+    try std.testing.expectEqual(escaped_message.len, preheatCapacityForMessage(escaped_message));
 
     var change_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer change_arena.deinit();

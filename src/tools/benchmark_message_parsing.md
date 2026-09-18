@@ -73,6 +73,14 @@ invalid frames. The later streaming parser removes the dynamic JSON tree that
 caused this regression, allowing the combined streaming-plus-preheat path to
 pass both full-change and many-edit gates.
 
+Large frames whose first 4 KiB contain no JSON escape now reserve an additional
+25% of headroom, while escaped source keeps the frame-sized preheat. This covers
+long single-line or generated text whose decoded string remains close to the
+frame size. A 325,155-byte flat `didOpen` changed from two backing allocations
+totaling 1,950,952 bytes to one 609,726-byte allocation; measured parsing stayed
+within the same roughly 0.41–0.49 ms range. Enlarged preheats remain capped at
+16 MiB.
+
 The complete server path was checked separately with fixed CPU affinity. Eight
 ABBA runs repeatedly opened and closed one `Sema.zig` document for 50 cycles.
 The median open phase changed from 27.09 to 26.14 milliseconds (-3.5%), and the
