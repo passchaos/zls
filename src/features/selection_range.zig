@@ -8,6 +8,10 @@ const ast = @import("../ast.zig");
 const types = @import("lsp").types;
 const offsets = @import("../offsets.zig");
 
+const Mapping = offsets.multiple.IndexToPositionMapping;
+const stack_mapping_capacity = 64;
+const stack_mapping_bytes = stack_mapping_capacity * @sizeOf(Mapping) + @alignOf(Mapping) - 1;
+
 pub fn generateSelectionRanges(
     arena: std.mem.Allocator,
     handle: *DocumentStore.Handle,
@@ -15,7 +19,11 @@ pub fn generateSelectionRanges(
     offset_encoding: offsets.Encoding,
 ) error{OutOfMemory}!?[]types.SelectionRange {
     const tree = &handle.tree;
-    var mappings: std.ArrayList(offsets.multiple.IndexToPositionMapping) = .empty;
+    var mapping_allocator_state = std.heap.stackFallback(stack_mapping_bytes, arena);
+    const mapping_allocator = mapping_allocator_state.get();
+    var mappings: std.ArrayList(Mapping) = .empty;
+    defer mappings.deinit(mapping_allocator);
+    try mappings.ensureTotalCapacityPrecise(mapping_allocator, stack_mapping_capacity);
     const result = try arena.alloc(types.SelectionRange, positions.len);
     for (positions, result) |position, *root_selection_range| {
         const source_index = offsets.positionToIndex(handle.tree.source, position, offset_encoding);
@@ -37,7 +45,7 @@ pub fn generateSelectionRanges(
             }
         }
 
-        var builder: Builder = .init(root_selection_range, &mappings);
+        var builder: Builder = .init(root_selection_range, &mappings, mapping_allocator);
         if (stack.items.len == 0) {
             try builder.add(arena, offsets.nodeToLoc(tree, .root));
             continue;
@@ -73,18 +81,21 @@ pub fn generateSelectionRanges(
 const Builder = struct {
     node: *types.SelectionRange,
     is_node_uninitalized: bool,
-    mappings: *std.ArrayList(offsets.multiple.IndexToPositionMapping),
+    mappings: *std.ArrayList(Mapping),
+    mapping_allocator: std.mem.Allocator,
 
     // `add` must be called at least once afterwards to initalize `root_selection_range`.
     fn init(
         root_selection_range: *types.SelectionRange,
-        mappings: *std.ArrayList(offsets.multiple.IndexToPositionMapping),
+        mappings: *std.ArrayList(Mapping),
+        mapping_allocator: std.mem.Allocator,
     ) Builder {
         root_selection_range.* = undefined;
         return .{
             .node = root_selection_range,
             .is_node_uninitalized = true,
             .mappings = mappings,
+            .mapping_allocator = mapping_allocator,
         };
     }
 
@@ -98,9 +109,32 @@ const Builder = struct {
         if (current) |c| c.parent = new;
         b.node = new;
         b.is_node_uninitalized = false;
-        try b.mappings.appendSlice(arena, &.{
+        try b.mappings.appendSlice(b.mapping_allocator, &.{
             .{ .output = &new.range.start, .source_index = loc.start },
             .{ .output = &new.range.end, .source_index = loc.end },
         });
     }
 };
+
+test "selection range mappings stay on the stack through the common depth" {
+    var mapping_allocator_state = std.heap.stackFallback(stack_mapping_bytes, std.testing.failing_allocator);
+    const mapping_allocator = mapping_allocator_state.get();
+    var mappings: std.ArrayList(Mapping) = .empty;
+    defer mappings.deinit(mapping_allocator);
+    try mappings.ensureTotalCapacityPrecise(mapping_allocator, stack_mapping_capacity);
+
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var root: types.SelectionRange = undefined;
+    var builder: Builder = .init(&root, &mappings, mapping_allocator);
+    for (0..stack_mapping_capacity / 2) |index| {
+        try builder.add(arena, .{ .start = index, .end = index + 1 });
+    }
+    try std.testing.expectEqual(stack_mapping_capacity, mappings.items.len);
+    try std.testing.expectError(
+        error.OutOfMemory,
+        builder.add(arena, .{ .start = stack_mapping_capacity, .end = stack_mapping_capacity + 1 }),
+    );
+}

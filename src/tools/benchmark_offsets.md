@@ -110,6 +110,19 @@ processes, each timed over 50 warmed requests, median request time changed from
 44.94 ms to 44.20 ms (-1.6%). Every run returned the same root symbol count and
 full response SHA-256.
 
+## Selection range mapping buffer, 2026-09-18
+
+Selection range requests now keep the first 64 position mappings (typically 32
+AST ranges) in a 1 KiB stack buffer and fall back to the request arena beyond
+that point. A failing-allocator test enforces the stack boundary. This removes
+the mapping array's arena allocation for the common single-cursor request and
+reduces retained growth allocations for multi-cursor requests.
+
+Fixed-CPU LSP benchmarks used a 1,024-function document. Across eight alternating
+baseline/candidate processes, a 1,000-request single-cursor run measured 66.92 us
+versus 65.45 us (-2.2%), while a 100-request 64-cursor run measured 7.38 ms
+versus 7.20 ms (-2.4%). Full response SHA-256 values matched in every run.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte
