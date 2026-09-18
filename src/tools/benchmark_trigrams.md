@@ -26,6 +26,24 @@ declarations show no general replacement for the raw path: preparation pays
 for repeated and periodic hits but regresses selective and missing queries.
 Workspace-symbol therefore keeps raw lookup for a single store.
 
+## Borrow identical periodic posting sets, 2026-09-18
+
+Repeated periodic queries can contain several distinct trigrams whose posting
+lists describe the same declaration set, followed by a superset. Query
+intersection now keeps an immutable posting slice borrowed until it encounters
+a list that removes a candidate. Equal sets and supersets therefore avoid both
+copying and scratch allocation; partial and near-equal sets still materialize
+the existing intersection buffer. Tests exercise the allocation-free raw and
+prepared paths with a failing allocator.
+
+On AArch64 Linux, Zig 0.16.0, `ReleaseFast`, LLVM, 100,000 generated periodic
+declarations, and 200 rounds per sample, `abcabcabcabcabcabcabc` changed from
+469,884 to 172,896 ns/query raw (-63.2%) and from 409,611 to 172,585 ns/query
+prepared (-57.9%). Counts and checksums matched. Common, selective, missing,
+equal-near-miss, equal-disjoint, and equal-partial controls did not regress.
+Queries against `Sema.zig`, `array_list.zig`, and `unicode.zig` also returned
+identical results with timings in the run-to-run noise range.
+
 The `--files` mode separately reports median AST parse and TrigramStore init
 time for each real Zig source, followed by declaration, trigram, posting-list,
 filter, maximum-list-size, and allocator statistics. It also measures raw and

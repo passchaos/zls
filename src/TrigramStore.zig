@@ -98,6 +98,7 @@ pub const Query = struct {
     inline_trigrams: [inline_capacity]PreparedTrigram = undefined,
     heap_trigrams: ?[]PreparedTrigram = null,
     len: usize = 0,
+    has_duplicates: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, text: []const u8) error{OutOfMemory}!Query {
         assert(text.len != 0);
@@ -123,11 +124,15 @@ pub const Query = struct {
             else
                 query.inline_trigrams[0..query.len];
             for (items[0..@min(query.len, deduplicate_scan_limit)]) |existing| {
-                if (TrigramContext.toInt(existing.value) == trigram_value) break;
+                if (TrigramContext.toInt(existing.value) == trigram_value) {
+                    query.has_duplicates = true;
+                    break;
+                }
             } else {
                 if (query.len > deduplicate_scan_limit and
                     TrigramContext.toInt(items[query.len - 1].value) == trigram_value)
                 {
+                    query.has_duplicates = true;
                     continue;
                 }
                 if (query.len == inline_capacity) {
@@ -709,31 +714,37 @@ noinline fn intersectRawQueryFromRarestPostings(
         return null;
     }
 
-    try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
-    var len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
-    declaration_buffer.shrinkRetainingCapacity(len);
-    if (len == 0) return declaration_buffer.items;
+    const seed_postings_equal = postingSlicesEqual(first.declarations, other.declarations);
+    var declarations: []const Declaration.Index = if (seed_postings_equal)
+        first.declarations
+    else blk: {
+        try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
+        const len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
+        declaration_buffer.shrinkRetainingCapacity(len);
+        break :blk declaration_buffer.items;
+    };
+    if (declarations.len == 0) return declarations;
 
     if (!unique_overflow) {
         for (unique[0..unique_len]) |posting| {
             if (seedContainsTrigram(first, other, posting.trigram)) continue;
-            len = mergeIntersection(posting.declarations, declaration_buffer.items[0..len]);
-            declaration_buffer.shrinkRetainingCapacity(len);
-            if (len == 0) break;
+            declarations = try intersectBorrowedCandidate(allocator, declarations, posting.declarations, declaration_buffer);
+            if (declarations.len == 0) break;
         }
     } else {
         iterator = .init(query);
         while (iterator.next()) |trigram| {
             if (seedContainsTrigram(first, other, trigram)) continue;
-            len = mergeIntersection(
+            declarations = try intersectBorrowedCandidate(
+                allocator,
+                declarations,
                 (store.trigram_to_declarations.get(trigram) orelse unreachable).slice(store.postings),
-                declaration_buffer.items[0..len],
+                declaration_buffer,
             );
-            declaration_buffer.shrinkRetainingCapacity(len);
-            if (len == 0) break;
+            if (declarations.len == 0) break;
         }
     }
-    return declaration_buffer.items;
+    return declarations;
 }
 
 fn declarationsForShortQuery(
@@ -796,7 +807,7 @@ pub fn declarationSliceForPreparedQuery(
     }
 
     const second = (store.trigram_to_declarations.getAdapted(trigrams[1], PreparedTrigramContext{}) orelse return &.{}).slice(store.postings);
-    if (trigrams.len > Query.inline_capacity and
+    if ((trigrams.len > Query.inline_capacity or query.has_duplicates) and
         first.len >= filter_min_posting_len and second.len >= filter_min_posting_len)
     {
         if (try store.intersectPreparedQueryFromRarestPostings(
@@ -843,23 +854,71 @@ noinline fn intersectPreparedQueryFromRarestPostings(
         considerPostingSeed(&first, &second, .{ .trigram = trigram.value, .declarations = declarations });
     }
     const other = second orelse return null;
-    if (!isSkewed(@min(first_declarations.len, second_declarations.len), first.declarations.len)) return null;
+    const seed_postings_equal = postingSlicesEqual(first.declarations, other.declarations);
+    if (!seed_postings_equal and
+        !isSkewed(@min(first_declarations.len, second_declarations.len), first.declarations.len)) return null;
 
-    try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
-    var len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
-    declaration_buffer.shrinkRetainingCapacity(len);
-    if (len == 0) return declaration_buffer.items;
+    var declarations: []const Declaration.Index = if (seed_postings_equal)
+        first.declarations
+    else blk: {
+        try declaration_buffer.resize(allocator, @min(first.declarations.len, other.declarations.len));
+        const len = mergeIntersectionInto(first.declarations, other.declarations, declaration_buffer.items);
+        declaration_buffer.shrinkRetainingCapacity(len);
+        break :blk declaration_buffer.items;
+    };
+    if (declarations.len == 0) return declarations;
 
     for (trigrams) |trigram| {
         if (seedContainsTrigram(first, other, trigram.value)) continue;
-        len = mergeIntersection(
+        declarations = try intersectBorrowedCandidate(
+            allocator,
+            declarations,
             (store.trigram_to_declarations.getAdapted(trigram, PreparedTrigramContext{}) orelse unreachable).slice(store.postings),
-            declaration_buffer.items[0..len],
+            declaration_buffer,
         );
-        declaration_buffer.shrinkRetainingCapacity(len);
-        if (len == 0) break;
+        if (declarations.len == 0) break;
     }
+    return declarations;
+}
+
+fn postingSlicesEqual(a: []const Declaration.Index, b: []const Declaration.Index) bool {
+    if (a.len != b.len or a.len < filter_min_posting_len) return false;
+    if (a[0] != b[0] or a[a.len - 1] != b[b.len - 1]) return false;
+    return postingCommonPrefixLen(a, b) == a.len;
+}
+
+fn intersectBorrowedCandidate(
+    allocator: std.mem.Allocator,
+    current: []const Declaration.Index,
+    posting: []const Declaration.Index,
+    declaration_buffer: *std.ArrayList(Declaration.Index),
+) error{OutOfMemory}![]const Declaration.Index {
+    if (declaration_buffer.items.len == 0 and postingContainsAll(posting, current)) return current;
+
+    if (declaration_buffer.items.len == 0) {
+        try declaration_buffer.resize(allocator, @min(current.len, posting.len));
+        const len = mergeIntersectionInto(current, posting, declaration_buffer.items);
+        declaration_buffer.shrinkRetainingCapacity(len);
+        return declaration_buffer.items;
+    }
+
+    assert(current.ptr == declaration_buffer.items.ptr);
+    const len = mergeIntersection(posting, declaration_buffer.items);
+    declaration_buffer.shrinkRetainingCapacity(len);
     return declaration_buffer.items;
+}
+
+fn postingContainsAll(haystack: []const Declaration.Index, needles: []const Declaration.Index) bool {
+    if (needles.len > haystack.len) return false;
+    var haystack_index: usize = 0;
+    for (needles) |needle| {
+        while (haystack_index < haystack.len and @intFromEnum(haystack[haystack_index]) < @intFromEnum(needle)) {
+            haystack_index += 1;
+        }
+        if (haystack_index == haystack.len or haystack[haystack_index] != needle) return false;
+        haystack_index += 1;
+    }
+    return true;
 }
 
 fn appendDeclaration(
@@ -1145,6 +1204,7 @@ test Query {
 
         const expected = [_]Trigram{ "abc".*, "bca".*, "cab".* };
         try std.testing.expect(query.heap_trigrams == null);
+        try std.testing.expect(query.has_duplicates);
         try std.testing.expectEqual(expected.len, query.trigrams().len);
         for (query.trigrams(), expected) |actual, value| {
             try std.testing.expectEqual(value, actual.value);
@@ -1403,6 +1463,23 @@ fn lowerBoundDeclaration(items: []const Declaration.Index, needle: Declaration.I
         }
     }
     return low;
+}
+
+test postingContainsAll {
+    try std.testing.expect(postingContainsAll(&.{}, &.{}));
+    try std.testing.expect(postingContainsAll(&.{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5) }, &.{}));
+    try std.testing.expect(postingContainsAll(
+        &.{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5), @enumFromInt(8) },
+        &.{ @enumFromInt(1), @enumFromInt(5), @enumFromInt(8) },
+    ));
+    try std.testing.expect(!postingContainsAll(
+        &.{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5), @enumFromInt(8) },
+        &.{ @enumFromInt(1), @enumFromInt(4), @enumFromInt(8) },
+    ));
+    try std.testing.expect(!postingContainsAll(
+        &.{ @enumFromInt(1), @enumFromInt(3) },
+        &.{ @enumFromInt(1), @enumFromInt(3), @enumFromInt(5) },
+    ));
 }
 
 test mergeIntersection {
@@ -1705,12 +1782,30 @@ test "long queries start with rare posting lists" {
     const periodic_text = "abcabcabcabcabcabcabc";
     const periodic_raw = try store.declarationSliceForQuery(allocator, periodic_text, &raw_buffer);
     try std.testing.expectEqual(filter_min_posting_len, periodic_raw.len);
+    try std.testing.expectEqual(@as(usize, 0), raw_buffer.items.len);
+    var allocation_free_raw_buffer: std.ArrayList(Declaration.Index) = .empty;
+    const allocation_free_raw = try store.declarationSliceForQuery(
+        std.testing.failing_allocator,
+        periodic_text,
+        &allocation_free_raw_buffer,
+    );
+    try std.testing.expectEqualSlices(Declaration.Index, periodic_raw, allocation_free_raw);
+    try std.testing.expectEqual(@as(usize, 0), allocation_free_raw_buffer.capacity);
 
     var periodic_query = try Query.init(allocator, periodic_text);
     defer periodic_query.deinit(allocator);
     prepared_buffer.clearRetainingCapacity();
     const periodic_prepared = try store.declarationSliceForPreparedQuery(allocator, &periodic_query, &prepared_buffer);
     try std.testing.expectEqualSlices(Declaration.Index, periodic_raw, periodic_prepared);
+    try std.testing.expectEqual(@as(usize, 0), prepared_buffer.items.len);
+    var allocation_free_prepared_buffer: std.ArrayList(Declaration.Index) = .empty;
+    const allocation_free_prepared = try store.declarationSliceForPreparedQuery(
+        std.testing.failing_allocator,
+        &periodic_query,
+        &allocation_free_prepared_buffer,
+    );
+    try std.testing.expectEqualSlices(Declaration.Index, periodic_raw, allocation_free_prepared);
+    try std.testing.expectEqual(@as(usize, 0), allocation_free_prepared_buffer.capacity);
 
     raw_buffer.clearRetainingCapacity();
     const short_repeated_text = "aaaaaaaa";
