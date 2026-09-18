@@ -70,6 +70,19 @@ baseline versus direct production path measured 7,068 versus 7,027 ns for
 indices and 9,001 versus 8,818 ns for locations. Reversed, interleaved, and
 last-pair-swapped inputs preserve the mapping fallback and remained within 2%.
 
+## Inlay hint output conversion, 2026-09-18
+
+Inlay hint conversion now sorts its internal records only when necessary and
+writes positions directly into the final protocol response. This removes the
+temporary source-index and position arrays, reducing the conversion stage from
+three allocations to one. A failing-allocator test enforces the single-allocation
+bound and checks stable duplicate ordering and Unicode positions.
+
+A fixed-CPU LSP benchmark generated 4,096 two-argument calls and requested the
+resulting 8,192 hints. Across eight alternating baseline/candidate processes,
+each timed over 40 warmed requests, the median request time changed from 27.65 ms
+to 27.10 ms (-2.0%). Every run returned the same hint count and response SHA-256.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte

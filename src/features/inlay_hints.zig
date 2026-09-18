@@ -194,36 +194,64 @@ const Builder = struct {
     }
 
     fn getInlayHints(self: *Builder, offset_encoding: offsets.Encoding) error{OutOfMemory}![]types.InlayHint {
-        const source_indices = try self.arena.alloc(usize, self.hints.items.len);
-        for (source_indices, self.hints.items) |*index, hint| {
-            index.* = hint.index;
-        }
-
-        const positions = try self.arena.alloc(types.Position, self.hints.items.len);
-
-        try offsets.multiple.indexToPosition(
+        return convertInlayHints(
             self.arena,
             self.handle.tree.source,
-            source_indices,
-            positions,
+            self.hints.items,
             offset_encoding,
         );
-
-        const converted_hints = try self.arena.alloc(types.InlayHint, self.hints.items.len);
-        for (converted_hints, self.hints.items, positions) |*converted_hint, hint, position| {
-            converted_hint.* = .{
-                .position = position,
-                .label = .{ .string = hint.label },
-                .kind = hint.kind,
-                .tooltip = if (hint.tooltip) |tooltip| .{ .markup_content = tooltip } else null,
-                .paddingLeft = false,
-                .paddingRight = hint.kind == .Parameter,
-            };
-        }
-
-        return converted_hints;
     }
 };
+
+fn convertInlayHints(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    hints: []InlayHint,
+    offset_encoding: offsets.Encoding,
+) error{OutOfMemory}![]types.InlayHint {
+    if (!std.sort.isSorted(InlayHint, hints, {}, InlayHint.lessThan)) {
+        std.mem.sort(InlayHint, hints, {}, InlayHint.lessThan);
+    }
+
+    const converted_hints = try allocator.alloc(types.InlayHint, hints.len);
+    var last_index: usize = 0;
+    var last_position: types.Position = .{ .line = 0, .character = 0 };
+    for (converted_hints, hints) |*converted_hint, hint| {
+        const position = offsets.advancePosition(source, last_position, last_index, hint.index, offset_encoding);
+        last_index = hint.index;
+        last_position = position;
+        converted_hint.* = .{
+            .position = position,
+            .label = .{ .string = hint.label },
+            .kind = hint.kind,
+            .tooltip = if (hint.tooltip) |tooltip| .{ .markup_content = tooltip } else null,
+            .paddingLeft = false,
+            .paddingRight = hint.kind == .Parameter,
+        };
+    }
+    return converted_hints;
+}
+
+test "convert inlay hints allocates only the result" {
+    const source = "a¶↉🠁\nsecond";
+    var hints = [_]InlayHint{
+        .{ .index = 11, .label = "second", .kind = .Type, .tooltip = null },
+        .{ .index = 1, .label = "first-a", .kind = .Parameter, .tooltip = null },
+        .{ .index = 1, .label = "first-b", .kind = .Parameter, .tooltip = null },
+    };
+    var failing_allocator: std.testing.FailingAllocator = .init(std.testing.allocator, .{ .fail_index = 1 });
+    const allocator = failing_allocator.allocator();
+    const converted = try convertInlayHints(allocator, source, &hints, .@"utf-16");
+    defer allocator.free(converted);
+
+    try std.testing.expectEqual(@as(usize, 1), failing_allocator.allocations);
+    try std.testing.expectEqualStrings("first-a", converted[0].label.string);
+    try std.testing.expectEqualStrings("first-b", converted[1].label.string);
+    try std.testing.expectEqualStrings("second", converted[2].label.string);
+    try std.testing.expectEqual(offsets.indexToPosition(source, 1, .@"utf-16"), converted[0].position);
+    try std.testing.expectEqual(offsets.indexToPosition(source, 1, .@"utf-16"), converted[1].position);
+    try std.testing.expectEqual(offsets.indexToPosition(source, 11, .@"utf-16"), converted[2].position);
+}
 
 /// writes parameter hints into `builder.hints`
 fn writeCallHint(

@@ -735,6 +735,9 @@ fn testInlayHints(source: []const u8, options: Options) !void {
         std.debug.print("Server returned `null` as the result\n", .{});
         return error.InvalidResponse;
     };
+    for (hints[0..hints.len -| 1], hints[@min(1, hints.len)..]) |previous, current| {
+        try std.testing.expect(offsets.orderPosition(previous.position, current.position) != .gt);
+    }
 
     var visited: std.DynamicBitSetUnmanaged = try .initEmpty(allocator, hints.len);
     defer visited.deinit(allocator);
