@@ -65,6 +65,15 @@ pub fn main(init: std.process.Init) !void {
     @memset(long_line, 'a');
     try benchmarkPositionToIndex(io, allocator, "synthetic-long-line", long_line);
 
+    const sparse_unicode_line = try allocator.alloc(u8, 67 * 4096);
+    defer allocator.free(sparse_unicode_line);
+    for (0..4096) |index| {
+        const chunk = sparse_unicode_line[index * 67 ..][0..67];
+        @memset(chunk[0..63], 'a');
+        @memcpy(chunk[63..], "🠁");
+    }
+    try benchmarkPositionToIndex(io, allocator, "synthetic-sparse-unicode-line", sparse_unicode_line);
+
     const dense_newlines = try allocator.alloc(u8, 2 * 1024 * 1024);
     defer allocator.free(dense_newlines);
     @memset(dense_newlines, '\n');

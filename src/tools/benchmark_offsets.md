@@ -152,6 +152,23 @@ Checksums matched for UTF-8, UTF-16, and UTF-32 in every case. The dense
 newline input guards against an earlier per-newline `findScalarPos` prototype
 that was roughly 24 times slower than the baseline and was rejected.
 
+## Long-line code-unit lookup, 2026-09-18
+
+`positionToIndex` now skips long ASCII prefixes in SIMD blocks for UTF-16 and
+UTF-32 before decoding non-ASCII codepoints. The fallback preserves clamping
+and the existing UTF-16 behavior when a requested code unit lands within a
+surrogate pair. Deterministic random differential tests compare the replacement
+with lsp-kit across ASCII, two-, three-, and four-byte codepoints and requests
+beyond the end of the line.
+
+On AArch64 Linux, Zig 0.16.0, `ReleaseFast`, LLVM, 256 byte-uniform queries over
+a 256 KiB ASCII line changed UTF-16 position lookup from about 1.56 ms to 34 us
+and short range conversion from about 1.61 ms to 46 us. UTF-32 changed from
+about 123 us to 34 us and from 135 us to 46 us respectively. A 274 KiB line
+with one four-byte codepoint after every 63 ASCII bytes changed UTF-16 lookup
+from about 1.57 ms to 60 us and UTF-32 from about 128 us to 60 us. All checksums
+matched; UTF-8 controls were unchanged.
+
 Eight fixed-CPU ABBA pairs opened the complete `Sema.zig`, synchronized the
 document, and issued 200 `textDocument/hover` requests for a local variable near
 the end of the 34,840-line file. Median request-batch time changed from 239.67

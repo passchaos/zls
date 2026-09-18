@@ -97,7 +97,93 @@ pub const convertRangeEncoding = offsets.convertRangeEncoding;
 
 pub const advancePosition = @import("offsets/advance_position.zig").advancePosition;
 pub const countCodeUnits = offsets.countCodeUnits;
-pub const getNCodeUnitByteCount = offsets.getNCodeUnitByteCount;
+
+/// Returns the byte length covering `n` code units, clamped to `text.len`.
+/// Long ASCII prefixes are skipped a SIMD block at a time on the LLVM backend.
+pub fn getNCodeUnitByteCount(text: []const u8, n: usize, encoding: Encoding) usize {
+    if (encoding == .@"utf-8") return @min(text.len, n);
+    if (n == 0) return 0;
+
+    var index: usize = 0;
+    var remaining = n;
+    if (@import("builtin").zig_backend == .stage2_llvm) if (std.simd.suggestVectorLength(u8)) |block_size| {
+        const Block = @Vector(block_size, u8);
+        const non_ascii: Block = @splat(0x80);
+        while (text.len - index >= block_size) {
+            const bytes: Block = text[index..][0..block_size].*;
+            if (@reduce(.Or, bytes >= non_ascii)) {
+                var ascii_prefix_len: usize = 0;
+                while (text[index + ascii_prefix_len] < 0x80) : (ascii_prefix_len += 1) {}
+                if (remaining <= ascii_prefix_len) return index + remaining;
+                remaining -= ascii_prefix_len;
+                index += ascii_prefix_len;
+
+                const byte_count = std.unicode.utf8ByteSequenceLength(text[index]) catch unreachable;
+                index += byte_count;
+                const unit_count: usize = if (encoding == .@"utf-16" and byte_count == 4) 2 else 1;
+                if (remaining <= unit_count) return index;
+                remaining -= unit_count;
+            } else {
+                if (remaining <= block_size) return index + remaining;
+                remaining -= block_size;
+                index += block_size;
+            }
+        }
+    };
+
+    while (index < text.len) {
+        const byte_count = std.unicode.utf8ByteSequenceLength(text[index]) catch unreachable;
+        index += byte_count;
+        const unit_count: usize = if (encoding == .@"utf-16" and byte_count == 4) 2 else 1;
+        if (remaining <= unit_count) break;
+        remaining -= unit_count;
+    }
+    return index;
+}
+
+test "getNCodeUnitByteCount matches lsp offsets" {
+    const texts = [_][]const u8{
+        "",
+        "short ASCII",
+        "a" ** 63 ++ "¶" ++ "b" ** 65,
+        "a" ** 64 ++ "🠁" ++ "b" ** 64,
+        "¶↉🠁" ** 32 ++ "tail",
+    };
+    for (texts) |text| {
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            const unit_count = offsets.countCodeUnits(text, encoding);
+            for (0..unit_count + 3) |units| {
+                try std.testing.expectEqual(
+                    offsets.getNCodeUnitByteCount(text, units, encoding),
+                    getNCodeUnitByteCount(text, units, encoding),
+                );
+            }
+        }
+    }
+
+    var random_text_buffer: [1024]u8 = undefined;
+    var random: std.Random.DefaultPrng = .init(0x636f_6465_756e_6974);
+    const codepoints = [_][]const u8{ "a", "_", "¶", "↉", "🠁", "🇺" };
+    for (0..32) |_| {
+        var text_length: usize = 0;
+        while (text_length < random_text_buffer.len - 4) {
+            const codepoint = codepoints[random.random().uintLessThan(usize, codepoints.len)];
+            @memcpy(random_text_buffer[text_length..][0..codepoint.len], codepoint);
+            text_length += codepoint.len;
+        }
+        const random_text = random_text_buffer[0..text_length];
+        inline for (.{ Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            const unit_count = offsets.countCodeUnits(random_text, encoding);
+            for (0..128) |_| {
+                const units = random.random().uintLessThan(usize, unit_count + 3);
+                try std.testing.expectEqual(
+                    offsets.getNCodeUnitByteCount(random_text, units, encoding),
+                    getNCodeUnitByteCount(random_text, units, encoding),
+                );
+            }
+        }
+    }
+}
 
 test "positionToIndex matches lsp offsets" {
     const texts = [_][]const u8{
