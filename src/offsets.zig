@@ -837,7 +837,9 @@ pub const multiple = struct {
         mappings: []IndexToPositionMapping,
         encoding: Encoding,
     ) void {
-        std.mem.sort(IndexToPositionMapping, mappings, {}, IndexToPositionMapping.lessThan);
+        if (!std.sort.isSorted(IndexToPositionMapping, mappings, {}, IndexToPositionMapping.lessThan)) {
+            std.mem.sort(IndexToPositionMapping, mappings, {}, IndexToPositionMapping.lessThan);
+        }
 
         var last_index: usize = 0;
         var last_position: Position = .{ .line = 0, .character = 0 };
@@ -891,6 +893,13 @@ pub const multiple = struct {
             .{ .line = 1, .character = 0 },
             .{ .line = 0, .character = 0 },
         }, &result_positions);
+
+        const ordered_indices: []const usize = &.{ 0, 3, 3, 6, 9 };
+        var ordered_positions: [ordered_indices.len]Position = undefined;
+        try multiple.indexToPosition(std.testing.allocator, text, ordered_indices, &ordered_positions, .@"utf-16");
+        for (ordered_indices, ordered_positions) |index, position| {
+            try std.testing.expectEqual(offsets.indexToPosition(text, index, .@"utf-16"), position);
+        }
 
         const unicode_text = "a¶↉🠁\r\nsecond line\nthird";
         const valid_indices = [_]usize{ 0, 1, 3, 6, 10, 11, 12, 18, 23, unicode_text.len };

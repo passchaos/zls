@@ -48,6 +48,19 @@ was within 1% of baseline in this run. Checksums matched at every measured batch
 size. In the arena-backed feature call sites, the fast path also avoids retaining
 up to 1 KiB of temporary mapping storage until the request arena is released.
 
+## Ordered batch fast path, 2026-09-18
+
+Mapping batches are now checked for source order before invoking the stable sort.
+This is an O(n) pass that returns immediately on the first inversion. It avoids
+sorting entirely for callers that naturally emit mappings in source order, while
+retaining the original stable sort for arbitrary input.
+
+On the same AArch64 setup, ordered batches of 8 through 128 improved by 1% to 7%
+for both batch helpers. At 128 items, location-to-range fell from 9,628 ns to
+8,962 ns (-6.9%), and index-to-position fell from 7,414 ns to 7,096 ns (-4.3%).
+Reversed and interleaved controls remained within 1% of the baseline. Checksums
+matched for every order and batch size.
+
 ## SIMD position-to-index scanning, 2026-09-17
 
 LSP requests supply `(line, character)` positions, while ZLS analysis uses byte

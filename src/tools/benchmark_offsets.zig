@@ -8,6 +8,7 @@ const baseline_offsets = zls.lsp.offsets;
 const PositionToIndexMode = enum { baseline, production };
 const RangeToLocMode = enum { baseline, production };
 const MultipleMode = enum { baseline, production };
+const BatchOrder = enum { ordered, reversed, interleaved };
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -84,59 +85,89 @@ fn benchmarkMultipleConversions(
         defer allocator.free(locs);
         const ranges = try allocator.alloc(offsets.Range, range_count);
         defer allocator.free(ranges);
-        for (locs, 0..) |*loc, index| {
-            const start = (source.len * index) / range_count;
-            loc.* = .{ .start = start, .end = @min(source.len, start + 32) };
-            indices[index] = start;
-        }
-
-        const rounds = @max(1, (16 * 1024 * 1024) / @max(1, source.len));
-        inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
-            var samples: [7]u64 = undefined;
-            var checksum: u64 = 0;
-            for (&samples) |*sample| {
-                const before = std.Io.Clock.awake.now(io);
-                for (0..rounds) |_| {
-                    switch (mode) {
-                        .baseline => try multipleLocToRangeBaseline(allocator, source, locs, ranges, .@"utf-16"),
-                        .production => try offsets.multiple.locToRange(allocator, source, locs, ranges, .@"utf-16"),
-                    }
-                    for (ranges) |range| {
-                        checksum +%= (@as(u64, range.start.line) << 32) | range.start.character;
-                        checksum +%= (@as(u64, range.end.line) << 32) | range.end.character;
-                    }
-                }
-                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+        inline for ([_]BatchOrder{ .ordered, .reversed, .interleaved }) |order| {
+            for (locs, indices, 0..) |*loc, *source_index, index| {
+                const rank = switch (order) {
+                    .ordered => index,
+                    .reversed => range_count - index - 1,
+                    .interleaved => (index * 5) % range_count,
+                };
+                const start = (source.len * rank) / range_count;
+                loc.* = .{ .start = start, .end = @min(source.len, start + 32) };
+                source_index.* = start;
             }
-            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
-            std.debug.print("{s}: batch-loc-to-range {t} count={d}: {d} ns/batch checksum={d}\n", .{
-                name,                              mode,     range_count,
-                samples[samples.len / 2] / rounds, checksum,
-            });
-        }
 
-        inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
-            var samples: [7]u64 = undefined;
-            var checksum: u64 = 0;
-            for (&samples) |*sample| {
-                const before = std.Io.Clock.awake.now(io);
-                for (0..rounds) |_| {
-                    switch (mode) {
-                        .baseline => try multipleIndexToPositionBaseline(allocator, source, indices, positions, .@"utf-16"),
-                        .production => try offsets.multiple.indexToPosition(allocator, source, indices, positions, .@"utf-16"),
-                    }
-                    for (positions) |position| {
-                        checksum +%= (@as(u64, position.line) << 32) | position.character;
-                    }
-                }
-                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
-            }
-            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
-            std.debug.print("{s}: batch-index-to-position {t} count={d}: {d} ns/batch checksum={d}\n", .{
-                name,                              mode,     range_count,
-                samples[samples.len / 2] / rounds, checksum,
-            });
+            const rounds = @max(1, (16 * 1024 * 1024) / @max(1, source.len));
+            try benchmarkBatchLocToRange(io, allocator, name, source, locs, ranges, order, rounds);
+            try benchmarkBatchIndexToPosition(io, allocator, name, source, indices, positions, order, rounds);
         }
+    }
+}
+
+fn benchmarkBatchLocToRange(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    source: []const u8,
+    locs: []const offsets.Loc,
+    ranges: []offsets.Range,
+    order: BatchOrder,
+    rounds: usize,
+) !void {
+    inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
+        var samples: [7]u64 = undefined;
+        var checksum: u64 = 0;
+        for (&samples) |*sample| {
+            const before = std.Io.Clock.awake.now(io);
+            for (0..rounds) |_| {
+                switch (mode) {
+                    .baseline => try multipleLocToRangeBaseline(allocator, source, locs, ranges, .@"utf-16"),
+                    .production => try offsets.multiple.locToRange(allocator, source, locs, ranges, .@"utf-16"),
+                }
+                for (ranges) |range| {
+                    checksum +%= (@as(u64, range.start.line) << 32) | range.start.character;
+                    checksum +%= (@as(u64, range.end.line) << 32) | range.end.character;
+                }
+            }
+            sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+        }
+        std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+        std.debug.print("{s}: batch-loc-to-range {t} {t} count={d}: {d} ns/batch checksum={d}\n", .{
+            name, mode, order, locs.len, samples[samples.len / 2] / rounds, checksum,
+        });
+    }
+}
+
+fn benchmarkBatchIndexToPosition(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    source: []const u8,
+    indices: []const usize,
+    positions: []offsets.Position,
+    order: BatchOrder,
+    rounds: usize,
+) !void {
+    inline for ([_]MultipleMode{ .baseline, .production }) |mode| {
+        var samples: [7]u64 = undefined;
+        var checksum: u64 = 0;
+        for (&samples) |*sample| {
+            const before = std.Io.Clock.awake.now(io);
+            for (0..rounds) |_| {
+                switch (mode) {
+                    .baseline => try multipleIndexToPositionBaseline(allocator, source, indices, positions, .@"utf-16"),
+                    .production => try offsets.multiple.indexToPosition(allocator, source, indices, positions, .@"utf-16"),
+                }
+                for (positions) |position| {
+                    checksum +%= (@as(u64, position.line) << 32) | position.character;
+                }
+            }
+            sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+        }
+        std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+        std.debug.print("{s}: batch-index-to-position {t} {t} count={d}: {d} ns/batch checksum={d}\n", .{
+            name, mode, order, indices.len, samples[samples.len / 2] / rounds, checksum,
+        });
     }
 }
 
@@ -153,7 +184,7 @@ fn multipleIndexToPositionBaseline(
     for (mappings, indices, positions) |*mapping, index, *position| {
         mapping.* = .{ .output = position, .source_index = index };
     }
-    offsets.multiple.indexToPositionWithMappings(text, mappings, encoding);
+    indexToPositionWithMappingsBaseline(text, mappings, encoding);
 }
 
 fn multipleLocToRangeBaseline(
@@ -170,7 +201,28 @@ fn multipleLocToRangeBaseline(
         mappings[2 * index + 0] = .{ .output = &range.start, .source_index = loc.start };
         mappings[2 * index + 1] = .{ .output = &range.end, .source_index = loc.end };
     }
-    offsets.multiple.indexToPositionWithMappings(text, mappings, encoding);
+    indexToPositionWithMappingsBaseline(text, mappings, encoding);
+}
+
+fn indexToPositionWithMappingsBaseline(
+    text: []const u8,
+    mappings: []offsets.multiple.IndexToPositionMapping,
+    encoding: offsets.Encoding,
+) void {
+    std.mem.sort(offsets.multiple.IndexToPositionMapping, mappings, {}, struct {
+        fn lessThan(_: void, lhs: offsets.multiple.IndexToPositionMapping, rhs: offsets.multiple.IndexToPositionMapping) bool {
+            return lhs.source_index < rhs.source_index;
+        }
+    }.lessThan);
+
+    var last_index: usize = 0;
+    var last_position: offsets.Position = .{ .line = 0, .character = 0 };
+    for (mappings) |mapping| {
+        const position = offsets.advancePosition(text, last_position, last_index, mapping.source_index, encoding);
+        last_index = mapping.source_index;
+        last_position = position;
+        mapping.output.* = position;
+    }
 }
 
 fn benchmarkPositionToIndex(
