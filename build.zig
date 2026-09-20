@@ -253,6 +253,35 @@ pub fn build(b: *Build) !void {
         b.step("bench-message-parsing", "Benchmark inbound LSP message parsing").dependOn(&run.step);
     }
 
+    { // zig build bench-lsp-references -Doptimize=ReleaseFast -- [benchmark options]
+        const benchmark_zls = b.addExecutable(.{
+            .name = "zls-reference-benchmark-server",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .single_threaded = single_threaded,
+                .pic = pie,
+                .strip = strip,
+                .imports = &.{
+                    .{ .name = "exe_options", .module = exe_options },
+                    .{ .name = "known-folders", .module = b.dependency("known_folders", .{
+                        .target = target,
+                        .optimize = optimize,
+                    }).module("known-folders") },
+                    .{ .name = "tracy", .module = zls_module.import_table.get("tracy").? },
+                    .{ .name = "zls", .module = zls_module },
+                },
+            }),
+            .use_llvm = use_llvm,
+        });
+        const run = b.addSystemCommand(&.{"python3"});
+        run.addFileArg(b.path("src/tools/benchmark_lsp_references.py"));
+        run.addArtifactArg(benchmark_zls);
+        if (b.args) |args| run.addArgs(args);
+        b.step("bench-lsp-references", "Benchmark reference-family LSP requests").dependOn(&run.step);
+    }
+
     const known_folders_module = b.dependency("known_folders", .{
         .target = target,
         .optimize = optimize,

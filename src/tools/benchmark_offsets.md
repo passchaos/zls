@@ -73,6 +73,13 @@ distributed across the 861 KiB `src/analysis.zig` measured as follows:
 All result checksums matched. A single range remains unchanged at about 39 ns,
 so the cursor does not impose a measurable one-result penalty in this harness.
 
+The protocol-level `benchmark_lsp_references.py` tool then exercised 4,096
+references in a generated 112 KiB document. Across 24 timed requests after four
+warmups, median end-to-end latency changed from 18.87 ms to 6.25 ms (-67%) for
+references, 17.84 ms to 5.54 ms (-69%) for document highlights, and 17.89 ms to
+5.72 ms (-68%) for rename. Each pair returned 4,097 items with matching
+canonical response SHA-256 values.
+
 ## Small batch allocation removal, 2026-09-18
 
 The batched `indexToPosition` and `locToRange` helpers now keep up to 64 mapping
