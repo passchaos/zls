@@ -1904,6 +1904,13 @@ fn collectContainerFields(
     container: Analyser.Type,
     omit_members: std.BufSet,
 ) Analyser.Error!void {
+    if ((likely == .enum_comparison or likely == .switch_case) and
+        !container.isEnumType(builder.analyser) and
+        !container.isTaggedUnion())
+    {
+        return;
+    }
+
     const info = switch (container.data) {
         .container => |info| info,
         else => return,

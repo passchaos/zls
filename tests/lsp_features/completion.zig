@@ -23383,6 +23383,19 @@ test "enum literal" {
     });
 }
 
+test "enum-only contexts reject plain struct fields" {
+    try testCompletion(
+        \\const S = struct { alpha: u32 };
+        \\const value: S = undefined;
+        \\const result = value == .<cursor>;
+    , &.{});
+    try testCompletion(
+        \\const S = struct { alpha: u32 };
+        \\const value: S = undefined;
+        \\const result = switch (value) { .<cursor> };
+    , &.{});
+}
+
 test "enum literal resolution cache" {
     const source =
         \\const E = enum { same };
