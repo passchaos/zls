@@ -281,6 +281,26 @@ fn colorIdentifierBasedOnType(
     }
 }
 
+fn colorFieldIdentifierBasedOnType(
+    builder: *Builder,
+    type_node: Analyser.Type,
+    receiver_type: Analyser.Type,
+    target_tok: Ast.TokenIndex,
+    tok_mod: TokenModifiers,
+) error{OutOfMemory}!void {
+    if (!type_node.isFunc()) {
+        return try colorIdentifierBasedOnType(builder, type_node, target_tok, false, tok_mod);
+    }
+
+    var new_tok_mod = tok_mod;
+    if (type_node.isGenericFunc()) {
+        new_tok_mod.generic = true;
+    }
+    const has_self_param = !receiver_type.is_type_val and
+        builder.analyser.firstParamIs(type_node, try receiver_type.typeOf(builder.analyser));
+    try writeTokenMod(builder, target_tok, if (has_self_param) .method else .function, new_tok_mod);
+}
+
 fn writeNodeTokens(builder: *Builder, node: Ast.Node.Index) Analyser.Error!void {
     const handle = builder.handle;
     const tree = &handle.tree;
@@ -1141,11 +1161,11 @@ fn writeFieldAccess(builder: *Builder, node: Ast.Node.Index) Analyser.Error!void
         }
 
         const resolved_type = try decl_type.resolveType(builder.analyser) orelse break :decl_blk;
-        try colorIdentifierBasedOnType(
+        try colorFieldIdentifierBasedOnType(
             builder,
             resolved_type,
+            lhs_type,
             field_name_token,
-            false,
             .{
                 .mutable = !decl_type.isConst(),
                 .static = !(resolved_type.is_type_val or resolved_type.isFunc()) and try decl_type.isStatic(),

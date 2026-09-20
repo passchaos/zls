@@ -497,7 +497,6 @@ pub fn hasSelfParam(analyser: *Analyser, func_ty: Type) error{OutOfMemory}!bool 
     const container = func_ty.data.function.container_type.*;
     if (container.is_type_val) return false;
     const in_container = try container.typeOf(analyser);
-    if (in_container.isNamespace()) return false;
     return analyser.firstParamIs(func_ty, in_container);
 }
 

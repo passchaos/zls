@@ -639,13 +639,13 @@ test "method call on return value of generic function" {
         .{ "value", .variable, .{ .declaration = true, .static = true } },
         .{ "=", .operator, .{} },
         .{ "map", .variable, .{ .static = true } },
-        .{ "getValue", .function, .{} },
+        .{ "getValue", .method, .{} },
 
         .{ "const", .keyword, .{} },
         .{ "foo", .variable, .{ .declaration = true, .static = true } },
         .{ "=", .operator, .{} },
         .{ "value", .variable, .{ .static = true } },
-        .{ "foo", .function, .{} },
+        .{ "foo", .method, .{} },
     });
 }
 
@@ -2109,7 +2109,7 @@ test "generic function with @This() as self param" {
         .{ "demo", .variable, .{ .mutable = true } },
         .{ "usize", .type, .{} },
         .{ "demo", .variable, .{ .mutable = true } },
-        .{ "bar", .function, .{ .generic = true } },
+        .{ "bar", .method, .{ .generic = true } },
         .{ "usize", .type, .{} },
     });
 }
