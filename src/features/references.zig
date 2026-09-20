@@ -619,16 +619,32 @@ fn controlFlowReferences(
     return locations;
 }
 
+pub const Callsite = struct {
+    call: Analyser.NodeWithHandle,
+    receiver: ?Analyser.NodeWithHandle,
+};
+
 const CallBuilder = struct {
-    callsites: std.ArrayList(Analyser.NodeWithHandle) = .empty,
+    callsites: std.ArrayList(Callsite) = .empty,
     /// this is the declaration we are searching for
     target_decl: Analyser.DeclWithHandle,
     analyser: *Analyser,
 
-    fn add(self: *CallBuilder, handle: *DocumentStore.Handle, call_node: Ast.Node.Index) error{OutOfMemory}!void {
+    fn add(
+        self: *CallBuilder,
+        handle: *DocumentStore.Handle,
+        call_node: Ast.Node.Index,
+        receiver_node: ?Ast.Node.Index,
+    ) error{OutOfMemory}!void {
         try self.callsites.append(self.analyser.arena, .{
-            .handle = handle,
-            .node = call_node,
+            .call = .{
+                .handle = handle,
+                .node = call_node,
+            },
+            .receiver = if (receiver_node) |receiver| .{
+                .handle = handle,
+                .node = receiver,
+            } else null,
         });
     }
 
@@ -672,7 +688,7 @@ const CallBuilder = struct {
                         )) orelse return;
 
                         if (builder.target_decl.eql(child)) {
-                            try builder.add(handle, node);
+                            try builder.add(handle, node, null);
                         }
                     },
                     .field_access => {
@@ -681,10 +697,12 @@ const CallBuilder = struct {
                         const deref_lhs = try builder.analyser.resolveDerefType(lhs) orelse lhs;
 
                         const symbol = offsets.tokenToSlice(tree, field_name);
-                        const child = (try deref_lhs.lookupSymbol(builder.analyser, symbol)) orelse return;
-
-                        if (builder.target_decl.eql(child)) {
-                            try builder.add(handle, node);
+                        for (try deref_lhs.getAllTypesWithHandles(builder.analyser)) |ty| {
+                            const child = (try ty.lookupSymbol(builder.analyser, symbol)) orelse continue;
+                            if (builder.target_decl.eql(child)) {
+                                try builder.add(handle, node, if (lhs.is_type_val) null else lhs_node);
+                                return;
+                            }
                         }
                     },
                     else => {},
@@ -700,7 +718,7 @@ pub fn callsiteReferences(
     decl_handle: Analyser.DeclWithHandle,
     /// search other files for references
     workspace: bool,
-) Analyser.Error!std.ArrayList(Analyser.NodeWithHandle) {
+) Analyser.Error!std.ArrayList(Callsite) {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 

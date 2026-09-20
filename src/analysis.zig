@@ -11739,7 +11739,6 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
         else => return null,
     };
 
-    const tree = &decl_handle.handle.tree;
     const is_cimport = std.mem.eql(u8, std.Io.Dir.path.basename(decl_handle.handle.uri.raw), "cimport.zig");
 
     if (is_cimport or !analyser.collect_callsite_references or analyser.callsite_reference_depth >= 1) return null;
@@ -11753,16 +11752,6 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
 
     const func_decl: Declaration = .{ .ast_node = pay.func };
 
-    var func_buf: [1]Ast.Node.Index = undefined;
-    const func = tree.fullFnProto(&func_buf, pay.func).?;
-
-    var func_params_len: usize = 0;
-
-    var it: ast.FnParamIterator = .init(&func, tree);
-    while (it.next()) |_| {
-        func_params_len += 1;
-    }
-
     const refs = try references.callsiteReferences(
         analyser,
         .{ .decl = func_decl, .handle = decl_handle.handle, .container_type = decl_handle.container_type },
@@ -11772,39 +11761,32 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
     var possible: std.ArrayList(Type.TypeWithDescriptor) = .empty;
 
     for (refs.items) |ref| {
+        const call_tree = &ref.call.handle.tree;
         var call_buf: [1]Ast.Node.Index = undefined;
-        const call = tree.fullCall(&call_buf, ref.node).?;
+        const call = call_tree.fullCall(&call_buf, ref.call.node).?;
+        const argument = if (ref.receiver) |receiver| blk: {
+            if (pay.param_index == 0) break :blk receiver;
+            const argument_index = pay.param_index - 1;
+            if (argument_index >= call.ast.params.len) continue;
+            break :blk NodeWithHandle.of(call.ast.params[argument_index], ref.call.handle);
+        } else blk: {
+            if (pay.param_index >= call.ast.params.len) continue;
+            break :blk NodeWithHandle.of(call.ast.params[pay.param_index], ref.call.handle);
+        };
 
-        const real_param_idx = if (func_params_len != 0 and pay.param_index != 0 and call.ast.params.len == func_params_len - 1)
-            pay.param_index - 1
-        else
-            pay.param_index;
-
-        if (real_param_idx >= call.ast.params.len) continue;
-
-        var ty = resolve_ty: {
+        const ty = resolve_ty: {
             // don't resolve callsite references while resolving callsite references
             const old_collect_callsite_references = analyser.collect_callsite_references;
             defer analyser.collect_callsite_references = old_collect_callsite_references;
             analyser.collect_callsite_references = false;
 
-            break :resolve_ty try analyser.resolveTypeOfNode(.of(
-                // TODO?: this is a """heuristic based approach"""
-                // perhaps it would be better to use proper self detection
-                // maybe it'd be a perf issue and this is fine?
-                // you figure it out future contributor <3
-                call.ast.params[real_param_idx],
-                ref.handle,
-            )) orelse continue;
+            break :resolve_ty try analyser.resolveTypeOfNode(.of(argument.node, argument.handle)) orelse continue;
         };
 
-        ty = try ty.typeOf(analyser);
-        std.debug.assert(ty.is_type_val);
-
-        const loc = offsets.tokenToPosition(tree, tree.nodeMainToken(call.ast.params[real_param_idx]), .@"utf-8");
+        const loc = offsets.tokenToPosition(&argument.handle.tree, argument.handle.tree.nodeMainToken(argument.node), .@"utf-8");
         try possible.append(analyser.arena, .{
             .type = ty,
-            .descriptor = try std.fmt.allocPrint(analyser.arena, "{s}:{d}:{d}", .{ ref.handle.uri.raw, loc.line + 1, loc.character + 1 }),
+            .descriptor = try std.fmt.allocPrint(analyser.arena, "{s}:{d}:{d}", .{ argument.handle.uri.raw, loc.line + 1, loc.character + 1 }),
         });
     }
 

@@ -24892,10 +24892,12 @@ test "function taking a generic struct arg" {
 test "anytype resolution based on callsite-references" {
     try testCompletion(
         \\const Writer1 = struct {
+        \\    field1: u32,
         \\    fn write1(self: Writer1) void {}
         \\    fn writeAll1(self: Writer1) void {}
         \\};
         \\const Writer2 = struct {
+        \\    field2: u64,
         \\    fn write2(self: Writer2) void {}
         \\    fn writeAll2(self: Writer2) void {}
         \\};
@@ -24907,17 +24909,21 @@ test "anytype resolution based on callsite-references" {
         \\    writer.<cursor>
         \\}
     , &.{
-        .{ .label = "write1", .kind = .Function, .detail = "fn (self: Writer1) void" },
-        .{ .label = "write2", .kind = .Function, .detail = "fn (self: Writer2) void" },
-        .{ .label = "writeAll1", .kind = .Function, .detail = "fn (self: Writer1) void" },
-        .{ .label = "writeAll2", .kind = .Function, .detail = "fn (self: Writer2) void" },
+        .{ .label = "field1", .kind = .Field, .detail = "u32" },
+        .{ .label = "field2", .kind = .Field, .detail = "u64" },
+        .{ .label = "write1", .kind = .Method, .detail = "fn (self: Writer1) void" },
+        .{ .label = "write2", .kind = .Method, .detail = "fn (self: Writer2) void" },
+        .{ .label = "writeAll1", .kind = .Method, .detail = "fn (self: Writer1) void" },
+        .{ .label = "writeAll2", .kind = .Method, .detail = "fn (self: Writer2) void" },
     });
     try testCompletion(
         \\const Writer1 = struct {
+        \\    field1: u32,
         \\    fn write1(self: Writer1) void {}
         \\    fn writeAll1(self: Writer1) void {}
         \\};
         \\const Writer2 = struct {
+        \\    field2: u64,
         \\    fn write2(self: Writer2) void {}
         \\    fn writeAll2(self: Writer2) void {}
         \\};
@@ -24929,8 +24935,72 @@ test "anytype resolution based on callsite-references" {
         \\    writer.<cursor>
         \\}
     , &.{
-        .{ .label = "write1", .kind = .Function, .detail = "fn (self: Writer1) void" },
-        .{ .label = "writeAll1", .kind = .Function, .detail = "fn (self: Writer1) void" },
+        .{ .label = "field1", .kind = .Field, .detail = "u32" },
+        .{ .label = "write1", .kind = .Method, .detail = "fn (self: Writer1) void" },
+        .{ .label = "writeAll1", .kind = .Method, .detail = "fn (self: Writer1) void" },
+    });
+}
+
+test "anytype method resolution from branching receiver callsites" {
+    try testCompletion(
+        \\const Argument = struct { field: u32 };
+        \\const Alpha = struct {
+        \\    fn consume(_: Alpha, value: anytype) void {
+        \\        _ = value;
+        \\    }
+        \\};
+        \\const Beta = struct {
+        \\    fn consume(_: Beta, value: anytype) void {
+        \\        value.<cursor>
+        \\    }
+        \\};
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\const argument: Argument = undefined;
+        \\comptime {
+        \\    receiver.consume(argument);
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+}
+
+test "anytype self resolves from method receiver" {
+    try testCompletion(
+        \\const Argument = struct { argument_field: u32 };
+        \\const S = struct {
+        \\    self_field: u64,
+        \\    fn inspect(self: anytype, argument: Argument) void {
+        \\        _ = argument;
+        \\        self.<cursor>
+        \\    }
+        \\};
+        \\const value: S = undefined;
+        \\const argument: Argument = undefined;
+        \\comptime {
+        \\    value.inspect(argument);
+        \\}
+    , &.{
+        .{ .label = "self_field", .kind = .Field, .detail = "u64" },
+        .{ .label = "inspect", .kind = .Method, .detail = "fn (self: anytype, argument: Argument) void" },
+    });
+}
+
+test "anytype callsite preserves type values" {
+    try testCompletion(
+        \\const S = struct {
+        \\    const static_value: u32 = 1;
+        \\    instance_value: u64,
+        \\};
+        \\fn inspect(T: anytype) void {
+        \\    _ = T.<cursor>
+        \\}
+        \\comptime {
+        \\    inspect(S);
+        \\}
+    , &.{
+        .{ .label = "static_value", .kind = .Constant, .detail = "u32" },
     });
 }
 
