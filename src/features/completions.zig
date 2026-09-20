@@ -272,17 +272,26 @@ fn declToCompletion(builder: *Builder, decl_handle: Analyser.DeclWithHandle) Ana
         if (exclusions.has(name)) return;
     }
 
-    var doc_comments_buffer: [2][]const u8 = undefined;
+    var doc_comments_buffer: [3][]const u8 = undefined;
     var doc_comments: std.ArrayList([]const u8) = .initBuffer(&doc_comments_buffer);
     if (try decl_handle.docComments(builder.arena)) |docs| {
         doc_comments.appendAssumeCapacity(docs);
+    }
+    if (try builder.analyser.resolveVarDeclAlias(decl_handle)) |definition_decl| {
+        if (try definition_decl.docComments(builder.arena)) |definition_docs| {
+            if (!containsString(doc_comments.items, definition_docs)) {
+                doc_comments.appendAssumeCapacity(definition_docs);
+            }
+        }
     }
 
     const maybe_resolved_ty = try decl_handle.resolveType(builder.analyser);
 
     if (maybe_resolved_ty) |resolve_ty| {
         if (try resolve_ty.docComments(builder.arena)) |docs| {
-            doc_comments.appendAssumeCapacity(docs);
+            if (!containsString(doc_comments.items, docs)) {
+                doc_comments.appendAssumeCapacity(docs);
+            }
         }
     }
 
@@ -411,6 +420,13 @@ fn declToCompletion(builder: *Builder, decl_handle: Analyser.DeclWithHandle) Ana
             });
         },
     }
+}
+
+fn containsString(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |item| {
+        if (std.mem.eql(u8, item, needle)) return true;
+    }
+    return false;
 }
 
 fn functionTypeCompletion(

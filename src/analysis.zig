@@ -793,6 +793,10 @@ pub fn resolveVarDeclAlias(analyser: *Analyser, decl: DeclWithHandle) Error!?Dec
 
                 const base_exp = var_decl.ast.init_node.unwrap() orelse return result;
                 if (tree.tokenTag(var_decl.ast.mut_token) != .keyword_const) return result;
+                switch (tree.nodeTag(base_exp)) {
+                    .identifier, .field_access => {},
+                    else => return result,
+                }
 
                 const gop = try node_trail.getOrPut(analyser.gpa, .{ .node = base_exp, .uri = handle.uri });
                 if (gop.found_existing) return null;

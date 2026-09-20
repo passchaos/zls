@@ -25518,7 +25518,6 @@ test "enum completion on out of bound token index" {
 }
 
 test "combine doc comments of declaration and definition" {
-    if (true) return error.SkipZigTest; // TODO
     try testCompletion(
         \\const foo = struct {
         \\    /// A
@@ -25535,12 +25534,36 @@ test "combine doc comments of declaration and definition" {
         .{
             .label = "bar",
             .kind = .Struct,
-            .detail = "struct",
+            .detail = "type",
             .documentation =
-            \\ A
+            \\A
             \\
-            \\ B
+            \\B
             ,
+        },
+    });
+    try testCompletion(
+        \\/// B
+        \\const Definition = struct {};
+        \\/// A
+        \\const Alias = Definition;
+        \\const value = <cursor>
+    , &.{
+        .{
+            .label = "Alias",
+            .kind = .Struct,
+            .detail = "type",
+            .documentation =
+            \\A
+            \\
+            \\B
+            ,
+        },
+        .{
+            .label = "Definition",
+            .kind = .Struct,
+            .detail = "type",
+            .documentation = "B",
         },
     });
 }
