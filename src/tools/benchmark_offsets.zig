@@ -10,6 +10,7 @@ const IndexToPositionMode = enum { baseline, production };
 const LocToRangeMode = enum { baseline, production };
 const RangeToLocMode = enum { baseline, production };
 const MultipleMode = enum { allocation_baseline, mapping_baseline, production };
+const CursorMode = enum { repeated, cursor };
 const BatchOrder = enum { ordered, reversed, interleaved, last_swapped };
 const stack_mapping_capacity = 64;
 
@@ -117,7 +118,47 @@ fn benchmarkMultipleConversions(
             const rounds = @max(1, (16 * 1024 * 1024) / @max(1, source.len));
             try benchmarkBatchLocToRange(io, allocator, name, source, locs, ranges, order, rounds);
             try benchmarkBatchIndexToPosition(io, allocator, name, source, indices, positions, order, rounds);
+            if (order == .ordered) {
+                try benchmarkCursorLocToRange(io, name, source, locs, ranges, rounds);
+            }
         }
+    }
+}
+
+fn benchmarkCursorLocToRange(
+    io: std.Io,
+    name: []const u8,
+    source: []const u8,
+    locs: []const offsets.Loc,
+    ranges: []offsets.Range,
+    rounds: usize,
+) !void {
+    inline for ([_]CursorMode{ .repeated, .cursor }) |mode| {
+        var samples: [7]u64 = undefined;
+        var checksum: u64 = 0;
+        for (&samples) |*sample| {
+            const before = std.Io.Clock.awake.now(io);
+            for (0..rounds) |_| {
+                switch (mode) {
+                    .repeated => for (locs, ranges) |loc, *range| {
+                        range.* = offsets.locToRange(source, loc, .@"utf-16");
+                    },
+                    .cursor => {
+                        var cursor: offsets.PositionCursor = .init(source, .@"utf-16");
+                        for (locs, ranges) |loc, *range| range.* = cursor.locToRange(loc);
+                    },
+                }
+                for (ranges) |range| {
+                    checksum +%= (@as(u64, range.start.line) << 32) | range.start.character;
+                    checksum +%= (@as(u64, range.end.line) << 32) | range.end.character;
+                }
+            }
+            sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+        }
+        std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+        std.debug.print("{s}: sequential-loc-to-range {t} count={d}: {d} ns/batch checksum={d}\n", .{
+            name, mode, locs.len, samples[samples.len / 2] / rounds, checksum,
+        });
     }
 }
 

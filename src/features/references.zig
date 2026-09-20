@@ -32,12 +32,13 @@ fn labelReferences(
 
     var locations: std.ArrayList(types.Location) = .empty;
     errdefer locations.deinit(allocator);
+    var position_cursor: offsets.PositionCursor = .init(tree.source, encoding);
 
     if (include_decl) {
         // The first token is always going to be the label
         try locations.append(allocator, .{
             .uri = handle.uri.raw,
-            .range = offsets.tokenToRange(tree, first_tok, encoding),
+            .range = position_cursor.locToRange(offsets.tokenToLoc(tree, first_tok)),
         });
     }
 
@@ -53,7 +54,7 @@ fn labelReferences(
 
         try locations.append(allocator, .{
             .uri = handle.uri.raw,
-            .range = offsets.tokenToRange(tree, curr_tok + 2, encoding),
+            .range = position_cursor.locToRange(offsets.tokenToLoc(tree, curr_tok + 2)),
         });
     }
 
@@ -70,6 +71,8 @@ const Builder = struct {
     did_add_target_symbol: bool = false,
     analyser: *Analyser,
     encoding: offsets.Encoding,
+    current_handle: ?*DocumentStore.Handle = null,
+    position_cursor: ?offsets.PositionCursor = null,
 
     fn add(self: *Builder, handle: *DocumentStore.Handle, token_index: Ast.TokenIndex) error{OutOfMemory}!void {
         if (self.target_symbol.handle == handle and
@@ -78,9 +81,13 @@ const Builder = struct {
             if (self.did_add_target_symbol) return;
             self.did_add_target_symbol = true;
         }
+        if (self.current_handle != handle) {
+            self.current_handle = handle;
+            self.position_cursor = .init(handle.tree.source, self.encoding);
+        }
         try self.locations.append(self.analyser.arena, .{
             .uri = handle.uri.raw,
-            .range = offsets.tokenToRange(&handle.tree, token_index, self.encoding),
+            .range = self.position_cursor.?.locToRange(offsets.tokenToLoc(&handle.tree, token_index)),
         });
     }
 
@@ -89,6 +96,8 @@ const Builder = struct {
         defer tracy_zone.end();
 
         const arena = self.analyser.arena;
+        self.current_handle = handle;
+        self.position_cursor = .init(handle.tree.source, self.encoding);
         try referenceNode(self, handle, node);
         var walker: ast.Walker = try .init(arena, &handle.tree, node);
         defer walker.deinit(arena);
@@ -524,18 +533,19 @@ fn controlFlowReferences(
 
     var locations: std.ArrayList(types.Location) = try .initCapacity(allocator, results.items.len + @intFromBool(include_decl));
     errdefer locations.deinit(allocator);
+    var position_cursor: offsets.PositionCursor = .init(tree.source, encoding);
 
     if (include_decl) {
         locations.appendAssumeCapacity(.{
             .uri = handle.uri.raw,
-            .range = offsets.tokenToRange(tree, kw_token, encoding),
+            .range = position_cursor.locToRange(offsets.tokenToLoc(tree, kw_token)),
         });
     }
 
     for (results.items) |token| {
         locations.appendAssumeCapacity(.{
             .uri = handle.uri.raw,
-            .range = offsets.tokenToRange(tree, token, encoding),
+            .range = position_cursor.locToRange(offsets.tokenToLoc(tree, token)),
         });
     }
     return locations;

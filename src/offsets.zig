@@ -109,6 +109,62 @@ pub const convertRangeEncoding = offsets.convertRangeEncoding;
 pub const advancePosition = @import("offsets/advance_position.zig").advancePosition;
 pub const countCodeUnits = offsets.countCodeUnits;
 
+/// Incrementally converts source indices and locations from one source file.
+/// Backward queries reset to the start, so arbitrary order remains correct
+/// while naturally ordered callers scan every source prefix only once.
+pub const PositionCursor = struct {
+    text: []const u8,
+    encoding: Encoding,
+    index: usize = 0,
+    position: Position = .{ .line = 0, .character = 0 },
+
+    pub fn init(text: []const u8, encoding: Encoding) PositionCursor {
+        return .{ .text = text, .encoding = encoding };
+    }
+
+    pub fn at(cursor: *PositionCursor, index: usize) Position {
+        std.debug.assert(index <= cursor.text.len);
+        if (index < cursor.index) {
+            cursor.index = 0;
+            cursor.position = .{ .line = 0, .character = 0 };
+        }
+        cursor.position = advancePosition(cursor.text, cursor.position, cursor.index, index, cursor.encoding);
+        cursor.index = index;
+        return cursor.position;
+    }
+
+    pub fn locToRange(cursor: *PositionCursor, loc: Loc) Range {
+        std.debug.assert(loc.start <= loc.end and loc.end <= cursor.text.len);
+        const start = cursor.at(loc.start);
+        const end = advancePosition(cursor.text, start, loc.start, loc.end, cursor.encoding);
+        cursor.index = loc.end;
+        cursor.position = end;
+        return .{ .start = start, .end = end };
+    }
+};
+
+test "PositionCursor matches lsp offsets in arbitrary order" {
+    const text = "a¶↉🠁\r\nsecond line\n" ** 32 ++ "tail🇺🇸";
+    const boundaries = [_]usize{ 0, 1, 3, 6, 10, 11, 12, 18, 23, 64, 256, text.len };
+    const order = [_]usize{ 0, 6, 1, 10, 10, 3, 11, 7, 2, 9, 4, 8, 5 };
+
+    inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+        var cursor: PositionCursor = .init(text, encoding);
+        for (order) |boundary_index| {
+            const index = boundaries[boundary_index];
+            try std.testing.expectEqual(offsets.indexToPosition(text, index, encoding), cursor.at(index));
+        }
+
+        cursor = .init(text, encoding);
+        for (order, 0..) |start_boundary_index, i| {
+            const start = boundaries[start_boundary_index];
+            const end = boundaries[@max(start_boundary_index, order[(i + 3) % order.len])];
+            const loc: Loc = .{ .start = start, .end = end };
+            try std.testing.expectEqual(offsets.locToRange(text, loc, encoding), cursor.locToRange(loc));
+        }
+    }
+}
+
 /// Returns the byte length covering `n` code units, clamped to `text.len`.
 /// Long ASCII prefixes are skipped a SIMD block at a time on the LLVM backend.
 pub fn getNCodeUnitByteCount(text: []const u8, n: usize, encoding: Encoding) usize {
@@ -1015,12 +1071,9 @@ pub const multiple = struct {
         std.debug.assert(source_indices.len == result_positions.len);
 
         if (std.sort.isSorted(usize, source_indices, {}, std.sort.asc(usize))) {
-            var last_index: usize = 0;
-            var last_position: Position = .{ .line = 0, .character = 0 };
+            var cursor: PositionCursor = .init(text, encoding);
             for (source_indices, result_positions) |index, *position| {
-                position.* = advancePosition(text, last_position, last_index, index, encoding);
-                last_index = index;
-                last_position = position.*;
+                position.* = cursor.at(index);
             }
             return;
         }
@@ -1128,13 +1181,9 @@ pub const multiple = struct {
         std.debug.assert(locs.len == ranges.len);
 
         if (locsAreOrdered(locs)) {
-            var last_index: usize = 0;
-            var last_position: Position = .{ .line = 0, .character = 0 };
+            var cursor: PositionCursor = .init(text, encoding);
             for (locs, ranges) |loc, *range| {
-                range.start = advancePosition(text, last_position, last_index, loc.start, encoding);
-                range.end = advancePosition(text, range.start, loc.start, loc.end, encoding);
-                last_index = loc.end;
-                last_position = range.end;
+                range.* = cursor.locToRange(loc);
             }
             return;
         }

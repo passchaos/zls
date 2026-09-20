@@ -51,6 +51,28 @@ On the 1.50 MiB Zig `Sema.zig`, whose lines are much shorter, index-to-position
 and location-to-range stayed in the same range as baseline across all encodings.
 Dense-newline controls did as well. Checksums matched in every case.
 
+## Sequential reference range conversion, 2026-09-20
+
+Reference, rename, document-highlight, label, and control-flow result builders
+now keep a per-file position cursor. Source-ordered hits advance from the prior
+range instead of rescanning from byte zero; an out-of-order hit resets the
+cursor, preserving arbitrary-order semantics. The same cursor now backs the
+ordered batch helpers, removing duplicate position-state code. Tests cover
+forward, backward, duplicate, overlapping, and multi-file result patterns.
+
+On AArch64 macOS, Zig 0.16.0, `ReleaseFast`, LLVM, sequential UTF-16 ranges
+distributed across the 861 KiB `src/analysis.zig` measured as follows:
+
+| ranges | repeated single conversion | cursor conversion | change |
+| ---: | ---: | ---: | ---: |
+| 8 | 147.7 us | 37.5 us | -75% |
+| 32 | 656.2 us | 43.1 us | -93% |
+| 64 | 1,319.9 us | 46.1 us | -97% |
+| 128 | 2,692.9 us | 48.8 us | -98% |
+
+All result checksums matched. A single range remains unchanged at about 39 ns,
+so the cursor does not impose a measurable one-result penalty in this harness.
+
 ## Small batch allocation removal, 2026-09-18
 
 The batched `indexToPosition` and `locToRange` helpers now keep up to 64 mapping
