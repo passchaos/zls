@@ -1245,12 +1245,18 @@ fn completeFileSystemStringLiteral(builder: *Builder, pos_context: Analyser.Posi
                 label;
 
             const score: usize = if (entry.kind == .file) 6 else 5;
+            const item_insert_range = if (entry.kind == .file and
+                expected_extension != null and
+                std.mem.endsWith(u8, source[insert_loc.start..replace_loc.end], expected_extension.?))
+                replace_range
+            else
+                insert_range;
 
             try builder.completions.append(builder.arena, .{
                 .label = label,
                 .kind = if (entry.kind == .file) .File else .Folder,
                 .detail = if (pos_context == .cinclude_string_literal) path else null,
-                .textEdit = createTextEdit(builder, .{ .newText = insert_text, .insert = insert_range, .replace = replace_range }),
+                .textEdit = createTextEdit(builder, .{ .newText = insert_text, .insert = item_insert_range, .replace = replace_range }),
                 .sortText = try generateSortText(builder.arena, score, label),
             });
         } else |err| switch (err) {

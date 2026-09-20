@@ -85,13 +85,16 @@ pub const Context = struct {
         source: []const u8,
         mode: std.zig.Ast.Mode = .zig,
         base_directory: []const u8 = "/",
+        uri: ?zls.Uri = null,
     }) !zls.Uri {
         std.debug.assert(std.mem.startsWith(u8, options.base_directory, "/"));
         std.debug.assert(std.mem.endsWith(u8, options.base_directory, "/"));
 
         const arena = self.arena.allocator();
-        const path = try std.fmt.allocPrint(arena, "untitled://{s}Untitled-{d}.{t}", .{ options.base_directory, self.file_id, options.mode });
-        const uri: zls.Uri = try .parse(arena, path);
+        const uri: zls.Uri = options.uri orelse blk: {
+            const path = try std.fmt.allocPrint(arena, "untitled://{s}Untitled-{d}.{t}", .{ options.base_directory, self.file_id, options.mode });
+            break :blk try .parse(arena, path);
+        };
 
         const params: types.TextDocument.DidOpenParams = .{
             .textDocument = .{

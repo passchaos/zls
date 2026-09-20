@@ -26493,6 +26493,17 @@ test "insert replace behaviour - doc test name" {
 }
 
 test "insert replace behaviour - file system completions" {
+    if (@import("builtin").target.cpu.arch.isWasm()) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "main.zig", .data = "" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "file.zig", .data = "" });
+    const document_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.zig", allocator);
+    defer allocator.free(document_path);
+    const document_uri: zls.Uri = try .fromPath(allocator, document_path);
+    defer document_uri.deinit(allocator);
+
     // zig fmt: off
     try testCompletionTextEdit(.{
         .source = \\const std = @import("<cursor>");
@@ -26529,19 +26540,28 @@ test "insert replace behaviour - file system completions" {
         , .expected_replace_line = \\const std = @import("std");
         ,
     });
-    if (true) return error.SkipZigTest; // TODO
     try testCompletionTextEdit(.{
         .source = \\const std = @import("file<cursor>.zig");
         , .label = "file.zig"
         , .expected_insert_line = \\const std = @import("file.zig");
         , .expected_replace_line = \\const std = @import("file.zig");
+        , .document_uri = document_uri
         ,
     });
     try testCompletionTextEdit(.{
         .source = \\const std = @import("fi<cursor>le.zig");
         , .label = "file.zig"
-        , .expected_insert_line = \\const std = @import("filele.zig");
+        , .expected_insert_line = \\const std = @import("file.zig");
         , .expected_replace_line = \\const std = @import("file.zig");
+        , .document_uri = document_uri
+        ,
+    });
+    try testCompletionTextEdit(.{
+        .source = \\const std = @import("file.z<cursor>ig");
+        , .label = "file.zig"
+        , .expected_insert_line = \\const std = @import("file.zig");
+        , .expected_replace_line = \\const std = @import("file.zig");
+        , .document_uri = document_uri
         ,
     });
     // zig fmt: on
@@ -26981,6 +27001,7 @@ fn testCompletionTextEdit(
 
         enable_argument_placeholders: bool = false,
         enable_snippets: bool = false,
+        document_uri: ?zls.Uri = null,
     },
 ) !void {
     const cursor_idx = std.mem.find(u8, options.source, "<cursor>").?;
@@ -27004,7 +27025,7 @@ fn testCompletionTextEdit(
     ctx.server.config_manager.config.enable_argument_placeholders = options.enable_argument_placeholders;
     ctx.server.config_manager.config.enable_snippets = options.enable_snippets;
 
-    const test_uri = try ctx.addDocument(.{ .source = text });
+    const test_uri = try ctx.addDocument(.{ .source = text, .uri = options.document_uri });
 
     const cursor_position = offsets.indexToPosition(options.source, cursor_idx, ctx.server.offset_encoding);
     const params: types.completion.Params = .{
