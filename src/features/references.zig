@@ -272,7 +272,7 @@ const Builder = struct {
 
         const document_scope = builder.current_document_scope.?;
         const scope = Analyser.innermostScopeAtIndex(document_scope, source_index);
-        var candidate = builder.analyser.lookupSymbolGlobalFromScope(
+        var candidate = try builder.analyser.lookupSymbolGlobalFromScope(
             handle,
             document_scope,
             scope,

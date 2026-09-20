@@ -15,6 +15,9 @@ declarations: std.MultiArrayList(Declaration),
 source: []const u8,
 /// used for looking up a child declaration in a given scope
 declaration_lookup_map: DeclarationLookupMap,
+/// Declarations whose source spelling contains an escape sequence.
+/// Consulted only after the direct declaration lookup misses.
+escaped_declarations: std.ArrayList(Declaration.Index),
 extra: std.ArrayList(u32),
 
 /// Every `index` inside this `ArrayhashMap` is equivalent to a `Declaration.Index`
@@ -387,6 +390,9 @@ const ScopeContext = struct {
             try doc_scope.declarations.append(allocator, declaration);
             errdefer _ = doc_scope.declarations.pop();
             const declaration_index: Declaration.Index = @enumFromInt(doc_scope.declarations.len - 1);
+            if (std.mem.findScalar(u8, name, '\\') != null) {
+                try doc_scope.escaped_declarations.append(allocator, declaration_index);
+            }
 
             const data = &doc_scope.scopes.items(.data)[@intFromEnum(pushed.scope)];
             const child_declarations = &doc_scope.scopes.items(.child_declarations)[@intFromEnum(pushed.scope)];
@@ -534,6 +540,7 @@ pub fn initWithDeclarationCapacity(
         .declarations = .empty,
         .source = tree.source,
         .declaration_lookup_map = .empty,
+        .escaped_declarations = .empty,
         .extra = .empty,
     };
     errdefer document_scope.deinit(allocator);
@@ -572,12 +579,14 @@ pub fn shrinkToFit(scope: *DocumentScope, allocator: std.mem.Allocator) error{Ou
     try multi_array_list.shrinkAndFree(allocator, &scope.declarations);
     try multi_array_list.shrinkAndFree(allocator, &scope.scopes);
     try multi_array_list.shrinkAndFree(allocator, &scope.declaration_lookup_map.entries);
+    scope.escaped_declarations.shrinkAndFree(allocator, scope.escaped_declarations.items.len);
 }
 
 pub fn deinit(scope: *DocumentScope, allocator: std.mem.Allocator) void {
     scope.scopes.deinit(allocator);
     scope.declarations.deinit(allocator);
     scope.declaration_lookup_map.deinit(allocator);
+    scope.escaped_declarations.deinit(allocator);
     scope.extra.deinit(allocator);
 }
 
@@ -1371,6 +1380,10 @@ pub fn getDeclarationLookup(
     };
 }
 
+pub fn getEscapedDeclarationsConst(doc_scope: DocumentScope) []const Declaration.Index {
+    return doc_scope.escaped_declarations.items;
+}
+
 pub fn getScopeDeclarationsConst(
     doc_scope: DocumentScope,
     scope: Scope.Index,
@@ -1497,6 +1510,7 @@ test DeclarationLookupContext {
 test "DocumentScope.init handles every allocation failure" {
     const source: [:0]const u8 =
         \\const Container = struct {
+        \\    const @"escaped\x21" = 1;
         \\    value: u32,
         \\    fn method(self: @This()) u32 {
         \\        return self.value;

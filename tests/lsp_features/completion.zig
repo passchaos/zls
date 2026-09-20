@@ -318,14 +318,23 @@ test "symbol lookup on escaped identifiers" {
     });
 }
 
-test "escaped identifier normalization" {
-    if (true) return error.SkipZigTest; // TODO
+test "escaped identifier normalization in lookup" {
     try testCompletion(
         \\const S = struct { alpha: u32 };
         \\var s: @"\x53" = undefined;
         \\const foo = @"\x73".<cursor>
     , &.{
-        .{ .label = "foo", .kind = .Constant },
+        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
+    });
+}
+
+test "escaped identifier normalization in declarations" {
+    try testCompletion(
+        \\const @"\x53" = struct { alpha: u32 };
+        \\var @"\u{73}": S = undefined;
+        \\const foo = s.<cursor>
+    , &.{
+        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
     });
 }
 

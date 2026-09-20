@@ -734,7 +734,7 @@ pub fn resolveDeclarationOfNode(analyser: *Analyser, options: ResolveOptions) Er
     return switch (tree.nodeTag(node)) {
         .identifier => blk: {
             const name_token = ast.identifierTokenFromIdentifierNode(tree, node) orelse break :blk null;
-            const name = offsets.identifierTokenToNameSlice(tree, name_token);
+            const name = try analyser.identifierTokenName(tree, name_token) orelse break :blk null;
             if (options.container_type) |ty| {
                 if (try ty.lookupSymbol(analyser, name)) |symbol| break :blk symbol;
             }
@@ -747,7 +747,7 @@ pub fn resolveDeclarationOfNode(analyser: *Analyser, options: ResolveOptions) Er
                 .container_type = options.container_type,
             })) orelse break :blk null;
             if (!resolved.is_type_val) break :blk null;
-            const symbol_name = offsets.identifierTokenToNameSlice(tree, field_name);
+            const symbol_name = try analyser.identifierTokenName(tree, field_name) orelse break :blk null;
             break :blk try resolved.lookupSymbol(analyser, symbol_name);
         },
         else => null,
@@ -14663,7 +14663,7 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
     switch (tree.nodeTag(node)) {
         .identifier => {
             const name_token = ast.identifierTokenFromIdentifierNode(tree, node) orelse return null;
-            const name = offsets.identifierTokenToNameSlice(tree, name_token);
+            const name = try analyser.identifierTokenName(tree, name_token) orelse return null;
 
             const is_escaped_identifier = tree.source[tree.tokenStart(name_token)] == '@';
             if (!is_escaped_identifier) {
@@ -17697,7 +17697,7 @@ pub fn getFieldAccessType(
         switch (tok.tag) {
             .eof => return current_type,
             .identifier => {
-                const symbol_name = offsets.identifierIndexToSlice(tokenizer.buffer, tok.loc.start, .name);
+                const symbol_name = try analyser.identifierIndexName(tokenizer.buffer, tok.loc.start) orelse return null;
                 if (try analyser.lookupSymbolGlobal(
                     handle,
                     symbol_name,
@@ -17726,8 +17726,7 @@ pub fn getFieldAccessType(
                             return current_type;
                         }
 
-                        const symbol = offsets.identifierIndexToSlice(tokenizer.buffer, after_period.loc.start, .name);
-
+                        const symbol = try analyser.identifierIndexName(tokenizer.buffer, after_period.loc.start) orelse return null;
                         current_type = try analyser.resolveFieldAccess(current_type orelse return null, symbol) orelse return null;
                     },
                     .question_mark => {
@@ -19071,22 +19070,23 @@ pub fn lookupSymbolGlobal(
 }
 
 pub fn lookupSymbolGlobalFromScope(
-    _: *Analyser,
+    analyser: *Analyser,
     handle: *DocumentStore.Handle,
     document_scope: *const DocumentScope,
     initial_scope: Scope.Index,
     symbol: []const u8,
     source_index: usize,
-) ?DeclWithHandle {
+) error{OutOfMemory}!?DeclWithHandle {
     const tree = &handle.tree;
     var current_scope = initial_scope;
 
     while (true) {
-        if (document_scope.getScopeDeclaration(.{
+        const field_decl = document_scope.getScopeDeclaration(.{
             .scope = current_scope,
             .name = symbol,
             .kind = .field,
-        }).unwrap()) |decl_index| {
+        }).unwrap() orelse try analyser.lookupEscapedScopeDeclaration(document_scope, tree, current_scope, symbol, .field);
+        if (field_decl) |decl_index| {
             const decl = document_scope.declarations.get(@intFromEnum(decl_index));
             std.debug.assert(decl == .ast_node);
 
@@ -19099,11 +19099,12 @@ pub fn lookupSymbolGlobalFromScope(
             }
         }
 
-        if (document_scope.getScopeDeclaration(.{
+        const other_decl = document_scope.getScopeDeclaration(.{
             .scope = current_scope,
             .name = symbol,
             .kind = .other,
-        }).unwrap()) |decl_index| {
+        }).unwrap() orelse try analyser.lookupEscapedScopeDeclaration(document_scope, tree, current_scope, symbol, .other);
+        if (other_decl) |decl_index| {
             const decl = document_scope.declarations.get(@intFromEnum(decl_index));
             return .{ .decl = decl, .handle = handle };
         }
@@ -19111,6 +19112,23 @@ pub fn lookupSymbolGlobalFromScope(
         current_scope = document_scope.getScopeParent(current_scope).unwrap() orelse break;
     }
 
+    return null;
+}
+
+fn lookupEscapedScopeDeclaration(
+    analyser: *Analyser,
+    document_scope: *const DocumentScope,
+    tree: *const Ast,
+    scope: Scope.Index,
+    symbol: []const u8,
+    kind: DocumentScope.DeclarationLookup.Kind,
+) error{OutOfMemory}!?Declaration.Index {
+    for (document_scope.getEscapedDeclarationsConst()) |decl_index| {
+        const lookup = document_scope.getDeclarationLookup(decl_index);
+        if (lookup.scope != scope or lookup.kind != kind) continue;
+        const decl = document_scope.declarations.get(@intFromEnum(decl_index));
+        if (try analyser.identifierTokenMatches(tree, decl.nameToken(tree), symbol)) return decl_index;
+    }
     return null;
 }
 
@@ -19129,8 +19147,20 @@ pub fn identifierTokenName(
     tree: *const Ast,
     token: Ast.TokenIndex,
 ) error{OutOfMemory}!?[]const u8 {
-    const raw = tree.tokenSlice(token);
-    if (!std.mem.startsWith(u8, raw, "@\"")) return offsets.identifierTokenToNameSlice(tree, token);
+    return analyser.identifierSourceName(tree.tokenSlice(token));
+}
+
+fn identifierIndexName(
+    analyser: *Analyser,
+    source: [:0]const u8,
+    source_index: usize,
+) error{OutOfMemory}!?[]const u8 {
+    const loc = offsets.identifierIndexToLoc(source, source_index, .full);
+    return analyser.identifierSourceName(offsets.locToSlice(source, loc));
+}
+
+fn identifierSourceName(analyser: *Analyser, raw: []const u8) error{OutOfMemory}!?[]const u8 {
+    if (!std.mem.startsWith(u8, raw, "@\"")) return if (std.mem.startsWith(u8, raw, "@")) raw[1..] else raw;
 
     var discarding_writer: std.Io.Writer.Discarding = .init(&.{});
     const parsed = std.zig.string_literal.parseWrite(&discarding_writer.writer, raw[1..]) catch |err| switch (err) {
@@ -19212,27 +19242,21 @@ pub fn lookupSymbolContainer(
     const handle = container_scope.handle;
     const document_scope = try handle.getDocumentScope();
 
-    if (document_scope.getScopeDeclaration(.{
+    const decl_index = document_scope.getScopeDeclaration(.{
         .scope = container_scope.scope,
         .name = symbol,
         .kind = kind,
-    }).unwrap()) |decl_index| {
-        const decl = document_scope.declarations.get(@intFromEnum(decl_index));
+    }).unwrap() orelse try analyser.lookupEscapedScopeDeclaration(
+        document_scope,
+        &handle.tree,
+        container_scope.scope,
+        symbol,
+        kind,
+    );
+    if (decl_index) |index| {
+        const decl = document_scope.declarations.get(@intFromEnum(index));
         return .{ .decl = decl, .handle = handle, .container_type = container_type };
     }
-
-    for (document_scope.getScopeDeclarationsConst(container_scope.scope)) |decl_index| {
-        const index = @intFromEnum(decl_index);
-        const lookup = document_scope.getDeclarationLookup(decl_index);
-        if (lookup.kind != kind) continue;
-        if (std.mem.findScalar(u8, lookup.name, '\\') == null) continue;
-
-        const decl = document_scope.declarations.get(index);
-        if (try analyser.identifierTokenMatches(&handle.tree, decl.nameToken(&handle.tree), symbol)) {
-            return .{ .decl = decl, .handle = handle, .container_type = container_type };
-        }
-    }
-
     return null;
 }
 
