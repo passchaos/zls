@@ -25979,6 +25979,22 @@ test "insert replace behaviour - builtin with partial argument placeholders" {
         .enable_snippets = true,
         .enable_argument_placeholders = true,
     });
+    try testCompletionTextEdit(.{
+        .source = "const foo = @<cursor>(1, , 3);",
+        .label = "@max",
+        .expected_insert_line = "const foo = @max(1, ${1:...}, 3);",
+        .expected_replace_line = "const foo = @max(1, ${1:...}, 3);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source = "const foo = @<cursor>(1, 2,);",
+        .label = "@compileLog",
+        .expected_insert_line = "const foo = @compileLog(1, 2, ${1:...});",
+        .expected_replace_line = "const foo = @compileLog(1, 2, ${1:...});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
 }
 
 test "insert replace behaviour - prepend on builtin or enum literal" {

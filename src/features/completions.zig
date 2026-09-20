@@ -860,17 +860,21 @@ fn completeBuiltin(builder: *Builder) error{OutOfMemory}!void {
             .snippet => .Snippet,
         };
         const new_text = if (partial_call) |call| partial: {
-            if (use_placeholders and call.arguments.len <= builtin.parameters.len) {
+            const has_varargs = builtin.parameters.len != 0 and
+                std.mem.eql(u8, builtin.parameters[builtin.parameters.len - 1].signature, "...");
+            if (use_placeholders and (call.arguments.len <= builtin.parameters.len or has_varargs)) {
                 var snippet: std.ArrayList(u8) = .empty;
                 try snippet.print(builder.arena, "{s}(", .{name});
                 var placeholder_index: usize = 1;
-                for (builtin.parameters, 0..) |param, index| {
+                const slot_count = @max(builtin.parameters.len, call.arguments.len);
+                for (0..slot_count) |index| {
                     if (index != 0) try snippet.appendSlice(builder.arena, ", ");
                     const argument = if (index < call.arguments.len) call.arguments[index] else "";
                     if (argument.len != 0) {
                         try partial_calls.appendSnippetLiteral(&snippet, builder.arena, argument);
                     } else {
-                        try snippet.print(builder.arena, "${{{d}:{f}}}", .{ placeholder_index, Analyser.fmtEscapedSnippet(param.signature) });
+                        const signature = if (index < builtin.parameters.len) builtin.parameters[index].signature else "...";
+                        try snippet.print(builder.arena, "${{{d}:{f}}}", .{ placeholder_index, Analyser.fmtEscapedSnippet(signature) });
                         placeholder_index += 1;
                     }
                 }
