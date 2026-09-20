@@ -68,6 +68,21 @@ test "local scope" {
     );
 }
 
+test "nested scope shadowing" {
+    try testSymbolReferences(
+        \\const <0> = 0;
+        \\fn outer() void {
+        \\    _ = <0>;
+        \\    {
+        \\        const <1> = 1;
+        \\        _ = <1>;
+        \\        _ = <1>;
+        \\    }
+        \\    _ = <0>;
+        \\}
+    );
+}
+
 test "destructuring" {
     try testSymbolReferences(
         \\const blk = {

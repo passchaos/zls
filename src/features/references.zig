@@ -5,6 +5,7 @@ const Ast = std.zig.Ast;
 
 const Server = @import("../Server.zig");
 const DocumentStore = @import("../DocumentStore.zig");
+const DocumentScope = @import("../DocumentScope.zig");
 const Analyser = @import("../analysis.zig");
 const lsp = @import("lsp");
 const types = lsp.types;
@@ -65,6 +66,7 @@ const Builder = struct {
     locations: std.ArrayList(types.Location) = .empty,
     /// this is the declaration we are searching for
     target_symbol: Analyser.DeclWithHandle,
+    target_symbol_name: []const u8,
     /// the decl is local to a function, block, etc
     local_only_decl: bool,
     /// Whether the `target_symbol` has been added
@@ -72,7 +74,10 @@ const Builder = struct {
     analyser: *Analyser,
     encoding: offsets.Encoding,
     current_handle: ?*DocumentStore.Handle = null,
+    current_document_scope: ?*const DocumentScope = null,
     position_cursor: ?offsets.PositionCursor = null,
+    identifier_scope_loc: ?offsets.Loc = null,
+    identifier_scope_matches: bool = false,
 
     fn add(self: *Builder, handle: *DocumentStore.Handle, token_index: Ast.TokenIndex) error{OutOfMemory}!void {
         if (self.target_symbol.handle == handle and
@@ -97,7 +102,9 @@ const Builder = struct {
 
         const arena = self.analyser.arena;
         self.current_handle = handle;
+        self.current_document_scope = try handle.getDocumentScope();
         self.position_cursor = .init(handle.tree.source, self.encoding);
+        self.identifier_scope_loc = null;
         try referenceNode(self, handle, node);
         var walker: ast.Walker = try .init(arena, &handle.tree, node);
         defer walker.deinit(arena);
@@ -112,10 +119,7 @@ const Builder = struct {
         node: Ast.Node.Index,
     ) Analyser.Error!void {
         const tree = &handle.tree;
-        const target_symbol_name = offsets.identifierTokenToNameSlice(
-            &builder.target_symbol.handle.tree,
-            builder.target_symbol.nameToken(),
-        );
+        const target_symbol_name = builder.target_symbol_name;
 
         var candidate: Analyser.DeclWithHandle, const name_token = candidate: switch (tree.nodeTag(node)) {
             .identifier,
@@ -139,13 +143,10 @@ const Builder = struct {
                 }
 
                 if (!std.mem.eql(u8, name, target_symbol_name)) return;
-
-                const candidate = try builder.analyser.lookupSymbolGlobal(
-                    handle,
-                    name,
-                    tree.tokenStart(name_token),
-                ) orelse return;
-                break :candidate .{ candidate, name_token };
+                if (try builder.identifierMatchesTarget(handle, name, name_token)) {
+                    try builder.add(handle, name_token);
+                }
+                return;
             },
             .field_access => {
                 if (builder.local_only_decl) return;
@@ -245,11 +246,51 @@ const Builder = struct {
             else => return,
         };
 
-        candidate = try builder.analyser.resolveVarDeclAlias(candidate) orelse candidate;
+        if (builder.target_symbol.eql(candidate)) {
+            try builder.add(handle, name_token);
+            return;
+        }
 
+        candidate = try builder.analyser.resolveVarDeclAlias(candidate) orelse candidate;
         if (builder.target_symbol.eql(candidate)) {
             try builder.add(handle, name_token);
         }
+    }
+
+    fn identifierMatchesTarget(
+        builder: *Builder,
+        handle: *DocumentStore.Handle,
+        name: []const u8,
+        name_token: Ast.TokenIndex,
+    ) Analyser.Error!bool {
+        const source_index = handle.tree.tokenStart(name_token);
+        if (builder.identifier_scope_loc) |loc| {
+            if (loc.start <= source_index and source_index <= loc.end) {
+                return builder.identifier_scope_matches;
+            }
+        }
+
+        const document_scope = builder.current_document_scope.?;
+        const scope = Analyser.innermostScopeAtIndex(document_scope, source_index);
+        var candidate = builder.analyser.lookupSymbolGlobalFromScope(
+            handle,
+            document_scope,
+            scope,
+            name,
+            source_index,
+        ) orelse return false;
+        if (!builder.target_symbol.eql(candidate)) {
+            candidate = try builder.analyser.resolveVarDeclAlias(candidate) orelse candidate;
+        }
+        const matches = builder.target_symbol.eql(candidate);
+
+        if (document_scope.getScopeTag(scope) == .block and
+            document_scope.getScopeChildScopesConst(scope).len == 0)
+        {
+            builder.identifier_scope_loc = document_scope.getScopeLoc(scope);
+            builder.identifier_scope_matches = matches;
+        }
+        return matches;
     }
 };
 
@@ -303,6 +344,10 @@ fn symbolReferences(
     var builder: Builder = .{
         .analyser = analyser,
         .target_symbol = target_symbol,
+        .target_symbol_name = offsets.identifierTokenToNameSlice(
+            &target_symbol.handle.tree,
+            target_symbol.nameToken(),
+        ),
         .local_only_decl = local_node != null,
         .encoding = encoding,
     };

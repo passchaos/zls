@@ -19015,14 +19015,31 @@ pub fn lookupLabel(
 }
 
 pub fn lookupSymbolGlobal(
-    _: *Analyser,
+    analyser: *Analyser,
     handle: *DocumentStore.Handle,
     symbol: []const u8,
     source_index: usize,
 ) error{OutOfMemory}!?DeclWithHandle {
-    const tree = &handle.tree;
     const document_scope = try handle.getDocumentScope();
-    var current_scope = innermostScopeAtIndex(document_scope, source_index);
+    return analyser.lookupSymbolGlobalFromScope(
+        handle,
+        document_scope,
+        innermostScopeAtIndex(document_scope, source_index),
+        symbol,
+        source_index,
+    );
+}
+
+pub fn lookupSymbolGlobalFromScope(
+    _: *Analyser,
+    handle: *DocumentStore.Handle,
+    document_scope: *const DocumentScope,
+    initial_scope: Scope.Index,
+    symbol: []const u8,
+    source_index: usize,
+) ?DeclWithHandle {
+    const tree = &handle.tree;
+    var current_scope = initial_scope;
 
     while (true) {
         if (document_scope.getScopeDeclaration(.{

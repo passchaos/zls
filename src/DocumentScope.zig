@@ -1323,6 +1323,11 @@ pub fn getScopeTag(
     return doc_scope.scopes.items(.data)[@intFromEnum(scope)].tag;
 }
 
+pub fn getScopeLoc(doc_scope: DocumentScope, scope: Scope.Index) offsets.Loc {
+    const loc = doc_scope.scopes.items(.loc)[@intFromEnum(scope)];
+    return .{ .start = loc.start, .end = loc.end };
+}
+
 pub fn getScopeParent(
     doc_scope: DocumentScope,
     scope: Scope.Index,
