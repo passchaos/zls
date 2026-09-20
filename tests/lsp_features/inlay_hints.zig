@@ -120,6 +120,25 @@ test "function-valued field does not consume an implicit self parameter" {
     , .{ .kind = .Parameter });
 }
 
+test "branching receiver parameter hints require matching names" {
+    try testInlayHints(
+        \\const Alpha = struct { fn apply(_: Alpha, value: u32) void {} };
+        \\const Beta = struct { fn apply(_: Beta, value: u32) void {} };
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\receiver.apply(<value>1);
+    , .{ .kind = .Parameter });
+    try testInlayHints(
+        \\const Alpha = struct { fn apply(_: Alpha, first: u32) void {} };
+        \\const Beta = struct { fn apply(_: Beta, second: u32) void {} };
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\receiver.apply(1);
+    , .{ .kind = .Parameter });
+}
+
 test "function self parameter with pointer type in type declaration" {
     try testInlayHints(
         \\const Foo = *opaque { pub fn bar(self: Foo, alpha: u32) void {} };

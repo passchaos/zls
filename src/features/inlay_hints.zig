@@ -265,16 +265,37 @@ fn writeCallHint(
     const handle = builder.handle;
 
     const ty = try builder.analyser.resolveTypeOfNode(.of(call.ast.fn_expr, handle)) orelse return;
-    const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(ty) orelse return;
-    const fn_info = fn_ty.data.function;
+    const resolved_types = try ty.getAllTypesWithHandles(builder.analyser);
+    const Candidate = struct { parameters: []const Analyser.Type.Data.Parameter };
+    var candidates: std.ArrayList(Candidate) = .empty;
+    for (resolved_types) |resolved_type| {
+        const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(resolved_type) orelse continue;
+        const has_self_param = try builder.analyser.isInstanceCall(handle, call, fn_ty);
+        try candidates.append(builder.arena, .{
+            .parameters = fn_ty.data.function.parameters[@intFromBool(has_self_param)..],
+        });
+    }
+    if (candidates.items.len == 0) return;
 
-    const has_self_param = try builder.analyser.isInstanceCall(handle, call, fn_ty);
-
-    const parameters = fn_info.parameters[@intFromBool(has_self_param)..];
     const arguments = call.ast.params;
-    const min_len = @min(parameters.len, arguments.len);
-    for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
-        const parameter_name = param.name orelse continue;
+    arguments: for (arguments, 0..) |arg, argument_index| {
+        var parameter: ?Analyser.Type.Data.Parameter = null;
+        var consistent_tooltip = true;
+        for (candidates.items) |candidate| {
+            if (argument_index >= candidate.parameters.len) continue :arguments;
+            const current = candidate.parameters[argument_index];
+            const current_name = current.name orelse continue :arguments;
+            if (parameter) |expected| {
+                if (!std.mem.eql(u8, expected.name.?, current_name)) continue :arguments;
+                consistent_tooltip = consistent_tooltip and
+                    expected.modifier == current.modifier and
+                    expected.type.eql(current.type);
+            } else {
+                parameter = current;
+            }
+        }
+        const param = parameter orelse continue;
+        const parameter_name = param.name.?;
 
         if (builder.config.inlay_hints_hide_redundant_param_names or builder.config.inlay_hints_hide_redundant_param_names_last_token) dont_skip: {
             const arg_token = if (builder.config.inlay_hints_hide_redundant_param_names_last_token)
@@ -291,13 +312,15 @@ fn writeCallHint(
             continue;
         }
 
-        const no_alias = if (param.modifier) |m| m == .noalias_param else false;
-        const comp_time = if (param.modifier) |m| m == .comptime_param else false;
-
-        const tooltip = try param.type.stringifyTypeVal(
-            builder.analyser,
-            .{ .truncate_container_decls = true },
-        );
+        const no_alias = consistent_tooltip and if (param.modifier) |m| m == .noalias_param else false;
+        const comp_time = consistent_tooltip and if (param.modifier) |m| m == .comptime_param else false;
+        const tooltip = if (consistent_tooltip)
+            try param.type.stringifyTypeVal(
+                builder.analyser,
+                .{ .truncate_container_decls = true },
+            )
+        else
+            "";
 
         try builder.appendParameterHint(
             handle.tree.nodeTag(arg),

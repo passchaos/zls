@@ -511,7 +511,6 @@ pub fn firstParamIs(
     func_type: Type,
     expected_type: Type,
 ) bool {
-    _ = analyser;
     std.debug.assert(expected_type.is_type_val);
     std.debug.assert(func_type.isFunc());
     const func_info = func_type.data.function;
@@ -535,6 +534,16 @@ pub fn firstParamIs(
         },
         else => expected_type,
     };
+    if (deref_expected_type.data == .either) {
+        for (deref_expected_type.data.either) |entry| {
+            const candidate: Type = .{
+                .data = entry.type_data,
+                .is_type_val = deref_expected_type.is_type_val,
+            };
+            if (analyser.firstParamIs(func_type, candidate)) return true;
+        }
+        return false;
+    }
     return switch (deref_type.data) {
         .either => |entries| {
             for (entries) |entry| {
