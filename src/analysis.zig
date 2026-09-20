@@ -18824,9 +18824,49 @@ pub fn collectAllSymbolsAtSourceIndex(
             const decl = document_scope.declarations.get(@intFromEnum(decl_index));
             if (decl == .ast_node and handle.tree.nodeTag(decl.ast_node).isContainerField()) continue;
             if (decl == .label) continue;
+            if (!declarationIsVisibleAtSourceIndex(document_scope, &handle.tree, scope_index, decl, source_index)) continue;
             try decl_collection.append(analyser.arena, .{ .decl = decl, .handle = handle });
         }
     }
+}
+
+fn declarationIsVisibleAtSourceIndex(
+    document_scope: *const DocumentScope,
+    tree: *const Ast,
+    scope: Scope.Index,
+    declaration: Declaration,
+    source_index: usize,
+) bool {
+    const declaration_loc: ?offsets.Loc = switch (declaration) {
+        .ast_node => |node| switch (tree.nodeTag(node)) {
+            .global_var_decl,
+            .local_var_decl,
+            .simple_var_decl,
+            .aligned_var_decl,
+            => offsets.nodeToLoc(tree, node),
+            else => null,
+        },
+        .assign_destructure => |payload| offsets.nodeToLoc(tree, payload.node),
+        else => null,
+    };
+    const loc = declaration_loc orelse return true;
+
+    // Container declarations are order independent and may be recursive. With
+    // parse errors, however, the parser can incorrectly stretch a declaration
+    // across the cursor; do not expose that malformed enclosing declaration.
+    if (document_scope.getScopeTag(scope) == .container) {
+        if (declaration == .ast_node) {
+            if (tree.fullVarDecl(declaration.ast_node)) |var_decl| {
+                if (var_decl.ast.init_node.unwrap()) |init_node| {
+                    if (ast.isContainer(tree, init_node)) return true;
+                }
+            }
+        }
+        return tree.errors.len == 0 or source_index < loc.start or loc.end <= source_index;
+    }
+
+    // Local declarations become visible only after their declaration ends.
+    return loc.end <= source_index;
 }
 
 pub const EnclosingScopeIterator = struct {

@@ -201,7 +201,6 @@ test "completion prefix recovery preserves the original text edit range" {
 }
 
 test "local scope" {
-    if (true) return error.SkipZigTest;
     try testCompletion(
         \\const foo = {
         \\    var bar = 5;
@@ -210,6 +209,41 @@ test "local scope" {
         \\};
     , &.{
         .{ .label = "bar", .kind = .Variable },
+    });
+
+    try testCompletion(
+        \\fn scope() void {
+        \\    const before = 1;
+        \\    _ = <cursor>before;
+        \\    const after = 2;
+        \\}
+    , &.{
+        .{ .label = "before", .kind = .Constant },
+        .{ .label = "scope", .kind = .Function, .detail = "fn () void" },
+    });
+
+    try testCompletion(
+        \\fn scope() void {
+        \\    const before = 1;<cursor>
+        \\}
+    , &.{
+        .{ .label = "before", .kind = .Constant },
+        .{ .label = "scope", .kind = .Function, .detail = "fn () void" },
+    });
+
+    try testCompletion(
+        \\const before = 1;
+        \\const current = <cursor>;
+        \\const after = 2;
+    , &.{
+        .{ .label = "before", .kind = .Constant },
+        .{ .label = "after", .kind = .Constant },
+    });
+
+    try testCompletion(
+        \\const Node = struct { next: ?*<cursor>Node };
+    , &.{
+        .{ .label = "Node", .kind = .Struct },
     });
 }
 
