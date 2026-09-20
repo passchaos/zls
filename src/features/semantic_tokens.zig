@@ -1177,12 +1177,13 @@ fn writeFieldAccess(builder: *Builder, node: Ast.Node.Index) Analyser.Error!void
             if (decl_type.decl != .ast_node) break :field_blk;
             const decl_node = decl_type.decl.ast_node;
             if (!decl_type.handle.tree.nodeTag(decl_node).isContainerField()) break :field_blk;
-            if (lhs_type.data != .container) break :field_blk;
-            const scope_handle = lhs_type.data.container.scope_handle;
+            const container_type = decl_type.container_type orelse lhs_type;
+            if (container_type.data != .container) break :field_blk;
+            const scope_handle = container_type.data.container.scope_handle;
             const field_token_type = fieldTokenType(
                 scope_handle.toNode(),
                 scope_handle.handle,
-                lhs_type.is_type_val,
+                container_type.is_type_val,
             ).?;
 
             try writeTokenMod(builder, field_name_token, field_token_type, .{});

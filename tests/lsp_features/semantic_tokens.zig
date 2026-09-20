@@ -486,6 +486,84 @@ test "field access" {
     });
 }
 
+test "field access on branching receiver" {
+    try testSemanticTokens(
+        \\fn use(value: if (undefined) struct { shared: u32 } else struct { shared: u64 }) void {
+        \\    _ = value.shared;
+        \\}
+    , &.{
+        .{ "fn", .keyword, .{} },
+        .{ "use", .function, .{ .declaration = true } },
+        .{ "value", .parameter, .{ .declaration = true } },
+        .{ "if", .keyword, .{} },
+        .{ "undefined", .keywordLiteral, .{} },
+        .{ "struct", .keyword, .{} },
+        .{ "shared", .property, .{ .declaration = true } },
+        .{ "u32", .type, .{} },
+        .{ "else", .keyword, .{} },
+        .{ "struct", .keyword, .{} },
+        .{ "shared", .property, .{ .declaration = true } },
+        .{ "u64", .type, .{} },
+        .{ "void", .type, .{} },
+        .{ "=", .operator, .{} },
+        .{ "value", .parameter, .{} },
+        .{ "shared", .property, .{} },
+    });
+}
+
+test "method access on branching receiver" {
+    try testSemanticTokens(
+        \\const Alpha = struct { fn apply(_: Alpha) void {} };
+        \\const Beta = struct { fn apply(_: Beta) void {} };
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\const result = receiver.apply();
+    , &.{
+        .{ "const", .keyword, .{} },
+        .{ "Alpha", .namespace, .{ .declaration = true } },
+        .{ "=", .operator, .{} },
+        .{ "struct", .keyword, .{} },
+        .{ "fn", .keyword, .{} },
+        .{ "apply", .method, .{ .declaration = true } },
+        .{ "_", .parameter, .{ .declaration = true } },
+        .{ "Alpha", .namespace, .{} },
+        .{ "void", .type, .{} },
+        .{ "const", .keyword, .{} },
+        .{ "Beta", .namespace, .{ .declaration = true } },
+        .{ "=", .operator, .{} },
+        .{ "struct", .keyword, .{} },
+        .{ "fn", .keyword, .{} },
+        .{ "apply", .method, .{ .declaration = true } },
+        .{ "_", .parameter, .{ .declaration = true } },
+        .{ "Beta", .namespace, .{} },
+        .{ "void", .type, .{} },
+        .{ "const", .keyword, .{} },
+        .{ "alpha", .variable, .{ .declaration = true, .static = true } },
+        .{ "Alpha", .namespace, .{} },
+        .{ "=", .operator, .{} },
+        .{ "undefined", .keywordLiteral, .{} },
+        .{ "const", .keyword, .{} },
+        .{ "beta", .variable, .{ .declaration = true, .static = true } },
+        .{ "Beta", .namespace, .{} },
+        .{ "=", .operator, .{} },
+        .{ "undefined", .keywordLiteral, .{} },
+        .{ "const", .keyword, .{} },
+        .{ "receiver", .variable, .{ .declaration = true, .static = true } },
+        .{ "=", .operator, .{} },
+        .{ "if", .keyword, .{} },
+        .{ "undefined", .keywordLiteral, .{} },
+        .{ "alpha", .variable, .{ .static = true } },
+        .{ "else", .keyword, .{} },
+        .{ "beta", .variable, .{ .static = true } },
+        .{ "const", .keyword, .{} },
+        .{ "result", .variable, .{ .declaration = true, .static = true } },
+        .{ "=", .operator, .{} },
+        .{ "receiver", .variable, .{ .static = true } },
+        .{ "apply", .method, .{} },
+    });
+}
+
 test "field access on unknown" {
     try testSemanticTokens(
         \\const alpha = Unknown.foo;
