@@ -173,7 +173,6 @@ pub fn build(b: *Build) !void {
                 .root_module = exe_module,
                 .max_rss = if (optimize == .Debug and target_query.os_tag == .wasi) 2_200_000_000 else 2_000_000_000,
                 .use_llvm = use_llvm,
-                .use_lld = use_llvm,
             });
         }
 
@@ -200,7 +199,6 @@ pub fn build(b: *Build) !void {
                 .imports = &.{.{ .name = "zls", .module = zls_module }},
             }),
             .use_llvm = use_llvm,
-            .use_lld = use_llvm,
         });
         const run = b.addRunArtifact(benchmark);
         if (b.args) |args| run.addArgs(args);
@@ -217,7 +215,6 @@ pub fn build(b: *Build) !void {
                 .imports = &.{.{ .name = "zls", .module = zls_module }},
             }),
             .use_llvm = use_llvm,
-            .use_lld = use_llvm,
         });
         const run = b.addRunArtifact(benchmark);
         if (b.args) |args| run.addArgs(args);
@@ -234,7 +231,6 @@ pub fn build(b: *Build) !void {
                 .imports = &.{.{ .name = "zls", .module = zls_module }},
             }),
             .use_llvm = use_llvm,
-            .use_lld = use_llvm,
         });
         const run = b.addRunArtifact(benchmark);
         if (b.args) |args| run.addArgs(args);
@@ -251,7 +247,6 @@ pub fn build(b: *Build) !void {
                 .imports = &.{.{ .name = "zls", .module = zls_module }},
             }),
             .use_llvm = use_llvm,
-            .use_lld = use_llvm,
         });
         const run = b.addRunArtifact(benchmark);
         if (b.args) |args| run.addArgs(args);
@@ -283,7 +278,6 @@ pub fn build(b: *Build) !void {
             .name = "zls",
             .root_module = exe_module,
             .use_llvm = use_llvm,
-            .use_lld = use_llvm,
         });
         b.installArtifact(exe);
     }
@@ -312,7 +306,6 @@ pub fn build(b: *Build) !void {
         }),
         .filters = test_filters,
         .use_llvm = use_llvm,
-        .use_lld = use_llvm,
     });
 
     const src_tests = b.addTest(.{
@@ -320,7 +313,6 @@ pub fn build(b: *Build) !void {
         .root_module = zls_module,
         .filters = test_filters,
         .use_llvm = use_llvm,
-        .use_lld = use_llvm,
     });
 
     if (target.result.cpu.arch.isWasm() and b.enable_wasmtime) {
