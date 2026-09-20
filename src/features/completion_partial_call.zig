@@ -18,12 +18,12 @@ pub fn parse(
     const open_index = identifier_loc.end;
     const scan_result = scan(source, open_index, null) orelse return null;
     if (!scan_result.has_empty) return null;
+    const range = offsets.locToRange(source, .{ .start = identifier_loc.start, .end = scan_result.end_index }, encoding);
+    if (range.start.line != range.end.line) return null;
 
     const arguments = try allocator.alloc([]const u8, scan_result.argument_count);
     const verified = scan(source, open_index, arguments).?;
     std.debug.assert(verified.end_index == scan_result.end_index and verified.argument_count == scan_result.argument_count);
-    const range = offsets.locToRange(source, .{ .start = identifier_loc.start, .end = scan_result.end_index }, encoding);
-    if (range.start.line != range.end.line) return null;
     return .{ .range = range, .arguments = arguments };
 }
 
@@ -53,6 +53,7 @@ fn scan(source: [:0]const u8, open_index: usize, output: ?[][]const u8) ?Scan {
             .r_paren => {
                 paren_depth -= 1;
                 if (paren_depth != 0) continue;
+                if (bracket_depth != 0 or brace_depth != 0) return null;
                 const argument = std.mem.trim(u8, source[argument_start..token_start], " \t\r\n");
                 has_empty = has_empty or argument.len == 0;
                 if (output) |arguments| arguments[argument_count] = argument;
@@ -60,9 +61,15 @@ fn scan(source: [:0]const u8, open_index: usize, output: ?[][]const u8) ?Scan {
                 return .{ .end_index = token_end, .argument_count = argument_count, .has_empty = has_empty };
             },
             .l_bracket => bracket_depth += 1,
-            .r_bracket => bracket_depth -|= 1,
+            .r_bracket => {
+                if (bracket_depth == 0) return null;
+                bracket_depth -= 1;
+            },
             .l_brace => brace_depth += 1,
-            .r_brace => brace_depth -|= 1,
+            .r_brace => {
+                if (brace_depth == 0) return null;
+                brace_depth -= 1;
+            },
             .comma => if (paren_depth == 1 and bracket_depth == 0 and brace_depth == 0) {
                 const argument = std.mem.trim(u8, source[argument_start..token_start], " \t\r\n");
                 has_empty = has_empty or argument.len == 0;
@@ -102,6 +109,13 @@ test parse {
 
     try std.testing.expect((try parse(allocator, "call(1, 2)", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
     try std.testing.expect((try parse(allocator, "call(1,", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+    try std.testing.expect((try parse(allocator, "call(], )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+    try std.testing.expect((try parse(allocator, "call(}, )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+    try std.testing.expect((try parse(allocator, "call([1, )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+    try std.testing.expect((try parse(allocator, "call(.{ 1, )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+
+    var failing_allocator: std.testing.FailingAllocator = .init(allocator, .{ .fail_index = 0 });
+    try std.testing.expect((try parse(failing_allocator.allocator(), "call(1,\n )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
 }
 
 test appendSnippetLiteral {
