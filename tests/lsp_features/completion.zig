@@ -26286,6 +26286,18 @@ test "insert replace behaviour - function with partial argument placeholders" {
     try testCompletionTextEdit(.{
         .source =
         \\fn func(comptime T: type, number: u32) void {}
+        \\const foo = <cursor> // keep this comment
+        \\    (u32,);
+        ,
+        .label = "func",
+        .expected_insert_line = "const foo = func // keep this comment",
+        .expected_replace_line = "const foo = func // keep this comment",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn func(comptime T: type, number: u32) void {}
         \\const foo = <cursor>  (u32,);
         ,
         .label = "func",
@@ -26357,6 +26369,24 @@ test "insert replace behaviour - function with partial argument placeholders" {
         .label = "func",
         .expected_insert_line = "const foo = func(1,);",
         .expected_replace_line = "const foo = func(1,);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+}
+
+test "insert replace behaviour - escaped function with partial argument placeholders" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn @"${}"(value: u32) void {}
+        \\const result = <cursor>( );
+        ,
+        .label = "@\"${}\"",
+        .expected_insert_line =
+        \\const result = @"\${\}"(${1:value: u32});
+        ,
+        .expected_replace_line =
+        \\const result = @"\${\}"(${1:value: u32});
+        ,
         .enable_snippets = true,
         .enable_argument_placeholders = true,
     });
