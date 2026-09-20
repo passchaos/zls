@@ -112,6 +112,16 @@ test "field access" {
         \\const S = struct { <def><decl>alpha</decl></def>: <tdef>u32</tdef> };
         \\const foo = (S{ .alpha = undefined }).<>alpha;
     );
+    try testDefinition(
+        \\const S = struct { <def><decl>callback</decl></def>: *const <tdef>fn</tdef> (arg: S) void };
+        \\const s: S = undefined;
+        \\const cb = s.<>callback;
+    );
+    try testDefinition(
+        \\const S = struct { <tdef>fn</tdef> <def><decl>method</decl></def>(self: S) void {} };
+        \\const s: S = undefined;
+        \\s.<>method();
+    );
 }
 
 test "struct init" {
