@@ -210,6 +210,26 @@ test "rename callable fields without touching same-named methods" {
     );
 }
 
+test "prepare rename only accepts resolvable symbols" {
+    try testPrepareRename(
+        \\const val<cursor>ue = 1;
+    , "value");
+    try testPrepareRename(
+        \\const value: u<cursor>32 = 1;
+    , null);
+    try testPrepareRename(
+        \\const value = miss<cursor>ing;
+    , null);
+    try testPrepareRename(
+        \\const value = <cursor>_;
+    , null);
+    try testPrepareRename(
+        \\const S = struct { field: u32 };
+        \\const s: S = undefined;
+        \\const value = s.fi<cursor>eld;
+    , "field");
+}
+
 test "struct init result location from function return type" {
     try testSymbolReferences(
         \\fn foo() struct { <0>: i32 } {
@@ -441,6 +461,28 @@ fn testRename(source: []const u8, new_name: []const u8, expected: []const u8) !v
     const actual = try zls.diff.applyTextEdits(allocator, text, edits, ctx.server.offset_encoding);
     defer allocator.free(actual);
     try std.testing.expectEqualStrings(expected, actual);
+}
+
+fn testPrepareRename(source: []const u8, expected_placeholder: ?[]const u8) !void {
+    const cursor_index = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_index], source[cursor_index + "<cursor>".len ..] });
+    defer allocator.free(text);
+
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = text });
+    const params: types.prepare_rename.Params = .{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(text, cursor_index, ctx.server.offset_encoding),
+    };
+    const response = try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/prepareRename", params);
+    if (expected_placeholder) |expected| {
+        const actual = response orelse return error.InvalidResponse;
+        try std.testing.expectEqualStrings(expected, actual.prepare_rename_placeholder.placeholder);
+    } else {
+        try std.testing.expectEqual(null, response);
+    }
 }
 
 /// source files have the following name pattern: `untitled-{d}.zig`

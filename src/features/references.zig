@@ -735,6 +735,46 @@ pub const GeneralReferencesResponse = union {
     highlight: []types.DocumentHighlight,
 };
 
+fn resolveSymbolTarget(
+    analyser: *Analyser,
+    arena: std.mem.Allocator,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+    pos_context: Analyser.PositionContext,
+) Analyser.Error!?Analyser.DeclWithHandle {
+    const name_loc = offsets.identifierLocFromIndex(&handle.tree, source_index) orelse return null;
+    const name = offsets.locToSlice(handle.tree.source, name_loc);
+
+    var target_decl = switch (pos_context) {
+        .var_access, .test_doctest_name => try analyser.lookupSymbolGlobal(handle, name, source_index),
+        .field_access => |loc| blk: {
+            const held_loc = offsets.locMerge(loc, name_loc);
+            const candidates = try analyser.getSymbolFieldAccesses(arena, handle, source_index, held_loc, name) orelse return null;
+            break :blk if (candidates.len != 0) candidates[0] else null;
+        },
+        .label_access, .label_decl => try Analyser.lookupLabel(handle, name, source_index),
+        .enum_literal => try analyser.getSymbolEnumLiteral(handle, source_index, name),
+        else => null,
+    } orelse return null;
+
+    target_decl = try analyser.resolveVarDeclAlias(target_decl) orelse target_decl;
+    return target_decl;
+}
+
+pub fn prepareRenameLoc(
+    server: *Server,
+    arena: std.mem.Allocator,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+) Server.Error!?offsets.Loc {
+    if (handle.tree.mode == .zon) return null;
+    const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, true);
+    var analyser = server.initAnalyser(arena, handle);
+    defer analyser.deinit();
+    _ = try resolveSymbolTarget(&analyser, arena, handle, source_index, pos_context) orelse return null;
+    return offsets.identifierLocFromIndex(&handle.tree, source_index);
+}
+
 pub fn referencesHandler(server: *Server, arena: std.mem.Allocator, request: GeneralReferencesRequest) Server.Error!?GeneralReferencesResponse {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -768,27 +808,7 @@ pub fn referencesHandler(server: *Server, arena: std.mem.Allocator, request: Gen
             );
         }
 
-        const name_loc = offsets.identifierLocFromIndex(&handle.tree, source_index) orelse return null;
-        const name = offsets.locToSlice(handle.tree.source, name_loc);
-
-        var target_decl = switch (pos_context) {
-            .var_access, .test_doctest_name => try analyser.lookupSymbolGlobal(handle, name, source_index),
-            .field_access => |loc| z: {
-                const held_loc = offsets.locMerge(loc, name_loc);
-                const a = try analyser.getSymbolFieldAccesses(arena, handle, source_index, held_loc, name);
-                if (a) |b| {
-                    if (b.len != 0) break :z b[0];
-                }
-
-                break :z null;
-            },
-            .label_access, .label_decl => try Analyser.lookupLabel(handle, name, source_index),
-            .enum_literal => try analyser.getSymbolEnumLiteral(handle, source_index, name),
-            .keyword => null,
-            else => null,
-        } orelse return null;
-
-        target_decl = try analyser.resolveVarDeclAlias(target_decl) orelse target_decl;
+        const target_decl = try resolveSymbolTarget(&analyser, arena, handle, source_index, pos_context) orelse return null;
 
         break :locs switch (target_decl.decl) {
             .label => |payload| try labelReferences(
