@@ -792,6 +792,40 @@ test "decl literal" {
         .{ "=", .operator, .{} },
         .{ "foo", .function, .{} },
     });
+    try testSemanticTokens(
+        \\const S = struct {
+        \\    fn make(comptime T: type, value: T) S { return .{ .value = @intCast(value) }; }
+        \\    value: u32,
+        \\};
+        \\const value: S = .make(u8, 1);
+    , &.{
+        .{ "const", .keyword, .{} },
+        .{ "S", .@"struct", .{ .declaration = true } },
+        .{ "=", .operator, .{} },
+        .{ "struct", .keyword, .{} },
+        .{ "fn", .keyword, .{} },
+        .{ "make", .function, .{ .declaration = true, .generic = true } },
+        .{ "comptime", .keyword, .{} },
+        .{ "T", .typeParameter, .{ .declaration = true } },
+        .{ "type", .type, .{} },
+        .{ "value", .parameter, .{ .declaration = true } },
+        .{ "T", .typeParameter, .{} },
+        .{ "S", .@"struct", .{} },
+        .{ "return", .keyword, .{} },
+        .{ "value", .property, .{} },
+        .{ "=", .operator, .{} },
+        .{ "@intCast", .builtin, .{} },
+        .{ "value", .parameter, .{} },
+        .{ "value", .property, .{ .declaration = true } },
+        .{ "u32", .type, .{} },
+        .{ "const", .keyword, .{} },
+        .{ "value", .variable, .{ .declaration = true, .static = true } },
+        .{ "S", .@"struct", .{} },
+        .{ "=", .operator, .{} },
+        .{ "make", .function, .{ .generic = true } },
+        .{ "u8", .type, .{} },
+        .{ "1", .number, .{} },
+    });
 }
 
 test "error literal" {

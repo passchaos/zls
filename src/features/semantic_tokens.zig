@@ -656,8 +656,28 @@ fn writeNodeTokens(builder: *Builder, node: Ast.Node.Index) Analyser.Error!void 
             const call = tree.fullCall(&params, node).?;
 
             if (tree.nodeTag(call.ast.fn_expr) == .enum_literal) {
-                // TODO actually try to resolve the decl literal
-                try writeToken(builder, tree.nodeMainToken(call.ast.fn_expr), .function);
+                const name_token = tree.nodeMainToken(call.ast.fn_expr);
+                const name = offsets.identifierTokenToNameSlice(tree, name_token);
+                const decl = try builder.analyser.getSymbolEnumLiteral(
+                    handle,
+                    tree.tokenStart(name_token),
+                    name,
+                );
+                if (decl) |resolved_decl| {
+                    if (try resolved_decl.resolveType(builder.analyser)) |resolved_type| {
+                        if (resolved_type.isTypeFunc()) {
+                            try writeToken(builder, name_token, .type);
+                        } else if (resolved_type.isFunc()) {
+                            try writeTokenMod(builder, name_token, .function, .{ .generic = resolved_type.isGenericFunc() });
+                        } else {
+                            try writeToken(builder, name_token, .function);
+                        }
+                    } else {
+                        try writeToken(builder, name_token, .function);
+                    }
+                } else {
+                    try writeToken(builder, name_token, .function);
+                }
             } else {
                 try writeNodeTokens(builder, call.ast.fn_expr);
             }
