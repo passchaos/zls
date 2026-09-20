@@ -26233,6 +26233,53 @@ test "insert replace behaviour - function with partial argument placeholders" {
     });
 }
 
+test "insert replace behaviour - variadic function with placeholders" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\extern fn func(format: [*:0]const u8, ...) callconv(.c) c_int;
+        \\const result = <cursor>;
+        ,
+        .label = "func",
+        .expected_insert_line = "const result = func(${1:format: [*:0]const u8}, ${2:...});",
+        .expected_replace_line = "const result = func(${1:format: [*:0]const u8}, ${2:...});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\extern fn func(...) callconv(.c) void;
+        \\const result = <cursor>;
+        ,
+        .label = "func",
+        .expected_insert_line = "const result = func(${1:...});",
+        .expected_replace_line = "const result = func(${1:...});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\extern fn func(format: [*:0]const u8, ...) callconv(.c) c_int;
+        \\const result = <cursor>(, 1);
+        ,
+        .label = "func",
+        .expected_insert_line = "const result = func(${1:format: [*:0]const u8}, 1);",
+        .expected_replace_line = "const result = func(${1:format: [*:0]const u8}, 1);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\extern fn func(format: [*:0]const u8, ...) callconv(.c) c_int;
+        \\const result = <cursor>("value", , 2);
+        ,
+        .label = "func",
+        .expected_insert_line = "const result = func(\"value\", ${1:...}, 2);",
+        .expected_replace_line = "const result = func(\"value\", ${1:...}, 2);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+}
+
 test "insert replace behaviour - function alias" {
     try testCompletionTextEdit(.{
         .source =

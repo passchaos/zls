@@ -323,12 +323,14 @@ fn rawStringifyFunction(
         }
     }
 
+    var snippet_placeholder_index: usize = 1;
     switch (options.parameters) {
         .collapse => {
             const has_arguments = parameters.len != 0;
             if (has_arguments) {
                 if (options.snippet_placeholders) {
-                    try writer.writeAll("${1:...}");
+                    try writer.print("${{{d}:...}}", .{snippet_placeholder_index});
+                    snippet_placeholder_index += 1;
                 } else {
                     try writer.writeAll("...");
                 }
@@ -338,7 +340,8 @@ fn rawStringifyFunction(
             for (parameters, 0..) |param_info, index| {
                 if (index != 0) try writer.writeAll(", ");
                 if (options.snippet_placeholders) {
-                    try writer.print("${{{d}:", .{index + 1});
+                    try writer.print("${{{d}:", .{snippet_placeholder_index});
+                    snippet_placeholder_index += 1;
                 }
 
                 try analyser.rawStringifyParameter(escaping_writer, .{
@@ -359,7 +362,11 @@ fn rawStringifyFunction(
         if (parameters.len != 0) {
             try writer.writeAll(", ");
         }
-        try writer.writeAll("...");
+        if (options.snippet_placeholders) {
+            try writer.print("${{{d}:...}}", .{snippet_placeholder_index});
+        } else {
+            try writer.writeAll("...");
+        }
     }
 
     try writer.writeByte(')');

@@ -455,7 +455,7 @@ fn functionTypeCompletion(
 
     const new_text = if (partial_call) |call| partial: {
         const parameters = info.parameters[@intFromBool(has_self_param)..];
-        if (try createPartialFunctionSnippet(builder, func_name, parameters, call.arguments)) |snippet| {
+        if (try createPartialFunctionSnippet(builder, func_name, parameters, info.has_varargs, call.arguments)) |snippet| {
             insert_range = call.range;
             replace_range = call.range;
             insert_text_format = .Snippet;
@@ -774,20 +774,29 @@ fn createPartialFunctionSnippet(
     builder: *Builder,
     function_name: []const u8,
     parameters: []const Analyser.Type.Data.Parameter,
+    has_varargs: bool,
     arguments: []const []const u8,
 ) error{OutOfMemory}!?[]const u8 {
-    if (arguments.len > parameters.len) return null;
+    if (arguments.len > parameters.len and !has_varargs) return null;
 
     var snippet: std.ArrayList(u8) = .empty;
     try snippet.print(builder.arena, "{f}(", .{Analyser.fmtEscapedSnippet(function_name)});
     var placeholder_index: usize = 1;
-    for (parameters, 0..) |parameter, index| {
+    const slot_count = @max(parameters.len, arguments.len);
+    for (0..slot_count) |index| {
         if (index != 0) try snippet.appendSlice(builder.arena, ", ");
         const argument = if (index < arguments.len) arguments[index] else "";
         if (argument.len != 0) {
             try partial_calls.appendSnippetLiteral(&snippet, builder.arena, argument);
             continue;
         }
+        if (index >= parameters.len) {
+            std.debug.assert(has_varargs);
+            try snippet.print(builder.arena, "${{{d}:...}}", .{placeholder_index});
+            placeholder_index += 1;
+            continue;
+        }
+        const parameter = parameters[index];
         const parameter_text = try builder.analyser.stringifyParameter(.{
             .info = parameter,
             .include_modifier = true,
