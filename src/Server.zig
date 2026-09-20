@@ -161,10 +161,7 @@ fn sendToClientResponse(server: *Server, id: lsp.JsonRPCMessage.ID, result: anyt
         .id = id,
         .result_or_error = .{ .result = result },
     };
-    const capacity_hint = if (@TypeOf(result) == ?types.workspace.Symbol.Result)
-        response_buffer.workspaceSymbolCapacityHint(result)
-    else
-        0;
+    const capacity_hint = response_buffer.responseCapacityHint(result);
     return try sendToClientInternal(server.io, server.allocator, server.transport, response, capacity_hint);
 }
 

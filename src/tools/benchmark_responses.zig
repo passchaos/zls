@@ -92,6 +92,9 @@ const CountingAllocator = struct {
 };
 
 const WorkspaceResponse = lsp.TypedJsonRPCResponse(types.workspace.Symbol.Result);
+const LocationResponse = lsp.TypedJsonRPCResponse(?[]types.Location);
+const HighlightResponse = lsp.TypedJsonRPCResponse(?[]types.DocumentHighlight);
+const WorkspaceEditResponse = lsp.TypedJsonRPCResponse(?types.WorkspaceEdit);
 const DiagnosticNotification = lsp.TypedJsonRPCNotification(types.publish_diagnostics.Params);
 const SerializationMode = enum { standard, stack_prefix, capacity_hint };
 
@@ -127,6 +130,12 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkWorkspaceSymbols(io, allocator, "large-standard", large_symbol_count, rounds, .standard);
     try benchmarkWorkspaceSymbols(io, allocator, "large-stack", large_symbol_count, rounds, .stack_prefix);
     try benchmarkWorkspaceSymbols(io, allocator, "large-hinted", large_symbol_count, rounds, .capacity_hint);
+    try benchmarkLocations(io, allocator, large_symbol_count, rounds, .stack_prefix);
+    try benchmarkLocations(io, allocator, large_symbol_count, rounds, .capacity_hint);
+    try benchmarkHighlights(io, allocator, large_symbol_count, rounds, .stack_prefix);
+    try benchmarkHighlights(io, allocator, large_symbol_count, rounds, .capacity_hint);
+    try benchmarkWorkspaceEdit(io, allocator, large_symbol_count, rounds, .stack_prefix);
+    try benchmarkWorkspaceEdit(io, allocator, large_symbol_count, rounds, .capacity_hint);
 
     try benchmarkDiagnostics(io, allocator, "diagnostics-empty-standard", 0, rounds, .standard);
     try benchmarkDiagnostics(io, allocator, "diagnostics-empty-stack", 0, rounds, .stack_prefix);
@@ -134,6 +143,127 @@ pub fn main(init: std.process.Init) !void {
     try benchmarkDiagnostics(io, allocator, "diagnostics-small-stack", 8, rounds, .stack_prefix);
     try benchmarkDiagnostics(io, allocator, "diagnostics-large-standard", large_diagnostic_count, rounds, .standard);
     try benchmarkDiagnostics(io, allocator, "diagnostics-large-stack", large_diagnostic_count, rounds, .stack_prefix);
+}
+
+fn benchmarkLocations(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    location_count: usize,
+    rounds: usize,
+    mode: SerializationMode,
+) !void {
+    const locations = try allocator.alloc(types.Location, location_count);
+    defer allocator.free(locations);
+    for (locations, 0..) |*location, index| {
+        const line: u32 = @intCast(index);
+        location.* = .{
+            .uri = "file:///workspace/src/representative.zig",
+            .range = .{
+                .start = .{ .line = line, .character = 4 },
+                .end = .{ .line = line, .character = 24 },
+            },
+        };
+    }
+    const response: LocationResponse = .{
+        .id = .{ .number = 1 },
+        .result_or_error = .{ .result = locations },
+    };
+    const allocation_stats, const response_bytes = try measureAllocations(LocationSerialization, allocator, response, mode);
+    const time_ns, const checksum_value = try measureTime(LocationSerialization, io, allocator, response, rounds, mode);
+    if (checksum_value != response_bytes *% rounds *% sample_count) return error.UnstableChecksum;
+    printResult("locations", mode, location_count, response_bytes, time_ns, checksum_value, allocation_stats);
+}
+
+fn benchmarkHighlights(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    highlight_count: usize,
+    rounds: usize,
+    mode: SerializationMode,
+) !void {
+    const highlights = try allocator.alloc(types.DocumentHighlight, highlight_count);
+    defer allocator.free(highlights);
+    for (highlights, 0..) |*highlight, index| {
+        const line: u32 = @intCast(index);
+        highlight.* = .{
+            .range = .{
+                .start = .{ .line = line, .character = 4 },
+                .end = .{ .line = line, .character = 24 },
+            },
+            .kind = .Text,
+        };
+    }
+    const response: HighlightResponse = .{
+        .id = .{ .number = 1 },
+        .result_or_error = .{ .result = highlights },
+    };
+    const allocation_stats, const response_bytes = try measureAllocations(HighlightSerialization, allocator, response, mode);
+    const time_ns, const checksum_value = try measureTime(HighlightSerialization, io, allocator, response, rounds, mode);
+    if (checksum_value != response_bytes *% rounds *% sample_count) return error.UnstableChecksum;
+    printResult("highlights", mode, highlight_count, response_bytes, time_ns, checksum_value, allocation_stats);
+}
+
+fn benchmarkWorkspaceEdit(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    edit_count: usize,
+    rounds: usize,
+    mode: SerializationMode,
+) !void {
+    const uri = "file:///workspace/src/representative.zig";
+    const edits = try allocator.alloc(types.TextEdit, edit_count);
+    defer allocator.free(edits);
+    for (edits, 0..) |*edit, index| {
+        const line: u32 = @intCast(index);
+        edit.* = .{
+            .range = .{
+                .start = .{ .line = line, .character = 4 },
+                .end = .{ .line = line, .character = 24 },
+            },
+            .newText = "renamed_value",
+        };
+    }
+    var workspace_edit: types.WorkspaceEdit = .{ .changes = .{} };
+    defer workspace_edit.changes.?.map.deinit(allocator);
+    try workspace_edit.changes.?.map.putNoClobber(allocator, uri, edits);
+    const response: WorkspaceEditResponse = .{
+        .id = .{ .number = 1 },
+        .result_or_error = .{ .result = workspace_edit },
+    };
+    const allocation_stats, const response_bytes = try measureAllocations(WorkspaceEditSerialization, allocator, response, mode);
+    const time_ns, const checksum_value = try measureTime(WorkspaceEditSerialization, io, allocator, response, rounds, mode);
+    if (checksum_value != response_bytes *% rounds *% sample_count) return error.UnstableChecksum;
+    printResult("workspace-edit", mode, edit_count, response_bytes, time_ns, checksum_value, allocation_stats);
+}
+
+fn printResult(
+    name: []const u8,
+    mode: SerializationMode,
+    item_count: usize,
+    response_bytes: usize,
+    time_ns: u64,
+    checksum_value: usize,
+    allocation_stats: AllocationStats,
+) void {
+    std.debug.print(
+        "{s}-{t}: {d} items, {d} bytes, {d} ns/response, checksum={d}\n" ++
+            "  allocations={d} resizes={d} remap-attempts={d} remaps={d} frees={d} allocated={d} peak-live={d}\n",
+        .{
+            name,
+            mode,
+            item_count,
+            response_bytes,
+            time_ns,
+            checksum_value,
+            allocation_stats.allocations,
+            allocation_stats.resizes,
+            allocation_stats.remap_attempts,
+            allocation_stats.remaps,
+            allocation_stats.frees,
+            allocation_stats.allocated_bytes,
+            allocation_stats.peak_live_bytes,
+        },
+    );
 }
 
 fn benchmarkWorkspaceSymbols(
@@ -276,6 +406,57 @@ const WorkspaceSerialization = struct {
                 response,
                 .{ .emit_null_optional_fields = false },
                 zls.response_buffer.workspaceSymbolCapacityHint(response.result_or_error.result),
+            ),
+        };
+    }
+};
+
+const LocationSerialization = struct {
+    const Value = LocationResponse;
+
+    fn stringify(allocator: std.mem.Allocator, response: Value, mode: SerializationMode) error{OutOfMemory}![]u8 {
+        return switch (mode) {
+            .standard => try std.json.Stringify.valueAlloc(allocator, response, .{ .emit_null_optional_fields = false }),
+            .stack_prefix => try zls.response_buffer.stringifyAlloc(allocator, response, .{ .emit_null_optional_fields = false }),
+            .capacity_hint => try zls.response_buffer.stringifyAllocCapacity(
+                allocator,
+                response,
+                .{ .emit_null_optional_fields = false },
+                zls.response_buffer.responseCapacityHint(response.result_or_error.result),
+            ),
+        };
+    }
+};
+
+const HighlightSerialization = struct {
+    const Value = HighlightResponse;
+
+    fn stringify(allocator: std.mem.Allocator, response: Value, mode: SerializationMode) error{OutOfMemory}![]u8 {
+        return switch (mode) {
+            .standard => try std.json.Stringify.valueAlloc(allocator, response, .{ .emit_null_optional_fields = false }),
+            .stack_prefix => try zls.response_buffer.stringifyAlloc(allocator, response, .{ .emit_null_optional_fields = false }),
+            .capacity_hint => try zls.response_buffer.stringifyAllocCapacity(
+                allocator,
+                response,
+                .{ .emit_null_optional_fields = false },
+                zls.response_buffer.responseCapacityHint(response.result_or_error.result),
+            ),
+        };
+    }
+};
+
+const WorkspaceEditSerialization = struct {
+    const Value = WorkspaceEditResponse;
+
+    fn stringify(allocator: std.mem.Allocator, response: Value, mode: SerializationMode) error{OutOfMemory}![]u8 {
+        return switch (mode) {
+            .standard => try std.json.Stringify.valueAlloc(allocator, response, .{ .emit_null_optional_fields = false }),
+            .stack_prefix => try zls.response_buffer.stringifyAlloc(allocator, response, .{ .emit_null_optional_fields = false }),
+            .capacity_hint => try zls.response_buffer.stringifyAllocCapacity(
+                allocator,
+                response,
+                .{ .emit_null_optional_fields = false },
+                zls.response_buffer.responseCapacityHint(response.result_or_error.result),
             ),
         };
     }

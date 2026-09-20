@@ -7,7 +7,8 @@ zig build bench-responses -j1 -Doptimize=ReleaseFast -Duse-llvm=true -- 128 2048
 ```
 
 The benchmark serializes representative empty, small, and result-heavy
-`workspace/symbol` JSON-RPC responses and `textDocument/publishDiagnostics`
+`workspace/symbol` JSON-RPC responses, reference locations, document
+highlights, workspace edits, and `textDocument/publishDiagnostics`
 notifications. It directly compares the standard library allocation path, a
 4 KiB stack-backed prefix, and capacity hints for large payloads. It reports the
 median time from nine samples along with serialized size, a checksum, and
@@ -15,6 +16,20 @@ allocation activity for one message. Serialization includes allocation and
 returning an exactly sized owned slice; it does not include transport I/O.
 The large diagnostic case includes tags and related information on one quarter
 of its diagnostics.
+
+## Reference-family response capacity, 2026-09-20
+
+Large reference, document-highlight, and rename responses now reserve a cheap
+upper-bound estimate before JSON serialization. The estimate depends only on
+item counts and already-owned URI or replacement text lengths. Small responses
+continue through the 4 KiB stack prefix.
+
+On AArch64 macOS, Zig 0.16.0, `ReleaseFast`, LLVM, and 4,096 result items, the
+capacity hint reduced allocator remap attempts from 12--13 to one. Location
+response peak live bytes fell from 685,626 to 557,120 (-18.7%), highlights from
+401,127 to 393,280 (-2.0%), and a single-file workspace edit from 603,042 to
+446,600 (-25.9%). Response sizes and checksums matched. Serialization medians
+stayed within 1%, so no latency improvement is claimed.
 
 Compare identical round counts, large-result counts, response byte sizes, and
 checksums across revisions. The allocation counters describe allocator requests

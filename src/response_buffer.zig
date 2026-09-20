@@ -55,6 +55,35 @@ pub fn workspaceSymbolCapacityHint(result: ?types.workspace.Symbol.Result) usize
     return capacity;
 }
 
+pub fn responseCapacityHint(result: anytype) usize {
+    const Result = @TypeOf(result);
+    if (Result == ?types.workspace.Symbol.Result) {
+        return workspaceSymbolCapacityHint(result);
+    }
+    if (Result == ?[]types.Location) {
+        const locations = result orelse return 0;
+        var capacity: usize = 64;
+        for (locations) |location| capacity +|= 96 +| location.uri.len;
+        return capacity;
+    }
+    if (Result == ?[]types.DocumentHighlight) {
+        const highlights = result orelse return 0;
+        return 64 +| 96 *| highlights.len;
+    }
+    if (Result == ?types.WorkspaceEdit) {
+        const workspace_edit = result orelse return 0;
+        const changes = workspace_edit.changes orelse return 0;
+        var capacity: usize = 64;
+        var iterator = changes.map.iterator();
+        while (iterator.next()) |entry| {
+            capacity +|= 32 +| entry.key_ptr.*.len;
+            for (entry.value_ptr.*) |edit| capacity +|= 96 +| edit.newText.len;
+        }
+        return capacity;
+    }
+    return 0;
+}
+
 test stringifyAlloc {
     const allocator = std.testing.allocator;
 
@@ -118,6 +147,37 @@ test workspaceSymbolCapacityHint {
     );
     try std.testing.expectEqual(0, workspaceSymbolCapacityHint(null));
     try std.testing.expectEqual(64, workspaceSymbolCapacityHint(.{ .symbol_informations = &.{} }));
+}
+
+test "response capacity hints" {
+    const allocator = std.testing.allocator;
+    const uri = "file:///workspace/example.zig";
+    const locations = [_]types.Location{.{
+        .uri = uri,
+        .range = .{
+            .start = .{ .line = 1, .character = 2 },
+            .end = .{ .line = 1, .character = 7 },
+        },
+    }};
+    const highlights = [_]types.DocumentHighlight{.{
+        .range = locations[0].range,
+        .kind = .Text,
+    }};
+
+    try std.testing.expect(responseCapacityHint(@as(?[]types.Location, @constCast(&locations))) > uri.len);
+    try std.testing.expect(responseCapacityHint(@as(?[]types.DocumentHighlight, @constCast(&highlights))) > 64);
+
+    const edits = [_]types.TextEdit{.{
+        .range = locations[0].range,
+        .newText = "replacement",
+    }};
+    var workspace_edit: types.WorkspaceEdit = .{ .changes = .{} };
+    defer workspace_edit.changes.?.map.deinit(allocator);
+    try workspace_edit.changes.?.map.putNoClobber(allocator, uri, &edits);
+    try std.testing.expect(responseCapacityHint(@as(?types.WorkspaceEdit, workspace_edit)) > uri.len + edits[0].newText.len);
+
+    try std.testing.expectEqual(0, responseCapacityHint(@as(?[]types.Location, null)));
+    try std.testing.expectEqual(0, responseCapacityHint(@as(?types.WorkspaceEdit, null)));
 }
 
 test "workspace symbol result representations serialize identically" {
