@@ -64,13 +64,14 @@ fn labelReferences(
 
 const Builder = struct {
     locations: std.ArrayList(types.Location) = .empty,
-    /// this is the declaration we are searching for
-    target_symbol: Analyser.DeclWithHandle,
+    /// These are the declarations we are searching for. A field access on a
+    /// branching type can resolve to more than one declaration.
+    target_symbols: []const Analyser.DeclWithHandle,
     target_symbol_name: []const u8,
     /// the decl is local to a function, block, etc
     local_only_decl: bool,
-    /// Whether the `target_symbol` has been added
-    did_add_target_symbol: bool = false,
+    /// Whether each target declaration has been added.
+    did_add_target_symbols: []bool,
     analyser: *Analyser,
     encoding: offsets.Encoding,
     current_handle: ?*DocumentStore.Handle = null,
@@ -80,11 +81,11 @@ const Builder = struct {
     identifier_scope_matches: bool = false,
 
     fn add(self: *Builder, handle: *DocumentStore.Handle, token_index: Ast.TokenIndex) error{OutOfMemory}!void {
-        if (self.target_symbol.handle == handle and
-            self.target_symbol.nameToken() == token_index)
-        {
-            if (self.did_add_target_symbol) return;
-            self.did_add_target_symbol = true;
+        for (self.target_symbols, self.did_add_target_symbols) |target_symbol, *did_add| {
+            if (target_symbol.handle != handle or target_symbol.nameToken() != token_index) continue;
+            if (did_add.*) return;
+            did_add.* = true;
+            break;
         }
         if (self.current_handle != handle) {
             self.current_handle = handle;
@@ -94,6 +95,18 @@ const Builder = struct {
             .uri = handle.uri.raw,
             .range = self.position_cursor.?.locToRange(offsets.tokenToLoc(&handle.tree, token_index)),
         });
+    }
+
+    fn matchesTarget(self: *Builder, candidate_unresolved: Analyser.DeclWithHandle) Analyser.Error!bool {
+        for (self.target_symbols) |target_symbol| {
+            if (target_symbol.eql(candidate_unresolved)) return true;
+        }
+
+        const candidate = try self.analyser.resolveVarDeclAlias(candidate_unresolved) orelse candidate_unresolved;
+        for (self.target_symbols) |target_symbol| {
+            if (target_symbol.eql(candidate)) return true;
+        }
+        return false;
     }
 
     fn collectReferences(self: *Builder, handle: *DocumentStore.Handle, node: Ast.Node.Index) Analyser.Error!void {
@@ -121,7 +134,7 @@ const Builder = struct {
         const tree = &handle.tree;
         const target_symbol_name = builder.target_symbol_name;
 
-        var candidate: Analyser.DeclWithHandle, const name_token = candidate: switch (tree.nodeTag(node)) {
+        const candidate: Analyser.DeclWithHandle, const name_token = candidate: switch (tree.nodeTag(node)) {
             .identifier,
             .test_decl,
             => |tag| {
@@ -156,9 +169,14 @@ const Builder = struct {
 
                 const lhs = try builder.analyser.resolveTypeOfNode(.of(lhs_node, handle)) orelse return;
                 const deref_lhs = try builder.analyser.resolveDerefType(lhs) orelse lhs;
-
-                const candidate = try deref_lhs.lookupSymbol(builder.analyser, name) orelse return;
-                break :candidate .{ candidate, field_token };
+                for (try deref_lhs.getAllTypesWithHandles(builder.analyser)) |ty| {
+                    const candidate = try ty.lookupSymbol(builder.analyser, name) orelse continue;
+                    if (try builder.matchesTarget(candidate)) {
+                        try builder.add(handle, field_token);
+                        return;
+                    }
+                }
+                return;
             },
             .struct_init_one,
             .struct_init_one_comma,
@@ -246,13 +264,7 @@ const Builder = struct {
             else => return,
         };
 
-        if (builder.target_symbol.eql(candidate)) {
-            try builder.add(handle, name_token);
-            return;
-        }
-
-        candidate = try builder.analyser.resolveVarDeclAlias(candidate) orelse candidate;
-        if (builder.target_symbol.eql(candidate)) {
+        if (try builder.matchesTarget(candidate)) {
             try builder.add(handle, name_token);
         }
     }
@@ -272,17 +284,14 @@ const Builder = struct {
 
         const document_scope = builder.current_document_scope.?;
         const scope = Analyser.innermostScopeAtIndex(document_scope, source_index);
-        var candidate = try builder.analyser.lookupSymbolGlobalFromScope(
+        const candidate = try builder.analyser.lookupSymbolGlobalFromScope(
             handle,
             document_scope,
             scope,
             name,
             source_index,
         ) orelse return false;
-        if (!builder.target_symbol.eql(candidate)) {
-            candidate = try builder.analyser.resolveVarDeclAlias(candidate) orelse candidate;
-        }
-        const matches = builder.target_symbol.eql(candidate);
+        const matches = try builder.matchesTarget(candidate);
 
         if (document_scope.getScopeTag(scope) == .block and
             document_scope.getScopeChildScopesConst(scope).len == 0)
@@ -297,7 +306,7 @@ const Builder = struct {
 fn symbolReferences(
     analyser: *Analyser,
     request: GeneralReferencesRequest,
-    target_symbol: Analyser.DeclWithHandle,
+    target_symbols: []const Analyser.DeclWithHandle,
     encoding: offsets.Encoding,
     /// add `target_symbol` as a references
     include_decl: bool,
@@ -307,6 +316,8 @@ fn symbolReferences(
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
+    std.debug.assert(target_symbols.len != 0);
+    const target_symbol = target_symbols[0];
     std.debug.assert(target_symbol.decl != .label); // use `labelReferences` instead
 
     const doc_scope = try target_symbol.handle.getDocumentScope();
@@ -341,33 +352,45 @@ fn symbolReferences(
         .error_token => return .empty,
     };
 
+    const did_add_target_symbols = try analyser.arena.alloc(bool, target_symbols.len);
+    @memset(did_add_target_symbols, false);
     var builder: Builder = .{
         .analyser = analyser,
-        .target_symbol = target_symbol,
+        .target_symbols = target_symbols,
         .target_symbol_name = offsets.identifierTokenToNameSlice(
             &target_symbol.handle.tree,
             target_symbol.nameToken(),
         ),
         .local_only_decl = local_node != null,
         .encoding = encoding,
+        .did_add_target_symbols = did_add_target_symbols,
     };
 
     blk: {
         if (!include_decl) break :blk;
-        if (request == .highlight and !target_symbol.handle.uri.eql(current_handle.uri)) break :blk;
-        try builder.add(target_symbol.handle, target_symbol.nameToken());
+        for (target_symbols) |target| {
+            if (request == .highlight and !target.handle.uri.eql(current_handle.uri)) continue;
+            try builder.add(target.handle, target.nameToken());
+        }
     }
 
     try builder.collectReferences(current_handle, local_node orelse .root);
 
-    const workspace = local_node == null and request != .highlight and target_symbol.isPublic();
+    const workspace = local_node == null and request != .highlight and for (target_symbols) |target| {
+        if (target.isPublic()) break true;
+    } else false;
     if (workspace) {
-        var uris = try gatherWorkspaceReferenceCandidates(
-            analyser.store,
-            analyser.arena,
-            current_handle,
-            target_symbol.handle,
-        );
+        var uris: Uri.ArrayHashMap(void) = .empty;
+        for (target_symbols) |target| {
+            const target_uris = try gatherWorkspaceReferenceCandidates(
+                analyser.store,
+                analyser.arena,
+                current_handle,
+                target.handle,
+            );
+            try uris.ensureUnusedCapacity(analyser.arena, target_uris.count());
+            for (target_uris.keys()) |uri| uris.putAssumeCapacity(uri, {});
+        }
         for (uris.keys()) |uri| {
             if (uri.eql(current_handle.uri)) continue;
             const dependency_handle = try analyser.store.getOrLoadHandle(uri) orelse continue;
@@ -735,30 +758,46 @@ pub const GeneralReferencesResponse = union {
     highlight: []types.DocumentHighlight,
 };
 
-fn resolveSymbolTarget(
+fn resolveSymbolTargets(
     analyser: *Analyser,
     arena: std.mem.Allocator,
     handle: *DocumentStore.Handle,
     source_index: usize,
     pos_context: Analyser.PositionContext,
-) Analyser.Error!?Analyser.DeclWithHandle {
+) Analyser.Error!?[]const Analyser.DeclWithHandle {
     const name_loc = offsets.identifierLocFromIndex(&handle.tree, source_index) orelse return null;
     const name = offsets.locToSlice(handle.tree.source, name_loc);
 
-    var target_decl = switch (pos_context) {
+    const target_decls = switch (pos_context) {
         .var_access, .test_doctest_name => try analyser.lookupSymbolGlobal(handle, name, source_index),
-        .field_access => |loc| blk: {
+        .field_access => |loc| {
             const held_loc = offsets.locMerge(loc, name_loc);
             const candidates = try analyser.getSymbolFieldAccesses(arena, handle, source_index, held_loc, name) orelse return null;
-            break :blk if (candidates.len != 0) candidates[0] else null;
+            if (candidates.len == 0) return null;
+            return @as(?[]const Analyser.DeclWithHandle, try resolveAliasesAndDeduplicate(analyser, arena, candidates));
         },
         .label_access, .label_decl => try Analyser.lookupLabel(handle, name, source_index),
         .enum_literal => try analyser.getSymbolEnumLiteral(handle, source_index, name),
         else => null,
     } orelse return null;
 
-    target_decl = try analyser.resolveVarDeclAlias(target_decl) orelse target_decl;
-    return target_decl;
+    const target_decl = try analyser.resolveVarDeclAlias(target_decls) orelse target_decls;
+    return try arena.dupe(Analyser.DeclWithHandle, &.{target_decl});
+}
+
+fn resolveAliasesAndDeduplicate(
+    analyser: *Analyser,
+    arena: std.mem.Allocator,
+    candidates: []const Analyser.DeclWithHandle,
+) Analyser.Error![]const Analyser.DeclWithHandle {
+    var targets: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    for (candidates) |candidate_unresolved| {
+        const candidate = try analyser.resolveVarDeclAlias(candidate_unresolved) orelse candidate_unresolved;
+        for (targets.items) |target| {
+            if (target.eql(candidate)) break;
+        } else try targets.append(arena, candidate);
+    }
+    return targets.toOwnedSlice(arena);
 }
 
 pub fn prepareRenameLoc(
@@ -771,7 +810,7 @@ pub fn prepareRenameLoc(
     const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, true);
     var analyser = server.initAnalyser(arena, handle);
     defer analyser.deinit();
-    _ = try resolveSymbolTarget(&analyser, arena, handle, source_index, pos_context) orelse return null;
+    _ = try resolveSymbolTargets(&analyser, arena, handle, source_index, pos_context) orelse return null;
     return offsets.identifierLocFromIndex(&handle.tree, source_index);
 }
 
@@ -797,7 +836,6 @@ pub fn referencesHandler(server: *Server, arena: std.mem.Allocator, request: Gen
         else => true,
     };
 
-    // TODO: Make this work with branching types
     const locations = locs: {
         if (pos_context == .keyword and request != .rename) {
             break :locs try controlFlowReferences(
@@ -808,12 +846,12 @@ pub fn referencesHandler(server: *Server, arena: std.mem.Allocator, request: Gen
             );
         }
 
-        const target_decl = try resolveSymbolTarget(&analyser, arena, handle, source_index, pos_context) orelse return null;
+        const target_decls = try resolveSymbolTargets(&analyser, arena, handle, source_index, pos_context) orelse return null;
 
-        break :locs switch (target_decl.decl) {
+        break :locs switch (target_decls[0].decl) {
             .label => |payload| try labelReferences(
                 arena,
-                target_decl.handle,
+                target_decls[0].handle,
                 payload,
                 server.offset_encoding,
                 include_decl,
@@ -821,7 +859,7 @@ pub fn referencesHandler(server: *Server, arena: std.mem.Allocator, request: Gen
             else => try symbolReferences(
                 &analyser,
                 request,
-                target_decl,
+                target_decls,
                 server.offset_encoding,
                 include_decl,
                 handle,

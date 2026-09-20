@@ -210,6 +210,40 @@ test "rename callable fields without touching same-named methods" {
     );
 }
 
+test "references include matching fields from branching types" {
+    try testSimpleReferences(
+        \\const Alpha = struct { shared: u32 };
+        \\const Beta = struct { sha<cursor>red: u32 };
+        \\const value: if (undefined) Alpha else Beta = undefined;
+        \\const field = value.<loc>shared</loc>;
+    );
+    try testSimpleReferences(
+        \\const Alpha = struct { shared: u32 };
+        \\const Beta = struct { sha<cursor>red: u32 };
+        \\const value: switch (@as(u1, undefined)) {
+        \\    0 => Alpha,
+        \\    1 => Beta,
+        \\} = undefined;
+        \\const field = value.<loc>shared</loc>;
+    );
+}
+
+test "rename fields across branching types" {
+    try testRename(
+        \\const Alpha = struct { shared: u32 };
+        \\const Beta = struct { shared: u32 };
+        \\const Either = if (undefined) Alpha else Beta;
+        \\const value: Either = .{ .shared = 1 };
+        \\const field = value.sha<cursor>red;
+    , "renamed",
+        \\const Alpha = struct { renamed: u32 };
+        \\const Beta = struct { renamed: u32 };
+        \\const Either = if (undefined) Alpha else Beta;
+        \\const value: Either = .{ .renamed = 1 };
+        \\const field = value.renamed;
+    );
+}
+
 test "prepare rename only accepts resolvable symbols" {
     try testPrepareRename(
         \\const val<cursor>ue = 1;
