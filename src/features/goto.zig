@@ -47,7 +47,8 @@ fn gotoDefinitionSymbol(
                 }
                 if (resolved_ty.typeDefinitionToken()) |token_handle| break :blk token_handle;
             }
-            const type_declaration = try decl_handle.typeDeclarationNode() orelse return null;
+            const type_declaration = try decl_handle.typeDeclarationNode() orelse
+                try captureSourceTypeDeclarationNode(analyser, decl_handle) orelse return null;
 
             const target_range = offsets.nodeToRange(&type_declaration.handle.tree, type_declaration.node, offset_encoding);
             return .{
@@ -66,6 +67,35 @@ fn gotoDefinitionSymbol(
         .targetRange = target_range,
         .targetSelectionRange = target_range,
     };
+}
+
+fn captureSourceTypeDeclarationNode(
+    analyser: *Analyser,
+    decl_handle: Analyser.DeclWithHandle,
+) Analyser.Error!?Analyser.NodeWithHandle {
+    const condition = switch (decl_handle.decl) {
+        .optional_payload => |payload| payload.condition,
+        .error_union_payload => |payload| payload.condition,
+        else => return null,
+    };
+    const tree = &decl_handle.handle.tree;
+    var source_decl = switch (tree.nodeTag(condition)) {
+        .field_access => blk: {
+            const lhs_node, const field_token = tree.nodeData(condition).node_and_token;
+            const lhs = try analyser.resolveTypeOfNode(.{
+                .node_handle = .of(lhs_node, decl_handle.handle),
+                .container_type = decl_handle.container_type,
+            }) orelse return null;
+            const field_name = try analyser.identifierTokenName(tree, field_token) orelse return null;
+            break :blk try lhs.lookupSymbol(analyser, field_name) orelse return null;
+        },
+        else => try analyser.resolveDeclarationOfNode(.{
+            .node_handle = .of(condition, decl_handle.handle),
+            .container_type = decl_handle.container_type,
+        }) orelse return null,
+    };
+    source_decl = try analyser.resolveVarDeclAlias(source_decl) orelse source_decl;
+    return try source_decl.typeDeclarationNode();
 }
 
 fn gotoDefinitionLabel(

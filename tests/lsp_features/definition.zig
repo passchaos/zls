@@ -217,13 +217,22 @@ test "capture" {
         \\    if (maybe) |<def><decl><>some</decl></def>| {}
         \\}
     );
-    if (true) return error.SkipZigTest; // TODO
-    // primitives like `u32` are represented as a InternPool.Index so they
-    // don't have a Ast.Node.Index that gives them a source location
     try testDefinition(
         \\test {
         \\    var maybe: <tdef>?u32</tdef> = 5;
         \\    if (maybe) |<def><decl><>some</decl></def>| {}
+        \\}
+    );
+    try testDefinition(
+        \\const values = struct { maybe: <tdef>?u32</tdef> }{ .maybe = 5 };
+        \\test {
+        \\    if (values.maybe) |<def><decl><>some</decl></def>| {}
+        \\}
+    );
+    try testDefinition(
+        \\test {
+        \\    var result: <tdef>anyerror!u32</tdef> = 5;
+        \\    if (result) |<def><decl><>value</decl></def>| {}
         \\}
     );
 }
