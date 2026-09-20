@@ -686,7 +686,16 @@ fn writeNodeTokens(builder: *Builder, node: Ast.Node.Index) Analyser.Error!void 
         .unwrap_optional => {
             const lhs, const question_mark_token = tree.nodeData(node).node_and_token;
             try writeNodeTokens(builder, lhs);
-            try writeToken(builder, question_mark_token, .operator);
+            const question_mark_loc = offsets.tokenToLoc(tree, question_mark_token);
+            const includes_period = if (question_mark_token != 0 and tree.tokenTag(question_mark_token - 1) == .period) blk: {
+                const period_loc = offsets.tokenToLoc(tree, question_mark_token - 1);
+                if (period_loc.end == question_mark_loc.start) {
+                    try builder.addDirect(.operator, .{}, .{ .start = period_loc.start, .end = question_mark_loc.end });
+                    break :blk true;
+                }
+                break :blk false;
+            } else false;
+            if (!includes_period) try builder.addDirect(.operator, .{}, question_mark_loc);
         },
         .grouped_expression => {
             try writeNodeTokens(builder, tree.nodeData(node).node_and_token[0]);

@@ -368,8 +368,7 @@ test "operators" {
         .{ "alpha", .variable, .{ .declaration = true, .static = true, .mutable = true } },
         .{ "=", .operator, .{} },
         .{ "undefined", .keywordLiteral, .{} },
-        // TODO these should be either (.? and .*) or (? and *)
-        .{ "?", .operator, .{} },
+        .{ ".?", .operator, .{} },
         .{ ".*", .operator, .{} },
     });
 }
