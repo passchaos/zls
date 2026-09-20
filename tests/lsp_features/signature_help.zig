@@ -313,6 +313,21 @@ test "anytype" {
     , "fn foo(a: u32, b: anytype, c: u32) void", 1);
 }
 
+test "variadic" {
+    try testSignatureHelp(
+        \\extern fn foo(format: [*:0]const u8, ...) callconv(.c) c_int;
+        \\const result = foo("%d", <cursor>1);
+    , "fn foo(format: [*:0]const u8, ...) c_int", 1);
+    try testSignatureHelp(
+        \\extern fn foo(format: [*:0]const u8, ...) callconv(.c) c_int;
+        \\const result = foo("%d", 1, <cursor>2);
+    , "fn foo(format: [*:0]const u8, ...) c_int", 1);
+    try testSignatureHelp(
+        \\extern fn foo(...) callconv(.c) void;
+        \\foo(<cursor>1);
+    , "fn foo(...) void", 0);
+}
+
 test "nested function call" {
     try testSignatureHelp(
         \\fn foo(a: u32, b: u32) i32 {

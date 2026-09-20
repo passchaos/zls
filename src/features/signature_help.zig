@@ -57,6 +57,17 @@ fn fnProtoToSignatureInfo(
             } } else null,
         });
     }
+    if (info.has_varargs) {
+        try params.append(arena, .{
+            .label = .{ .string = "..." },
+        });
+    }
+    const active_parameter: ?u32 = if (arg_idx < info.parameters.len)
+        arg_idx
+    else if (info.has_varargs)
+        @intCast(info.parameters.len)
+    else
+        null;
     return types.SignatureHelp.Signature{
         .label = label,
         .documentation = if (info.doc_comments) |comment| .{ .markup_content = .{
@@ -64,7 +75,7 @@ fn fnProtoToSignatureInfo(
             .value = comment,
         } } else null,
         .parameters = params.items,
-        .activeParameter = if (arg_idx < params.items.len) arg_idx else null,
+        .activeParameter = active_parameter,
     };
 }
 
