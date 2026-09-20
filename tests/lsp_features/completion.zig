@@ -25036,6 +25036,73 @@ test "anytype resolution follows function aliases" {
     });
 }
 
+test "anytype resolution follows cross-file callsites" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const source =
+        \\pub fn inspect(value: anytype) void {
+        \\    value.<cursor>
+        \\}
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
+    defer allocator.free(text);
+    const uri = try ctx.addDocument(.{ .source = text });
+
+    _ = try ctx.addDocument(.{ .source =
+        \\const api = @import("Untitled-0.zig");
+        \\const Argument = struct { field: u32 };
+        \\const argument: Argument = undefined;
+        \\comptime {
+        \\    api.inspect(argument);
+        \\}
+    });
+
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })) orelse return error.InvalidResponse;
+    const completion = try searchCompletionItemWithLabel(response.completion_list, "field");
+    try std.testing.expectEqual(types.completion.Item.Kind.Field, completion.kind.?);
+    try std.testing.expectEqualStrings("u32", completion.detail.?);
+}
+
+test "anytype resolution follows transitive cross-file callsites" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const source =
+        \\pub fn inspect(value: anytype) void {
+        \\    value.<cursor>
+        \\}
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
+    defer allocator.free(text);
+    const uri = try ctx.addDocument(.{ .source = text });
+
+    _ = try ctx.addDocument(.{ .source =
+        \\pub const inspect = @import("Untitled-0.zig").inspect;
+    });
+    _ = try ctx.addDocument(.{ .source =
+        \\const api = @import("Untitled-1.zig");
+        \\const Argument = struct { field: u32 };
+        \\const argument: Argument = undefined;
+        \\comptime {
+        \\    api.inspect(argument);
+        \\}
+    });
+
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })) orelse return error.InvalidResponse;
+    const completion = try searchCompletionItemWithLabel(response.completion_list, "field");
+    try std.testing.expectEqual(types.completion.Item.Kind.Field, completion.kind.?);
+    try std.testing.expectEqualStrings("u32", completion.detail.?);
+}
+
 test "@field" {
     try testCompletion(
         \\pub const chip_mod = struct {
