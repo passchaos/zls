@@ -160,6 +160,29 @@ test "struct field access" {
     );
 }
 
+test "callable field and method references stay distinct" {
+    try testSymbolReferences(
+        \\const S = struct {
+        \\    <0>: *const fn (S) void,
+        \\    fn method(self: S) void { _ = self; }
+        \\};
+        \\fn use(s: S) void {
+        \\    _ = s.<0>;
+        \\    s.<0>(undefined);
+        \\}
+    );
+    try testSymbolReferences(
+        \\const S = struct {
+        \\    callback: *const fn (S) void,
+        \\    fn <0>(self: S) void { _ = self; }
+        \\};
+        \\fn use(s: S) void {
+        \\    s.<0>();
+        \\    _ = s.callback;
+        \\}
+    );
+}
+
 test "struct init result location from function return type" {
     try testSymbolReferences(
         \\fn foo() struct { <0>: i32 } {
