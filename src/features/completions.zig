@@ -1452,6 +1452,7 @@ fn createCompletionPrefixSource(
         completion_end += 1;
     }
     const prefix = original_source[0..completion_end];
+    const has_trailing_comma = completion_end < original_source.len and original_source[completion_end] == ',';
 
     var source: std.ArrayList(u8) = .empty;
     try source.appendSlice(arena, prefix);
@@ -1463,32 +1464,67 @@ fn createCompletionPrefixSource(
     var tokenizer: std.zig.Tokenizer = .init(token_source);
     var delimiters: std.ArrayList(std.zig.Token.Tag) = .empty;
     var last_tag: std.zig.Token.Tag = .eof;
+    var continue_delimiter_depth: ?usize = null;
     while (true) {
         const token = tokenizer.next();
         if (token.tag == .eof) break;
         last_tag = token.tag;
         switch (token.tag) {
             .l_paren, .l_bracket, .l_brace => try delimiters.append(arena, token.tag),
-            .r_paren => popMatchingDelimiter(&delimiters, .l_paren),
-            .r_bracket => popMatchingDelimiter(&delimiters, .l_bracket),
-            .r_brace => popMatchingDelimiter(&delimiters, .l_brace),
+            .r_paren => {
+                popMatchingDelimiter(&delimiters, .l_paren);
+                if (continue_delimiter_depth) |depth| {
+                    if (delimiters.items.len < depth) continue_delimiter_depth = null;
+                }
+            },
+            .r_bracket => {
+                popMatchingDelimiter(&delimiters, .l_bracket);
+                if (continue_delimiter_depth) |depth| {
+                    if (delimiters.items.len < depth) continue_delimiter_depth = null;
+                }
+            },
+            .r_brace => {
+                popMatchingDelimiter(&delimiters, .l_brace);
+                if (continue_delimiter_depth) |depth| {
+                    if (delimiters.items.len < depth) continue_delimiter_depth = null;
+                }
+            },
+            .keyword_continue => continue_delimiter_depth = delimiters.items.len,
+            .semicolon => continue_delimiter_depth = null,
+            .comma => if (continue_delimiter_depth) |depth| {
+                if (delimiters.items.len <= depth) continue_delimiter_depth = null;
+            },
             else => {},
         }
     }
 
     switch (last_tag) {
-        .period, .period_asterisk => try source.appendSlice(arena, "__zls_completion"),
+        .period, .period_asterisk => {
+            try source.appendSlice(arena, "__zls_completion");
+            if (has_trailing_comma and delimiters.items.len != 0) try source.append(arena, ',');
+        },
         else => {},
     }
 
-    var inserted_statement_terminator = false;
+    var inserted_statement_terminator = has_trailing_comma and delimiters.items.len != 0;
     var delimiter_index = delimiters.items.len;
+    if (last_tag == .period) {
+        if (continue_delimiter_depth) |outer_depth| {
+            if (outer_depth < delimiter_index) {
+                while (delimiter_index > outer_depth) {
+                    delimiter_index -= 1;
+                    try source.append(arena, closingDelimiter(delimiters.items[delimiter_index]));
+                }
+                try source.append(arena, ',');
+                inserted_statement_terminator = true;
+            }
+        }
+    }
     while (delimiter_index > 0) {
         delimiter_index -= 1;
         const delimiter = delimiters.items[delimiter_index];
         switch (delimiter) {
-            .l_paren => try source.append(arena, ')'),
-            .l_bracket => try source.append(arena, ']'),
+            .l_paren, .l_bracket => try source.append(arena, closingDelimiter(delimiter)),
             .l_brace => {
                 if (!inserted_statement_terminator) {
                     try source.append(arena, ';');
@@ -1501,6 +1537,15 @@ fn createCompletionPrefixSource(
     }
     if (!inserted_statement_terminator) try source.append(arena, ';');
     return try source.toOwnedSliceSentinel(arena, 0);
+}
+
+fn closingDelimiter(open: std.zig.Token.Tag) u8 {
+    return switch (open) {
+        .l_paren => ')',
+        .l_bracket => ']',
+        .l_brace => '}',
+        else => unreachable,
+    };
 }
 
 fn popMatchingDelimiter(delimiters: *std.ArrayList(std.zig.Token.Tag), expected: std.zig.Token.Tag) void {

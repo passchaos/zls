@@ -540,6 +540,12 @@ test "enum literal after break label" {
     , .enum_literal, .{});
 }
 
+test "enum literal after continue label" {
+    try testContext(
+        \\const value = blk: switch (foo) { .alpha => continue :blk <loc>.<cursor></loc>, };
+    , .enum_literal, .{ .lookahead = false });
+}
+
 test "enum literal in 'then' expression of 'if' statement" {
     try testContext(
         \\var foo = if (bar) <loc>.<cursor>foo</loc> else .bar;

@@ -24501,11 +24501,10 @@ test "continue with label - enum/decl literal" {
         \\    .alpha => continue :blk .<cursor>,
         \\};
     , &.{
-        // TODO this should have the following completion items
-        // .{ .label = "alpha", .kind = .EnumMember },
-        // .{ .label = "beta", .kind = .EnumMember },
-        // .{ .label = "init", .kind = .Function, .detail = "fn () E" },
-        // .{ .label = "default", .kind = .EnumMember },
+        .{ .label = "alpha", .kind = .EnumMember },
+        .{ .label = "beta", .kind = .EnumMember },
+        .{ .label = "init", .kind = .Function, .detail = "fn () E" },
+        .{ .label = "default", .kind = .EnumMember },
     });
     try testCompletion(
         \\const E = enum {
@@ -24540,9 +24539,8 @@ test "continue with label - structinit" {
         \\    .alpha => continue :blk .{ .<cursor> }
         \\};
     , &.{
-        // TODO this should have the following completion items
-        // .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-        // .{ .label = "beta", .kind = .Field, .detail = "[]const u8" },
+        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
+        .{ .label = "beta", .kind = .Field, .detail = "[]const u8" },
     });
     try testCompletion(
         \\const U = union(enum) {
@@ -24570,10 +24568,9 @@ test "continue with label - structinit" {
         \\    .alpha => continue :blk .{ .gamma = .{ .<cursor> }
         \\};
     , &.{
-        // TODO this should have the following completion items
-        // .{ .label = "gamma", .kind = .Field, .detail = "?U" },
-        // .{ .label = "beta", .kind = .Field, .detail = "u32" },
-        // .{ .label = "alpha", .kind = .Field, .detail = "*const U" },
+        .{ .label = "gamma", .kind = .Field, .detail = "?U" },
+        .{ .label = "beta", .kind = .Field, .detail = "u32" },
+        .{ .label = "alpha", .kind = .Field, .detail = "*const U" },
     });
     try testCompletion(
         \\const U = union(enum) {
