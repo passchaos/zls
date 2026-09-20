@@ -125,6 +125,14 @@ const Builder = struct {
         try builder.add(kind, builder.tree.firstToken(node), ast.lastToken(builder.tree, node), start_reach, end_reach);
     }
 
+    fn addCommentLoc(builder: *Builder, start: usize, end: usize) error{OutOfMemory}!void {
+        if (std.mem.findScalar(u8, builder.tree.source[start..end], '\n') == null) return;
+        try builder.locations.append(builder.allocator, .{
+            .loc = .{ .start = start, .end = end },
+            .kind = .comment,
+        });
+    }
+
     fn getRanges(builder: Builder) error{OutOfMemory}![]types.FoldingRange {
         const tracy_zone = tracy.trace(@src());
         defer tracy_zone.end();
@@ -137,6 +145,73 @@ const Builder = struct {
         );
     }
 };
+
+fn isDocumentComment(source: []const u8, comment_start: usize, comment_end: usize) bool {
+    const comment = source[comment_start..comment_end];
+    return std.mem.startsWith(u8, comment, "//!") or
+        (std.mem.startsWith(u8, comment, "///") and !std.mem.startsWith(u8, comment, "////"));
+}
+
+fn isRegionComment(source: []const u8, comment_start: usize, comment_end: usize) bool {
+    const comment = source[comment_start..comment_end];
+    return std.mem.startsWith(u8, comment, "//#region") or
+        std.mem.startsWith(u8, comment, "//#endregion");
+}
+
+fn addLineCommentRangesInTrivia(builder: *Builder, trivia_start: usize, trivia_end: usize) error{OutOfMemory}!void {
+    const source = builder.tree.source;
+    var group_start: ?usize = null;
+    var group_end: usize = 0;
+    var search_index = trivia_start;
+    var line_start = if (std.mem.findLast(u8, source[0..trivia_start], "\n")) |newline| newline + 1 else 0;
+
+    while (std.mem.findPos(u8, source[0..trivia_end], search_index, "//")) |comment_start| {
+        if (std.mem.findLast(u8, source[search_index..comment_start], "\n")) |newline| {
+            line_start = search_index + newline + 1;
+        }
+        const line_end_with_cr = std.mem.findScalarPos(u8, source[0..trivia_end], comment_start, '\n') orelse trivia_end;
+        const comment_end = if (line_end_with_cr > comment_start and source[line_end_with_cr - 1] == '\r')
+            line_end_with_cr - 1
+        else
+            line_end_with_cr;
+        const is_full_line = std.mem.trim(u8, source[line_start..comment_start], " \t\r").len == 0;
+        const is_foldable = is_full_line and
+            !isDocumentComment(source, comment_start, comment_end) and
+            !isRegionComment(source, comment_start, comment_end);
+
+        if (!is_foldable) {
+            if (group_start) |start| try builder.addCommentLoc(start, group_end);
+            group_start = null;
+        } else if (group_start) |start| {
+            _ = start;
+            const between = source[group_end..comment_start];
+            if (std.mem.count(u8, between, "\n") != 1) {
+                try builder.addCommentLoc(group_start.?, group_end);
+                group_start = comment_start;
+            }
+            group_end = comment_end;
+        } else {
+            group_start = comment_start;
+            group_end = comment_end;
+        }
+
+        search_index = line_end_with_cr + @intFromBool(line_end_with_cr < trivia_end);
+        line_start = search_index;
+    }
+
+    if (group_start) |start| try builder.addCommentLoc(start, group_end);
+}
+
+fn addLineCommentRanges(builder: *Builder) error{OutOfMemory}!void {
+    var trivia_start: usize = 0;
+    for (0..builder.tree.tokens.len) |i| {
+        const token: Ast.TokenIndex = @intCast(i);
+        const token_start = builder.tree.tokenStart(token);
+        try addLineCommentRangesInTrivia(builder, trivia_start, token_start);
+        trivia_start = offsets.tokenToLoc(builder.tree, token).end;
+    }
+    try addLineCommentRangesInTrivia(builder, trivia_start, builder.tree.source.len);
+}
 
 fn convertRanges(
     allocator: std.mem.Allocator,
@@ -278,7 +353,7 @@ pub fn generateFoldingRanges(allocator: std.mem.Allocator, tree: *const Ast, enc
         }
     }
 
-    // TODO add folding range normal comments
+    try addLineCommentRanges(&builder);
 
     // Folding range for top level imports
     if (tree.mode == .zig) blk: {

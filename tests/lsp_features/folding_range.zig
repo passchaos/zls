@@ -36,6 +36,32 @@ test "doc comment" {
     });
 }
 
+test "line comment" {
+    try testFoldingRange(
+        \\// hello
+        \\// world
+        \\const value = "// not a comment";
+        \\const other = 1; // trailing one
+        \\// standalone one
+        \\//#region
+        \\// inside
+        \\//#endregion
+        \\//// ordinary
+        \\//// comments
+    , &.{
+        .{ .startLine = 0, .startCharacter = 0, .endLine = 1, .endCharacter = 8, .kind = .comment },
+        .{ .startLine = 8, .startCharacter = 0, .endLine = 9, .endCharacter = 13, .kind = .comment },
+        .{ .startLine = 5, .startCharacter = 0, .endLine = 7, .endCharacter = 12, .kind = .region },
+    });
+    try testFoldingRange(
+        "// first\r\n// second\r\n\r\n// third\r\n// fourth\r\n",
+        &.{
+            .{ .startLine = 0, .startCharacter = 0, .endLine = 1, .endCharacter = 9, .kind = .comment },
+            .{ .startLine = 3, .startCharacter = 0, .endLine = 4, .endCharacter = 9, .kind = .comment },
+        },
+    );
+}
+
 test "region" {
     try testFoldingRange(
         \\const foo = 0;
