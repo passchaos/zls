@@ -1981,7 +1981,15 @@ fn collectVarAccessContainerNodes(
 ) Analyser.Error!void {
     const analyser = builder.analyser;
 
-    const symbol_decl = try analyser.lookupSymbolGlobal(handle, handle.tree.source[loc.start..loc.end], loc.end) orelse return;
+    const symbol_name = handle.tree.source[loc.start..loc.end];
+    const symbol_decl = try analyser.lookupSymbolGlobal(handle, symbol_name, loc.end) orelse {
+        if (dot_context.likely == .switch_case) {
+            if (try recoverCatchCaptureErrorSet(builder, handle, loc, symbol_name)) |error_set| {
+                _ = try error_set.getAllTypesWithHandlesArraySet(analyser, types_with_handles);
+            }
+        }
+        return;
+    };
     const result = try symbol_decl.resolveType(analyser) orelse return;
     const type_expr = try analyser.resolveDerefType(result) orelse result;
     if (!type_expr.isFunc()) {
@@ -2001,6 +2009,55 @@ fn collectVarAccessContainerNodes(
     if (param_index >= info.parameters.len) return;
     const param_type = info.parameters[param_index].type;
     _ = try param_type.getAllTypesWithHandlesArraySet(analyser, types_with_handles);
+}
+
+/// Recovers the capture in a catch-expression switch when Zig's parser drops
+/// the catch node after an incomplete switch case at the cursor.
+fn recoverCatchCaptureErrorSet(
+    builder: *Builder,
+    handle: *DocumentStore.Handle,
+    condition_loc: offsets.Loc,
+    condition_name: []const u8,
+) Analyser.Error!?Analyser.Type {
+    const tree = &handle.tree;
+    const condition_token = offsets.sourceIndexToTokenIndex(tree, condition_loc.start).pickPreferred(&.{.identifier}, tree) orelse return null;
+    if (condition_token < 3 or
+        tree.tokenTag(condition_token - 1) != .l_paren or
+        tree.tokenTag(condition_token - 2) != .keyword_switch)
+    {
+        return null;
+    }
+    const switch_token = condition_token - 2;
+    const capture_token: Ast.TokenIndex = switch (tree.tokenTag(switch_token - 1)) {
+        .pipe => if (switch_token >= 4 and
+            tree.tokenTag(switch_token - 2) == .identifier and
+            tree.tokenTag(switch_token - 3) == .pipe and
+            tree.tokenTag(switch_token - 4) == .keyword_catch)
+            switch_token - 2
+        else
+            return null,
+        .l_brace => if (switch_token >= 5 and
+            tree.tokenTag(switch_token - 2) == .pipe and
+            tree.tokenTag(switch_token - 3) == .identifier and
+            tree.tokenTag(switch_token - 4) == .pipe and
+            tree.tokenTag(switch_token - 5) == .keyword_catch)
+            switch_token - 3
+        else
+            return null,
+        else => return null,
+    };
+    const catch_token = capture_token - 2;
+    const capture_name = try builder.analyser.identifierTokenName(tree, capture_token) orelse return null;
+    if (!std.mem.eql(u8, capture_name, condition_name)) return null;
+
+    const lhs_end = offsets.tokenToLoc(tree, catch_token - 1).end;
+    const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(builder.arena, tree, lhs_end -| 1);
+    for (nodes) |node| {
+        if (offsets.nodeToLoc(tree, node).end != lhs_end) continue;
+        const lhs_type = try builder.analyser.resolveTypeOfNode(.of(node, handle)) orelse continue;
+        if (try builder.analyser.resolveUnwrapErrorUnionType(lhs_type, .error_set)) |error_set| return error_set;
+    }
+    return null;
 }
 
 fn collectFieldAccessTypes(

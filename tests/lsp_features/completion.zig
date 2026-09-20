@@ -23737,7 +23737,6 @@ test "switch on error set - completion inside catch block works" {
 }
 
 test "switch on error set - completion inside catch statement" {
-    if (true) return error.SkipZigTest; // TODO un-skip after https://github.com/zigtools/zls/issues/2341 and/or https://github.com/zigtools/zls/issues/1112
     try testCompletion(
         \\fn idk() error{ E1, E2 }!void {}
         \\test {
@@ -23749,10 +23748,21 @@ test "switch on error set - completion inside catch statement" {
         .{ .label = "error.E1", .kind = .Constant },
         .{ .label = "error.E2", .kind = .Constant },
     });
+
+    try testCompletion(
+        \\fn idk() error{ E1, E2 }!void {}
+        \\const other: error{Wrong} = undefined;
+        \\test {
+        \\  idk() catch |err| switch (other) {
+        \\      error.<cursor>
+        \\  };
+        \\}
+    , &.{
+        .{ .label = "error.Wrong", .kind = .Constant },
+    });
 }
 
 test "switch on error set - Works in a function of a container" {
-    if (true) return error.SkipZigTest; // TODO un-skip after https://github.com/zigtools/zls/issues/1535
     try testCompletion(
         \\fn idk() error{ E1, E2 }!void {}
         \\pub const Manager = struct {
