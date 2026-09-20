@@ -23760,6 +23760,18 @@ test "switch on error set - completion inside catch statement" {
     , &.{
         .{ .label = "error.Wrong", .kind = .Constant },
     });
+
+    try testCompletion(
+        \\fn idk() error{ E1, E2 }!void {}
+        \\test {
+        \\  idk() catch |@"err\x21"| switch (@"err\u{21}") {
+        \\      error.<cursor>
+        \\  };
+        \\}
+    , &.{
+        .{ .label = "error.E1", .kind = .Constant },
+        .{ .label = "error.E2", .kind = .Constant },
+    });
 }
 
 test "switch on error set - Works in a function of a container" {

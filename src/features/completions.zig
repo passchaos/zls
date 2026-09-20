@@ -1984,7 +1984,7 @@ fn collectVarAccessContainerNodes(
     const symbol_name = handle.tree.source[loc.start..loc.end];
     const symbol_decl = try analyser.lookupSymbolGlobal(handle, symbol_name, loc.end) orelse {
         if (dot_context.likely == .switch_case) {
-            if (try recoverCatchCaptureErrorSet(builder, handle, loc, symbol_name)) |error_set| {
+            if (try recoverCatchCaptureErrorSet(builder, handle, loc)) |error_set| {
                 _ = try error_set.getAllTypesWithHandlesArraySet(analyser, types_with_handles);
             }
         }
@@ -2017,7 +2017,6 @@ fn recoverCatchCaptureErrorSet(
     builder: *Builder,
     handle: *DocumentStore.Handle,
     condition_loc: offsets.Loc,
-    condition_name: []const u8,
 ) Analyser.Error!?Analyser.Type {
     const tree = &handle.tree;
     const condition_token = offsets.sourceIndexToTokenIndex(tree, condition_loc.start).pickPreferred(&.{.identifier}, tree) orelse return null;
@@ -2048,6 +2047,7 @@ fn recoverCatchCaptureErrorSet(
     };
     const catch_token = capture_token - 2;
     const capture_name = try builder.analyser.identifierTokenName(tree, capture_token) orelse return null;
+    const condition_name = try builder.analyser.identifierTokenName(tree, condition_token) orelse return null;
     if (!std.mem.eql(u8, capture_name, condition_name)) return null;
 
     const lhs_end = offsets.tokenToLoc(tree, catch_token - 1).end;
