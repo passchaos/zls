@@ -79,13 +79,40 @@ fn fnProtoToSignatureInfo(
     };
 }
 
-pub fn getSignatureInfo(
+fn signatureInfosForType(
+    analyser: *Analyser,
+    arena: std.mem.Allocator,
+    commas: u32,
+    skip_self_param: bool,
+    ty: Analyser.Type,
+    markup_kind: types.MarkupKind,
+) Analyser.Error!?[]const types.SignatureHelp.Signature {
+    var signatures: std.ArrayList(types.SignatureHelp.Signature) = .empty;
+    for (try ty.getAllTypesWithHandles(analyser)) |candidate| {
+        const func_type = try analyser.resolveFuncProtoOfCallable(candidate) orelse continue;
+        const signature = try fnProtoToSignatureInfo(
+            analyser,
+            arena,
+            commas,
+            skip_self_param,
+            func_type,
+            markup_kind,
+        );
+        for (signatures.items) |existing| {
+            if (std.mem.eql(u8, existing.label, signature.label)) break;
+        } else try signatures.append(arena, signature);
+    }
+    if (signatures.items.len == 0) return null;
+    return @as(?[]const types.SignatureHelp.Signature, try signatures.toOwnedSlice(arena));
+}
+
+pub fn getSignatureInfos(
     analyser: *Analyser,
     arena: std.mem.Allocator,
     handle: *DocumentStore.Handle,
     absolute_index: usize,
     markup_kind: types.MarkupKind,
-) Analyser.Error!?types.SignatureHelp.Signature {
+) Analyser.Error!?[]const types.SignatureHelp.Signature {
     const document_scope = try handle.getDocumentScope();
     const innermost_block_scope = Analyser.innermostScopeAtIndexWithTag(document_scope, absolute_index, .init(.{
         .block = true,
@@ -225,7 +252,8 @@ pub fn getSignatureInfo(
                         @intCast(param_infos.len - 1)
                     else
                         null;
-                    return types.SignatureHelp.Signature{
+                    const signatures = try arena.alloc(types.SignatureHelp.Signature, 1);
+                    signatures[0] = .{
                         .label = try Analyser.renderBuiltinFunctionSignature(
                             arena,
                             builtin_name,
@@ -239,6 +267,7 @@ pub fn getSignatureInfo(
                         .parameters = param_infos,
                         .activeParameter = active_parameter,
                     };
+                    return signatures;
                 }
                 // Scan for a function call lhs expression.
                 var state: union(enum) {
@@ -295,15 +324,15 @@ pub fn getSignatureInfo(
                     else => try analyser.getFieldAccessType(handle, loc.start, loc) orelse continue,
                 };
 
-                if (try analyser.resolveFuncProtoOfCallable(ty)) |func_type| {
-                    return try fnProtoToSignatureInfo(
-                        analyser,
-                        arena,
-                        paren_commas,
-                        false,
-                        func_type,
-                        markup_kind,
-                    );
+                if (try signatureInfosForType(
+                    analyser,
+                    arena,
+                    paren_commas,
+                    false,
+                    ty,
+                    markup_kind,
+                )) |signatures| {
+                    return signatures;
                 }
 
                 const name_loc = offsets.identifierLocFromIndex(&handle.tree, loc.end - 1) orelse {
@@ -318,15 +347,15 @@ pub fn getSignatureInfo(
                     continue;
                 };
 
-                if (try analyser.resolveFuncProtoOfCallable(ty)) |func_type| {
-                    return try fnProtoToSignatureInfo(
-                        analyser,
-                        arena,
-                        paren_commas,
-                        skip_self_param,
-                        func_type,
-                        markup_kind,
-                    );
+                if (try signatureInfosForType(
+                    analyser,
+                    arena,
+                    paren_commas,
+                    skip_self_param,
+                    ty,
+                    markup_kind,
+                )) |signatures| {
+                    return signatures;
                 }
             },
             .r_brace, .r_paren, .r_bracket => |tag| {

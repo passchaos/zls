@@ -1412,7 +1412,7 @@ fn signatureHelpHandler(server: *Server, arena: std.mem.Allocator, request: type
     var analyser = server.initAnalyser(arena, handle);
     defer analyser.deinit();
 
-    const signature_info = (try signature_help.getSignatureInfo(
+    const signatures = (try signature_help.getSignatureInfos(
         &analyser,
         arena,
         handle,
@@ -1420,13 +1420,10 @@ fn signatureHelpHandler(server: *Server, arena: std.mem.Allocator, request: type
         markup_kind,
     )) orelse return null;
 
-    var signatures = try arena.alloc(types.SignatureHelp.Signature, 1);
-    signatures[0] = signature_info;
-
     return .{
         .signatures = signatures,
         .activeSignature = 0,
-        .activeParameter = signature_info.activeParameter,
+        .activeParameter = signatures[0].activeParameter,
     };
 }
 

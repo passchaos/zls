@@ -332,6 +332,56 @@ test "self parameter is anytype" {
     , "fn foo(self: anytype, a: u32, b: void) bool", 2);
 }
 
+test "branching receiver returns all method signatures" {
+    try testSignatureHelps(
+        \\const Alpha = struct {
+        \\    fn apply(_: Alpha, value: u32) void {}
+        \\};
+        \\const Beta = struct {
+        \\    fn apply(_: Beta, text: []const u8, flag: bool) bool {}
+        \\};
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\const result = receiver.apply(<cursor>);
+    , &.{
+        .{ .label = "fn apply(_: Alpha, value: u32) void", .active_parameter = 1 },
+        .{ .label = "fn apply(_: Beta, text: []const u8, flag: bool) bool", .active_parameter = 1 },
+    });
+    try testSignatureHelps(
+        \\const Alpha = struct {
+        \\    fn apply(_: Alpha, value: u32) void {}
+        \\};
+        \\const Beta = struct {
+        \\    fn apply(_: Beta, text: []const u8, flag: bool) bool {}
+        \\};
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\const result = receiver.apply(1, <cursor>);
+    , &.{
+        .{ .label = "fn apply(_: Alpha, value: u32) void", .active_parameter = null },
+        .{ .label = "fn apply(_: Beta, text: []const u8, flag: bool) bool", .active_parameter = 2 },
+    });
+}
+
+test "branching receiver deduplicates identical method signatures" {
+    try testSignatureHelps(
+        \\const Alpha = struct {
+        \\    fn apply(_: anytype, value: u32) void {}
+        \\};
+        \\const Beta = struct {
+        \\    fn apply(_: anytype, value: u32) void {}
+        \\};
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\const result = receiver.apply(<cursor>);
+    , &.{
+        .{ .label = "fn apply(_: anytype, value: u32) void", .active_parameter = 1 },
+    });
+}
+
 test "anytype" {
     try testSignatureHelp(
         \\fn foo(a: u32, b: anytype, c: u32) void {
@@ -414,6 +464,16 @@ test "builtin" {
 }
 
 fn testSignatureHelp(source: []const u8, expected_label: []const u8, expected_active_parameter: ?u32) !void {
+    try testSignatureHelps(source, &.{.{
+        .label = expected_label,
+        .active_parameter = expected_active_parameter,
+    }});
+}
+
+fn testSignatureHelps(source: []const u8, expected: []const struct {
+    label: []const u8,
+    active_parameter: ?u32,
+}) !void {
     const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
     const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
     defer allocator.free(text);
@@ -434,11 +494,10 @@ fn testSignatureHelp(source: []const u8, expected_label: []const u8, expected_ac
     };
 
     try std.testing.expectEqual(@as(?u32, 0), response.activeSignature);
-    try std.testing.expectEqual(@as(usize, 1), response.signatures.len);
-
-    const signature = response.signatures[0];
-    try std.testing.expectEqual(expected_active_parameter, response.activeParameter);
-    try std.testing.expectEqual(response.activeParameter, signature.activeParameter);
-
-    try std.testing.expectEqualStrings(expected_label, signature.label);
+    try std.testing.expectEqual(expected.len, response.signatures.len);
+    try std.testing.expectEqual(expected[0].active_parameter, response.activeParameter);
+    for (expected, response.signatures) |expected_signature, actual_signature| {
+        try std.testing.expectEqual(expected_signature.active_parameter, actual_signature.activeParameter);
+        try std.testing.expectEqualStrings(expected_signature.label, actual_signature.label);
+    }
 }
