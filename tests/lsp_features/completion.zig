@@ -23258,8 +23258,7 @@ test "enum" {
         \\};
         \\test {
         \\    const s = S{};
-        // XXX This doesn't work without the closing brace at the end
-        \\    s.f(.{.se = .<cursor>}
+        \\    s.f(.{.se = .<cursor>
         \\}
     , &.{
         .{ .label = "sef1", .kind = .EnumMember },
