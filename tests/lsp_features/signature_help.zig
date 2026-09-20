@@ -239,6 +239,12 @@ test "function pointer container field" {
         \\const s: S = undefined;
         \\s.callback(<cursor>undefined, 1);
     , "fn (arg: S, value: u32) void", 0);
+    try testSignatureHelp(
+        \\const S = struct { callback: *const fn(arg: S, value: u32) void };
+        \\const Outer = struct { inner: S };
+        \\const outer: Outer = undefined;
+        \\outer.inner.callback(<cursor>undefined, 1);
+    , "fn (arg: S, value: u32) void", 0);
 }
 
 test "self parameter" {

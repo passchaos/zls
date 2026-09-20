@@ -26468,6 +26468,19 @@ test "insert replace behaviour - function-valued field keeps explicit receiver a
         .enable_snippets = true,
         .enable_argument_placeholders = true,
     });
+    try testCompletionTextEdit(.{
+        .source =
+        \\const S = struct { callback: *const fn (arg: S, value: u32) void };
+        \\const Outer = struct { inner: S };
+        \\const outer: Outer = undefined;
+        \\outer.inner.<cursor>(, 1);
+        ,
+        .label = "callback",
+        .expected_insert_line = "outer.inner.callback(${1:arg: S}, 1);",
+        .expected_replace_line = "outer.inner.callback(${1:arg: S}, 1);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
 }
 
 test "insert replace behaviour - escaped identifier" {

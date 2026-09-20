@@ -112,6 +112,12 @@ test "function-valued field does not consume an implicit self parameter" {
         \\const s: S = undefined;
         \\s.callback(<arg>undefined, <value>1);
     , .{ .kind = .Parameter });
+    try testInlayHints(
+        \\const S = struct { callback: *const fn (arg: S, value: u32) void };
+        \\const Outer = struct { inner: S };
+        \\const outer: Outer = undefined;
+        \\outer.inner.callback(<arg>undefined, <value>1);
+    , .{ .kind = .Parameter });
 }
 
 test "function self parameter with pointer type in type declaration" {
