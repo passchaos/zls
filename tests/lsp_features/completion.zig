@@ -25004,6 +25004,38 @@ test "anytype callsite preserves type values" {
     });
 }
 
+test "anytype resolution follows function aliases" {
+    try testCompletion(
+        \\const Argument = struct { field: u32 };
+        \\fn inspect(value: anytype) void {
+        \\    value.<cursor>
+        \\}
+        \\const invoke = inspect;
+        \\const argument: Argument = undefined;
+        \\comptime {
+        \\    invoke(argument);
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+    try testCompletion(
+        \\const Argument = struct { field: u32 };
+        \\const S = struct {
+        \\    fn inspect(_: S, value: anytype) void {
+        \\        value.<cursor>
+        \\    }
+        \\};
+        \\const invoke = S.inspect;
+        \\const receiver: S = undefined;
+        \\const argument: Argument = undefined;
+        \\comptime {
+        \\    invoke(receiver, argument);
+        \\}
+    , &.{
+        .{ .label = "field", .kind = .Field, .detail = "u32" },
+    });
+}
+
 test "@field" {
     try testCompletion(
         \\pub const chip_mod = struct {

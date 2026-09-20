@@ -630,6 +630,12 @@ const CallBuilder = struct {
     target_decl: Analyser.DeclWithHandle,
     analyser: *Analyser,
 
+    fn matchesTarget(self: *CallBuilder, candidate: Analyser.DeclWithHandle) Analyser.Error!bool {
+        if (self.target_decl.eql(candidate)) return true;
+        const resolved = try self.analyser.resolveVarDeclAlias(candidate) orelse return false;
+        return self.target_decl.eql(resolved);
+    }
+
     fn add(
         self: *CallBuilder,
         handle: *DocumentStore.Handle,
@@ -687,7 +693,7 @@ const CallBuilder = struct {
                             tree.tokenStart(identifier_token),
                         )) orelse return;
 
-                        if (builder.target_decl.eql(child)) {
+                        if (try builder.matchesTarget(child)) {
                             try builder.add(handle, node, null);
                         }
                     },
@@ -699,7 +705,7 @@ const CallBuilder = struct {
                         const symbol = offsets.tokenToSlice(tree, field_name);
                         for (try deref_lhs.getAllTypesWithHandles(builder.analyser)) |ty| {
                             const child = (try ty.lookupSymbol(builder.analyser, symbol)) orelse continue;
-                            if (builder.target_decl.eql(child)) {
+                            if (try builder.matchesTarget(child)) {
                                 try builder.add(handle, node, if (lhs.is_type_val) null else lhs_node);
                                 return;
                             }
