@@ -25418,6 +25418,60 @@ test "either - fields and methods with same name" {
     });
 }
 
+test "either - conflicting method snippets preserve the call" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\const Alpha = struct {
+        \\    fn apply(_: @This(), first: u32, second: u32) void {}
+        \\};
+        \\const Beta = struct {
+        \\    fn apply(_: @This(), value: u32) void {}
+        \\};
+        \\const item: if (undefined) Alpha else Beta = undefined;
+        \\const result = item.<cursor>(,);
+        ,
+        .label = "apply",
+        .expected_insert_line = "const result = item.apply(,);",
+        .expected_replace_line = "const result = item.apply(,);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\const Alpha = struct {
+        \\    fn apply(_: @This(), value: u32) void {}
+        \\};
+        \\const Beta = struct {
+        \\    fn apply(_: @This(), first: u32, second: u32) void {}
+        \\};
+        \\const item: if (undefined) Alpha else Beta = undefined;
+        \\const result = item.<cursor>(,);
+        ,
+        .label = "apply",
+        .expected_insert_line = "const result = item.apply(,);",
+        .expected_replace_line = "const result = item.apply(,);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\const Alpha = struct {
+        \\    fn apply(_: @This(), value: u32) void {}
+        \\};
+        \\const Beta = struct {
+        \\    fn apply(_: @This(), value: u32) void {}
+        \\};
+        \\const item: if (undefined) Alpha else Beta = undefined;
+        \\const result = item.<cursor>( );
+        ,
+        .label = "apply",
+        .expected_insert_line = "const result = item.apply(${1:value: u32});",
+        .expected_replace_line = "const result = item.apply(${1:value: u32});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+}
+
 test "either instance field preserves all candidate types" {
     try testCompletion(
         \\const AlphaValue = struct { alpha: u8 };

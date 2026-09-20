@@ -88,16 +88,39 @@ pub const Completions = struct {
                     false
             else
                 false;
+        const keep_text_edit = eqlCompletionTextEdits(ptr.textEdit, item.textEdit);
 
         ptr.deprecated = ptr.deprecated orelse item.deprecated;
         ptr.tags = ptr.tags orelse item.tags;
         if (!keep_detail) ptr.detail = null;
         if (!keep_label_details) ptr.labelDetails = null;
+        if (!keep_text_edit) {
+            ptr.insertText = null;
+            ptr.insertTextFormat = .PlainText;
+            ptr.textEdit = null;
+        }
     }
 
     fn eqlSlices(comptime T: type, a: ?[]const T, b: ?[]const T) bool {
         return (a == null and b == null) or
             (a != null and b != null and std.mem.eql(T, a.?, b.?));
+    }
+
+    fn eqlCompletionTextEdits(a: ?types.completion.Item.TextEdit, b: ?types.completion.Item.TextEdit) bool {
+        if (a == null or b == null) return a == null and b == null;
+        return switch (a.?) {
+            .text_edit => |a_edit| switch (b.?) {
+                .text_edit => |b_edit| std.meta.eql(a_edit.range, b_edit.range) and
+                    std.mem.eql(u8, a_edit.newText, b_edit.newText),
+                .insert_replace_edit => false,
+            },
+            .insert_replace_edit => |a_edit| switch (b.?) {
+                .text_edit => false,
+                .insert_replace_edit => |b_edit| std.meta.eql(a_edit.insert, b_edit.insert) and
+                    std.meta.eql(a_edit.replace, b_edit.replace) and
+                    std.mem.eql(u8, a_edit.newText, b_edit.newText),
+            },
+        };
     }
 };
 
