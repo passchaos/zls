@@ -23394,6 +23394,21 @@ test "enum-only contexts reject plain struct fields" {
         \\const value: S = undefined;
         \\const result = switch (value) { .<cursor> };
     , &.{});
+    try testCompletion(
+        \\const E = enum { alpha };
+        \\fn value() E { return .alpha; }
+        \\comptime {
+        \\    value() = .<cursor>;
+        \\}
+    , &.{});
+    try testCompletion(
+        \\const E = enum { alpha };
+        \\const S = struct { fn value(_: S) E { return .alpha; } };
+        \\const s: S = undefined;
+        \\comptime {
+        \\    s.value() = .<cursor>;
+        \\}
+    , &.{});
 }
 
 test "enum completion from method call result" {

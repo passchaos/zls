@@ -1063,6 +1063,7 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
 
     const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(builder.arena, tree, loc.start);
     const dot_context = getEnumLiteralContext(tree, dot_token_index, nodes) orelse return;
+    if (dot_context.likely == .invalid) return;
     const used_members_set = try collectUsedMembersSet(builder, dot_context.likely, dot_token_index);
     const containers = try collectContainerNodes(builder, builder.orig_handle, dot_context);
     for (containers) |container| {
@@ -1561,6 +1562,34 @@ fn popMatchingDelimiter(delimiters: *std.ArrayList(std.zig.Token.Tag), expected:
     if (delimiters.getLastOrNull() == expected) _ = delimiters.pop();
 }
 
+fn callExpressionBeforeAssignment(tree: *const Ast, equal_token: Ast.TokenIndex) bool {
+    if (equal_token == 0 or tree.tokenTag(equal_token - 1) != .r_paren) return false;
+
+    var token = equal_token - 1;
+    var depth: usize = 0;
+    while (true) : (token -= 1) {
+        switch (tree.tokenTag(token)) {
+            .r_paren => depth += 1,
+            .l_paren => {
+                depth -= 1;
+                if (depth == 0) break;
+            },
+            else => {},
+        }
+        if (token == 0) return false;
+    }
+
+    while (token != 0) {
+        token -= 1;
+        switch (tree.tokenTag(token)) {
+            .colon => return false,
+            .semicolon, .l_brace, .r_brace, .equal, .comma => return true,
+            else => {},
+        }
+    }
+    return true;
+}
+
 // <--------------------------------------------------------------------------->
 //               completions/enum_literal.zig staging area
 // <--------------------------------------------------------------------------->
@@ -1584,12 +1613,7 @@ const EnumLiteralContext = struct {
         /// `S{.`, `var s:S = .{.`, `f(.{.` or `a.f(.{.`
         struct_field,
         switch_case,
-        // TODO Abort, don't list any enums
-        //  - lhs of `=` is a fn call
-        //  - able to resolve the type of a switch condition, but it is a struct
-        //  ? Would this lead to confusion/perceived as the server not responding? Push an error diag ?
-        // / Abort, don't list any enums
-        // invalid,
+        invalid,
 
         fn allowsDeclLiterals(likely: Likely) bool {
             return switch (likely) {
@@ -1630,7 +1654,12 @@ fn getEnumLiteralContext(
 
     switch (tree.tokenTag(token_index)) {
         .equal => {
+            const equal_token = token_index;
             token_index -= 1;
+            if (callExpressionBeforeAssignment(tree, equal_token)) {
+                dot_context.likely = .invalid;
+                return dot_context;
+            }
             dot_context.need_ret_type = tree.tokenTag(token_index) == .r_paren;
             dot_context.likely = .enum_assignment;
             dot_context.type_info = .{ .identifier_token_index = token_index };
