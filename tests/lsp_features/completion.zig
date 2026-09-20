@@ -23396,6 +23396,27 @@ test "enum-only contexts reject plain struct fields" {
     , &.{});
 }
 
+test "enum completion from method call result" {
+    try testCompletion(
+        \\const E = enum { alpha, beta };
+        \\const S = struct { fn value(_: @This()) E { return .alpha; } };
+        \\const s: S = undefined;
+        \\const result = s.value() == .<cursor>;
+    , &.{
+        .{ .label = "alpha", .kind = .EnumMember },
+        .{ .label = "beta", .kind = .EnumMember },
+    });
+    try testCompletion(
+        \\const E = enum { alpha, beta };
+        \\const S = struct { value: *const E };
+        \\const s: S = undefined;
+        \\const result = s.value.* == .<cursor>;
+    , &.{
+        .{ .label = "alpha", .kind = .EnumMember },
+        .{ .label = "beta", .kind = .EnumMember },
+    });
+}
+
 test "enum literal resolution cache" {
     const source =
         \\const E = enum { same };

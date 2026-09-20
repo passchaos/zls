@@ -2290,10 +2290,9 @@ fn collectFieldAccessContainerNodes(
     const analyser = builder.analyser;
     const arena = builder.arena;
 
-    // XXX It could be any/all of the preceding logic, but this fn seems
-    // inconsistent at returning name_loc for methods, ie
-    // `abc.method() == .` => fails, `abc.method(.{}){.}` => ok
-    // it also fails for `abc.xyz.*` ... currently we take advantage of this quirk
+    // Compound field accesses may not end in an identifier, for example
+    // `abc.method() == .` or `abc.xyz.*`. Resolve the complete expression in
+    // those cases instead of trying to look up one final member declaration.
     const name_loc = offsets.identifierLocFromIndex(&handle.tree, loc.end) orelse {
         const result = try analyser.getFieldAccessType(handle, loc.end, loc) orelse return;
         const container = try analyser.resolveDerefType(result) orelse result;
