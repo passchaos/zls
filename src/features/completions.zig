@@ -377,7 +377,7 @@ fn declToCompletion(builder: *Builder, decl_handle: Analyser.DeclWithHandle) Ana
             var is_deprecated: bool = false;
             if (maybe_resolved_ty) |ty| {
                 if (try builder.analyser.resolveFuncProtoOfCallable(ty)) |func_ty| blk: {
-                    var item = try functionTypeCompletion(builder, name, decl_handle.container_type, func_ty) orelse break :blk;
+                    var item = try functionTypeCompletion(builder, name, decl_handle.container_type, ty, func_ty) orelse break :blk;
                     item.documentation = documentation;
                     builder.completions.appendAssumeCapacity(item);
                     return;
@@ -456,6 +456,7 @@ fn functionTypeCompletion(
     builder: *Builder,
     func_name: []const u8,
     parent_container_ty: ?Analyser.Type,
+    callable_ty: Analyser.Type,
     func_ty: Analyser.Type,
 ) error{OutOfMemory}!?types.completion.Item {
     std.debug.assert(func_ty.isFunc());
@@ -551,18 +552,21 @@ fn functionTypeCompletion(
         };
     };
 
-    const details = try builder.analyser.stringifyFunction(.{
-        .info = info,
-        .include_fn_keyword = true,
-        .include_name = false,
-        .parameters = .{ .show = .{
-            .include_modifiers = true,
-            .include_names = true,
-            .include_types = true,
-        } },
-        .include_return_type = true,
-        .snippet_placeholders = false,
-    });
+    const details = if (try builder.analyser.resolveDerefType(callable_ty) != null)
+        try callable_ty.stringifyTypeOf(builder.analyser, .{ .truncate_container_decls = false })
+    else
+        try builder.analyser.stringifyFunction(.{
+            .info = info,
+            .include_fn_keyword = true,
+            .include_name = false,
+            .parameters = .{ .show = .{
+                .include_modifiers = true,
+                .include_names = true,
+                .include_types = true,
+            } },
+            .include_return_type = true,
+            .snippet_placeholders = false,
+        });
 
     return .{
         .label = func_name,
@@ -1985,7 +1989,7 @@ fn collectContainerFields(
                 expected_ty = expected_ty.resolveDeclLiteralResultType();
                 if (expected_ty.data != .container) continue;
                 if (!expected_ty.data.container.scope_handle.eql(container.data.container.scope_handle)) continue;
-                const completion_item = try functionTypeCompletion(builder, name, container, resolved_ty) orelse continue;
+                const completion_item = try functionTypeCompletion(builder, name, container, resolved_ty, resolved_ty) orelse continue;
                 try builder.completions.append(builder.arena, completion_item);
             },
             else => {},

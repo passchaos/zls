@@ -498,8 +498,7 @@ test "function alias" {
         .{
             .label = "baz",
             .kind = .Function,
-            // TODO detail should be '*fn () void' or '*const fn () void'
-            .detail = "fn () void",
+            .detail = "*const fn () void",
         },
     });
     try testCompletion(
@@ -523,8 +522,7 @@ test "function alias" {
         .{
             .label = "baz",
             .kind = .Function,
-            // TODO detail should be '*fn () void' or '*const fn () void'
-            .detail = "fn () void",
+            .detail = "*const fn () void",
         },
     });
     try testCompletion(
