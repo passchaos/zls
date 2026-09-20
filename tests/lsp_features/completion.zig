@@ -25842,7 +25842,6 @@ test "insert replace behaviour - builtin with snippets - @errorFromInt" {
 }
 
 test "insert replace behaviour - builtin with partial argument placeholders" {
-    if (true) return error.SkipZigTest; // TODO
     try testCompletionTextEdit(.{
         .source = "const foo = @<cursor>(u32,);",
         .label = "@as",
@@ -26143,7 +26142,6 @@ test "insert replace behaviour - function with snippets - partial argument place
 }
 
 test "insert replace behaviour - function with partial argument placeholders" {
-    if (true) return error.SkipZigTest; // TODO
     try testCompletionTextEdit(.{
         .source =
         \\fn func(comptime T: type, number: u32) void {}
@@ -26174,6 +26172,39 @@ test "insert replace behaviour - function with partial argument placeholders" {
         .label = "func",
         .expected_insert_line = "const foo = func(u32, 5);",
         .expected_replace_line = "const foo = func(u32, 5);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn func(comptime T: type, number: u32) void {}
+        \\const foo = <cursor>(@TypeOf(.{ 1, 2 }),);
+        ,
+        .label = "func",
+        .expected_insert_line = "const foo = func(@TypeOf(.{ 1, 2 }), ${1:number: u32});",
+        .expected_replace_line = "const foo = func(@TypeOf(.{ 1, 2 }), ${1:number: u32});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn func(comptime T: type, number: u32) void {}
+        \\const foo = <cursor>(@TypeOf("$\n"),);
+        ,
+        .label = "func",
+        .expected_insert_line = "const foo = func(@TypeOf(\"\\$\\\\n\"), ${1:number: u32});",
+        .expected_replace_line = "const foo = func(@TypeOf(\"\\$\\\\n\"), ${1:number: u32});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn func(number: u32) void {}
+        \\const foo = <cursor>(1,);
+        ,
+        .label = "func",
+        .expected_insert_line = "const foo = func(1,);",
+        .expected_replace_line = "const foo = func(1,);",
         .enable_snippets = true,
         .enable_argument_placeholders = true,
     });

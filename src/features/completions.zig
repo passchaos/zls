@@ -14,6 +14,7 @@ const tracy = @import("tracy");
 const Uri = @import("../Uri.zig");
 const DocumentScope = @import("../DocumentScope.zig");
 const analyser_completions = @import("../analyser/completions.zig");
+const partial_calls = @import("completion_partial_call.zig");
 
 const version_data = @import("version_data");
 const snippets = @import("../snippets.zig");
@@ -430,9 +431,22 @@ fn functionTypeCompletion(
         break :blk builder.analyser.firstParamIs(func_ty, try container_ty.typeOf(builder.analyser));
     } else false;
 
-    const insert_range, const replace_range, const new_text_format = prepareFunctionCompletion(builder);
+    var insert_range, var replace_range, const new_text_format, const partial_call = try prepareFunctionCompletion(builder);
+    var insert_text_format: types.InsertTextFormat = switch (new_text_format) {
+        .only_name => .PlainText,
+        .snippet => .Snippet,
+    };
 
-    const new_text = switch (new_text_format) {
+    const new_text = if (partial_call) |call| partial: {
+        const parameters = info.parameters[@intFromBool(has_self_param)..];
+        if (try createPartialFunctionSnippet(builder, func_name, parameters, call.arguments)) |snippet| {
+            insert_range = call.range;
+            replace_range = call.range;
+            insert_text_format = .Snippet;
+            break :partial snippet;
+        }
+        break :partial func_name;
+    } else switch (new_text_format) {
         .only_name => func_name,
         .snippet => snippet: {
             std.debug.assert(builder.use_snippets);
@@ -461,11 +475,6 @@ fn functionTypeCompletion(
             }
         },
     };
-    const insert_text_format: types.InsertTextFormat = switch (new_text_format) {
-        .only_name => .PlainText,
-        .snippet => .Snippet,
-    };
-
     const kind: types.completion.Item.Kind = if (func_ty.isTypeFunc())
         .Struct
     else if (has_self_param)
@@ -703,9 +712,9 @@ fn prepareCompletionLoc(tree: *const Ast, source_index: usize) offsets.Loc {
 }
 
 const FunctionCompletionFormat = enum { snippet, only_name };
-const PrepareFunctionCompletionResult = struct { types.Range, types.Range, FunctionCompletionFormat };
+const PrepareFunctionCompletionResult = struct { types.Range, types.Range, FunctionCompletionFormat, ?partial_calls.PartialCall };
 
-fn prepareFunctionCompletion(builder: *Builder) PrepareFunctionCompletionResult {
+fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFunctionCompletionResult {
     if (builder.cached_prepare_function_completion_result) |result| return result;
 
     const tree = &builder.orig_handle.tree;
@@ -733,9 +742,47 @@ fn prepareFunctionCompletion(builder: *Builder) PrepareFunctionCompletionResult 
 
     const insert_range = offsets.locToRange(source, insert_loc, builder.server.offset_encoding);
     const replace_range = offsets.locToRange(source, replace_loc, builder.server.offset_encoding);
+    const partial_call = if (builder.use_snippets and
+        builder.server.config_manager.config.enable_argument_placeholders and
+        format == .only_name and
+        identifier_loc.end < source.len and source[identifier_loc.end] == '(')
+        try partial_calls.parse(builder.arena, source, identifier_loc, builder.server.offset_encoding)
+    else
+        null;
 
-    builder.cached_prepare_function_completion_result = .{ insert_range, replace_range, format };
+    builder.cached_prepare_function_completion_result = .{ insert_range, replace_range, format, partial_call };
     return builder.cached_prepare_function_completion_result.?;
+}
+
+fn createPartialFunctionSnippet(
+    builder: *Builder,
+    function_name: []const u8,
+    parameters: []const Analyser.Type.Data.Parameter,
+    arguments: []const []const u8,
+) error{OutOfMemory}!?[]const u8 {
+    if (arguments.len > parameters.len) return null;
+
+    var snippet: std.ArrayList(u8) = .empty;
+    try snippet.print(builder.arena, "{f}(", .{Analyser.fmtEscapedSnippet(function_name)});
+    var placeholder_index: usize = 1;
+    for (parameters, 0..) |parameter, index| {
+        if (index != 0) try snippet.appendSlice(builder.arena, ", ");
+        const argument = if (index < arguments.len) arguments[index] else "";
+        if (argument.len != 0) {
+            try partial_calls.appendSnippetLiteral(&snippet, builder.arena, argument);
+            continue;
+        }
+        const parameter_text = try builder.analyser.stringifyParameter(.{
+            .info = parameter,
+            .include_modifier = true,
+            .include_name = true,
+            .include_type = true,
+        });
+        try snippet.print(builder.arena, "${{{d}:{f}}}", .{ placeholder_index, Analyser.fmtEscapedSnippet(parameter_text) });
+        placeholder_index += 1;
+    }
+    try snippet.append(builder.arena, ')');
+    return snippet.items;
 }
 
 fn completeBuiltin(builder: *Builder) error{OutOfMemory}!void {
@@ -745,11 +792,39 @@ fn completeBuiltin(builder: *Builder) error{OutOfMemory}!void {
     const config = &builder.server.config_manager.config;
     const use_placeholders = builder.use_snippets and config.enable_argument_placeholders;
 
-    const insert_range, const replace_range, const new_text_format = prepareFunctionCompletion(builder);
+    const insert_range, const replace_range, const new_text_format, const partial_call = try prepareFunctionCompletion(builder);
 
     try builder.completions.ensureUnusedCapacity(builder.arena, version_data.builtins.kvs.len);
     for (version_data.builtins.keys(), version_data.builtins.values()) |name, builtin| {
-        const new_text = switch (new_text_format) {
+        var item_insert_range = insert_range;
+        var item_replace_range = replace_range;
+        var insert_text_format: types.InsertTextFormat = switch (new_text_format) {
+            .only_name => .PlainText,
+            .snippet => .Snippet,
+        };
+        const new_text = if (partial_call) |call| partial: {
+            if (use_placeholders and call.arguments.len <= builtin.parameters.len) {
+                var snippet: std.ArrayList(u8) = .empty;
+                try snippet.print(builder.arena, "{s}(", .{name});
+                var placeholder_index: usize = 1;
+                for (builtin.parameters, 0..) |param, index| {
+                    if (index != 0) try snippet.appendSlice(builder.arena, ", ");
+                    const argument = if (index < call.arguments.len) call.arguments[index] else "";
+                    if (argument.len != 0) {
+                        try partial_calls.appendSnippetLiteral(&snippet, builder.arena, argument);
+                    } else {
+                        try snippet.print(builder.arena, "${{{d}:{f}}}", .{ placeholder_index, Analyser.fmtEscapedSnippet(param.signature) });
+                        placeholder_index += 1;
+                    }
+                }
+                try snippet.append(builder.arena, ')');
+                item_insert_range = call.range;
+                item_replace_range = call.range;
+                insert_text_format = .Snippet;
+                break :partial snippet.items;
+            }
+            break :partial name;
+        } else switch (new_text_format) {
             .only_name => name,
             .snippet => snippet: {
                 std.debug.assert(builder.use_snippets);
@@ -769,10 +844,6 @@ fn completeBuiltin(builder: *Builder) error{OutOfMemory}!void {
                 break :snippet try std.fmt.allocPrint(builder.arena, "{s}(${{1:}})", .{name});
             },
         };
-        const insert_text_format: types.InsertTextFormat = switch (new_text_format) {
-            .only_name => .PlainText,
-            .snippet => .Snippet,
-        };
         const detail = try Analyser.renderBuiltinFunctionSignature(
             builder.arena,
             name,
@@ -786,7 +857,7 @@ fn completeBuiltin(builder: *Builder) error{OutOfMemory}!void {
             .filterText = name[1..],
             .detail = detail,
             .insertTextFormat = insert_text_format,
-            .textEdit = createTextEdit(builder, .{ .newText = new_text[1..], .insert = insert_range, .replace = replace_range }),
+            .textEdit = createTextEdit(builder, .{ .newText = new_text[1..], .insert = item_insert_range, .replace = item_replace_range }),
             .documentation = .{
                 .markup_content = .{
                     .kind = if (builder.server.client_capabilities.completion_doc_supports_md) .markdown else .plaintext,
