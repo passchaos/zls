@@ -183,6 +183,33 @@ test "callable field and method references stay distinct" {
     );
 }
 
+test "rename callable fields without touching same-named methods" {
+    try testRename(
+        \\const S = struct { call<cursor>back: *const fn (arg: S) void };
+        \\const Other = struct { fn callback(self: Other) void { _ = self; } };
+        \\fn use(s: S, other: Other) void {
+        \\    _ = s.callback;
+        \\    other.callback();
+        \\}
+    , "new callback",
+        \\const S = struct { @"new callback": *const fn (arg: S) void };
+        \\const Other = struct { fn callback(self: Other) void { _ = self; } };
+        \\fn use(s: S, other: Other) void {
+        \\    _ = s.@"new callback";
+        \\    other.callback();
+        \\}
+    );
+    try testRename(
+        \\const S = struct { @"old <cursor>callback": u32 };
+        \\const s: S = undefined;
+        \\const value = s.@"old callback";
+    , "renamed",
+        \\const S = struct { renamed: u32 };
+        \\const s: S = undefined;
+        \\const value = s.renamed;
+    );
+}
+
 test "struct init result location from function return type" {
     try testSymbolReferences(
         \\fn foo() struct { <0>: i32 } {
@@ -390,6 +417,30 @@ test "cross-file - alias" {
 
 fn testSymbolReferences(source: []const u8) !void {
     return testMultiFileSymbolReferences(&.{source}, true);
+}
+
+fn testRename(source: []const u8, new_name: []const u8, expected: []const u8) !void {
+    const cursor_index = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_index], source[cursor_index + "<cursor>".len ..] });
+    defer allocator.free(text);
+
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = text });
+    const params: types.rename.Params = .{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(text, cursor_index, ctx.server.offset_encoding),
+        .newName = new_name,
+    };
+    const response: types.WorkspaceEdit = try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/rename", params) orelse
+        return error.InvalidResponse;
+    const changes = response.changes orelse return error.InvalidResponse;
+    try std.testing.expectEqual(@as(usize, 1), changes.map.count());
+    const edits = changes.map.get(uri.raw) orelse return error.InvalidResponse;
+    const actual = try zls.diff.applyTextEdits(allocator, text, edits, ctx.server.offset_encoding);
+    defer allocator.free(actual);
+    try std.testing.expectEqualStrings(expected, actual);
 }
 
 /// source files have the following name pattern: `untitled-{d}.zig`
