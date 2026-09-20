@@ -17,14 +17,39 @@ approximately 16 MiB, with a minimum of one file scan. Input memory barriers
 prevent the compiler from reusing a previous scan's result. The printed checksum
 must match when comparing the same inputs and benchmark harness across revisions.
 
-The same executable also measures 256 byte-uniform `(line, character)` to byte
-index queries and short range conversions against the frozen lsp-kit
-implementation. It includes one long ASCII line and a dense-newline synthetic
-input as regression guards.
+The same executable also measures 256 byte-uniform conversions in both
+directions, plus short location and range conversions, against the frozen
+lsp-kit implementation. It includes long ASCII and sparse-Unicode lines plus a
+dense-newline synthetic input as regression guards.
 
 It also compares batched index and location conversions against allocation-based
 copies of the previous implementations. Batch sizes straddle the stack-buffer
 cutoffs, and checksums must match between baseline and production.
+
+## Single output position conversion, 2026-09-20
+
+Single `indexToPosition` and `locToRange` calls now reuse ZLS's incremental
+position scanner instead of lsp-kit's separate scalar prefix scan. This extends
+the existing vectorized UTF-8/16/32 path to response ranges produced by hover,
+completion, goto, diagnostics, and other single-result features. Random
+Unicode differential tests compare both functions with lsp-kit at valid
+codepoint boundaries.
+
+On AArch64 macOS, Zig 0.16.0, `ReleaseFast`, and the LLVM backend, 256
+byte-uniform queries over a 256 KiB ASCII line measured as follows:
+
+| operation / encoding | baseline | production | change |
+| --- | ---: | ---: | ---: |
+| index to position / UTF-8 | 50.8 us | 5.9 us | -88% |
+| index to position / UTF-16 | 271.1 us | 17.9 us | -93% |
+| index to position / UTF-32 | 57.1 us | 49.0 us | -14% |
+| location to range / UTF-8 | 111.8 us | 6.3 us | -94% |
+| location to range / UTF-16 | 538.7 us | 18.1 us | -97% |
+| location to range / UTF-32 | 127.3 us | 47.0 us | -63% |
+
+On the 1.50 MiB Zig `Sema.zig`, whose lines are much shorter, index-to-position
+and location-to-range stayed in the same range as baseline across all encodings.
+Dense-newline controls did as well. Checksums matched in every case.
 
 ## Small batch allocation removal, 2026-09-18
 

@@ -16,7 +16,11 @@ pub const Loc = offsets.Loc;
 pub const Position = offsets.Position;
 pub const Range = offsets.Range;
 
-pub const indexToPosition = offsets.indexToPosition;
+/// Converts a byte index to an LSP position using the same vectorized scan as
+/// batched position conversion.
+pub fn indexToPosition(text: []const u8, index: usize, encoding: Encoding) Position {
+    return advancePosition(text, .{ .line = 0, .character = 0 }, 0, index, encoding);
+}
 
 /// Converts an LSP position to a byte index while counting newline blocks in
 /// parallel. Out-of-range lines and characters retain the lsp-kit clamping
@@ -60,7 +64,14 @@ pub const locLength = offsets.locLength;
 pub const rangeLength = offsets.rangeLength;
 
 pub const locToSlice = offsets.locToSlice;
-pub const locToRange = offsets.locToRange;
+pub fn locToRange(text: []const u8, loc: Loc, encoding: Encoding) Range {
+    std.debug.assert(loc.start <= loc.end and loc.end <= text.len);
+    const start = indexToPosition(text, loc.start, encoding);
+    return .{
+        .start = start,
+        .end = advancePosition(text, start, loc.start, loc.end, encoding),
+    };
+}
 
 pub fn rangeToLoc(text: []const u8, range: Range, encoding: Encoding) Loc {
     std.debug.assert(orderPosition(range.start, range.end) != .gt);
@@ -228,6 +239,45 @@ test "positionToIndex matches random valid positions" {
             while (index < text.len and text[index] & 0xc0 == 0x80) index -= 1;
             const position = offsets.indexToPosition(text, index, encoding);
             try std.testing.expectEqual(index, positionToIndex(text, position, encoding));
+        }
+    }
+}
+
+test "indexToPosition and locToRange match lsp offsets" {
+    const texts = [_][]const u8{
+        "",
+        "short ASCII",
+        "a" ** 63 ++ "¶" ++ "b" ** 65,
+        "a" ** 64 ++ "🠁" ++ "b" ** 64,
+        "a¶↉🠁\r\nsecond line\n" ** 32 ++ "tail🇺🇸",
+    };
+    var random: std.Random.DefaultPrng = .init(0x696e_6465_785f_706f);
+
+    for (texts) |text| {
+        var boundaries: [4096]usize = undefined;
+        var boundary_count: usize = 1;
+        boundaries[0] = 0;
+        var index: usize = 0;
+        while (index < text.len) {
+            index += std.unicode.utf8ByteSequenceLength(text[index]) catch unreachable;
+            boundaries[boundary_count] = index;
+            boundary_count += 1;
+        }
+
+        inline for (.{ Encoding.@"utf-8", Encoding.@"utf-16", Encoding.@"utf-32" }) |encoding| {
+            for (0..@min(boundary_count * 2, 1024)) |_| {
+                const first = boundaries[random.random().uintLessThan(usize, boundary_count)];
+                const second = boundaries[random.random().uintLessThan(usize, boundary_count)];
+                const loc: Loc = .{ .start = @min(first, second), .end = @max(first, second) };
+                try std.testing.expectEqual(
+                    offsets.indexToPosition(text, loc.start, encoding),
+                    indexToPosition(text, loc.start, encoding),
+                );
+                try std.testing.expectEqual(
+                    offsets.locToRange(text, loc, encoding),
+                    locToRange(text, loc, encoding),
+                );
+            }
         }
     }
 }

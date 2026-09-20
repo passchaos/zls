@@ -6,6 +6,8 @@ const offsets = zls.offsets;
 const baseline_offsets = zls.lsp.offsets;
 
 const PositionToIndexMode = enum { baseline, production };
+const IndexToPositionMode = enum { baseline, production };
+const LocToRangeMode = enum { baseline, production };
 const RangeToLocMode = enum { baseline, production };
 const MultipleMode = enum { allocation_baseline, mapping_baseline, production };
 const BatchOrder = enum { ordered, reversed, interleaved, last_swapped };
@@ -20,6 +22,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Usage: zig build bench-offsets -Doptimize=ReleaseFast -- file.zig ...\n", .{});
         return error.MissingSourceFile;
     }
+    std.debug.print("backend: {t}\n", .{@import("builtin").zig_backend});
 
     for (args[1..]) |path| {
         const source = try std.Io.Dir.cwd().readFileAllocOptions(io, path, allocator, .limited(std.zig.max_src_size), .of(u8), 0);
@@ -294,9 +297,71 @@ fn benchmarkPositionToIndex(
     const query_count = 256;
     const positions = try allocator.alloc(offsets.Position, query_count);
     defer allocator.free(positions);
+    const locs = try allocator.alloc(offsets.Loc, query_count);
+    defer allocator.free(locs);
     std.debug.print("{s}: {d} bytes, {d} position queries\n", .{ name, source.len, positions.len });
 
     for ([_]offsets.Encoding{ .@"utf-8", .@"utf-16", .@"utf-32" }) |encoding| {
+        for (locs, 0..) |*loc, query_index| {
+            var source_index = (source.len * query_index) / query_count;
+            while (source_index > 0 and source_index < source.len and source[source_index] & 0xc0 == 0x80) source_index -= 1;
+            var end_index = @min(source.len, source_index + 32);
+            while (end_index > source_index and end_index < source.len and source[end_index] & 0xc0 == 0x80) end_index -= 1;
+            loc.* = .{ .start = source_index, .end = end_index };
+            if (!std.meta.eql(
+                baseline_offsets.locToRange(source, loc.*, encoding),
+                offsets.locToRange(source, loc.*, encoding),
+            )) return error.LocToRangeMismatch;
+        }
+
+        inline for ([_]IndexToPositionMode{ .baseline, .production }) |mode| {
+            var samples: [7]u64 = undefined;
+            var checksum: u64 = 0;
+            for (&samples) |*sample| {
+                const before = std.Io.Clock.awake.now(io);
+                for (0..query_count) |query_index| {
+                    const source_index = (source.len * query_index) / query_count;
+                    const position = switch (mode) {
+                        .baseline => baseline_offsets.indexToPosition(source, source_index, encoding),
+                        .production => offsets.indexToPosition(source, source_index, encoding),
+                    };
+                    checksum +%= (@as(u64, position.line) << 32) | position.character;
+                }
+                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+            }
+            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+            std.debug.print("  index-to-position {t} {t}: {d} ns/query checksum={d}\n", .{
+                mode,
+                encoding,
+                samples[samples.len / 2] / query_count,
+                checksum,
+            });
+        }
+
+        inline for ([_]LocToRangeMode{ .baseline, .production }) |mode| {
+            var samples: [7]u64 = undefined;
+            var checksum: u64 = 0;
+            for (&samples) |*sample| {
+                const before = std.Io.Clock.awake.now(io);
+                for (locs) |loc| {
+                    const range = switch (mode) {
+                        .baseline => baseline_offsets.locToRange(source, loc, encoding),
+                        .production => offsets.locToRange(source, loc, encoding),
+                    };
+                    checksum +%= (@as(u64, range.start.line) << 32) | range.start.character;
+                    checksum +%= (@as(u64, range.end.line) << 32) | range.end.character;
+                }
+                sample.* = @intCast(before.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds());
+            }
+            std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+            std.debug.print("  loc-to-range {t} {t}: {d} ns/query checksum={d}\n", .{
+                mode,
+                encoding,
+                samples[samples.len / 2] / locs.len,
+                checksum,
+            });
+        }
+
         for (positions, 0..) |*position, query_index| {
             const source_index = (source.len * query_index) / query_count;
             position.* = offsets.indexToPosition(source, source_index, encoding);
