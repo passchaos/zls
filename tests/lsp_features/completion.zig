@@ -22682,14 +22682,13 @@ test "if captures" {
         .{ .label = "alpha", .kind = .Field, .detail = "u32" },
     });
 
-    // TODO fix value capture without block scope
-    // try testCompletion(
-    //     \\const S = struct { alpha: u32 };
-    //     \\const foo: ?S = undefined;
-    //     \\const bar = if(foo) |baz| baz.<cursor>
-    // , &.{
-    //     .{ .label = "alpha", .kind = .Field, .detail = "u32" },
-    // });
+    try testCompletion(
+        \\const S = struct { alpha: u32 };
+        \\const foo: ?S = undefined;
+        \\const bar = if(foo) |baz| baz.<cursor>
+    , &.{
+        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
+    });
 
     try testCompletion(
         \\const E = error{ X, Y };
