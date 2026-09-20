@@ -378,6 +378,16 @@ test "builtin" {
         \\    @as(?u32,@intCast(<cursor>))
         \\}
     , "@intCast(int: anytype) anytype", 0);
+    try testSignatureHelp(
+        \\test {
+        \\    @as(u32, 1, <cursor>)
+        \\}
+    , "@as(comptime T: type, expression) T", null);
+    try testSignatureHelp(
+        \\test {
+        \\    @src(<cursor>)
+        \\}
+    , "@src() SourceLocation", null);
 }
 
 fn testSignatureHelp(source: []const u8, expected_label: []const u8, expected_active_parameter: ?u32) !void {

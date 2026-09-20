@@ -229,7 +229,7 @@ pub fn getSignatureInfo(
                             .value = builtin.documentation,
                         } },
                         .parameters = param_infos,
-                        .activeParameter = paren_commas,
+                        .activeParameter = if (paren_commas < param_infos.len) paren_commas else null,
                     };
                 }
                 // Scan for a function call lhs expression.
