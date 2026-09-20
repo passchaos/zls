@@ -1180,6 +1180,43 @@ test "var decl alias" {
         \\(comptime_int = 5)
         \\```
     );
+    try testHoverWithOptions(
+        \\/// B
+        \\fn target() void {}
+        \\/// A
+        \\const al<cursor>ias = target;
+    ,
+        \\fn target() void
+        \\(fn () void)
+        \\
+        \\A
+        \\
+        \\B
+    , .{ .markup_kind = .plaintext });
+    try testHoverWithOptions(
+        \\/// B
+        \\const Target = struct {};
+        \\/// A
+        \\const Ali<cursor>as = Target;
+    ,
+        \\const Target = struct
+        \\(type)
+        \\
+        \\A
+        \\
+        \\B
+    , .{ .markup_kind = .plaintext });
+}
+
+test "function-valued field" {
+    try testHoverWithOptions(
+        \\const S = struct { callback: *const fn (S, u32) void };
+        \\const s: S = undefined;
+        \\const callback = s.call<cursor>back;
+    ,
+        \\callback: *const fn (S, u32) void
+        \\(*const fn (S, u32) void)
+    , .{ .markup_kind = .plaintext });
 }
 
 test "comptime typeInfo reflection value" {
