@@ -484,7 +484,7 @@ fn functionTypeCompletion(
                 });
             }
 
-            if (info.parameters.len -| @intFromBool(has_self_param) == 0) {
+            if (info.parameters.len -| @intFromBool(has_self_param) == 0 and !info.has_varargs) {
                 break :snippet try std.fmt.allocPrint(builder.arena, "{f}()", .{Analyser.fmtEscapedSnippet(func_name)});
             } else {
                 break :snippet try std.fmt.allocPrint(builder.arena, "{f}(${{1:}})", .{Analyser.fmtEscapedSnippet(func_name)});

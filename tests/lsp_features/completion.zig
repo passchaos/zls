@@ -26280,6 +26280,20 @@ test "insert replace behaviour - variadic function with placeholders" {
     });
 }
 
+test "insert replace behaviour - variadic function without argument placeholders" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\extern fn func(...) callconv(.c) void;
+        \\const result = <cursor>;
+        ,
+        .label = "func",
+        .expected_insert_line = "const result = func(${1:});",
+        .expected_replace_line = "const result = func(${1:});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = false,
+    });
+}
+
 test "insert replace behaviour - function alias" {
     try testCompletionTextEdit(.{
         .source =
