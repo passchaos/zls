@@ -268,8 +268,7 @@ fn writeCallHint(
     const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(ty) orelse return;
     const fn_info = fn_ty.data.function;
 
-    const has_self_param = call.ast.params.len + 1 == fn_info.parameters.len and
-        try builder.analyser.isInstanceCall(handle, call, fn_ty);
+    const has_self_param = try builder.analyser.isInstanceCall(handle, call, fn_ty);
 
     const parameters = fn_info.parameters[@intFromBool(has_self_param)..];
     const arguments = call.ast.params;

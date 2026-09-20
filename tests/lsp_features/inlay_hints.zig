@@ -84,6 +84,18 @@ test "function self parameter" {
         \\const Foo = struct { pub fn bar(self: Foo, alpha: u32, beta: []const u8) void {} };
         \\const _ = Foo.bar(<self>undefined,<alpha>5,<beta>"");
     , .{ .kind = .Parameter });
+    // Keep the implicit self offset even while a call is missing arguments.
+    try testInlayHints(
+        \\const Foo = struct { pub fn bar(self: Foo, alpha: u32, beta: []const u8) void {} };
+        \\const foo: Foo = .{};
+        \\const _ = foo.bar(<alpha>5);
+    , .{ .kind = .Parameter });
+    // Extra variadic arguments do not shift fixed-parameter hints onto self.
+    try testInlayHints(
+        \\const Foo = struct { extern fn bar(self: *Foo, alpha: u32, ...) callconv(.c) void; };
+        \\const foo: *Foo = undefined;
+        \\const _ = foo.bar(<alpha>5, 6, 7);
+    , .{ .kind = .Parameter });
     try testInlayHints(
         \\const Foo = struct {
         \\  pub fn bar(self: Foo, alpha: u32, beta: []const u8) void {}
