@@ -26168,6 +26168,29 @@ test "insert replace behaviour - function with partial argument placeholders" {
     try testCompletionTextEdit(.{
         .source =
         \\fn func(comptime T: type, number: u32) void {}
+        \\const foo = <cursor>
+        \\    (u32,);
+        ,
+        .label = "func",
+        .expected_insert_line = "const foo = func",
+        .expected_replace_line = "const foo = func",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn func(comptime T: type, number: u32) void {}
+        \\const foo = <cursor>  (u32,);
+        ,
+        .label = "func",
+        .expected_insert_line = "const foo = func(u32, ${1:number: u32});",
+        .expected_replace_line = "const foo = func(u32, ${1:number: u32});",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn func(comptime T: type, number: u32) void {}
         \\const foo = <cursor>(u32,);
         ,
         .label = "func",

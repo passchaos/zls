@@ -15,7 +15,7 @@ pub fn parse(
     identifier_loc: offsets.Loc,
     encoding: offsets.Encoding,
 ) error{OutOfMemory}!?PartialCall {
-    const open_index = identifier_loc.end;
+    const open_index = callOpenIndex(source, identifier_loc.end) orelse return null;
     const scan_result = scan(source, open_index, null) orelse return null;
     if (!scan_result.has_empty) return null;
     const range = offsets.locToRange(source, .{ .start = identifier_loc.start, .end = scan_result.end_index }, encoding);
@@ -27,6 +27,18 @@ pub fn parse(
     return .{ .range = range, .arguments = arguments };
 }
 
+pub fn hasCall(source: [:0]const u8, after_identifier: usize) bool {
+    var tokenizer: std.zig.Tokenizer = .init(source[after_identifier..]);
+    return tokenizer.next().tag == .l_paren;
+}
+
+fn callOpenIndex(source: [:0]const u8, after_identifier: usize) ?usize {
+    var index = after_identifier;
+    while (index < source.len and (source[index] == ' ' or source[index] == '\t')) : (index += 1) {}
+    if (index == source.len or source[index] != '(') return null;
+    return index;
+}
+
 const Scan = struct {
     end_index: usize,
     argument_count: usize,
@@ -35,9 +47,10 @@ const Scan = struct {
 
 fn scan(source: [:0]const u8, open_index: usize, output: ?[][]const u8) ?Scan {
     var tokenizer: std.zig.Tokenizer = .init(source[open_index..]);
-    if (tokenizer.next().tag != .l_paren) return null;
+    const open = tokenizer.next();
+    if (open.tag != .l_paren or open.loc.start != 0) return null;
 
-    var argument_start: usize = open_index + 1;
+    var argument_start: usize = open_index + open.loc.end;
     var argument_count: usize = 0;
     var paren_depth: usize = 1;
     var bracket_depth: usize = 0;
@@ -107,7 +120,16 @@ test parse {
     try std.testing.expectEqualSlices([]const u8, &.{ "@TypeOf(.{ 1, 2 })", "", "\"a,b\"" }, parsed.arguments);
     try std.testing.expectEqual(offsets.locToRange(source, .{ .start = 0, .end = source.len }, .@"utf-16"), parsed.range);
 
+    const spaced_source: [:0]const u8 = "call \t(, 2)";
+    const spaced = (try parse(allocator, spaced_source, .{ .start = 0, .end = 4 }, .@"utf-16")).?;
+    defer allocator.free(spaced.arguments);
+    try std.testing.expectEqualSlices([]const u8, &.{ "", "2" }, spaced.arguments);
+    try std.testing.expectEqual(offsets.locToRange(spaced_source, .{ .start = 0, .end = spaced_source.len }, .@"utf-16"), spaced.range);
+
     try std.testing.expect((try parse(allocator, "call(1, 2)", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+    try std.testing.expect((try parse(allocator, "call \n(, 2)", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
+    try std.testing.expect(hasCall("call \n(, 2)", 4));
+    try std.testing.expect(hasCall("call // comment\n(, 2)", 4));
     try std.testing.expect((try parse(allocator, "call(1,", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
     try std.testing.expect((try parse(allocator, "call(], )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);
     try std.testing.expect((try parse(allocator, "call(}, )", .{ .start = 0, .end = 4 }, .@"utf-16")) == null);

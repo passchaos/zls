@@ -742,6 +742,7 @@ fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFuncti
     var replace_loc: offsets.Loc = .{ .start = identifier_loc.start, .end = identifier_loc.end };
 
     var format: FunctionCompletionFormat = .only_name;
+    const has_existing_call = partial_calls.hasCall(source, identifier_loc.end);
 
     const insert_can_be_snippet = builder.use_snippets and std.mem.startsWith(u8, source[insert_loc.end..], "()");
     const replace_can_be_snippet = builder.use_snippets and std.mem.startsWith(u8, source[replace_loc.end..], "()");
@@ -752,7 +753,7 @@ fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFuncti
         format = .snippet;
     } else if (insert_can_be_snippet or replace_can_be_snippet) {
         // snippet completions would be possible but insert and replace would need different `newText`
-    } else if (builder.use_snippets and !std.mem.startsWith(u8, source[identifier_loc.end..], "(")) {
+    } else if (builder.use_snippets and !has_existing_call) {
         format = .snippet;
     }
 
@@ -761,7 +762,7 @@ fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFuncti
     const partial_call = if (builder.use_snippets and
         builder.server.config_manager.config.enable_argument_placeholders and
         format == .only_name and
-        identifier_loc.end < source.len and source[identifier_loc.end] == '(')
+        has_existing_call)
         try partial_calls.parse(builder.arena, source, identifier_loc, builder.server.offset_encoding)
     else
         null;
