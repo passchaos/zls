@@ -235,6 +235,20 @@ test "function pointer container field" {
 }
 
 test "self parameter" {
+    try testSignatureHelp(
+        \\const S = struct {
+        \\    fn foo(self: @This(), value: u32) void {}
+        \\};
+        \\const s: S = undefined;
+        \\const result = s.foo(<cursor>);
+    , "fn foo(self: S, value: u32) void", 1);
+    try testSignatureHelp(
+        \\const S = struct {
+        \\    fn foo(self: @This(), value: u32) void {}
+        \\};
+        \\const result = S.foo(<cursor>, 1);
+    , "fn foo(self: S, value: u32) void", 0);
+
     // parameter: S
     // argument: S
     try testSignatureHelp(
