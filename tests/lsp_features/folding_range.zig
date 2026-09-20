@@ -240,7 +240,6 @@ test "function with multi-line parameters and return type" {
 }
 
 test "nested folding ranges inside function parameter" {
-    if (true) return error.SkipZigTest; // TODO
     try testFoldingRange(
         \\fn foo(a: u32, b: u32, c: enum {
         \\    d,
@@ -253,19 +252,20 @@ test "nested folding ranges inside function parameter" {
         \\    _ = g;
         \\}
     , &.{
+        .{ .startLine = 0, .startCharacter = 7, .endLine = 4, .endCharacter = 9 },
         .{ .startLine = 0, .startCharacter = 32, .endLine = 3, .endCharacter = 6 },
         .{ .startLine = 4, .startCharacter = 17, .endLine = 8, .endCharacter = 10 },
     });
 }
 
 test "nested folding ranges inside container types" {
-    if (true) return error.SkipZigTest; // TODO
     try testFoldingRange(
         \\const Foo = struct { foo: struct {
         \\    bar: void,
         \\} };
     , &.{
-        .{ .startLine = 0, .startCharacter = 20, .endLine = 1, .endCharacter = 14 },
+        .{ .startLine = 0, .startCharacter = 34, .endLine = 1, .endCharacter = 14 },
+        .{ .startLine = 0, .startCharacter = 20, .endLine = 2, .endCharacter = 0 },
     });
 }
 
