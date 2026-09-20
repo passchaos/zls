@@ -25548,6 +25548,15 @@ test "integer overflow in dot completions at beginning of file" {
     , &.{});
 }
 
+test "struct init completion at beginning of file" {
+    try testCompletion(
+        \\S{ .<cursor> }
+        \\const S = struct { alpha: u32 };
+    , &.{
+        .{ .label = "alpha", .kind = .Field, .detail = "u32" },
+    });
+}
+
 test "enum completion on out of bound parameter index" {
     try testCompletion(
         \\fn foo() void {}

@@ -1876,9 +1876,9 @@ fn getSwitchOrStructInitContext(
             else => {},
         }
     }
-    // Maybe we simply ran out of tokens?
-    // FIXME: This creates a 'blind spot' if the first node in a file is a .container_field_init
-    if (upper_index == 0) return null;
+    // Token zero is a valid type anchor for an initializer at the beginning of
+    // a file. Only treat it as an exhausted search when it is not an identifier.
+    if (upper_index == 0 and tree.tokenTag(upper_index) != .identifier) return null;
 
     return .{
         .likely = likely,
