@@ -480,12 +480,18 @@ pub fn isInstanceCall(
     std.debug.assert(!func_ty.is_type_val);
     if (call_handle.tree.nodeTag(call.ast.fn_expr) != .field_access) return false;
 
-    const container_node, _ = call_handle.tree.nodeData(call.ast.fn_expr).node_and_token;
+    const container_node, const field_token = call_handle.tree.nodeData(call.ast.fn_expr).node_and_token;
 
-    const container_ty = if (try analyser.resolveTypeOfNodeInternal(.of(container_node, call_handle))) |container_instance|
-        try container_instance.typeOf(analyser)
-    else
-        func_ty.data.function.container_type.*;
+    const container_ty = if (try analyser.resolveTypeOfNodeInternal(.of(container_node, call_handle))) |container_instance| blk: {
+        const member_container = try analyser.resolveDerefType(container_instance) orelse container_instance;
+        const field_name = try analyser.identifierTokenName(&call_handle.tree, field_token) orelse return false;
+        if (try member_container.lookupSymbol(analyser, field_name)) |member| {
+            if (member.decl == .ast_node and member.handle.tree.nodeTag(member.decl.ast_node).isContainerField()) {
+                return false;
+            }
+        }
+        break :blk try container_instance.typeOf(analyser);
+    } else func_ty.data.function.container_type.*;
 
     std.debug.assert(container_ty.is_type_val);
 

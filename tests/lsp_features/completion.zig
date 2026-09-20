@@ -26455,6 +26455,21 @@ test "insert replace behaviour - function alias" {
     });
 }
 
+test "insert replace behaviour - function-valued field keeps explicit receiver argument" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\const S = struct { callback: *const fn (arg: S, value: u32) void };
+        \\const s: S = undefined;
+        \\s.<cursor>(, 1);
+        ,
+        .label = "callback",
+        .expected_insert_line = "s.callback(${1:arg: S}, 1);",
+        .expected_replace_line = "s.callback(${1:arg: S}, 1);",
+        .enable_snippets = true,
+        .enable_argument_placeholders = true,
+    });
+}
+
 test "insert replace behaviour - escaped identifier" {
     try testCompletionTextEdit(.{
         .source =

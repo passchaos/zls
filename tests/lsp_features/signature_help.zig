@@ -232,6 +232,13 @@ test "function pointer container field" {
         \\const s: S = undefined;
         \\const foo = s.foo.*(<cursor>);
     , "fn (a: u32, b: void) bool", 0);
+    try testSignatureHelp(
+        \\const S = struct {
+        \\    callback: *const fn(arg: S, value: u32) void,
+        \\};
+        \\const s: S = undefined;
+        \\s.callback(<cursor>undefined, 1);
+    , "fn (arg: S, value: u32) void", 0);
 }
 
 test "self parameter" {
