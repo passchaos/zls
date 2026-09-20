@@ -217,6 +217,14 @@ pub fn getSignatureInfo(
                                 null,
                         };
                     }
+                    const has_varargs = builtin.parameters.len != 0 and
+                        std.mem.eql(u8, builtin.parameters[builtin.parameters.len - 1].signature, "...");
+                    const active_parameter: ?u32 = if (paren_commas < param_infos.len)
+                        paren_commas
+                    else if (has_varargs)
+                        @intCast(param_infos.len - 1)
+                    else
+                        null;
                     return types.SignatureHelp.Signature{
                         .label = try Analyser.renderBuiltinFunctionSignature(
                             arena,
@@ -229,7 +237,7 @@ pub fn getSignatureInfo(
                             .value = builtin.documentation,
                         } },
                         .parameters = param_infos,
-                        .activeParameter = if (paren_commas < param_infos.len) paren_commas else null,
+                        .activeParameter = active_parameter,
                     };
                 }
                 // Scan for a function call lhs expression.

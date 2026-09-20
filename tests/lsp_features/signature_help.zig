@@ -388,6 +388,16 @@ test "builtin" {
         \\    @src(<cursor>)
         \\}
     , "@src() SourceLocation", null);
+    try testSignatureHelp(
+        \\test {
+        \\    @compileLog(<cursor>)
+        \\}
+    , "@compileLog(...) void", 0);
+    try testSignatureHelp(
+        \\test {
+        \\    @compileLog(1, 2, <cursor>)
+        \\}
+    , "@compileLog(...) void", 0);
 }
 
 fn testSignatureHelp(source: []const u8, expected_label: []const u8, expected_active_parameter: ?u32) !void {
