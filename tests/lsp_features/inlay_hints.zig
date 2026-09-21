@@ -137,6 +137,14 @@ test "branching receiver parameter hints require matching names" {
         \\const receiver = if (undefined) alpha else beta;
         \\receiver.apply(1);
     , .{ .kind = .Parameter });
+    try testInlayHints(
+        \\const Alpha = struct { fn apply(_: Alpha, value: u32) void {} };
+        \\const Beta = struct { apply: *const fn (receiver: Beta, value: u32) void };
+        \\const alpha: Alpha = undefined;
+        \\const beta: Beta = undefined;
+        \\const receiver = if (undefined) alpha else beta;
+        \\receiver.apply(undefined, 1);
+    , .{ .kind = .Parameter });
 }
 
 test "function self parameter with pointer type in type declaration" {

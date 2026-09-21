@@ -265,15 +265,27 @@ fn writeCallHint(
     const handle = builder.handle;
 
     const ty = try builder.analyser.resolveTypeOfNode(.of(call.ast.fn_expr, handle)) orelse return;
-    const resolved_types = try ty.getAllTypesWithHandles(builder.analyser);
     const Candidate = struct { parameters: []const Analyser.Type.Data.Parameter };
     var candidates: std.ArrayList(Candidate) = .empty;
-    for (resolved_types) |resolved_type| {
-        const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(resolved_type) orelse continue;
-        const has_self_param = try builder.analyser.isInstanceCall(handle, call, fn_ty);
-        try candidates.append(builder.arena, .{
-            .parameters = fn_ty.data.function.parameters[@intFromBool(has_self_param)..],
-        });
+    if (handle.tree.nodeTag(call.ast.fn_expr) == .field_access) {
+        const lhs_node, const field_token = handle.tree.nodeData(call.ast.fn_expr).node_and_token;
+        const lhs = try builder.analyser.resolveTypeOfNode(.of(lhs_node, handle)) orelse return;
+        const receiver = try builder.analyser.resolveDerefType(lhs) orelse lhs;
+        const field_name = try builder.analyser.identifierTokenName(&handle.tree, field_token) orelse return;
+        for (try receiver.getAllTypesWithHandles(builder.analyser)) |receiver_type| {
+            const member = try receiver_type.lookupSymbol(builder.analyser, field_name) orelse continue;
+            const member_type = try member.resolveType(builder.analyser) orelse continue;
+            const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(member_type) orelse continue;
+            const has_self_param = try builder.analyser.isInstanceMemberAccess(receiver_type, member, fn_ty);
+            try candidates.append(builder.arena, .{
+                .parameters = fn_ty.data.function.parameters[@intFromBool(has_self_param)..],
+            });
+        }
+    } else {
+        for (try ty.getAllTypesWithHandles(builder.analyser)) |resolved_type| {
+            const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(resolved_type) orelse continue;
+            try candidates.append(builder.arena, .{ .parameters = fn_ty.data.function.parameters });
+        }
     }
     if (candidates.items.len == 0) return;
 

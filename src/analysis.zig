@@ -498,6 +498,18 @@ pub fn isInstanceCall(
     return analyser.firstParamIs(func_ty, container_ty);
 }
 
+pub fn isInstanceMemberAccess(
+    analyser: *Analyser,
+    receiver_type: Type,
+    member: DeclWithHandle,
+    func_type: Type,
+) error{OutOfMemory}!bool {
+    std.debug.assert(func_type.isFunc());
+    if (receiver_type.is_type_val) return false;
+    if (member.decl == .ast_node and member.handle.tree.nodeTag(member.decl.ast_node).isContainerField()) return false;
+    return analyser.firstParamIs(func_type, try receiver_type.typeOf(analyser));
+}
+
 pub fn hasSelfParam(analyser: *Analyser, func_ty: Type) error{OutOfMemory}!bool {
     std.debug.assert(func_ty.isFunc());
     const container = func_ty.data.function.container_type.*;
