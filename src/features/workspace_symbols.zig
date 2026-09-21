@@ -5,6 +5,7 @@ const std = @import("std");
 const lsp = @import("lsp");
 const types = lsp.types;
 
+const Analyser = @import("../analysis.zig");
 const DocumentStore = @import("../DocumentStore.zig");
 const offsets = @import("../offsets.zig");
 const Server = @import("../Server.zig");
@@ -40,6 +41,9 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     defer if (prepared_query) |*query| query.deinit(arena);
 
     for (handles.items) |handle| {
+        var analyser = server.initAnalyser(arena, handle);
+        defer analyser.deinit();
+
         const trigram_store = handle.trigram_store.getCached();
 
         declaration_buffer.clearRetainingCapacity();
@@ -105,7 +109,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                     .variable => .Variable,
                     .constant => .Constant,
                     .field => .Field,
-                    .function => .Function,
+                    .function => try functionSymbolKind(&analyser, handle, name_token),
                     .test_function => .Method, // there is no SymbolKind that represents a tests,
                 },
                 .location = .{
@@ -120,4 +124,26 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     }
 
     return .{ .symbol_informations = symbols.items };
+}
+
+fn functionSymbolKind(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    name_token: std.zig.Ast.TokenIndex,
+) Analyser.Error!types.SymbolKind {
+    const source_index = handle.tree.tokenStart(name_token);
+    const container_type = try analyser.innermostContainer(handle, source_index);
+    const container = switch (container_type.data) {
+        .container => |container| container,
+        else => return .Function,
+    };
+    if (container.scope_handle.scope == .root) return .Function;
+
+    const name = try analyser.identifierTokenName(&handle.tree, name_token) orelse return .Function;
+    const declaration = try analyser.lookupSymbolContainer(container_type, name, .other) orelse return .Function;
+    if (declaration.nameToken() != name_token) return .Function;
+
+    const func_type = try declaration.resolveType(analyser) orelse return .Function;
+    if (!func_type.isFunc()) return .Function;
+    return if (analyser.firstParamIs(func_type, container_type)) .Method else .Function;
 }

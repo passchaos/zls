@@ -111,6 +111,33 @@ test "workspace symbols" {
     try testDocumentSymbol(&ctx, "no_such_symbol", "");
 }
 
+test "workspace symbols distinguish methods from static functions" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    try ctx.addWorkspace("Methods", "/methods/");
+    _ = try ctx.addDocument(.{
+        .source =
+        \\const Service = struct {
+        \\    fn staticFunction() void {}
+        \\    fn valueMethod(self: Service) void { _ = self; }
+        \\    fn pointerMethod(self: *Service) void { _ = self; }
+        \\    fn genericMethod(self: anytype) void { _ = self; }
+        \\};
+        ,
+        .base_directory = "/methods/",
+    });
+
+    try testDocumentSymbol(&ctx, "Function",
+        \\Function staticFunction
+    );
+    try testDocumentSymbol(&ctx, "Method",
+        \\Method valueMethod
+        \\Method pointerMethod
+        \\Method genericMethod
+    );
+}
+
 test "workspace symbol ranges across long Unicode spans" {
     const source = "// " ++ "¶↉🠁" ** 16 ++ "\r\n" ++
         "const @\"symbol¶↉🠁\" = struct {\r\n" ++
