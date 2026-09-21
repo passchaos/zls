@@ -457,6 +457,16 @@ test "remove function parameter" {
         \\    used: u32,
         \\) void { _ = used; }
     , .{ .filter_title = "remove function parameter" });
+    try testDiagnostic(
+        "fn foo(\n\tused: u32,\n\tunused: u32,\n) void { _ = used; }\n",
+        "fn foo(\n\tused: u32,\n) void { _ = used; }\n",
+        .{ .filter_title = "remove function parameter" },
+    );
+    try testDiagnostic(
+        "fn foo(\r\n    used: u32,\r\n    unused: u32,\r\n) void { _ = used; }\r\n",
+        "fn foo(\r\n    used: u32,\r\n) void { _ = used; }\r\n",
+        .{ .filter_title = "remove function parameter" },
+    );
 }
 
 test "variable never mutated" {

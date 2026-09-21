@@ -1051,7 +1051,7 @@ fn getParamRemovalRange(tree: *const Ast, param: Ast.full.FnProto.Param) offsets
     var trim_end = false;
     while (loc.start != 0) : (loc.start -= 1) {
         switch (tree.source[loc.start - 1]) {
-            ' ', '\n' => continue,
+            ' ', '\t', '\r', '\n' => continue,
             ',' => {
                 loc.start -= 1;
                 break;
@@ -1067,7 +1067,7 @@ fn getParamRemovalRange(tree: *const Ast, param: Ast.full.FnProto.Param) offsets
     var found_comma = false;
     while (trim_end and loc.end < tree.source.len) : (loc.end += 1) {
         switch (tree.source[loc.end]) {
-            ' ', '\n' => continue,
+            ' ', '\t', '\r', '\n' => continue,
             ',' => if (!found_comma) {
                 found_comma = true;
                 continue;
