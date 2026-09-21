@@ -340,6 +340,16 @@ test "remove pointless discard" {
         \\}
         \\
     );
+    try testDiagnostic(
+        \\fn foo(a: u32) u32 {
+        \\    _ = a; // autofix
+        \\    return a;
+        \\}
+    ,
+        \\fn foo(a: u32) u32 {
+        \\    return a;
+        \\}
+    , .{ .filter_kind = .quickfix, .filter_title = "remove pointless discard" });
 }
 
 test "remove discard of unknown identifier" {

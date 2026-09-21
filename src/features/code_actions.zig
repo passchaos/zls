@@ -542,7 +542,7 @@ fn handlePointlessDiscard(builder: *Builder, loc: offsets.Loc) error{OutOfMemory
     if (builder.wantKind(.quickfix)) {
         try builder.actions.append(builder.arena, .{
             .title = "remove pointless discard",
-            .kind = .@"source.fixAll",
+            .kind = .quickfix,
             .isPreferred = true,
             .edit = try builder.createWorkspaceEdit(&.{
                 builder.createTextEditLoc(edit_loc, ""),
