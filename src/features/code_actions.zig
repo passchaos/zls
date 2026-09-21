@@ -213,15 +213,13 @@ pub fn generateMultilineStringCodeActions(
     }
     str_escaped.appendAssumeCapacity('"');
 
-    // Get Loc of the whole literal to delete it
-    // Multiline string literal ends before the \n or \r, but it must be deleted too
+    // Get Loc of the whole literal to delete it. Include the newline and
+    // indentation before the next token so the replacement rejoins cleanly.
     const first_token_start = tree.tokenStart(@intCast(start));
-    const last_token_end = std.mem.findNonePos(
-        u8,
-        tree.source,
-        offsets.tokenToLoc(tree, @intCast(end - 1)).end + 1,
-        "\n\r",
-    ) orelse tree.source.len;
+    const last_token_end = if (end < tree.tokens.len)
+        tree.tokenStart(@intCast(end))
+    else
+        tree.source.len;
     const remove_loc: offsets.Loc = .{ .start = first_token_start, .end = last_token_end };
 
     try builder.actions.append(builder.arena, .{

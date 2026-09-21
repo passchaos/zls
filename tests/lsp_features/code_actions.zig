@@ -431,6 +431,32 @@ test "remove function parameter" {
     ,
         \\fn foo() void {}
     , .{ .filter_title = "remove function parameter" });
+    try testDiagnostic(
+        \\fn foo(unused: u32, used: u32) void { _ = used; }
+    ,
+        \\fn foo(used: u32) void { _ = used; }
+    , .{ .filter_title = "remove function parameter" });
+    try testDiagnostic(
+        \\fn foo(first: u32, unused: u32, last: u32) void { _ = first; _ = last; }
+    ,
+        \\fn foo(first: u32, last: u32) void { _ = first; _ = last; }
+    , .{ .filter_title = "remove function parameter" });
+    try testDiagnostic(
+        \\fn foo(used: u32, unused: u32) void { _ = used; }
+    ,
+        \\fn foo(used: u32) void { _ = used; }
+    , .{ .filter_title = "remove function parameter" });
+    try testDiagnostic(
+        \\fn foo(
+        \\    used: u32,
+        \\    /// removed with the parameter
+        \\    unused: u32,
+        \\) void { _ = used; }
+    ,
+        \\fn foo(
+        \\    used: u32,
+        \\) void { _ = used; }
+    , .{ .filter_title = "remove function parameter" });
 }
 
 test "variable never mutated" {
@@ -855,6 +881,19 @@ test "convert multiline string literal" {
     try testConvertString( // (force format)
         "const foo = \\\\<cursor>Hello\r\n;",
         \\const foo = "Hello";
+    );
+    try testConvertString(
+        \\fn run() void {
+        \\    const value =
+        \\        \\alpha
+        \\        \\be<cursor>ta
+        \\    ;
+        \\}
+    ,
+        \\fn run() void {
+        \\    const value =
+        \\        "alpha\nbeta";
+        \\}
     );
 }
 
