@@ -38,7 +38,8 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     const declaration_allocator = declaration_stack.get();
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
     defer declaration_buffer.deinit(declaration_allocator);
-    var prepared_query: ?TrigramStore.Query = if (request.query.len != 0 and handles.items.len > 1) try .init(arena, request.query) else null;
+    const short_query = if (request.query.len == 0) null else normalizedShortQuery(request.query);
+    var prepared_query: ?TrigramStore.Query = if (request.query.len != 0 and short_query == null and handles.items.len > 1) try .init(arena, request.query) else null;
     defer if (prepared_query) |*query| query.deinit(arena);
 
     for (handles.items) |handle| {
@@ -56,7 +57,9 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                 declaration.* = @enumFromInt(index);
             }
             break :all declaration_buffer.items;
-        } else if (prepared_query) |*query|
+        } else if (short_query) |query|
+            try declarationsForShortQuery(handle, query, declaration_allocator, &declaration_buffer)
+        else if (prepared_query) |*query|
             try trigram_store.declarationSliceForPreparedQuery(declaration_allocator, query, &declaration_buffer)
         else
             try trigram_store.declarationSliceForQuery(declaration_allocator, request.query, &declaration_buffer);
@@ -146,6 +149,62 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     }
 
     return .{ .symbol_informations = symbols.items };
+}
+
+const ShortQuery = struct {
+    bytes: [2]u8 = undefined,
+    len: u2 = 0,
+};
+
+fn normalizedShortQuery(query: []const u8) ?ShortQuery {
+    var result: ShortQuery = .{};
+    for (query) |char| {
+        if (char == '_') continue;
+        if (result.len == result.bytes.len) return null;
+        result.bytes[result.len] = std.ascii.toLower(char);
+        result.len += 1;
+    }
+    return result;
+}
+
+fn declarationsForShortQuery(
+    handle: *DocumentStore.Handle,
+    query: ShortQuery,
+    allocator: std.mem.Allocator,
+    declaration_buffer: *std.ArrayList(TrigramStore.Declaration.Index),
+) error{OutOfMemory}![]const TrigramStore.Declaration.Index {
+    if (query.len == 0) return &.{};
+
+    const names = handle.trigram_store.getCached().declarations.items(.name);
+    for (names, 0..) |name_token, index| {
+        const raw_name = handle.tree.tokenSlice(name_token);
+        const strategy: enum { raw, smart }, const name = switch (handle.tree.tokenTag(name_token)) {
+            .string_literal => .{ .raw, raw_name[1 .. raw_name.len - 1] },
+            .identifier => if (std.mem.startsWith(u8, raw_name, "@\""))
+                .{ .raw, raw_name[2 .. raw_name.len - 1] }
+            else
+                .{ .smart, raw_name },
+            else => unreachable,
+        };
+        if (!shortQueryMatches(name, strategy == .smart, query)) continue;
+        try declaration_buffer.append(allocator, @enumFromInt(index));
+    }
+    return declaration_buffer.items;
+}
+
+fn shortQueryMatches(name: []const u8, ignore_underscores: bool, query: ShortQuery) bool {
+    var matched: u2 = 0;
+    for (name) |raw_char| {
+        if (ignore_underscores and raw_char == '_') continue;
+        const char = std.ascii.toLower(raw_char);
+        if (char == query.bytes[matched]) {
+            matched += 1;
+            if (matched == query.len) return true;
+        } else {
+            matched = @intFromBool(char == query.bytes[0]);
+        }
+    }
+    return false;
 }
 
 fn containerNameAtIndex(

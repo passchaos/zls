@@ -75,8 +75,17 @@ test "workspace symbols" {
         \\Method walk the dog
     );
     try testDocumentSymbol(&ctx, "potato_d", "");
-    // Becomes S\x00\x00 which matches nothing
-    try testDocumentSymbol(&ctx, "S", "");
+    try testDocumentSymbol(&ctx, "S",
+        \\Constant SalamanderCrab
+        \\Function salamander_crab [SalamanderCrab]
+        \\Constant sheltie [Dog]
+        \\Variable @"Mr Crabs" [Dog]
+    );
+    try testDocumentSymbol(&ctx, "_LI_",
+        \\Constant Lion
+        \\Constant lion_for_real [Lion2]
+    );
+    try testDocumentSymbol(&ctx, "___", "");
     try testDocumentSymbol(&ctx, "lion",
         \\Constant Lion
         \\Constant lion_for_real [Lion2]
