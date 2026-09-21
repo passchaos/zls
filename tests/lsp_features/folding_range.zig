@@ -205,6 +205,17 @@ test "switch" {
         .{ .startLine = 1, .startCharacter = 4, .endLine = 5, .endCharacter = 6 },
         .{ .startLine = 0, .startCharacter = 24, .endLine = 7, .endCharacter = 15 },
     });
+    try testFoldingRange(
+        \\const foo = switch (
+        \\    alpha orelse
+        \\    beta
+        \\) {
+        \\    else => {},
+        \\};
+    , &.{
+        .{ .startLine = 0, .startCharacter = 20, .endLine = 2, .endCharacter = 8 },
+        .{ .startLine = 3, .startCharacter = 3, .endLine = 4, .endCharacter = 15 },
+    });
 }
 
 test "function" {

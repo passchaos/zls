@@ -458,6 +458,7 @@ pub fn generateFoldingRanges(allocator: std.mem.Allocator, tree: *const Ast, enc
             .switch_comma,
             => {
                 const lhs = tree.nodeData(node).node_and_extra[0];
+                try builder.add(null, tree.nodeMainToken(node) + 1, ast.lastToken(tree, lhs), .exclusive, .inclusive);
                 const start_tok = ast.lastToken(tree, lhs) + 2; // lparen + rbrace
                 const end_tok = ast.lastToken(tree, node);
                 try builder.add(null, start_tok, end_tok, .exclusive, .exclusive_ignore_space);
