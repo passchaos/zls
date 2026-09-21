@@ -28,6 +28,23 @@ test "container decl" {
     );
 }
 
+test "container methods" {
+    try testDocumentSymbol(
+        \\const S = struct {
+        \\    fn create() S {}
+        \\    fn byValue(_: S) void {}
+        \\    fn byPointer(_: *const S) void {}
+        \\    fn genericSelf(_: anytype) void {}
+        \\};
+    ,
+        \\Constant S
+        \\  Function create (fn create() S)
+        \\  Method byValue (fn byValue(_: S) void)
+        \\  Method byPointer (fn byPointer(_: *const S) void)
+        \\  Method genericSelf (fn genericSelf(_: anytype) void)
+    );
+}
+
 test "tuple" {
     try testDocumentSymbol(
         \\const S = struct {

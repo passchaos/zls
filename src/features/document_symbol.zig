@@ -7,6 +7,7 @@ const types = @import("lsp").types;
 const offsets = @import("../offsets.zig");
 const ast = @import("../ast.zig");
 const analysis = @import("../analysis.zig");
+const DocumentStore = @import("../DocumentStore.zig");
 const tracy = @import("tracy");
 
 const Symbol = struct {
@@ -65,10 +66,12 @@ test tokenNameFromSlice {
 }
 
 pub fn getDocumentSymbols(
+    analyser: *analysis,
     arena: std.mem.Allocator,
-    tree: *const Ast,
+    handle: *DocumentStore.Handle,
     encoding: offsets.Encoding,
-) error{OutOfMemory}![]types.DocumentSymbol {
+) analysis.Error![]types.DocumentSymbol {
+    const tree = &handle.tree;
     var symbols: std.ArrayList(Symbol) = .empty;
     var total_symbol_count: usize = 0;
 
@@ -149,11 +152,19 @@ pub fn getDocumentSymbols(
                 var buffer: [1]Ast.Node.Index = undefined;
                 const fn_info = tree.fullFnProto(&buffer, node).?;
                 const name_token = fn_info.name_token orelse continue;
+                const kind: types.SymbolKind = if (stack_entry.parent_container == .root)
+                    .Function
+                else kind: {
+                    const func_type = try analyser.resolveTypeOfNode(.of(node, handle)) orelse break :kind .Function;
+                    if (!func_type.isFunc()) break :kind .Function;
+                    const container_type = try analyser.innermostContainer(handle, tree.tokenStart(fn_info.ast.fn_token));
+                    break :kind if (analyser.firstParamIs(func_type, container_type)) .Method else .Function;
+                };
 
                 break :blk .{
                     .name_token = name_token,
                     .detail = analysis.getFunctionSignature(tree, fn_info),
-                    .kind = .Function,
+                    .kind = kind,
                     .loc = offsets.nodeToLoc(tree, node),
                     .selection_loc = offsets.tokenToLoc(tree, name_token),
                     .children = .empty,
