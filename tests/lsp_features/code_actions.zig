@@ -28,6 +28,21 @@ test "discard value" {
     );
 }
 
+test "discard value quickfix omits autofix marker" {
+    for ([_]bool{ true, false }) |want_zir| {
+        try testDiagnostic(
+            \\test {
+            \\    const foo = 1;
+            \\}
+        ,
+            \\test {
+            \\    const foo = 1;
+            \\    _ = foo;
+            \\}
+        , .{ .filter_title = "discard value", .want_zir = want_zir });
+    }
+}
+
 test "discard value with comments" {
     try testAutofix(
         \\test {
