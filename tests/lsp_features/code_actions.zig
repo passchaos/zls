@@ -487,6 +487,19 @@ test "remove capture" {
         \\        {}
         \\}
     , .{ .filter_title = "remove capture" });
+    try testDiagnostic(
+        \\test {
+        \\    for (0..1, 0..1) |unused, used| {
+        \\        _ = used;
+        \\    }
+        \\}
+    ,
+        \\test {
+        \\    for (0..1, 0..1) |unused, used| {
+        \\        _ = used;
+        \\    }
+        \\}
+    , .{ .filter_title = "remove capture" });
 }
 
 test "organize imports" {

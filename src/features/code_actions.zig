@@ -1202,6 +1202,21 @@ fn getCaptureLoc(text: []const u8, loc: offsets.Loc) ?offsets.Loc {
 
     const trimmed = std.mem.trim(u8, text[start_pipe_position + 1 .. end_pipe_position - 1], &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
+    var in_quotes = false;
+    var escaped = false;
+    for (trimmed) |char| {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (in_quotes and char == '\\') {
+            escaped = true;
+        } else if (char == '"') {
+            in_quotes = !in_quotes;
+        } else if (!in_quotes and char == ',') {
+            return null;
+        }
+    }
 
     while (end_pipe_position < text.len and switch (text[end_pipe_position]) {
         ' ', '\t' => true,
@@ -1227,10 +1242,13 @@ test getCaptureLoc {
     }
     {
         const text = "|i, jjj, foobar|";
-        const caploc = getCaptureLoc(text, .{ .start = 1, .end = 17 }) orelse
+        try std.testing.expect(getCaptureLoc(text, .{ .start = 1, .end = 17 }) == null);
+    }
+    {
+        const text = "|@\"a,b\"|";
+        const caploc = getCaptureLoc(text, .{ .start = 1, .end = 9 }) orelse
             return std.testing.expect(false);
-        const captext = text[caploc.start..caploc.end];
-        try std.testing.expectEqualStrings(text, captext);
+        try std.testing.expectEqualStrings(text, text[caploc.start..caploc.end]);
     }
     {
         const text = "|i|  {}";
