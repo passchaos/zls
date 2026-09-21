@@ -875,11 +875,19 @@ test "convert string literal to multiline" {
     );
     // In function
     try testConvertString(
-        \\const x = foo("<cursor>bar\nbaz");
+        \\fn run() void {
+        \\    const x = foo("<cursor>bar\nbaz");
+        \\}
     ,
-        \\const x = foo(\\bar
-        \\    \\baz
-        \\);
+        \\fn run() void {
+        \\    const x = foo(\\bar
+        \\        \\baz
+        \\    );
+        \\}
+    );
+    try testConvertString(
+        "fn run() void {\n\tconst x = foo(\"<cursor>bar\\nbaz\");\n}\n",
+        "fn run() void {\n\tconst x = foo(\\\\bar\n\t\t\\\\baz\n\t);\n}\n",
     );
 }
 
@@ -901,12 +909,11 @@ test "convert string literal to multiline - cursor outside of string literal" {
         \\const foo = \\hello
         \\;
     );
-    // TODO
-    // try testConvertString(
-    //     \\const foo = "hello" <cursor>;
-    // ,
-    //     \\const foo = "hello" <cursor>;
-    // );
+    try testConvertString(
+        \\const foo = "hello" <cursor>;
+    ,
+        \\const foo = "hello" ;
+    );
 }
 
 test "convert string literal to multiline - escapes" {

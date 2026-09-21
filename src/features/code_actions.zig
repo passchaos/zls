@@ -155,12 +155,15 @@ pub fn generateStringLiteralCodeActions(
         if (std.ascii.isControl(c)) return;
     }
     if (!std.unicode.utf8ValidateSlice(parsed)) return;
-    const with_slashes = try std.mem.replaceOwned(u8, builder.arena, parsed, "\n", "\n    \\\\"); // Hardcoded 4 spaces
+    const line_indent = lineIndentationAtIndex(tree.source, tree.tokenStart(token));
+    const continuation_prefix = try std.mem.concat(builder.arena, u8, &.{ "\n", line_indent, detectIndentation(tree.source), "\\\\" });
+    const with_slashes = try std.mem.replaceOwned(u8, builder.arena, parsed, "\n", continuation_prefix);
 
-    var result: std.ArrayList(u8) = try .initCapacity(builder.arena, with_slashes.len + 3);
-    result.appendSliceAssumeCapacity("\\\\");
-    result.appendSliceAssumeCapacity(with_slashes);
-    result.appendAssumeCapacity('\n');
+    var result: std.ArrayList(u8) = .empty;
+    try result.appendSlice(builder.arena, "\\\\");
+    try result.appendSlice(builder.arena, with_slashes);
+    try result.append(builder.arena, '\n');
+    try result.appendSlice(builder.arena, line_indent);
 
     const loc = offsets.tokenToLoc(tree, token);
     try builder.actions.append(builder.arena, .{
@@ -955,6 +958,12 @@ fn detectIndentation(source: []const u8) []const u8 {
     return "    "; // recommended style
 }
 
+fn lineIndentationAtIndex(source: []const u8, index: usize) []const u8 {
+    const line = offsets.lineSliceUntilIndex(source, index);
+    const indent_end = std.mem.findNone(u8, line, " \t") orelse line.len;
+    return line[0..indent_end];
+}
+
 // attempts to converts a slice of text into camelcase 'FUNCTION_NAME' -> 'functionName'
 fn createCamelcaseText(allocator: std.mem.Allocator, identifier: []const u8) error{OutOfMemory}![]const u8 {
     // skip initial & ending underscores
@@ -1009,15 +1018,7 @@ fn createDiscardText(
     // skip comments between the insert tokena and the token after it
     const insert_index = std.mem.findScalarPos(u8, source_until_next_token, insert_token_end, '\n') orelse source_until_next_token.len;
 
-    const indent = find_indent: {
-        const line = offsets.lineSliceUntilIndex(tree.source, insert_index);
-        for (line, 0..) |char, i| {
-            if (!std.ascii.isWhitespace(char)) {
-                break :find_indent line[0..i];
-            }
-        }
-        break :find_indent line;
-    };
+    const indent = lineIndentationAtIndex(tree.source, insert_index);
     const additional_indent = if (add_block_indentation) detectIndentation(tree.source) else "";
 
     const new_text_len =
