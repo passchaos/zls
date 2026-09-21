@@ -36,6 +36,7 @@ pub const Declaration = struct {
         constant,
         field,
         function,
+        container_function,
         test_function,
     };
 
@@ -56,6 +57,7 @@ pub const DeclarationPosition = struct {
 };
 
 comptime {
+    assert(@sizeOf(Declaration.Kind) == 1);
     assert(@sizeOf(Declaration) == 3 * @sizeOf(u32));
 }
 
@@ -255,6 +257,7 @@ pub fn initWithDeclarationCapacity(
     const stack_allocator = stack_fallback.get();
     var in_function_stack: std.ArrayList(bool) = try .initCapacity(stack_allocator, 16);
     defer in_function_stack.deinit(stack_allocator);
+    var container_depth: u32 = 0;
 
     while (try walker.next(walker_allocator, tree)) |entry| {
         switch (entry) {
@@ -273,7 +276,7 @@ pub fn initWithDeclarationCapacity(
                         allocator,
                         tree,
                         fn_token + 1,
-                        .function,
+                        if (container_depth == 0) .function else .container_function,
                     );
                 },
                 .test_decl => {
@@ -300,7 +303,10 @@ pub fn initWithDeclarationCapacity(
                 .tagged_union_enum_tag_trailing,
                 .tagged_union_two,
                 .tagged_union_two_trailing,
-                => try in_function_stack.append(stack_allocator, false),
+                => {
+                    container_depth += 1;
+                    try in_function_stack.append(stack_allocator, false);
+                },
 
                 .global_var_decl,
                 .local_var_decl,
@@ -359,7 +365,11 @@ pub fn initWithDeclarationCapacity(
                 .tagged_union_enum_tag_trailing,
                 .tagged_union_two,
                 .tagged_union_two_trailing,
-                => assert(!in_function_stack.pop().?),
+                => {
+                    assert(container_depth != 0);
+                    container_depth -= 1;
+                    assert(!in_function_stack.pop().?);
+                },
                 else => {},
             },
         }
@@ -1642,8 +1652,18 @@ test "declarations and query results stay in source order" {
     defer store.deinit(allocator);
 
     const names = store.declarations.items(.name);
+    const kinds = store.declarations.items(.kind);
     const position_cache = store.declarations.items(.position_cache);
     try std.testing.expectEqual(@as(usize, 7), names.len);
+    try std.testing.expectEqualSlices(Declaration.Kind, &.{
+        .constant,
+        .constant,
+        .field,
+        .container_function,
+        .variable,
+        .test_function,
+        .function,
+    }, kinds);
     try std.testing.expectEqual(store.declarations.len, store.declarations.capacity);
     for (names[1..], names[0 .. names.len - 1]) |current, previous| {
         try std.testing.expect(previous < current);

@@ -41,8 +41,8 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     defer if (prepared_query) |*query| query.deinit(arena);
 
     for (handles.items) |handle| {
-        var analyser = server.initAnalyser(arena, handle);
-        defer analyser.deinit();
+        var analyser: ?Analyser = null;
+        defer if (analyser) |*value| value.deinit();
 
         const trigram_store = handle.trigram_store.getCached();
 
@@ -109,7 +109,11 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                     .variable => .Variable,
                     .constant => .Constant,
                     .field => .Field,
-                    .function => try functionSymbolKind(&analyser, handle, name_token),
+                    .function => .Function,
+                    .container_function => kind: {
+                        if (analyser == null) analyser = server.initAnalyser(arena, handle);
+                        break :kind try containerFunctionSymbolKind(&analyser.?, handle, name_token);
+                    },
                     .test_function => .Method, // there is no SymbolKind that represents a tests,
                 },
                 .location = .{
@@ -126,7 +130,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     return .{ .symbol_informations = symbols.items };
 }
 
-fn functionSymbolKind(
+fn containerFunctionSymbolKind(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
     name_token: std.zig.Ast.TokenIndex,
