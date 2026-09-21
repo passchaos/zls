@@ -12,8 +12,6 @@ const TrigramStore = @import("../TrigramStore.zig");
 const Uri = @import("../Uri.zig");
 
 pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspace.Symbol.Params) error{ OutOfMemory, Canceled }!?types.workspace.Symbol.Result {
-    if (request.query.len == 0) return null;
-
     var workspace_uri_stack = std.heap.stackFallback(512, server.document_store.allocator);
     const workspace_uri_allocator = workspace_uri_stack.get();
     var workspace_uris: std.ArrayList(Uri.SchemeAndPath) = try .initCapacity(workspace_uri_allocator, server.workspaces.items.len);
@@ -38,14 +36,20 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     const declaration_allocator = declaration_stack.get();
     var declaration_buffer: std.ArrayList(TrigramStore.Declaration.Index) = .empty;
     defer declaration_buffer.deinit(declaration_allocator);
-    var prepared_query: ?TrigramStore.Query = if (handles.items.len > 1) try .init(arena, request.query) else null;
+    var prepared_query: ?TrigramStore.Query = if (request.query.len != 0 and handles.items.len > 1) try .init(arena, request.query) else null;
     defer if (prepared_query) |*query| query.deinit(arena);
 
     for (handles.items) |handle| {
         const trigram_store = handle.trigram_store.getCached();
 
         declaration_buffer.clearRetainingCapacity();
-        const declarations = if (prepared_query) |*query|
+        const declarations = if (request.query.len == 0) all: {
+            try declaration_buffer.resize(declaration_allocator, trigram_store.declarations.len);
+            for (declaration_buffer.items, 0..) |*declaration, index| {
+                declaration.* = @enumFromInt(index);
+            }
+            break :all declaration_buffer.items;
+        } else if (prepared_query) |*query|
             try trigram_store.declarationSliceForPreparedQuery(declaration_allocator, query, &declaration_buffer)
         else
             try trigram_store.declarationSliceForQuery(declaration_allocator, request.query, &declaration_buffer);

@@ -47,6 +47,20 @@ test "workspace symbols" {
         \\const PotatoDoctor = struct {};
     , .base_directory = "/farm/" });
 
+    try testDocumentSymbol(&ctx, "",
+        \\Constant SalamanderCrab
+        \\Function salamander_crab
+        \\Method 国際化
+        \\Constant Dog
+        \\Constant sheltie
+        \\Variable @"Mr Crabs"
+        \\Method walk the dog
+        \\Constant Lion
+        \\Function evolveToMonke
+        \\Function roar
+        \\Constant lion_for_real
+    );
+
     try testDocumentSymbol(&ctx, "Sal",
         \\Constant SalamanderCrab
         \\Function salamander_crab
