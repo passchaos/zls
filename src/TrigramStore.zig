@@ -33,7 +33,9 @@ pub const Declaration = struct {
 
     pub const Kind = enum {
         variable,
+        container_variable,
         constant,
+        container_constant,
         field,
         function,
         container_function,
@@ -319,8 +321,8 @@ pub fn initWithDeclarationCapacity(
                     const main_token = tree.nodeMainToken(node);
 
                     const kind: Declaration.Kind = switch (tree.tokenTag(main_token)) {
-                        .keyword_var => .variable,
-                        .keyword_const => .constant,
+                        .keyword_var => if (container_depth == 0) .variable else .container_variable,
+                        .keyword_const => if (container_depth == 0) .constant else .container_constant,
                         else => unreachable,
                     };
 
@@ -1657,7 +1659,7 @@ test "declarations and query results stay in source order" {
     try std.testing.expectEqual(@as(usize, 7), names.len);
     try std.testing.expectEqualSlices(Declaration.Kind, &.{
         .constant,
-        .constant,
+        .container_constant,
         .field,
         .container_function,
         .variable,

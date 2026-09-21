@@ -1,6 +1,7 @@
 //! Implementation of [`workspace/symbol`](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol)
 
 const std = @import("std");
+const Ast = std.zig.Ast;
 
 const lsp = @import("lsp");
 const types = lsp.types;
@@ -43,6 +44,8 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
     for (handles.items) |handle| {
         var analyser: ?Analyser = null;
         defer if (analyser) |*value| value.deinit();
+        var last_container_scope: Analyser.Scope.OptionalIndex = .none;
+        var last_container_name: ?[]const u8 = null;
 
         const trigram_store = handle.trigram_store.getCached();
 
@@ -81,6 +84,19 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                 raw_name,
                 handle.tree.tokenTag(name_token),
             );
+            const container_name = switch (kind) {
+                .container_variable,
+                .container_constant,
+                .field,
+                .container_function,
+                => try containerNameAtIndex(
+                    handle,
+                    start,
+                    &last_container_scope,
+                    &last_container_name,
+                ),
+                .variable, .constant, .function, .test_function => null,
+            };
 
             const start_position: offsets.Position = if (cached_position.line) |line| blk: {
                 const line_start = if (std.mem.findScalarLast(u8, handle.tree.source[0..loc.start], '\n')) |newline| newline + 1 else 0;
@@ -107,7 +123,8 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                 .name = name,
                 .kind = switch (kind) {
                     .variable => .Variable,
-                    .constant => .Constant,
+                    .container_variable => .Variable,
+                    .constant, .container_constant => .Constant,
                     .field => .Field,
                     .function => .Function,
                     .container_function => kind: {
@@ -123,11 +140,69 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                         .end = end_position,
                     },
                 },
+                .containerName = container_name,
             });
         }
     }
 
     return .{ .symbol_informations = symbols.items };
+}
+
+fn containerNameAtIndex(
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+    last_scope: *Analyser.Scope.OptionalIndex,
+    last_name: *?[]const u8,
+) error{OutOfMemory}!?[]const u8 {
+    const document_scope = try handle.getDocumentScope();
+    var scope = Analyser.innermostScopeAtIndex(document_scope, source_index);
+    while (!document_scope.getScopeTag(scope).isContainer()) {
+        scope = document_scope.getScopeParent(scope).unwrap() orelse return null;
+    }
+    if (scope == .root) return null;
+    if (last_scope.unwrap() == scope) return last_name.*;
+
+    const tree = &handle.tree;
+    const container_node = document_scope.getScopeAstNode(scope) orelse return null;
+    const container_loc = offsets.nodeToLoc(tree, container_node);
+    var ancestor = document_scope.getScopeParent(scope);
+    const name = name: while (ancestor.unwrap()) |ancestor_scope| : (ancestor = document_scope.getScopeParent(ancestor_scope)) {
+        for (document_scope.getScopeDeclarationsConst(ancestor_scope)) |declaration_index| {
+            const declaration = document_scope.declarations.get(@intFromEnum(declaration_index));
+            const declaration_node = switch (declaration) {
+                .ast_node => |node| node,
+                else => continue,
+            };
+            if (!declarationContainsLoc(tree, declaration_node, container_loc)) continue;
+            const name_token = declaration.nameToken(tree);
+            break :name @import("document_symbol.zig").tokenNameMaybeQuotes(tree, name_token);
+        }
+    } else null;
+
+    last_scope.* = scope.toOptional();
+    last_name.* = name;
+    return name;
+}
+
+fn declarationContainsLoc(tree: *const Ast, node: Ast.Node.Index, inner: offsets.Loc) bool {
+    switch (tree.nodeTag(node)) {
+        .global_var_decl,
+        .local_var_decl,
+        .simple_var_decl,
+        .aligned_var_decl,
+        .container_field,
+        .container_field_init,
+        .container_field_align,
+        .fn_proto,
+        .fn_proto_multi,
+        .fn_proto_one,
+        .fn_proto_simple,
+        .fn_decl,
+        => {},
+        else => return false,
+    }
+    const outer = offsets.nodeToLoc(tree, node);
+    return outer.start <= inner.start and inner.end <= outer.end;
 }
 
 fn containerFunctionSymbolKind(

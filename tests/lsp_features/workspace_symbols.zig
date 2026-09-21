@@ -49,26 +49,26 @@ test "workspace symbols" {
 
     try testDocumentSymbol(&ctx, "",
         \\Constant SalamanderCrab
-        \\Function salamander_crab
+        \\Function salamander_crab [SalamanderCrab]
         \\Method 国際化
         \\Constant Dog
-        \\Constant sheltie
-        \\Variable @"Mr Crabs"
+        \\Constant sheltie [Dog]
+        \\Variable @"Mr Crabs" [Dog]
         \\Method walk the dog
         \\Constant Lion
-        \\Function evolveToMonke
-        \\Function roar
-        \\Constant lion_for_real
+        \\Function evolveToMonke [Lion]
+        \\Function roar [Lion]
+        \\Constant lion_for_real [Lion2]
     );
 
     try testDocumentSymbol(&ctx, "Sal",
         \\Constant SalamanderCrab
-        \\Function salamander_crab
+        \\Function salamander_crab [SalamanderCrab]
     );
     try testDocumentSymbol(&ctx, "_cr___a_b_",
         \\Constant SalamanderCrab
-        \\Function salamander_crab
-        \\Variable @"Mr Crabs"
+        \\Function salamander_crab [SalamanderCrab]
+        \\Variable @"Mr Crabs" [Dog]
     );
     try testDocumentSymbol(&ctx, "dog",
         \\Constant Dog
@@ -79,10 +79,10 @@ test "workspace symbols" {
     try testDocumentSymbol(&ctx, "S", "");
     try testDocumentSymbol(&ctx, "lion",
         \\Constant Lion
-        \\Constant lion_for_real
+        \\Constant lion_for_real [Lion2]
     );
     try testDocumentSymbol(&ctx, "monke",
-        \\Function evolveToMonke
+        \\Function evolveToMonke [Lion]
     );
     try testDocumentSymbol(&ctx, "国際",
         \\Method 国際化
@@ -129,12 +129,12 @@ test "workspace symbols distinguish methods from static functions" {
     });
 
     try testDocumentSymbol(&ctx, "Function",
-        \\Function staticFunction
+        \\Function staticFunction [Service]
     );
     try testDocumentSymbol(&ctx, "Method",
-        \\Method valueMethod
-        \\Method pointerMethod
-        \\Method genericMethod
+        \\Method valueMethod [Service]
+        \\Method pointerMethod [Service]
+        \\Method genericMethod [Service]
     );
 }
 
@@ -190,11 +190,14 @@ fn testDocumentSymbol(ctx: *Context, query: []const u8, expected: []const u8) !v
 
     for (response.symbol_informations) |workspace_symbol| {
         std.debug.assert(workspace_symbol.tags == null); // unsupported for now
-        std.debug.assert(workspace_symbol.containerName == null); // unsupported for now
-        try actual.print(allocator, "{t} {s}\n", .{
+        try actual.print(allocator, "{t} {s}", .{
             workspace_symbol.kind,
             workspace_symbol.name,
         });
+        if (workspace_symbol.containerName) |container_name| {
+            try actual.print(allocator, " [{s}]", .{container_name});
+        }
+        try actual.append(allocator, '\n');
     }
 
     if (actual.items.len != 0) {
