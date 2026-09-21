@@ -1188,7 +1188,7 @@ fn getDiscardLoc(tree: *const Ast, loc: offsets.Loc) ?offsets.Loc {
 /// takes the location of a capture ie `value` from `...|value...|...`.
 /// returns the location from '|' until '|'
 fn getCaptureLoc(text: []const u8, loc: offsets.Loc) ?offsets.Loc {
-    const start_pipe_position = blk: {
+    var start_pipe_position = blk: {
         var i = loc.start;
         while (true) : (i -= 1) {
             if (text[i] == '|') break;
@@ -1197,11 +1197,22 @@ fn getCaptureLoc(text: []const u8, loc: offsets.Loc) ?offsets.Loc {
         break :blk i;
     };
 
-    const end_pipe_position = (std.mem.findScalarPos(u8, text, start_pipe_position + 1, '|') orelse
+    var end_pipe_position = (std.mem.findScalarPos(u8, text, start_pipe_position + 1, '|') orelse
         return null) + 1;
 
     const trimmed = std.mem.trim(u8, text[start_pipe_position + 1 .. end_pipe_position - 1], &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
+
+    while (end_pipe_position < text.len and switch (text[end_pipe_position]) {
+        ' ', '\t' => true,
+        else => false,
+    }) : (end_pipe_position += 1) {}
+    if (end_pipe_position == text.len or text[end_pipe_position] == '\n' or text[end_pipe_position] == '\r') {
+        while (start_pipe_position != 0 and switch (text[start_pipe_position - 1]) {
+            ' ', '\t' => true,
+            else => false,
+        }) : (start_pipe_position -= 1) {}
+    }
 
     return .{ .start = start_pipe_position, .end = end_pipe_position };
 }
@@ -1220,6 +1231,18 @@ test getCaptureLoc {
             return std.testing.expect(false);
         const captext = text[caploc.start..caploc.end];
         try std.testing.expectEqualStrings(text, captext);
+    }
+    {
+        const text = "|i|  {}";
+        const caploc = getCaptureLoc(text, .{ .start = 1, .end = 2 }) orelse
+            return std.testing.expect(false);
+        try std.testing.expectEqualStrings("|i|  ", text[caploc.start..caploc.end]);
+    }
+    {
+        const text = "|i|  \n{}";
+        const caploc = getCaptureLoc(text, .{ .start = 1, .end = 2 }) orelse
+            return std.testing.expect(false);
+        try std.testing.expectEqualStrings("|i|  ", text[caploc.start..caploc.end]);
     }
 
     try std.testing.expect(getCaptureLoc("||", .{ .start = 1, .end = 2 }) == null);

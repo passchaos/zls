@@ -463,7 +463,6 @@ test "discard capture name" {
 }
 
 test "remove capture" {
-    // TODO fix whitespace
     try testDiagnostic(
         \\test {
         \\    const maybe: ?u32 = 5;
@@ -472,7 +471,20 @@ test "remove capture" {
     ,
         \\test {
         \\    const maybe: ?u32 = 5;
-        \\    if (maybe)  {}
+        \\    if (maybe) {}
+        \\}
+    , .{ .filter_title = "remove capture" });
+    try testDiagnostic(
+        \\test {
+        \\    const maybe: ?u32 = 5;
+        \\    if (maybe) |value|
+        \\        {}
+        \\}
+    ,
+        \\test {
+        \\    const maybe: ?u32 = 5;
+        \\    if (maybe)
+        \\        {}
         \\}
     , .{ .filter_title = "remove capture" });
 }
