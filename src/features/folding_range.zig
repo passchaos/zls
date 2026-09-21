@@ -403,7 +403,26 @@ pub fn generateFoldingRanges(allocator: std.mem.Allocator, tree: *const Ast, enc
 
         switch (tree.nodeTag(node)) {
             .root => continue,
-            // TODO: Should folding multiline condition expressions also be supported? Ditto for the other control flow structures.
+
+            .if_simple,
+            .@"if",
+            => {
+                const if_node = ast.fullIf(tree, node).?;
+                try builder.add(null, if_node.ast.if_token + 1, ast.lastToken(tree, if_node.ast.cond_expr), .exclusive, .inclusive);
+            },
+            .while_simple,
+            .while_cont,
+            .@"while",
+            => {
+                const while_node = ast.fullWhile(tree, node).?;
+                try builder.add(null, while_node.ast.while_token + 1, ast.lastToken(tree, while_node.ast.cond_expr), .exclusive, .inclusive);
+            },
+            .for_simple,
+            .@"for",
+            => {
+                const for_node = ast.fullFor(tree, node).?;
+                try builder.add(null, for_node.ast.for_token + 1, ast.lastToken(tree, for_node.ast.inputs[for_node.ast.inputs.len - 1]), .exclusive, .inclusive);
+            },
 
             .fn_proto,
             .fn_proto_multi,

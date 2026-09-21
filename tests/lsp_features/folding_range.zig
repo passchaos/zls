@@ -104,6 +104,17 @@ test "if" {
         .{ .startLine = 0, .startCharacter = 24, .endLine = 1, .endCharacter = 11 },
         .{ .startLine = 2, .startCharacter = 8, .endLine = 3, .endCharacter = 11 },
     });
+    try testFoldingRange(
+        \\const foo = if (
+        \\    alpha and
+        \\    beta
+        \\) {
+        \\    // then
+        \\};
+    , &.{
+        .{ .startLine = 3, .startCharacter = 3, .endLine = 4, .endCharacter = 11 },
+        .{ .startLine = 0, .startCharacter = 16, .endLine = 2, .endCharacter = 8 },
+    });
 }
 
 test "for/while" {
@@ -141,6 +152,22 @@ test "for/while" {
     , &.{
         .{ .startLine = 0, .startCharacter = 26, .endLine = 1, .endCharacter = 11 },
         .{ .startLine = 2, .startCharacter = 8, .endLine = 3, .endCharacter = 6 },
+    });
+    try testFoldingRange(
+        \\const result = while (
+        \\    alpha and
+        \\    beta
+        \\) {};
+    , &.{
+        .{ .startLine = 0, .startCharacter = 22, .endLine = 2, .endCharacter = 8 },
+    });
+    try testFoldingRange(
+        \\const result = for (
+        \\    first,
+        \\    second,
+        \\) |a, b| {};
+    , &.{
+        .{ .startLine = 0, .startCharacter = 20, .endLine = 2, .endCharacter = 10 },
     });
 }
 
