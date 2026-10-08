@@ -1694,7 +1694,7 @@ fn resolveArgsTupleType(analyser: *Analyser, function_type: Type) Error!?Type {
     return try Type.createTupleType(analyser, parameter_types);
 }
 
-fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const []const u8 {
+pub fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const []const u8 {
     if (!container_type.is_type_val) return null;
     return switch (container_type.data) {
         .tuple => |fields| blk: {
@@ -2645,6 +2645,11 @@ fn resolveAggregateLiteralValue(
     aggregate_type: InternPool.Index,
     options: ResolveOptions,
 ) Error!?InternPool.Index {
+    if (analyser.ip.indexToKey(aggregate_type) == .optional_type) {
+        const payload_type = analyser.ip.indexToKey(aggregate_type).optional_type.payload_type;
+        const value = try analyser.resolveAggregateLiteralValue(payload_type, options) orelse return null;
+        return try analyser.ip.get(.{ .optional_value = .{ .ty = aggregate_type, .val = value } });
+    }
     const tree = &options.node_handle.handle.tree;
     switch (tree.nodeTag(options.node_handle.node)) {
         .struct_init_one,
@@ -2687,18 +2692,30 @@ fn resolveAggregateLiteralValue(
     }
     var buffer: [2]Ast.Node.Index = undefined;
     const array_init = tree.fullArrayInit(&buffer, options.node_handle.node).?;
-    const child_type, const len = switch (analyser.ip.indexToKey(aggregate_type)) {
+    const aggregate_key = analyser.ip.indexToKey(aggregate_type);
+    const child_type, const len = switch (aggregate_key) {
         .array_type => |array| .{ array.child, array.len },
         .vector_type => |vector| .{ vector.child, vector.len },
+        .tuple_type => |tuple| .{ InternPool.Index.none, tuple.types.len },
         else => return null,
     };
     if (len != array_init.ast.elements.len) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, array_init.ast.elements.len);
     defer analyser.gpa.free(values);
-    for (array_init.ast.elements, values) |element, *value| {
-        value.* = try analyser.resolveCoercedIPValue(child_type, .of(element, options.node_handle.handle)) orelse
-            try analyser.ip.getUnknown(child_type);
+    for (array_init.ast.elements, values, 0..) |element, *value, index| {
+        const element_type = if (aggregate_key == .tuple_type)
+            aggregate_key.tuple_type.types.at(@intCast(index), analyser.ip)
+        else
+            child_type;
+        var element_options = options;
+        element_options.node_handle.node = element;
+        value.* = try analyser.resolveCoercedIPValue(element_type, element_options) orelse
+            try analyser.ip.getUnknown(element_type);
+        if (aggregate_key == .tuple_type) {
+            const fixed_value = aggregate_key.tuple_type.values.at(@intCast(index), analyser.ip);
+            if (fixed_value != .none and fixed_value != value.*) return null;
+        }
     }
     return try analyser.ip.get(.{ .aggregate = .{
         .ty = aggregate_type,
@@ -8132,7 +8149,7 @@ fn resolveStructTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try analyser.arena.alloc(InternPool.Index, resolved_types.len);
     for (field_types, resolved_types) |*index, ty| index.* = ty.ipIndex() orelse .unknown_type;
-    return analyser.createComptimeStructType(layout, backing_type, names, resolved_types, field_types, alignments);
+    return analyser.createComptimeStructType(layout, backing_type, names, resolved_types, field_types, alignments, null);
 }
 
 fn createComptimeStructType(
@@ -8143,8 +8160,10 @@ fn createComptimeStructType(
     resolved_types: []const Type,
     field_types: []const InternPool.Index,
     alignments: []const u16,
+    defaults: ?[]const ?Type,
 ) Error!?Type {
     if (names.len != resolved_types.len or names.len != field_types.len or names.len != alignments.len) return null;
+    if (defaults) |values| if (values.len != names.len) return null;
     var backing_type = initial_backing_type;
     if (layout == .@"packed") {
         var total_bits: u64 = 0;
@@ -8167,9 +8186,13 @@ fn createComptimeStructType(
     var fields: std.array_hash_map.Auto(InternPool.String, InternPool.Struct.Field) = .empty;
     errdefer fields.deinit(analyser.gpa);
     try fields.ensureTotalCapacity(analyser.gpa, names.len);
-    for (names, field_types, alignments) |name, field_type, alignment| {
+    for (names, field_types, alignments, 0..) |name, field_type, alignment, index| {
         const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
-        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type, .alignment = alignment });
+        fields.putAssumeCapacityNoClobber(name_index, .{
+            .ty = field_type,
+            .alignment = alignment,
+            .default_value = if (defaults) |values| if (values[index]) |value| value.ipIndex() orelse .none else .none else .none,
+        });
     }
     const struct_index = try analyser.ip.createStruct(.{
         .fields = fields,
@@ -8182,10 +8205,11 @@ fn createComptimeStructType(
     fields = .empty;
     const struct_type = try analyser.ip.get(.{ .struct_type = struct_index });
     const generated_fields = try analyser.arena.alloc(GeneratedField, names.len);
-    for (generated_fields, names, resolved_types, alignments) |*field, name, ty, alignment| field.* = .{
+    for (generated_fields, names, resolved_types, alignments, 0..) |*field, name, ty, alignment, index| field.* = .{
         .name = name,
         .ty = ty,
         .alignment = alignment,
+        .default_value = if (defaults) |values| values[index] else null,
     };
     try analyser.generated_struct_fields.put(analyser.gpa, struct_type, generated_fields);
     return Type.fromIP(analyser, .type_type, struct_type);
@@ -8260,14 +8284,23 @@ pub fn resolveComptimeStructTypeValue(
     const attribute_items = attributes_sequence.backing[attributes_sequence.offset..][0..attributes_sequence.len];
     const alignments = try analyser.arena.alloc(u16, attribute_items.len);
     @memset(alignments, 0);
-    for (attribute_items, alignments) |attributes, *alignment| {
+    const defaults = try analyser.arena.alloc(?Type, attribute_items.len);
+    @memset(defaults, null);
+    for (attribute_items, alignments, defaults, resolved_types) |attributes, *alignment, *default, field_type| {
         if (comptime_eval.Value.field(attributes, "comptime")) |value| {
             if (comptimeBoolValue(value) orelse return null) return null;
         }
         if (comptime_eval.Value.field(attributes, "default_value_ptr")) |value| {
             switch (optionalComptimeValue(analyser, value) orelse return null) {
                 .absent => {},
-                .payload => return null,
+                .payload => |pointer| {
+                    const default_value = try analyser.resolveDerefType(pointer) orelse return null;
+                    default.* = if ((try default_value.typeOf(analyser)).eql(field_type)) default_value else coerce: {
+                        const type_index = field_type.ipIndex() orelse return null;
+                        const value_index = try analyser.coerceComptimeIPValue(type_index, default_value) orelse return null;
+                        break :coerce Type.fromIP(analyser, type_index, value_index);
+                    };
+                },
             }
         }
         if (comptime_eval.Value.field(attributes, "align")) |value| {
@@ -8288,6 +8321,7 @@ pub fn resolveComptimeStructTypeValue(
         resolved_types,
         field_types,
         alignments,
+        defaults,
     );
 }
 
@@ -12641,9 +12675,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                             return try analyser.enumValue(decl_type, tag);
                         }
                     }
-                    const ip_ty = decl_type.ipIndex() orelse break :num;
-                    const ip_index = try analyser.resolveCoercedIPValue(ip_ty, .of(init_node, handle)) orelse break :num;
-                    return Type.fromIP(analyser, analyser.ip.typeOf(ip_index), ip_index);
+                    if (decl_type.ipIndex()) |ip_ty| {
+                        if (try analyser.resolveCoercedIPValue(ip_ty, .of(init_node, handle))) |ip_index| {
+                            return Type.fromIP(analyser, analyser.ip.typeOf(ip_index), ip_index);
+                        }
+                    }
                 }
                 return try decl_type.instanceTypeVal(analyser);
             }

@@ -27416,7 +27416,7 @@ test "null-terminated slice" {
     });
 }
 
-fn testCompletion(source: []const u8, expected_completions: []const Completion) !void {
+pub fn testCompletion(source: []const u8, expected_completions: []const Completion) !void {
     try testCompletionWithOptions(source, expected_completions, .{});
 }
 

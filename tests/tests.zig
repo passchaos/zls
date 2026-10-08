@@ -12,6 +12,7 @@ comptime {
     // LSP features
     _ = @import("lsp_features/code_actions.zig");
     _ = @import("lsp_features/completion.zig");
+    _ = @import("lsp_features/comptime_result_locations.zig");
     _ = @import("lsp_features/definition.zig");
     _ = @import("lsp_features/diagnostics.zig");
     _ = @import("lsp_features/document_symbol.zig");

@@ -659,8 +659,18 @@ pub const Interpreter = struct {
     const ResultLocation = union(enum) {
         none,
         ty: Type,
+        reference: ResultReference,
         destructure: []DestructureComponent,
+
+        fn resultType(location: ResultLocation) ?Type {
+            return switch (location) {
+                .none, .destructure => null,
+                .ty => |ty| ty,
+                .reference => |reference| reference.ty,
+            };
+        }
     };
+    const ResultReference = struct { target: *Value.Reference, ty: Type };
     const DestructureComponent = union(enum) {
         discard,
         declaration: struct {
@@ -668,7 +678,7 @@ pub const Interpreter = struct {
             ty: ?Type,
             result: ?EvaluatedSource = null,
         },
-        reference: struct { target: *Value.Reference, ty: Type },
+        reference: ResultReference,
 
         fn resultType(component: DestructureComponent) ?Type {
             return switch (component) {
@@ -700,6 +710,7 @@ pub const Interpreter = struct {
         quota: usize = default_step_quota,
         depth: usize = 0,
         expression_depth: usize = 0,
+        result_pointer_needed: std.AutoHashMapUnmanaged(Analyser.NodeWithHandle, ?bool) = .empty,
 
         fn raiseQuota(self: *Budget, requested: u32) void {
             const new_quota = @min(@as(usize, requested), max_step_quota);
@@ -732,7 +743,7 @@ pub const Interpreter = struct {
         value: Type,
         source_node: ?Ast.Node.Index,
         capture_target: ?CaptureTarget = null,
-        destructured: bool = false,
+        result_stored: bool = false,
     };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
@@ -1773,14 +1784,42 @@ pub const Interpreter = struct {
     }
 
     pub fn evaluateArrayInit(self: *Interpreter, handle: *Handle, destination: Type, elements: []const Ast.Node.Index) Error!?Type {
+        return self.evaluateArrayInitWithTarget(handle, destination, elements, null, true);
+    }
+
+    fn evaluateArrayInitWithTarget(self: *Interpreter, handle: *Handle, destination: Type, elements: []const Ast.Node.Index, target: ?*Value.Reference, coerce_elements: bool) Error!?Type {
         const len = self.assignmentAggregateLength(destination) orelse return null;
         if (len != elements.len or len > self.budget.steps) return destination.instanceTypeVal(self.analyser);
+        // Literal elements cannot observe earlier stores. Build those arrays
+        // once instead of copying their backing storage for every element.
+        const needs_element_stores = target != null and for (elements) |element| {
+            if (!isLiteralInitializer(&handle.tree, element, 0)) break true;
+        } else false;
+        if (needs_element_stores) {
+            const reference = target.?;
+            if (!try self.materializeAggregateReference(handle, .{ .target = reference, .ty = destination })) return null;
+            for (elements, 0..) |element, index| {
+                const access: Value.Reference.Access = if (destination.isTupleType(self.analyser)) .{ .tuple_index = index } else .{ .index = index };
+                const element_type = try self.assignmentChildType(destination, access) orelse return null;
+                _ = try self.evalSourceWithResultLocation(handle, element, .{ .reference = .{
+                    .target = try self.extendReference(reference, access),
+                    .ty = element_type,
+                } }) orelse return null;
+            }
+            return self.readReference(reference);
+        }
         const values = try self.analyser.arena.alloc(Type, len);
         for (elements, values, 0..) |element, *value, index| {
             const element_type = try self.assignmentChildType(destination, .{ .index = index }) orelse return null;
-            value.* = try self.evaluateTypedExpression(handle, element, element_type) orelse
+            value.* = if (coerce_elements)
+                try self.evaluateTypedExpression(handle, element, element_type) orelse
+                    try element_type.instanceTypeVal(self.analyser) orelse return null
+            else if (try self.evalTypedSource(handle, element, element_type)) |evaluated|
+                evaluated.value
+            else
                 try element_type.instanceTypeVal(self.analyser) orelse return null;
         }
+        if (!coerce_elements) return @as(?Type, try Value.create(self.analyser, destination, .{ .array = values }));
         if (destination.ipIndex()) |type_index| intern: {
             const indices = try self.analyser.arena.alloc(InternPool.Index, len);
             for (values, indices) |value, *index| {
@@ -1796,6 +1835,21 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(self.analyser, destination, .{ .array = values }));
     }
 
+    fn isLiteralInitializer(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+        if (depth == 64) return false;
+        return switch (tree.nodeTag(node)) {
+            .number_literal, .char_literal, .string_literal, .multiline_string_literal, .enum_literal => true,
+            .identifier => blk: {
+                const name = tree.tokenSlice(tree.nodeMainToken(node));
+                break :blk std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false") or
+                    std.mem.eql(u8, name, "null") or std.mem.eql(u8, name, "undefined");
+            },
+            .grouped_expression => isLiteralInitializer(tree, tree.nodeData(node).node_and_token[0], depth + 1),
+            .negation => isLiteralInitializer(tree, tree.nodeData(node).node, depth + 1),
+            else => false,
+        };
+    }
+
     fn isUnionType(self: *Interpreter, ty: Type) bool {
         if (ty.isUnionType()) return true;
         const index = ty.ipIndex() orelse return false;
@@ -1803,6 +1857,10 @@ pub const Interpreter = struct {
     }
 
     pub fn evaluateStructInit(self: *Interpreter, handle: *Handle, destination: Type, field_nodes: []const Ast.Node.Index) Error!?Type {
+        return self.evaluateStructInitWithTarget(handle, destination, field_nodes, null, true);
+    }
+
+    fn evaluateStructInitWithTarget(self: *Interpreter, handle: *Handle, destination: Type, field_nodes: []const Ast.Node.Index, target: ?*Value.Reference, coerce_union_payload: bool) Error!?Type {
         const analyser = self.analyser;
         const tree = &handle.tree;
         const is_union = self.isUnionType(destination);
@@ -1814,6 +1872,20 @@ pub const Interpreter = struct {
         } else null;
         const len = if (ip_struct) |info| info.fields.count() else field_nodes.len;
         if (field_nodes.len > len or len > self.budget.steps) return destination.instanceTypeVal(analyser);
+        if (target) |reference| {
+            if (is_union) {
+                const name = try analyser.identifierTokenName(tree, tree.firstToken(field_nodes[0]) - 2) orelse return null;
+                const field_type = try self.assignmentChildType(destination, .{ .field = name }) orelse return null;
+                const current = try self.readReference(reference) orelse return null;
+                const active = try analyser.resolveKnownUnionFieldName(current);
+                const value = if (active != null and std.mem.eql(u8, active.?, name))
+                    try analyser.resolveFieldAccess(current, name) orelse return null
+                else
+                    try field_type.instanceTypeVal(analyser) orelse return null;
+                const fields = try analyser.arena.dupe(Value.Field, &.{.{ .name = name, .value = value }});
+                if (!try self.writeReference(handle, reference, try Value.create(analyser, destination, .{ .fields = fields }), null)) return null;
+            } else if (!try self.materializeAggregateReference(handle, .{ .target = reference, .ty = destination })) return null;
+        }
         const fields = try analyser.arena.alloc(Value.Field, len);
         var initialized: std.StringHashMapUnmanaged(void) = .empty;
         defer initialized.deinit(analyser.gpa);
@@ -1824,20 +1896,44 @@ pub const Interpreter = struct {
             if (entry.found_existing) return destination.instanceTypeVal(analyser);
             const field_type = try self.assignmentChildType(destination, .{ .field = name }) orelse
                 return destination.instanceTypeVal(analyser);
+            if (target) |reference| {
+                _ = try self.evalSourceWithResultLocation(handle, field_node, .{ .reference = .{
+                    .target = try self.extendReference(reference, .{ .field = name }),
+                    .ty = field_type,
+                } }) orelse return null;
+                field.name = name;
+                continue;
+            }
             const evaluated = try self.evalTypedSource(handle, field_node, field_type) orelse return destination.instanceTypeVal(analyser);
             field.* = .{
                 .name = name,
-                .value = try self.coerceFromSource(handle, field_type, evaluated.value, evaluated.source_node, null, !is_union) orelse
+                // Untyped union literals retain their source types until the
+                // caller applies assignment or argument coercion.
+                .value = if (is_union and !coerce_union_payload) evaluated.value else try self.coerceFromSource(handle, field_type, evaluated.value, evaluated.source_node, null, !is_union) orelse
                     return destination.instanceTypeVal(analyser),
             };
         }
+        if (target) |reference| {
+            // Later initializers may mutate fields that were already written.
+            const current = try self.readReference(reference) orelse return null;
+            for (fields[0..field_nodes.len]) |*field| {
+                field.value = try analyser.resolveFieldAccess(current, field.name) orelse return null;
+            }
+        }
         if (ip_struct) |info| {
             var next = field_nodes.len;
-            for (info.fields.keys(), info.fields.values()) |name_index, field| {
+            const generated_fields = analyser.generated_struct_fields.get(destination.ipIndex().?);
+            for (info.fields.keys(), info.fields.values(), 0..) |name_index, field, index| {
                 const name = try analyser.ip.string_pool.stringToSliceAlloc(analyser.store.io, analyser.arena, name_index);
                 if (initialized.contains(name)) continue;
-                if (field.default_value == .none) return destination.instanceTypeVal(analyser);
-                fields[next] = .{ .name = name, .value = Type.fromIP(analyser, field.ty, field.default_value) };
+                const default = if (generated_fields) |generated| generated[index].default_value else null;
+                fields[next] = .{
+                    .name = name,
+                    .value = default orelse if (field.default_value != .none)
+                        Type.fromIP(analyser, field.ty, field.default_value)
+                    else
+                        return destination.instanceTypeVal(analyser),
+                };
                 next += 1;
             }
         }
@@ -3260,23 +3356,118 @@ pub const Interpreter = struct {
         return self.evalSourceWithType(handle, node, null);
     }
 
+    fn aggregateResultReference(self: *Interpreter, handle: *Handle, result: ResultReference) Error!?ResultReference {
+        var reference = result;
+        while (true) {
+            const current = try self.readReference(reference.target) orelse return null;
+            const access: Value.Reference.Access, const payload_type: Type, const payload: Type = if (self.optionalPayloadType(reference.ty)) |ty| payload: {
+                const value = try self.analyser.resolveOptionalUnwrap(current) orelse
+                    try ty.instanceTypeVal(self.analyser) orelse return null;
+                break :payload .{ .optional_payload, ty, value };
+            } else if (self.errorUnionTypes(reference.ty)) |types| payload: {
+                const value = if (try self.errorUnionValue(current)) |value| switch (value) {
+                    .payload => |value_payload| value_payload,
+                    .failure => try types.payload.instanceTypeVal(self.analyser) orelse return null,
+                } else try types.payload.instanceTypeVal(self.analyser) orelse return null;
+                break :payload .{ .error_union_payload, types.payload, value };
+            } else return reference;
+            const value = try Value.create(self.analyser, reference.ty, switch (access) {
+                .optional_payload => .{ .optional = payload },
+                .error_union_payload => .{ .error_union = .{ .payload = payload } },
+                else => unreachable,
+            });
+            if (!try self.writeReference(handle, reference.target, value, null)) return null;
+            reference = .{ .target = try self.extendReference(reference.target, access), .ty = payload_type };
+        }
+    }
+
+    fn materializeAggregateReference(self: *Interpreter, handle: *Handle, reference: ResultReference) Error!bool {
+        const analyser = self.analyser;
+        const current = try self.readReference(reference.target) orelse return false;
+        const value = if (self.assignmentAggregateLength(reference.ty)) |len| array: {
+            if (Value.elements(current) != null) return true;
+            if (len > self.budget.steps) return false;
+            const items = try analyser.arena.alloc(Type, len);
+            for (items, 0..) |*item, index| {
+                item.* = try analyser.resolveBracketAccessType(current, .{ .single = index }) orelse unknown: {
+                    const ty = try self.assignmentChildType(reference.ty, .{ .index = index }) orelse return false;
+                    break :unknown try ty.instanceUnchecked(analyser);
+                };
+            }
+            break :array try Value.create(analyser, reference.ty, .{ .array = items });
+        } else fields: {
+            if (Value.fieldEntries(current) != null) return true;
+            const names = try analyser.metaFieldNames(reference.ty) orelse return false;
+            if (names.len > self.budget.steps) return false;
+            const fields = try analyser.arena.alloc(Value.Field, names.len);
+            for (names, fields) |name, *field| {
+                const ty = try self.assignmentChildType(reference.ty, .{ .field = name }) orelse return false;
+                field.* = .{
+                    .name = name,
+                    .value = try analyser.resolveFieldAccess(current, name) orelse try ty.instanceUnchecked(analyser),
+                };
+            }
+            break :fields try Value.create(analyser, reference.ty, .{ .fields = fields });
+        };
+        return self.writeReference(handle, reference.target, value, null);
+    }
+
+    fn aggregateInitResult(self: *Interpreter, handle: *Handle, value: Type, reference: ?ResultReference, source_node: ?Ast.Node.Index) Error!?EvaluatedSource {
+        if (self.pending_flow != null) return null;
+        if (reference) |target| {
+            if (!try self.writeReference(handle, target.target, value, source_node)) return null;
+            return self.storedResult();
+        }
+        return .{ .value = value, .source_node = source_node };
+    }
+
     fn evalSourceWithType(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: ?Type) Error!?EvaluatedSource {
         return self.evalSourceWithResultLocation(handle, node, if (destination) |ty| .{ .ty = ty } else .none);
     }
 
     fn evalSourceWithResultLocation(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, location: ResultLocation) Error!?EvaluatedSource {
-        const result = try self.evalSourceWithResultLocationInner(handle, node, location) orelse return null;
-        if (location != .destructure or result.destructured) return result;
+        const inner_location = if (location == .reference) switch (handle.tree.nodeTag(node)) {
+            .block,
+            .block_semicolon,
+            .block_two,
+            .block_two_semicolon,
+            .if_simple,
+            .@"if",
+            .for_simple,
+            .@"for",
+            .while_simple,
+            .while_cont,
+            .@"while",
+            .@"switch",
+            .switch_comma,
+            .@"orelse",
+            .@"catch",
+            => blk: {
+                const cached = try self.budget.result_pointer_needed.getOrPut(self.analyser.arena, .of(node, handle));
+                if (!cached.found_existing) cached.value_ptr.* = @import("result_location.zig").needsPointer(&handle.tree, node);
+                const requires_pointer = cached.value_ptr.* orelse return null;
+                break :blk if (requires_pointer) location else ResultLocation{ .ty = location.reference.ty };
+            },
+            else => location,
+        } else location;
+        const result = try self.evalSourceWithResultLocationInner(handle, node, inner_location) orelse return null;
+        if (self.pending_flow != null) return null;
+        if (result.result_stored) return result;
+        if (location == .reference) {
+            if (!try self.writeReference(handle, location.reference.target, result.value, result.source_node)) return null;
+            return self.storedResult();
+        }
+        if (location != .destructure) return result;
         const items = try self.mutableElements(result.value) orelse return null;
         if (items.len != location.destructure.len) return null;
         for (location.destructure, items) |*component, item| {
             if (!try self.storeDestructureComponent(handle, component, .{ .value = item, .source_node = null })) return null;
         }
-        return self.destructuredResult();
+        return self.storedResult();
     }
 
     fn evalSourceWithResultLocationInner(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, location: ResultLocation) Error!?EvaluatedSource {
-        const destination: ?Type = if (location == .ty) location.ty else null;
+        const destination = location.resultType();
         if (self.pending_flow != null) return null;
         const tree = &handle.tree;
         if (location == .destructure) {
@@ -3287,10 +3478,14 @@ pub const Interpreter = struct {
                     // Anonymous tuple initializers write each element directly to its
                     // result location. Later elements observe earlier stores.
                     for (literal.ast.elements, location.destructure) |element, *component| {
-                        const result = try self.evalSourceWithType(handle, element, component.resultType()) orelse return null;
-                        if (!try self.storeDestructureComponent(handle, component, result)) return null;
+                        if (component.* == .reference) {
+                            _ = try self.evalSourceWithResultLocation(handle, element, .{ .reference = component.reference }) orelse return null;
+                        } else {
+                            const result = try self.evalSourceWithType(handle, element, component.resultType()) orelse return null;
+                            if (!try self.storeDestructureComponent(handle, component, result)) return null;
+                        }
                     }
-                    return self.destructuredResult();
+                    return self.storedResult();
                 }
             }
         }
@@ -3382,14 +3577,31 @@ pub const Interpreter = struct {
             }
         };
         if (destination) |ty| {
+            const aggregate_type = self.payloadResultLocationType(ty);
             var struct_buffer: [2]Ast.Node.Index = undefined;
+            if (tree.fullArrayInit(&struct_buffer, node)) |literal| {
+                if (literal.ast.type_expr == .none and self.assignmentAggregateLength(aggregate_type) != null) {
+                    if (!self.tick()) return null;
+                    const reference = if (location == .reference)
+                        try self.aggregateResultReference(handle, location.reference) orelse return null
+                    else
+                        null;
+                    const value = try self.evaluateArrayInitWithTarget(handle, aggregate_type, literal.ast.elements, if (reference) |ref| ref.target else null, false) orelse return null;
+                    return self.aggregateInitResult(handle, value, reference, node);
+                }
+            }
             if (tree.fullStructInit(&struct_buffer, node)) |literal| {
                 if (literal.ast.type_expr == .none and
-                    ty.isStructType(self.analyser) and
-                    !ty.isTupleType(self.analyser)) return .{
-                    .value = try self.evaluateStructInit(handle, ty, literal.ast.fields) orelse return null,
-                    .source_node = null,
-                };
+                    ((aggregate_type.isStructType(self.analyser) and !aggregate_type.isTupleType(self.analyser)) or self.isUnionType(aggregate_type)))
+                {
+                    if (!self.tick()) return null;
+                    const reference = if (location == .reference)
+                        try self.aggregateResultReference(handle, location.reference) orelse return null
+                    else
+                        null;
+                    const value = try self.evaluateStructInitWithTarget(handle, aggregate_type, literal.ast.fields, if (reference) |ref| ref.target else null, false) orelse return null;
+                    return self.aggregateInitResult(handle, value, reference, if (self.isUnionType(aggregate_type)) node else null);
+                }
             }
         }
         var block_buffer: [2]Ast.Node.Index = undefined;
@@ -3511,7 +3723,12 @@ pub const Interpreter = struct {
             if (source_tag == .int or source_tag == .comptime_int)
                 return self.pointerFromIntValue(destination, value);
         }
-        const type_index = destination.ipIndex() orelse return value;
+        const type_index = destination.ipIndex() orelse {
+            if (value.ipIndex()) |index| {
+                if (self.analyser.ip.isUndefined(index)) return try destination.instanceUnchecked(self.analyser);
+            }
+            return value;
+        };
         if (type_index == .type_type) return if (value.is_type_val) value else null;
         if (value.data == .ip_index) {
             const coerced = try self.analyser.coerceComptimeIPValue(type_index, value) orelse return null;
@@ -5368,11 +5585,11 @@ pub const Interpreter = struct {
         return destination;
     }
 
-    fn destructuredResult(self: *Interpreter) EvaluatedSource {
+    fn storedResult(self: *Interpreter) EvaluatedSource {
         return .{
             .value = Type.fromIP(self.analyser, .void_type, .void_value),
             .source_node = null,
-            .destructured = true,
+            .result_stored = true,
         };
     }
 
@@ -5552,7 +5769,7 @@ pub const Interpreter = struct {
                     break :blk .{
                         .value = try self.captureBindings(evaluated.value),
                         .source_node = evaluated.source_node,
-                        .destructured = evaluated.destructured,
+                        .result_stored = evaluated.result_stored,
                     };
                 } else null;
                 return .{ .stopped = .{ .target = label.unwrap(), .result = result } };
@@ -5580,8 +5797,10 @@ pub const Interpreter = struct {
                 const target = try self.referenceForNode(handle, lhs) orelse return .unknown;
                 const current = try self.readReference(target) orelse return .unknown;
                 const destination = try current.typeOf(analyser);
-                const evaluated = try self.evalTypedSource(handle, rhs, destination) orelse return .unknown;
-                if (!try self.writeReference(handle, target, evaluated.value, evaluated.source_node)) return .unknown;
+                _ = try self.evalSourceWithResultLocation(handle, rhs, .{ .reference = .{
+                    .target = target,
+                    .ty = destination,
+                } }) orelse return .unknown;
                 return .next;
             },
             .assign_destructure => return self.assignDestructure(handle, node),

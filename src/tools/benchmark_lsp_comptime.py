@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Measure comptime array initialization through actual LSP completion requests."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.dont_write_bytecode = True
+from benchmark_lsp_references import Client
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=Path)
+    parser.add_argument("--element-count", type=int, default=2048)
+    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--rounds", type=int, default=20)
+    args = parser.parse_args()
+    if not 1 <= args.element_count <= 4096 or args.warmup < 0 or args.rounds < 1:
+        parser.error("element-count must be 1..4096, warmup non-negative, and rounds positive")
+
+    count = args.element_count
+    source = "\n".join((
+        "fn Select() type {",
+        f"    var values: [{count}]usize = undefined;",
+        "    values = .{ " + ", ".join(map(str, range(count))) + " };",
+        f"    const length = values[{count - 1}];",
+        "    return struct { items: [length]u8 };",
+        "}",
+        "const selected: Select() = undefined;",
+        "const field = selected.",
+        "",
+    ))
+    samples = []
+    with tempfile.TemporaryDirectory(prefix="zls-comptime-bench-") as directory:
+        root = Path(directory)
+        config = root / "zls.json"
+        config.write_text(json.dumps(dict(enable_build_on_save=False)))
+        uri = (root / "comptime.zig").as_uri()
+        with (root / "stderr.log").open("w+") as stderr:
+            process = subprocess.Popen(
+                [str(args.binary.resolve()), "--config-path", str(config)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
+            )
+            client = Client(process)
+            try:
+                client.request("initialize", dict(
+                    processId=os.getpid(), rootUri=root.as_uri(), capabilities={},
+                ))
+                client.notify("initialized", {})
+                client.notify("textDocument/didOpen", dict(textDocument=dict(
+                    uri=uri, languageId="zig", version=1, text=source,
+                )))
+                for iteration in range(args.warmup + args.rounds):
+                    start = time.perf_counter_ns()
+                    response = client.request("textDocument/completion", dict(
+                        textDocument=dict(uri=uri),
+                        position=dict(line=7, character=len("const field = selected.")),
+                    ))
+                    elapsed_us = (time.perf_counter_ns() - start) / 1000
+                    actual = {item["label"]: item.get("detail") for item in (response or {}).get("items", [])}
+                    expected = {"items": f"[{count - 1}]u8"}
+                    if actual != expected:
+                        raise RuntimeError(f"incorrect comptime result: {actual}, expected {expected}")
+                    if iteration >= args.warmup:
+                        samples.append(elapsed_us)
+                client.request("shutdown", None)
+                client.notify("exit", None)
+                process.wait(timeout=10)
+                if process.returncode != 0:
+                    raise RuntimeError(f"ZLS exited with {process.returncode}")
+            except BaseException:
+                stderr.seek(0)
+                print(stderr.read(), file=sys.stderr)
+                raise
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdin.close()
+                process.stdout.close()
+
+    samples.sort()
+    print(json.dumps(dict(
+        binary=str(args.binary.resolve()), element_count=count,
+        source_bytes=len(source.encode()), warmup=args.warmup, rounds=args.rounds,
+        median_us=statistics.median(samples), minimum_us=samples[0],
+        p90_us=samples[int((len(samples) - 1) * 0.9)], maximum_us=samples[-1],
+        samples_us=samples,
+    ), indent=2))
+
+
+if __name__ == "__main__":
+    main()
