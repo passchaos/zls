@@ -147,6 +147,33 @@ test "workspace symbols distinguish methods from static functions" {
     );
 }
 
+test "workspace symbols distinguish enum members from fields" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    try ctx.addWorkspace("Members", "/members/");
+    _ = try ctx.addDocument(.{
+        .source =
+        \\const Options = struct { member_struct: u8 };
+        \\const Choice = enum { member_enum, member_other };
+        \\const Payload = union(enum) { member_union: u8 };
+        \\const Tagged = enum(u8) { member_tagged = 7 };
+        \\const Nested = struct { member_nested: enum { member_value } };
+        ,
+        .base_directory = "/members/",
+    });
+
+    try testDocumentSymbol(&ctx, "member",
+        \\Field member_struct [Options]
+        \\EnumMember member_enum [Choice]
+        \\EnumMember member_other [Choice]
+        \\Field member_union [Payload]
+        \\EnumMember member_tagged [Tagged]
+        \\Field member_nested [Nested]
+        \\EnumMember member_value [member_nested]
+    );
+}
+
 test "workspace symbol ranges across long Unicode spans" {
     const source = "// " ++ "¶↉🠁" ** 16 ++ "\r\n" ++
         "const @\"symbol¶↉🠁\" = struct {\r\n" ++

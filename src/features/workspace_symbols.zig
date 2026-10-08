@@ -46,7 +46,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
         var analyser: ?Analyser = null;
         defer if (analyser) |*value| value.deinit();
         var last_container_scope: Analyser.Scope.OptionalIndex = .none;
-        var last_container_name: ?[]const u8 = null;
+        var last_container_info: ContainerInfo = .{};
 
         const trigram_store = handle.trigram_store.getCached();
 
@@ -87,18 +87,18 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                 raw_name,
                 handle.tree.tokenTag(name_token),
             );
-            const container_name = switch (kind) {
+            const container_info: ContainerInfo = switch (kind) {
                 .container_variable,
                 .container_constant,
                 .field,
                 .container_function,
-                => try containerNameAtIndex(
+                => try containerInfoAtIndex(
                     handle,
                     start,
                     &last_container_scope,
-                    &last_container_name,
+                    &last_container_info,
                 ),
-                .variable, .constant, .function, .test_function => null,
+                .variable, .constant, .function, .test_function => .{},
             };
 
             const start_position: offsets.Position = if (cached_position.line) |line| blk: {
@@ -128,7 +128,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                     .variable => .Variable,
                     .container_variable => .Variable,
                     .constant, .container_constant => .Constant,
-                    .field => .Field,
+                    .field => container_info.field_kind,
                     .function => .Function,
                     .container_function => kind: {
                         if (analyser == null) analyser = server.initAnalyser(arena, handle);
@@ -143,7 +143,7 @@ pub fn handler(server: *Server, arena: std.mem.Allocator, request: types.workspa
                         .end = end_position,
                     },
                 },
-                .containerName = container_name,
+                .containerName = container_info.name,
             });
         }
     }
@@ -207,22 +207,27 @@ fn shortQueryMatches(name: []const u8, ignore_underscores: bool, query: ShortQue
     return false;
 }
 
-fn containerNameAtIndex(
+const ContainerInfo = struct {
+    name: ?[]const u8 = null,
+    field_kind: types.SymbolKind = .Field,
+};
+
+fn containerInfoAtIndex(
     handle: *DocumentStore.Handle,
     source_index: usize,
     last_scope: *Analyser.Scope.OptionalIndex,
-    last_name: *?[]const u8,
-) error{OutOfMemory}!?[]const u8 {
+    last_info: *ContainerInfo,
+) error{OutOfMemory}!ContainerInfo {
     const document_scope = try handle.getDocumentScope();
     var scope = Analyser.innermostScopeAtIndex(document_scope, source_index);
     while (!document_scope.getScopeTag(scope).isContainer()) {
-        scope = document_scope.getScopeParent(scope).unwrap() orelse return null;
+        scope = document_scope.getScopeParent(scope).unwrap() orelse return .{};
     }
-    if (scope == .root) return null;
-    if (last_scope.unwrap() == scope) return last_name.*;
+    if (scope == .root) return .{};
+    if (last_scope.unwrap() == scope) return last_info.*;
 
     const tree = &handle.tree;
-    const container_node = document_scope.getScopeAstNode(scope) orelse return null;
+    const container_node = document_scope.getScopeAstNode(scope) orelse return .{};
     const container_loc = offsets.nodeToLoc(tree, container_node);
     var ancestor = document_scope.getScopeParent(scope);
     const name = name: while (ancestor.unwrap()) |ancestor_scope| : (ancestor = document_scope.getScopeParent(ancestor_scope)) {
@@ -239,8 +244,11 @@ fn containerNameAtIndex(
     } else null;
 
     last_scope.* = scope.toOptional();
-    last_name.* = name;
-    return name;
+    last_info.* = .{
+        .name = name,
+        .field_kind = if (tree.tokenTag(tree.nodeMainToken(container_node)) == .keyword_enum) .EnumMember else .Field,
+    };
+    return last_info.*;
 }
 
 fn declarationContainsLoc(tree: *const Ast, node: Ast.Node.Index, inner: offsets.Loc) bool {
