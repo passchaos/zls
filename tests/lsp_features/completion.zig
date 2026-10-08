@@ -12477,7 +12477,7 @@ test "generic function with comptime destructuring assignment" {
         \\const buffer: Buffer() = undefined;
         \\const field = buffer.<cursor>
     , &.{
-        .{ .label = "items", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "items", .kind = .Field, .detail = "[9]u8" },
     });
 
     try testCompletion(
@@ -19529,6 +19529,243 @@ test "comptime local tuple pointers preserve field identity" {
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "base_evaluations", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "name_evaluations", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime destructuring propagates result types through control flow" {
+    for ([_][]const u8{
+        ".{ @intCast(n), @intCast(n + 1) }",
+        "(if (true) .{ @intCast(n), @intCast(n + 1) } else .{ 0, 0 })",
+        "blk: { break :blk .{ @intCast(n), @intCast(n + 1) }; }",
+        "for (0..1) |_| { break .{ @intCast(n), @intCast(n + 1) }; } else .{ 0, 0 }",
+        "for (0..0) |_| {} else .{ @intCast(n), @intCast(n + 1) }",
+        "while (true) { break .{ @intCast(n), @intCast(n + 1) }; }",
+        "while (false) {} else .{ @intCast(n), @intCast(n + 1) }",
+        "switch (@as(u8, 1)) { 1 => .{ @intCast(n), @intCast(n + 1) }, else => .{ 0, 0 } }",
+        "sw: switch (@as(u8, 0)) { 0 => continue :sw 1, 1 => .{ @intCast(n), @intCast(n + 1) }, else => .{ 0, 0 } }",
+        "@as(?[2]u16, null) orelse .{ @intCast(n), @intCast(n + 1) }",
+        "@as(error{Missing}![2]u16, error.Missing) catch .{ @intCast(n), @intCast(n + 1) }",
+    }) |expression| {
+        const source = try std.mem.concat(allocator, u8, &.{
+            \\fn Result(comptime a: usize, comptime b: usize) type {
+            \\    return struct { first: [a]u8, second: [b]u8 };
+            \\}
+            \\fn Select() type {
+            \\    var a: u8 = 0;
+            \\    const n: u32 = 7;
+            \\    a, const b: u16 =
+            ,
+            expression,
+            \\;
+            \\    return Result(a, b);
+            \\}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+            ,
+        });
+        defer allocator.free(source);
+        try testCompletion(source, &.{
+            .{ .label = "first", .kind = .Field, .detail = "[7]u8" },
+            .{ .label = "second", .kind = .Field, .detail = "[8]u8" },
+        });
+    }
+}
+
+test "comptime destructuring preserves pointer targets changed by the source" {
+    try testCompletion(
+        \\fn Result(comptime a: usize, comptime b: usize) type {
+        \\    return struct { first: [a]u8, second: [b]u8 };
+        \\}
+        \\fn Select() type {
+        \\    var a: usize = 0;
+        \\    var b: usize = 0;
+        \\    var pointer = &a;
+        \\    pointer.*, _ = .{ blk: {
+        \\        pointer = &b;
+        \\        break :blk 7;
+        \\    }, 0 };
+        \\    return Result(a, b);
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
+test "comptime destructuring preserves stores before early returns" {
+    try testCompletion(
+        \\fn Result(comptime a: usize, comptime b: usize) type {
+        \\    return struct { first: [a]u8, second: [b]u8 };
+        \\}
+        \\fn Select() type {
+        \\    var a: usize = 0;
+        \\    var b: usize = 0;
+        \\    a, b = .{ 7, return Result(a, b) };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
+test "comptime destructuring stops on early returns from targets" {
+    try testCompletion(
+        \\fn Result(comptime a: usize, comptime b: usize) type {
+        \\    return struct { first: [a]u8, second: [b]u8 };
+        \\}
+        \\fn Select() type {
+        \\    var a: usize = 0;
+        \\    const b: usize = 0;
+        \\    (&a).*, ({
+        \\        return Result(a, b);
+        \\    }).* = .{ 7, 8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
+test "comptime destructuring preserves explicit array snapshots" {
+    try testCompletion(
+        \\fn Result(comptime a: usize, comptime b: usize) type {
+        \\    return struct { first: [a]u8, second: [b]u8 };
+        \\}
+        \\fn Select() type {
+        \\    var a: usize = 1;
+        \\    var b: usize = 2;
+        \\    a, b = [2]usize{ b, a };
+        \\    return Result(a, b);
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[2]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[1]u8" },
+    });
+}
+
+test "comptime destructuring stores anonymous elements in order" {
+    try testCompletion(
+        \\fn Result(comptime a: usize, comptime b: usize) type {
+        \\    return struct { first: [a]u8, second: [b]u8 };
+        \\}
+        \\fn Select() type {
+        \\    var a: usize = 1;
+        \\    var b: usize = 2;
+        \\    a, b = blk: {
+        \\        defer a += 1;
+        \\        break :blk .{ b, a };
+        \\    };
+        \\    return Result(a, b);
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
+test "comptime destructuring captures targets before evaluating the source" {
+    try testCompletion(
+        \\fn next(index: *usize) usize {
+        \\    const value = index.*;
+        \\    index.* += 1;
+        \\    return value;
+        \\}
+        \\fn Select() type {
+        \\    var values = [_]usize{ 0, 0, 0 };
+        \\    var index: usize = 0;
+        \\    values[next(&index)], values[next(&index)] = .{ index + 4, index + 5 };
+        \\    const saved = values;
+        \\    const count = index;
+        \\    return struct { first: [saved[0]]u8, second: [saved[1]]u8, count: [count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[6]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "count", .kind = .Field, .detail = "[2]u8" },
+    });
+}
+
+test "comptime destructuring captures all targets before writing" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var values = [_]usize{ 0, 0 };
+        \\    var index: usize = 0;
+        \\    index, values[index] = .{ 1, 7 };
+        \\    const saved = values;
+        \\    return struct { first: [saved[0]]u8, second: [saved[1]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
+test "comptime destructuring evaluates declaration types before targets" {
+    try testCompletion(
+        \\fn assignType(order: *usize) type {
+        \\    order.* = order.* * 10 + 1;
+        \\    return usize;
+        \\}
+        \\fn assignTarget(value: *usize, order: *usize) *usize {
+        \\    order.* = order.* * 10 + 2;
+        \\    return value;
+        \\}
+        \\fn rhs(order: *usize) [2]usize {
+        \\    order.* = order.* * 10 + 3;
+        \\    return .{ 4, 5 };
+        \\}
+        \\fn Select() type {
+        \\    var order: usize = 0;
+        \\    var value: usize = 0;
+        \\    assignTarget(&value, &order).*, const size: assignType(&order) = rhs(&order);
+        \\    const saved_order = order;
+        \\    const saved_value = value;
+        \\    return struct { order: [saved_order]u8, value: [saved_value]u8, size: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "order", .kind = .Field, .detail = "[123]u8" },
+        .{ .label = "value", .kind = .Field, .detail = "[4]u8" },
+        .{ .label = "size", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
+test "comptime destructuring evaluates nested targets once" {
+    try testCompletion(
+        \\fn next(index: *usize) usize {
+        \\    const value = index.*;
+        \\    index.* += 1;
+        \\    return value;
+        \\}
+        \\fn Select() type {
+        \\    var values = [_][1]usize{ .{0}, .{0} };
+        \\    var index: usize = 0;
+        \\    values[next(&index)][0], _ = .{ 7, 8 };
+        \\    const saved = values;
+        \\    const count = index;
+        \\    return struct { first: [saved[0][0]]u8, second: [saved[1][0]]u8, count: [count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "first", .kind = .Field, .detail = "[7]u8" },
+        .{ .label = "second", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "count", .kind = .Field, .detail = "[1]u8" },
     });
 }
 
