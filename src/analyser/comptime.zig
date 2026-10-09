@@ -2148,6 +2148,10 @@ pub const Interpreter = struct {
                 };
             },
             .unwrap_optional => {
+                if (try self.isLocalReferenceExpression(handle, node, 0)) {
+                    const reference = try self.referenceForNode(handle, node) orelse return null;
+                    return self.readReference(reference);
+                }
                 const optional = try self.eval(handle, handle.tree.nodeData(node).node_and_token[0]) orelse return null;
                 return switch (try self.optionalValue(optional) orelse return null) {
                     .absent => null,
@@ -2308,6 +2312,12 @@ pub const Interpreter = struct {
             .field_access => {
                 const base, const field_token = handle.tree.nodeData(node).node_and_token;
                 const field_name = offsets.identifierTokenToNameSlice(&handle.tree, field_token);
+                if (!std.mem.eql(u8, field_name, "ptr") and !std.mem.eql(u8, field_name, "len") and
+                    try self.isLocalReferenceExpression(handle, node, 0))
+                {
+                    const reference = try self.referenceForNode(handle, node) orelse return null;
+                    return self.readReference(reference);
+                }
                 const value = if (std.mem.eql(u8, field_name, "ptr") or std.mem.eql(u8, field_name, "len"))
                     try self.staticSequenceValue(handle, base) orelse try self.eval(handle, base) orelse return null
                 else
@@ -2326,8 +2336,13 @@ pub const Interpreter = struct {
                             .known => |known| known,
                             .unknown => null,
                         };
+                        if (index) |i| if (std.math.cast(usize, i)) |element_index| storage.freezePath(&.{.{ .index = element_index }});
                         return self.analyser.resolveBracketAccessType(storage.value, .{ .single = index });
                     }
+                }
+                if (try self.isLocalReferenceExpression(handle, node, 0)) {
+                    const reference = try self.referenceForNode(handle, node) orelse return null;
+                    return self.readReference(reference);
                 }
                 const operand = try self.captureOperand(handle, base, 0) orelse return null;
                 var value = operand.value;
@@ -2352,7 +2367,7 @@ pub const Interpreter = struct {
                 };
                 if (self.assignmentAggregateLength(try value.typeOf(self.analyser)) != null) {
                     if (operand.target) |target| if (target == .reference) {
-                        value = try self.borrowReference(target.reference) orelse return null;
+                        value = try self.readReference(target.reference) orelse return null;
                     };
                 }
                 return self.analyser.resolveBracketAccessType(value, .{ .single = index });
@@ -3811,6 +3826,28 @@ pub const Interpreter = struct {
         return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = target });
     }
 
+    /// Recognize paths whose base is already held by this interpreter. Do not
+    /// speculatively evaluate calls: a failed lookup must not repeat effects.
+    fn isLocalReferenceExpression(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, depth: u8) Error!bool {
+        if (depth == 128) return false;
+        const tree = &handle.tree;
+        const base = switch (tree.nodeTag(node)) {
+            .identifier => {
+                if (try self.cell(handle, node) != null) return true;
+                const token = tree.nodeMainToken(node);
+                const name = offsets.identifierTokenToNameSlice(tree, token);
+                const decl = try self.analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(token)) orelse return false;
+                const value = self.bindings.get(.{ .handle = decl.handle, .token = decl.nameToken() }) orelse return false;
+                return value.data == .comptime_value and value.data.comptime_value.data == .reference;
+            },
+            .array_access => tree.nodeData(node).node_and_node[0],
+            .field_access, .unwrap_optional, .grouped_expression => tree.nodeData(node).node_and_token[0],
+            .deref => tree.nodeData(node).node,
+            else => return false,
+        };
+        return self.isLocalReferenceExpression(handle, base, depth + 1);
+    }
+
     fn referenceForNode(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Reference {
         if (try self.cell(handle, node)) |storage| {
             const result = try self.analyser.arena.create(Value.Reference);
@@ -3840,10 +3877,10 @@ pub const Interpreter = struct {
                 const base, const index_node = tree.nodeData(node).node_and_node;
                 const parent = try self.aggregateReference(handle, base) orelse return null;
                 const current = try self.borrowReference(parent) orelse return null;
-                const items = try self.mutableElements(current) orelse return null;
+                const len = if (try self.mutableElements(current)) |items| items.len else self.assignmentAggregateLength(try current.typeOf(self.analyser)) orelse return null;
                 const index = try self.integer(handle, index_node) orelse return null;
-                if (index > items.len or
-                    (index == items.len and
+                if (index > len or
+                    (index == len and
                         try self.analyser.resolveBracketAccessType(current, .{ .single = index }) == null)) return null;
                 return self.extendReference(parent, try self.aggregateIndexAccess(current, index));
             },
@@ -3900,12 +3937,12 @@ pub const Interpreter = struct {
     }
 
     pub fn readReference(self: *Interpreter, target: *Value.Reference) Error!?Type {
-        if (target.path.len == 0) return target.storage.snapshot();
+        target.storage.freezePath(target.path);
         return self.borrowReference(target);
     }
 
-    /// The returned aggregate must not escape. Descendants remain immutable
-    /// because cell writes replace children rather than mutating their values.
+    /// The returned value and its descendants must not escape without first
+    /// freezing the corresponding ownership path in the cell.
     fn borrowReference(self: *Interpreter, target: *Value.Reference) Error!?Type {
         return self.readValuePath(target.storage.value, target.path);
     }
@@ -4380,6 +4417,18 @@ pub const Interpreter = struct {
                     const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse return null;
                     return @as(?Type, try analyser.enumValue(destination, tag));
                 }
+                if (destination.isTaggedUnion()) union_tag: {
+                    // A literal can also select a container constant such as
+                    // CallingConvention.c. Leave those to ordinary coercion.
+                    const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse break :union_tag;
+                    const payload_type = try self.assignmentChildType(destination, .{ .field = tag }) orelse return null;
+                    if (payload_type.ipIndex() != .void_type) return null;
+                    const fields = try analyser.arena.dupe(Value.Field, &.{.{
+                        .name = tag,
+                        .value = Type.fromIP(analyser, .void_type, .void_value),
+                    }});
+                    return @as(?Type, try Value.create(analyser, destination, .{ .fields = fields }));
+                }
                 if (destination.ipIndex() == .enum_literal_type) {
                     const tag = try analyser.identifierTokenName(tree, tree.nodeMainToken(literal_node)) orelse return null;
                     return @as(?Type, try analyser.enumValue(destination, tag));
@@ -4445,51 +4494,45 @@ pub const Interpreter = struct {
         source_node: ?Ast.Node.Index,
     ) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
-        if (target.path.len != 0 and target.storage.value.data == .comptime_value and
-            target.storage.value.data.comptime_value.data == .array)
-        {
-            const index = switch (target.path[0]) {
-                .index, .tuple_index => |index| index,
-                else => null,
-            };
-            if (index) |element_index| {
-                const items = target.storage.value.data.comptime_value.data.array;
-                if (element_index >= items.len) return false;
-                const child_type = try self.assignmentChildType(destination, target.path[0]) orelse return false;
-                const updated = try self.replaceReferenceValue(handle, items[element_index], child_type, target.path[1..], value, source_node) orelse return false;
-                try target.storage.replaceElement(self.analyser, element_index, updated);
-                return true;
-            }
-        }
-        const updated = try self.replaceReferenceValue(handle, target.storage.value, destination, target.path, value, source_node) orelse return false;
+        var leaf_type = destination;
+        for (target.path) |access| leaf_type = try self.assignmentChildType(leaf_type, access) orelse return false;
+        const coerced = try self.coerceAssignmentFromSource(handle, leaf_type, value, source_node, null) orelse return false;
+        if (target.path.len != 0 and try target.storage.writePath(self.analyser, target.path, coerced)) return true;
+        const updated = try self.replaceReferenceValue(target.storage.value, destination, target.path, coerced) orelse return false;
         target.storage.replace(updated);
         return true;
     }
 
     fn replaceReferenceValue(
         self: *Interpreter,
-        handle: *Handle,
         current: Type,
         destination: Type,
         path: []const Value.Reference.Access,
         value: Type,
-        source_node: ?Ast.Node.Index,
     ) Error!?Type {
-        if (path.len == 0) return self.coerceAssignmentFromSource(handle, destination, value, source_node, null);
+        if (path.len == 0) return value;
         const analyser = self.analyser;
         const child_destination = try self.assignmentChildType(destination, path[0]) orelse return null;
         switch (path[0]) {
             .index, .tuple_index => |index| {
-                const items = try self.mutableElements(current) orelse return null;
+                const items = try self.mutableElements(current) orelse materialize: {
+                    const len = self.assignmentAggregateLength(destination) orelse return null;
+                    if (index >= len or len > self.budget.steps) return null;
+                    const items = try analyser.arena.alloc(Type, len);
+                    for (items, 0..) |*item, i| {
+                        item.* = try analyser.resolveBracketAccessType(current, .{ .single = i }) orelse return null;
+                    }
+                    break :materialize items;
+                };
                 if (index >= items.len) return null;
                 const updated = try analyser.arena.dupe(Type, items);
-                updated[index] = try self.replaceReferenceValue(handle, items[index], child_destination, path[1..], value, source_node) orelse return null;
+                updated[index] = try self.replaceReferenceValue(items[index], child_destination, path[1..], value) orelse return null;
                 return try Value.create(analyser, destination, .{ .array = updated });
             },
             .field => |field_name| {
                 const old_value = try analyser.resolveFieldAccess(current, field_name) orelse return null;
-                const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
-                const fields = Value.fieldEntries(current) orelse return null;
+                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
+                const fields = Value.fieldEntries(current) orelse &.{};
                 const updated = try analyser.arena.dupe(Value.Field, fields);
                 for (updated) |*field| {
                     if (!std.mem.eql(u8, field.name, field_name)) continue;
@@ -4505,7 +4548,7 @@ pub const Interpreter = struct {
             },
             .optional_payload => {
                 const old_value = try analyser.resolveOptionalUnwrap(current) orelse return null;
-                const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
+                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
                 return try Value.create(analyser, destination, .{ .optional = new_value });
             },
             .error_union_payload => {
@@ -4513,7 +4556,7 @@ pub const Interpreter = struct {
                     .payload => |payload| payload,
                     .failure => return null,
                 };
-                const new_value = try self.replaceReferenceValue(handle, old_value, child_destination, path[1..], value, source_node) orelse return null;
+                const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
                 return try Value.create(analyser, destination, .{ .error_union = .{ .payload = new_value } });
             },
         }
@@ -4661,7 +4704,8 @@ pub const Interpreter = struct {
         for (path) |access| {
             current = switch (access) {
                 .index => |index| blk: {
-                    const items = try self.mutableElements(current) orelse return null;
+                    const items = try self.mutableElements(current) orelse
+                        break :blk try self.analyser.resolveBracketAccessType(current, .{ .single = index }) orelse return null;
                     if (index < items.len) break :blk items[index];
                     if (index > items.len) return null;
                     break :blk try self.analyser.resolveBracketAccessType(current, .{ .single = index }) orelse return null;

@@ -15856,7 +15856,14 @@ pub const Type = struct {
                 break :blk result;
             },
             .type_info_value => |value| value.value_type.runtimeType(analyser),
-            .comptime_value => |value| value.ty.runtimeType(analyser),
+            .comptime_value => |value| blk: {
+                if (value.ty.ipIndex()) |index| {
+                    break :blk Type.fromIP(analyser, index, null);
+                }
+                var result = value.ty;
+                result.is_type_val = false;
+                break :blk result;
+            },
             else => self,
         };
     }

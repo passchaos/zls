@@ -23,29 +23,39 @@ def main():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--rounds", type=int, default=20)
     parser.add_argument("--initializer", choices=("literal", "cast", "dependent", "call", "loop"), default="literal")
+    parser.add_argument("--layout", choices=("array", "struct", "matrix", "optional", "error_union"), default="array")
     args = parser.parse_args()
     if not 1 <= args.element_count <= 4096 or args.warmup < 0 or args.rounds < 1:
         parser.error("element-count must be 1..4096, warmup non-negative, and rounds positive")
 
     count = args.element_count
+    array_type = f"[{count}]usize"
+    zeros = f"([_]usize{{0}} ** {count})"
+    declaration, array = {
+        "array": (f"var values: {array_type} = undefined;", "values"),
+        "struct": (f"var state: struct {{ values: {array_type} }} = .{{ .values = {zeros} }};", "state.values"),
+        "matrix": (f"var state: [1]{array_type} = .{{{zeros}}};", "state[0]"),
+        "optional": (f"var state: ?{array_type} = @as({array_type}, {zeros});", "state.?"),
+        "error_union": (f"var state: error{{Missing}}!{array_type} = @as({array_type}, {zeros}); const payload = if (state) |*value| value else |_| unreachable;", "payload.*"),
+    }[args.layout]
     elements = {
         "literal": lambda index: str(index),
         "cast": lambda index: f"@as(usize, {index})",
-        "dependent": lambda index: f"values[{index - 1}] + 1" if index else "0",
+        "dependent": lambda index: f"{array}[{index - 1}] + 1" if index else "0",
         "call": lambda index: f"identity({index})",
     }.get(args.initializer)
     initializer = (
-        f"    values[0] = 0; for (1..{count}) |index| values[index] = values[index - 1] + 1;"
+        f"    {array}[0] = 0; for (1..{count}) |index| {array}[index] = {array}[index - 1] + 1;"
         if args.initializer == "loop" else
-        "    values = .{ " + ", ".join(elements(index) for index in range(count)) + " };"
+        f"    {array} = .{{ " + ", ".join(elements(index) for index in range(count)) + " };"
     )
     source = "\n".join((
         "fn identity(value: usize) usize { return value; }",
         "fn Select() type {",
         "    @setEvalBranchQuota(100000);",
-        f"    var values: [{count}]usize = undefined;",
+        "    " + declaration,
         initializer,
-        f"    const length = values[{count - 1}];",
+        f"    const length = {array}[{count - 1}];",
         "    return struct { items: [length]u8 };",
         "}",
         "const selected: Select() = undefined;",
@@ -106,6 +116,7 @@ def main():
     print(json.dumps(dict(
         binary=str(args.binary.resolve()), element_count=count,
         initializer=args.initializer,
+        layout=args.layout,
         max_rss_bytes=peak_rss * (1 if sys.platform == "darwin" else 1024),
         source_bytes=len(source.encode()), warmup=args.warmup, rounds=args.rounds,
         median_us=statistics.median(samples), minimum_us=samples[0],

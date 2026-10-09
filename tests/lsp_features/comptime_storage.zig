@@ -1,9 +1,8 @@
 const std = @import("std");
-const fixture = @import("../fixtures/comptime_storage.zig");
 const testCompletion = @import("completion.zig").testCompletion;
 
 test "comptime storage snapshots agree with Zig" {
-    const cases = .{
+    try testCases(@import("../fixtures/comptime_storage.zig"), @embedFile("../fixtures/comptime_storage.zig"), .{
         "successive_snapshots",
         "independent_cells",
         "pointer_alias_and_snapshot",
@@ -24,14 +23,36 @@ test "comptime storage snapshots agree with Zig" {
         "pointer_effectful_index",
         "labeled_switch_array",
         "vector_effectful_index",
-    };
+    });
+}
+
+test "comptime nested storage snapshots agree with Zig" {
+    try testCases(@import("../fixtures/comptime_nested_storage.zig"), @embedFile("../fixtures/comptime_nested_storage.zig"), .{
+        "struct_field_snapshot",
+        "matrix_row_snapshot",
+        "sibling_array_copy",
+        "optional_payload_snapshot",
+        "error_payload_snapshot",
+        "union_payload_snapshot",
+        "tuple_child_snapshot",
+        "array_of_structs",
+        "undefined_struct_array",
+        "undefined_matrix",
+        "undefined_nested_struct",
+        "nested_pointer_alias",
+        "nested_aggregate_argument",
+        "nested_initializer_snapshot",
+    });
+}
+
+fn testCases(comptime fixture: type, comptime fixture_source: []const u8, comptime cases: anytype) !void {
     inline for (cases) |name| {
         errdefer std.debug.print("comptime storage case: {s}\n", .{name});
         const Expected = @field(fixture, name)();
         const source = try std.fmt.allocPrint(
             std.testing.allocator,
             "{s}\nconst selected: {s}() = undefined;\nconst field = selected.<cursor>\n",
-            .{ @embedFile("../fixtures/comptime_storage.zig"), name },
+            .{ fixture_source, name },
         );
         defer std.testing.allocator.free(source);
         try testCompletion(source, &.{
