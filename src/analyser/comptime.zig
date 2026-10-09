@@ -54,7 +54,7 @@ pub const Value = struct {
         payload: Type,
         failure: Type,
     };
-    pub const Cell = struct { value: Type };
+    pub const Cell = @import("value_cell.zig");
     pub const Pointee = struct {
         value: Type,
         source: Analyser.NodeWithHandle,
@@ -380,7 +380,7 @@ pub const Value = struct {
     pub fn deref(value: Type) Type {
         if (value.data == .comptime_value) {
             return switch (value.data.comptime_value.data) {
-                .reference => |reference| if (reference.path.len == 0) reference.storage.value else value,
+                .reference => |reference| if (reference.path.len == 0) reference.storage.snapshot() else value,
                 .pointee => |pointee| pointee.value,
                 else => value,
             };
@@ -1003,7 +1003,10 @@ pub const Interpreter = struct {
             };
         }
         if (tree.nodeTag(unwrapped) == .@"switch" or tree.nodeTag(unwrapped) == .switch_comma) {
-            if (tree.switchFull(unwrapped).label_token != null) return null;
+            if (tree.switchFull(unwrapped).label_token != null) {
+                const result = self.expressionResult(try self.switchLoop(handle, unwrapped, true, .none, true)) orelse return null;
+                return .{ .value = result.value, .target = result.capture_target };
+            }
             const target = try self.switchTarget(handle, unwrapped) orelse return null;
             return self.captureOperand(handle, target, depth + 1);
         }
@@ -1108,6 +1111,11 @@ pub const Interpreter = struct {
             var base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
             base_operand.target = self.captureTargetOrTemporary(handle, base, base_operand);
             const index = try self.integer(handle, index_node) orelse return null;
+            if (self.assignmentAggregateLength(try base_operand.value.typeOf(self.analyser)) != null) {
+                if (base_operand.target) |target| if (target == .reference) {
+                    base_operand.value = try self.readReference(target.reference) orelse return null;
+                };
+            }
             const value = try self.analyser.resolveBracketAccessType(base_operand.value, .{ .single = index }) orelse return null;
             if (try Value.sequenceAlloc(self.analyser, base_operand.value)) |sequence| {
                 if (index >= sequence.len) return null;
@@ -2024,6 +2032,10 @@ pub const Interpreter = struct {
             const result = self.expressionResult(try self.block(handle, node, .none, false)) orelse return null;
             return result.value;
         }
+        if (ast.isContainer(&handle.tree, node)) {
+            const value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
+            return try self.captureBindings(value);
+        }
         switch (handle.tree.nodeTag(node)) {
             .address_of => {
                 const operand = handle.tree.nodeData(node).node;
@@ -2097,7 +2109,7 @@ pub const Interpreter = struct {
             },
             .@"switch", .switch_comma => {
                 if (handle.tree.switchFull(node).label_token != null) {
-                    const result = self.expressionResult(try self.switchLoop(handle, node, true, .none)) orelse return null;
+                    const result = self.expressionResult(try self.switchLoop(handle, node, true, .none, false)) orelse return null;
                     return result.value;
                 }
                 const target = try self.switchTarget(handle, node) orelse
@@ -2304,7 +2316,21 @@ pub const Interpreter = struct {
             },
             .array_access => {
                 const base, const index_node = handle.tree.nodeData(node).node_and_node;
-                var value = try self.evalPreservingPointerIdentity(handle, base) orelse return null;
+                // Array indexing evaluates an lvalue's address before the
+                // index, then loads its element after index side effects.
+                // Only the selected child escapes, so the array stays owned.
+                if (try self.cell(handle, base)) |storage| {
+                    if (self.assignmentAggregateLength(try storage.value.typeOf(self.analyser)) != null) {
+                        if (!self.tick()) return null;
+                        const index = switch (try self.integerValue(handle, index_node) orelse return null) {
+                            .known => |known| known,
+                            .unknown => null,
+                        };
+                        return self.analyser.resolveBracketAccessType(storage.value, .{ .single = index });
+                    }
+                }
+                const operand = try self.captureOperand(handle, base, 0) orelse return null;
+                var value = operand.value;
                 const value_type = if (value.data == .comptime_value)
                     try value.data.comptime_value.ty.instanceUnchecked(self.analyser)
                 else
@@ -2324,6 +2350,11 @@ pub const Interpreter = struct {
                     .known => |known| known,
                     .unknown => null,
                 };
+                if (self.assignmentAggregateLength(try value.typeOf(self.analyser)) != null) {
+                    if (operand.target) |target| if (target == .reference) {
+                        value = try self.borrowReference(target.reference) orelse return null;
+                    };
+                }
                 return self.analyser.resolveBracketAccessType(value, .{ .single = index });
             },
             .slice, .slice_open, .slice_sentinel => {
@@ -3643,7 +3674,7 @@ pub const Interpreter = struct {
             .@"switch", .switch_comma => blk: {
                 if (!self.tick()) return null;
                 if (tree.switchFull(node).label_token != null)
-                    break :blk self.expressionResult(try self.switchLoop(handle, node, true, location));
+                    break :blk self.expressionResult(try self.switchLoop(handle, node, true, location, false));
                 const target = try self.switchTarget(handle, node) orelse {
                     if (self.pending_flow) |pending| {
                         self.pending_flow = null;
@@ -3766,7 +3797,7 @@ pub const Interpreter = struct {
 
     pub fn read(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         const storage = try self.cell(handle, node) orelse return null;
-        return storage.value;
+        return storage.snapshot();
     }
 
     pub fn address(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
@@ -3775,7 +3806,7 @@ pub const Interpreter = struct {
     }
 
     fn referenceValue(self: *Interpreter, target: *Value.Reference) Error!?Type {
-        const current = try self.readReference(target) orelse return null;
+        const current = try self.borrowReference(target) orelse return null;
         const ty = try self.analyser.resolveAddressOf(false, current);
         return try Value.create(self.analyser, try ty.typeOf(self.analyser), .{ .reference = target });
     }
@@ -3794,7 +3825,7 @@ pub const Interpreter = struct {
             const params = tree.builtinCallParams(&buffer, node).?;
             if (params.len != 2) return null;
             const parent = try self.aggregateReference(handle, params[0]) orelse return null;
-            const current = try self.readReference(parent) orelse return null;
+            const current = try self.borrowReference(parent) orelse return null;
             const name_value = try self.eval(handle, params[1]) orelse return null;
             if (name_value.data != .string_value) return null;
             const field_name = name_value.data.string_value.bytes;
@@ -3808,7 +3839,7 @@ pub const Interpreter = struct {
             .array_access => {
                 const base, const index_node = tree.nodeData(node).node_and_node;
                 const parent = try self.aggregateReference(handle, base) orelse return null;
-                const current = try self.readReference(parent) orelse return null;
+                const current = try self.borrowReference(parent) orelse return null;
                 const items = try self.mutableElements(current) orelse return null;
                 const index = try self.integer(handle, index_node) orelse return null;
                 if (index > items.len or
@@ -3819,7 +3850,7 @@ pub const Interpreter = struct {
             .field_access => {
                 const base, const field_token = tree.nodeData(node).node_and_token;
                 const parent = try self.aggregateReference(handle, base) orelse return null;
-                const current = try self.readReference(parent) orelse return null;
+                const current = try self.borrowReference(parent) orelse return null;
                 const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
                 const aggregate_type = try current.typeOf(self.analyser);
                 if (aggregate_type.isTupleType(self.analyser)) {
@@ -3834,7 +3865,7 @@ pub const Interpreter = struct {
             .unwrap_optional => {
                 const base = tree.nodeData(node).node_and_token[0];
                 const parent = try self.aggregateReference(handle, base) orelse return null;
-                const current = try self.readReference(parent) orelse return null;
+                const current = try self.borrowReference(parent) orelse return null;
                 if (try self.analyser.resolveOptionalUnwrap(current) == null) return null;
                 return self.extendReference(parent, .optional_payload);
             },
@@ -3851,7 +3882,7 @@ pub const Interpreter = struct {
     fn aggregateReference(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Reference {
         const reference = try self.referenceForNode(handle, node);
         const value = if (reference) |target|
-            try self.readReference(target) orelse return null
+            try self.borrowReference(target) orelse return null
         else
             try self.eval(handle, node) orelse return null;
         if (value.data == .comptime_value and value.data.comptime_value.data == .reference)
@@ -3869,6 +3900,13 @@ pub const Interpreter = struct {
     }
 
     pub fn readReference(self: *Interpreter, target: *Value.Reference) Error!?Type {
+        if (target.path.len == 0) return target.storage.snapshot();
+        return self.borrowReference(target);
+    }
+
+    /// The returned aggregate must not escape. Descendants remain immutable
+    /// because cell writes replace children rather than mutating their values.
+    fn borrowReference(self: *Interpreter, target: *Value.Reference) Error!?Type {
         return self.readValuePath(target.storage.value, target.path);
     }
 
@@ -4407,7 +4445,24 @@ pub const Interpreter = struct {
         source_node: ?Ast.Node.Index,
     ) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
-        target.storage.value = try self.replaceReferenceValue(handle, target.storage.value, destination, target.path, value, source_node) orelse return false;
+        if (target.path.len != 0 and target.storage.value.data == .comptime_value and
+            target.storage.value.data.comptime_value.data == .array)
+        {
+            const index = switch (target.path[0]) {
+                .index, .tuple_index => |index| index,
+                else => null,
+            };
+            if (index) |element_index| {
+                const items = target.storage.value.data.comptime_value.data.array;
+                if (element_index >= items.len) return false;
+                const child_type = try self.assignmentChildType(destination, target.path[0]) orelse return false;
+                const updated = try self.replaceReferenceValue(handle, items[element_index], child_type, target.path[1..], value, source_node) orelse return false;
+                try target.storage.replaceElement(self.analyser, element_index, updated);
+                return true;
+            }
+        }
+        const updated = try self.replaceReferenceValue(handle, target.storage.value, destination, target.path, value, source_node) orelse return false;
+        target.storage.replace(updated);
         return true;
     }
 
@@ -5247,7 +5302,7 @@ pub const Interpreter = struct {
             try bindings.put(self.analyser.arena, token_handle, bound);
         }
         for (self.cells.keys(), self.cells.values()) |token_handle, storage| {
-            try bindings.put(self.analyser.arena, token_handle, storage.value);
+            try bindings.put(self.analyser.arena, token_handle, storage.snapshot());
         }
         info.bound_params = bindings;
         result.data = .{ .container = info };
@@ -5472,6 +5527,7 @@ pub const Interpreter = struct {
         node: Ast.Node.Index,
         expression: bool,
         destination: ResultLocation,
+        preserve_capture_target: bool,
     ) Error!Flow {
         const tree = &handle.tree;
         const switch_node = tree.switchFull(node);
@@ -5491,6 +5547,7 @@ pub const Interpreter = struct {
             .label = label_token,
             .destination = destination,
             .is_loop = false,
+            .preserve_capture_target = preserve_capture_target,
             .continue_destination = condition_type,
             .continue_by_ref = continue_by_ref,
         };
@@ -5505,7 +5562,10 @@ pub const Interpreter = struct {
                 if (reference) |value| .{ .reference = value } else null,
             ) orelse return .unknown;
             const flow: Flow = if (expression) expression_flow: {
-                const result = try self.evalSourceWithResultLocation(handle, target, destination);
+                const result: ?EvaluatedSource = if (preserve_capture_target) capture: {
+                    const operand = try self.captureOperand(handle, target, 0) orelse break :capture null;
+                    break :capture .{ .value = operand.value, .source_node = target, .capture_target = operand.target };
+                } else try self.evalSourceWithResultLocation(handle, target, destination);
                 if (self.pending_flow) |pending| {
                     self.pending_flow = null;
                     break :expression_flow pending;
@@ -5784,7 +5844,7 @@ pub const Interpreter = struct {
             .for_simple, .@"for" => return self.forLoop(handle, tree.fullFor(node).?, false, .none, false),
             .while_simple, .while_cont, .@"while" => return self.whileLoop(handle, ast.fullWhile(tree, node).?, false, .none, false),
             .@"switch", .switch_comma => {
-                if (tree.switchFull(node).label_token != null) return self.switchLoop(handle, node, false, .none);
+                if (tree.switchFull(node).label_token != null) return self.switchLoop(handle, node, false, .none, false);
                 const target = try self.switchTarget(handle, node) orelse return .unknown;
                 return self.statement(handle, target);
             },

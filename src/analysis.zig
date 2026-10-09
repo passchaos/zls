@@ -2261,7 +2261,7 @@ pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory
                         error.OutOfMemory => return error.OutOfMemory,
                         error.Canceled => return null,
                     }
-                else if (reference.path.len == 0) reference.storage.value else null;
+                else if (reference.path.len == 0) reference.storage.snapshot() else null;
                 if (target) |value| return .{ .type = value, .is_const = false };
             },
             .array => |items| {
