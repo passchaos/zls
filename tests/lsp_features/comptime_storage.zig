@@ -45,6 +45,23 @@ test "comptime nested storage snapshots agree with Zig" {
     });
 }
 
+test "comptime indexed fields agree with Zig" {
+    try testCases(@import("../fixtures/comptime_fields.zig"), @embedFile("../fixtures/comptime_fields.zig"), .{
+        "wide_snapshots",
+        "partial_values_and_defaults",
+        "reordered_initializers",
+        "appended_fields",
+        "initializer_self_reads",
+        "dynamic_field_names",
+        "nested_wide_snapshot",
+        "pointer_after_reordering",
+        "generated_wide_type",
+        "quoted_fields",
+        "repeated_array_pointer",
+        "concatenated_array_pointer",
+    });
+}
+
 fn testCases(comptime fixture: type, comptime fixture_source: []const u8, comptime cases: anytype) !void {
     inline for (cases) |name| {
         errdefer std.debug.print("comptime storage case: {s}\n", .{name});

@@ -103,12 +103,7 @@ const Owned = struct {
     fn indexOf(self: *Owned, access: Access) ?usize {
         return switch (access) {
             .index, .tuple_index => |index| if (self.data == .array and index < self.data.array.len) index else null,
-            .field => |name| if (self.data == .fields) field: {
-                for (self.data.fields, 0..) |field, index| {
-                    if (std.mem.eql(u8, field.name, name)) break :field index;
-                }
-                break :field null;
-            } else null,
+            .field => |name| self.value.fieldIndex(name),
             .optional_payload => if (self.value.data == .optional and self.value.data.optional != null) 0 else null,
             .error_union_payload => if (self.value.data == .error_union and self.value.data.error_union == .payload) 0 else null,
         };

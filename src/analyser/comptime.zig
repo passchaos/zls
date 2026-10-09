@@ -8,9 +8,13 @@ const Type = Analyser.Type;
 const Handle = @import("../DocumentStore.zig").Handle;
 const Error = Analyser.Error;
 const InternPool = @import("InternPool.zig");
+const FieldIndex = @import("field_index.zig");
 
 pub const Value = struct {
     ty: Type,
+    /// Auxiliary lookup only: field names/order remain unchanged when cells
+    /// clone or mutate values. This does not participate in semantic identity.
+    field_index: ?*const FieldIndex = null,
     data: union(enum) {
         array: []const Type,
         sequence: Sequence,
@@ -189,11 +193,11 @@ pub const Value = struct {
             },
             .fields => |fields| {
                 if (fields.len != other.data.fields.len) return false;
-                for (fields) |a| for (other.data.fields) |b| {
-                    if (!std.mem.eql(u8, a.name, b.name)) continue;
+                for (fields) |a| {
+                    const index = other.fieldIndex(a.name) orelse return false;
+                    const b = other.data.fields[index];
                     if (!a.value.eql(b.value)) return false;
-                    break;
-                } else return false;
+                }
             },
             .optional => |payload| {
                 if ((payload == null) != (other.data.optional == null)) return false;
@@ -370,6 +374,7 @@ pub const Value = struct {
     pub fn create(analyser: *Analyser, ty: Type, data: @FieldType(Value, "data")) error{OutOfMemory}!Type {
         const value = try analyser.arena.create(Value);
         value.* = .{ .ty = ty, .data = data };
+        if (data == .fields) value.field_index = try FieldIndex.create(analyser.arena, data.fields);
         return .{ .data = .{ .comptime_value = value }, .is_type_val = false };
     }
 
@@ -639,10 +644,16 @@ pub const Value = struct {
     }
 
     pub fn field(value: Type, name: []const u8) ?Type {
-        for (fieldEntries(value) orelse return null) |entry| {
-            if (std.mem.eql(u8, entry.name, name)) return entry.value;
-        }
-        return null;
+        const resolved = deref(value);
+        if (resolved.data != .comptime_value) return null;
+        const aggregate = resolved.data.comptime_value;
+        const index = aggregate.fieldIndex(name) orelse return null;
+        return aggregate.data.fields[index].value;
+    }
+
+    pub fn fieldIndex(self: *const Value, name: []const u8) ?usize {
+        if (self.data != .fields) return null;
+        return FieldIndex.lookup(self.field_index, self.data.fields, name);
     }
 };
 
@@ -1151,7 +1162,7 @@ pub const Interpreter = struct {
         if (tree.nodeTag(unwrapped) == .field_access) {
             const base, const field_token = tree.nodeData(unwrapped).node_and_token;
             const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
-            const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
+            const field_name = try self.analyser.identifierTokenName(tree, field_token) orelse return null;
             const value = try self.analyser.resolveFieldAccess(base_operand.value, field_name) orelse return null;
             var targeted_base = base_operand;
             targeted_base.target = self.captureTargetOrTemporary(handle, base, base_operand);
@@ -1710,6 +1721,8 @@ pub const Interpreter = struct {
             .@"orelse",
             .@"catch",
             .@"try",
+            .array_mult,
+            .array_cat,
             => true,
             .field_access => isTemporaryAddressOperand(tree, tree.nodeData(unwrapped).node_and_token[0], depth + 1),
             .array_access => isTemporaryAddressOperand(tree, tree.nodeData(unwrapped).node_and_node[0], depth + 1),
@@ -2311,7 +2324,7 @@ pub const Interpreter = struct {
             },
             .field_access => {
                 const base, const field_token = handle.tree.nodeData(node).node_and_token;
-                const field_name = offsets.identifierTokenToNameSlice(&handle.tree, field_token);
+                const field_name = try self.analyser.identifierTokenName(&handle.tree, field_token) orelse return null;
                 if (!std.mem.eql(u8, field_name, "ptr") and !std.mem.eql(u8, field_name, "len") and
                     try self.isLocalReferenceExpression(handle, node, 0))
                 {
@@ -3888,7 +3901,7 @@ pub const Interpreter = struct {
                 const base, const field_token = tree.nodeData(node).node_and_token;
                 const parent = try self.aggregateReference(handle, base) orelse return null;
                 const current = try self.borrowReference(parent) orelse return null;
-                const field_name = offsets.identifierTokenToNameSlice(tree, field_token);
+                const field_name = try self.analyser.identifierTokenName(tree, field_token) orelse return null;
                 const aggregate_type = try current.typeOf(self.analyser);
                 if (aggregate_type.isTupleType(self.analyser)) {
                     const index = std.fmt.parseUnsigned(usize, field_name, 10) catch return null;
@@ -4166,14 +4179,39 @@ pub const Interpreter = struct {
         if (fields.len != field_nodes.len) return null;
         const tree = &handle.tree;
         const coerced = try self.analyser.arena.alloc(Value.Field, fields.len);
-        for (fields, coerced) |field, *result| {
+        var nodes_by_name: std.StringHashMapUnmanaged(Ast.Node.Index) = .empty;
+        defer nodes_by_name.deinit(self.analyser.gpa);
+        for (fields, coerced, 0..) |field, *result, position| {
             const field_type = try self.assignmentChildType(destination, .{ .field = field.name }) orelse return null;
-            const field_node = for (field_nodes) |node| {
-                const name_token = tree.firstToken(node) - 2;
+            const field_node = source: {
+                // Evaluation normally retains source order. Only construct a
+                // secondary lookup when an aggregate was reordered.
+                const direct = field_nodes[position];
+                const name_token = tree.firstToken(direct) - 2;
                 if (tree.tokenTag(name_token) != .identifier) return null;
-                const name = offsets.identifierTokenToNameSlice(tree, name_token);
-                if (std.mem.eql(u8, field.name, name)) break node;
-            } else return null;
+                const name = try self.analyser.identifierTokenName(tree, name_token) orelse return null;
+                if (std.mem.eql(u8, field.name, name)) break :source direct;
+                if (fields.len >= FieldIndex.minimum_fields) {
+                    if (nodes_by_name.count() == 0) {
+                        try nodes_by_name.ensureTotalCapacity(self.analyser.gpa, @intCast(field_nodes.len));
+                        for (field_nodes) |node| {
+                            const token = tree.firstToken(node) - 2;
+                            if (tree.tokenTag(token) != .identifier) return null;
+                            const field_name = try self.analyser.identifierTokenName(tree, token) orelse return null;
+                            const entry = nodes_by_name.getOrPutAssumeCapacity(field_name);
+                            if (!entry.found_existing) entry.value_ptr.* = node;
+                        }
+                    }
+                    break :source nodes_by_name.get(field.name) orelse return null;
+                }
+                for (field_nodes) |node| {
+                    const token = tree.firstToken(node) - 2;
+                    if (tree.tokenTag(token) != .identifier) return null;
+                    const field_name = try self.analyser.identifierTokenName(tree, token) orelse return null;
+                    if (std.mem.eql(u8, field.name, field_name)) break :source node;
+                }
+                return null;
+            };
             result.* = .{
                 .name = field.name,
                 .value = try self.coerceFromSource(
@@ -6481,4 +6519,39 @@ test "comptime interpreter evaluation quota remains bounded and monotonic" {
     budget.raiseQuota(std.math.maxInt(u32));
     try std.testing.expectEqual(Interpreter.max_step_quota, budget.quota);
     try std.testing.expectEqual(Interpreter.max_step_quota - 10, budget.steps);
+}
+
+test "comptime field identity ignores lookup metadata and field order" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const count = FieldIndex.minimum_fields + 4;
+    const fields = try arena.alloc(Value.Field, count);
+    const reordered = try arena.alloc(Value.Field, count);
+    for (fields, 0..) |*entry, i| {
+        entry.* = .{ .name = try std.fmt.allocPrint(arena, "field_{}", .{i}), .value = Type.unknown_type };
+        reordered[count - 1 - i] = entry.*;
+    }
+    var original: Value = .{ .ty = Type.unknown_type, .data = .{ .fields = fields } };
+    const other: Value = .{
+        .ty = Type.unknown_type,
+        .data = .{ .fields = reordered },
+        .field_index = try FieldIndex.create(arena, reordered),
+    };
+    try std.testing.expect(original.eql(&other));
+    try std.testing.expect(other.eql(&original));
+    var original_hash: std.hash.Wyhash = .init(0);
+    var other_hash: std.hash.Wyhash = .init(0);
+    original.hash(&original_hash);
+    other.hash(&other_hash);
+    try std.testing.expectEqual(original_hash.final(), other_hash.final());
+    original.field_index = try FieldIndex.create(arena, fields);
+    try std.testing.expect(original.eql(&other));
+    try std.testing.expectEqual(@as(?usize, null), original.fieldIndex("absent"));
+
+    var changed = Type.unknown_type;
+    changed.is_type_val = !changed.is_type_val;
+    reordered[0].value = changed;
+    try std.testing.expect(!original.eql(&other));
+    try std.testing.expect(!other.eql(&original));
 }

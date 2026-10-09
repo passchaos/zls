@@ -62,6 +62,12 @@ def main():
         "const field = selected.",
         "",
     ))
+    metrics = measure_completion(args.binary, source, {"items": f"[{count - 1}]u8"}, args.warmup, args.rounds)
+    print(json.dumps(dict(metrics, element_count=count, initializer=args.initializer, layout=args.layout), indent=2))
+
+
+def measure_completion(binary, source, expected, warmup, rounds):
+    position = dict(line=len(source.splitlines()) - 1, character=len("const field = selected."))
     samples = []
     with tempfile.TemporaryDirectory(prefix="zls-comptime-bench-") as directory:
         root = Path(directory)
@@ -70,7 +76,7 @@ def main():
         uri = (root / "comptime.zig").as_uri()
         with (root / "stderr.log").open("w+") as stderr:
             process = subprocess.Popen(
-                [str(args.binary.resolve()), "--config-path", str(config)],
+                [str(binary.resolve()), "--config-path", str(config)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
             )
             client = Client(process)
@@ -82,18 +88,17 @@ def main():
                 client.notify("textDocument/didOpen", dict(textDocument=dict(
                     uri=uri, languageId="zig", version=1, text=source,
                 )))
-                for iteration in range(args.warmup + args.rounds):
+                for iteration in range(warmup + rounds):
                     start = time.perf_counter_ns()
                     response = client.request("textDocument/completion", dict(
                         textDocument=dict(uri=uri),
-                        position=dict(line=9, character=len("const field = selected.")),
+                        position=position,
                     ))
                     elapsed_us = (time.perf_counter_ns() - start) / 1000
                     actual = {item["label"]: item.get("detail") for item in (response or {}).get("items", [])}
-                    expected = {"items": f"[{count - 1}]u8"}
                     if actual != expected:
                         raise RuntimeError(f"incorrect comptime result: {actual}, expected {expected}")
-                    if iteration >= args.warmup:
+                    if iteration >= warmup:
                         samples.append(elapsed_us)
                 client.request("shutdown", None)
                 client.notify("exit", None)
@@ -113,16 +118,14 @@ def main():
 
     samples.sort()
     peak_rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-    print(json.dumps(dict(
-        binary=str(args.binary.resolve()), element_count=count,
-        initializer=args.initializer,
-        layout=args.layout,
+    return dict(
+        binary=str(binary.resolve()),
         max_rss_bytes=peak_rss * (1 if sys.platform == "darwin" else 1024),
-        source_bytes=len(source.encode()), warmup=args.warmup, rounds=args.rounds,
+        source_bytes=len(source.encode()), warmup=warmup, rounds=rounds,
         median_us=statistics.median(samples), minimum_us=samples[0],
         p90_us=samples[int((len(samples) - 1) * 0.9)], maximum_us=samples[-1],
         samples_us=samples,
-    ), indent=2))
+    )
 
 
 if __name__ == "__main__":
