@@ -6539,11 +6539,43 @@ pub const Interpreter = struct {
         const return_type = if (is_type_function)
             Type.fromIP(analyser, .type_type, .type_type)
         else return_type: {
-            const return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
+            var return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
+            if (analyser.hasUnresolvedType(return_value)) {
+                return_value = resolve: {
+                    const old_interpreter = analyser.comptime_interpreter;
+                    const old_bindings = analyser.generic_bindings;
+                    analyser.comptime_interpreter = &child;
+                    analyser.generic_bindings = &child.bindings;
+                    defer {
+                        analyser.comptime_interpreter = old_interpreter;
+                        analyser.generic_bindings = old_bindings;
+                    }
+                    break :resolve try analyser.resolveReturnValueOfFuncNode(info.handle, info.fn_node) orelse return .unknown;
+                };
+            }
             break :return_type try return_value.typeOf(analyser);
         };
         child.return_type = return_type;
-        const flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+        var flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+        if (flow == .unknown and is_type_function) {
+            const fallback = resolve: {
+                const old_interpreter = analyser.comptime_interpreter;
+                const old_bindings = analyser.generic_bindings;
+                analyser.comptime_interpreter = &child;
+                analyser.generic_bindings = &child.bindings;
+                defer {
+                    analyser.comptime_interpreter = old_interpreter;
+                    analyser.generic_bindings = old_bindings;
+                }
+                break :resolve try analyser.resolveTrailingTypeFunctionReturn(info.handle, info.fn_node);
+            };
+            if (fallback) |value| {
+                flow = .{ .returned = .{
+                    .value = try child.captureBindings(value),
+                    .source_node = null,
+                } };
+            }
+        }
         const old_interpreter = analyser.comptime_interpreter;
         const old_bindings = analyser.generic_bindings;
         analyser.comptime_interpreter = &child;
@@ -6552,7 +6584,7 @@ pub const Interpreter = struct {
             analyser.comptime_interpreter = old_interpreter;
             analyser.generic_bindings = old_bindings;
         }
-        return switch (flow) {
+        const result: Flow = switch (flow) {
             .next => blk: {
                 const coerced = try child.coerceFromSource(
                     info.handle,
@@ -6581,6 +6613,7 @@ pub const Interpreter = struct {
             },
             else => flow,
         };
+        return result;
     }
 
     fn callValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {

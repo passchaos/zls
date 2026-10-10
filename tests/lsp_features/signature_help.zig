@@ -369,6 +369,57 @@ test "selected FieldEnum method specializes return type" {
     , "fn call(comptime _: Impl(anytype), comptime method: enum(u0) {...}, args: struct { anytype }) anyerror!usize", 2);
 }
 
+test "generated Struct field preserves comptime value parameters" {
+    try testSignatureHelp(
+        \\const std = @import("std");
+        \\const Capability = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\const Buffer = struct {};
+        \\fn associatedFor(comptime Contract: type, comptime T: type) Contract.Associated {
+        \\    _ = T;
+        \\    return .{};
+        \\}
+        \\fn Impl(comptime Contract: type, comptime T: type) type {
+        \\    return Model(Contract, T, associatedFor(Contract, T));
+        \\}
+        \\fn Model(comptime Contract: type, comptime T: type, comptime associated: Contract.Associated) type {
+        \\    std.debug.assert(@sizeOf(T) != 0);
+        \\    return struct {
+        \\        const Self = @This();
+        \\        pub fn call(_: Self, value: T) associated.Error!T { return value; }
+        \\    };
+        \\}
+        \\fn setField(comptime index: usize, comptime name: [:0]const u8, comptime T: type, comptime default_value: T,
+        \\    names: anytype, types: anytype, attrs: anytype) void
+        \\{
+        \\    const Default = struct { const value: T = default_value; };
+        \\    names[index] = name;
+        \\    types[index] = T;
+        \\    attrs[index] = .{ .default_value_ptr = @ptrCast(&Default.value) };
+        \\}
+        \\fn Models(comptime T: type, comptime capabilities: anytype) type {
+        \\    const fields = @typeInfo(@TypeOf(capabilities)).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        const capability = @field(capabilities, field.name);
+        \\        if (@TypeOf(capability) == type) {
+        \\            const M = Impl(capability, T);
+        \\            setField(index, field.name, M, M{}, &names, &types, &attrs);
+        \\            continue;
+        \\        }
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const models: Models(*Buffer, .{ .model = Capability }) = .{};
+        \\fn use() anyerror!void {
+        \\    _ = try models.model.call(<cursor>undefined);
+        \\}
+    , "fn call(_: Model(Capability,*Buffer,.{}), value: *Buffer) anyerror!*Buffer", 1);
+}
+
 test "branching receiver returns all method signatures" {
     try testSignatureHelps(
         \\const Alpha = struct {

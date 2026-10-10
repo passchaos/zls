@@ -25174,8 +25174,12 @@ test "enum argument of method on generated type" {
     , &.{
         .{
             .label = "read",
+            .labelDetails = .{
+                .detail = "(*u8, []u8)",
+                .description = "anyerror!usize",
+            },
             .kind = .EnumMember,
-            .detail = "fn (Subject, []u8) assoc.Error!usize",
+            .detail = "fn (*u8, []u8) anyerror!usize",
             .documentation = "Reads bytes into the supplied buffer.",
         },
     });

@@ -1429,7 +1429,7 @@ pub fn resolveReturnType(analyser: *Analyser, func_type_param: Type) error{OutOf
     return info.return_value.*;
 }
 
-fn resolveReturnValueOfFuncNode(
+pub fn resolveReturnValueOfFuncNode(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
     func_node: Ast.Node.Index,
@@ -1473,6 +1473,29 @@ fn resolveReturnValueOfFuncNode(
     }
 
     return try child_type.instanceTypeVal(analyser);
+}
+
+/// Resolves a trailing top-level return after proving that no earlier statement
+/// can return. This lets comptime evaluation skip unsupported validation-only
+/// statements without choosing the wrong branch of a conditional type function.
+pub fn resolveTrailingTypeFunctionReturn(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    func_node: Ast.Node.Index,
+) Error!?Type {
+    const tree = &handle.tree;
+    if (tree.nodeTag(func_node) != .fn_decl) return null;
+    const body = tree.nodeData(func_node).node_and_node[1];
+    var buffer: [2]Ast.Node.Index = undefined;
+    const statements = tree.blockStatements(&buffer, body) orelse return null;
+    if (statements.len == 0) return null;
+    for (statements[0 .. statements.len - 1]) |statement| {
+        if (findReturnStatement(tree, statement) != null) return null;
+    }
+    const return_node = statements[statements.len - 1];
+    if (tree.nodeTag(return_node) != .@"return") return null;
+    const return_expr = tree.nodeData(return_node).opt_node.unwrap() orelse return null;
+    return analyser.resolveTypeOfNodeInternal(.of(return_expr, handle));
 }
 
 fn comptimeInterpreterNeeded(analyser: *Analyser, handle: *DocumentStore.Handle, body: Ast.Node.Index) error{OutOfMemory}!bool {
