@@ -15,7 +15,7 @@ def main():
     parser.add_argument("binary", type=Path)
     parser.add_argument("--field-count", type=int, default=512)
     parser.add_argument("--iterations", type=int, default=4)
-    parser.add_argument("--access", choices=("read", "write", "builtin"), default="write")
+    parser.add_argument("--access", choices=("read", "write", "builtin", "assign", "builtin-assign"), default="write")
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--rounds", type=int, default=20)
     args = parser.parse_args()
@@ -34,7 +34,10 @@ def main():
     else:
         storage = f"var state: Record = .{{ {values} }};"
         statements = " ".join(
-            f'@field(state, "{name}") += 1;' if args.access == "builtin" else f"state.{name} += 1;"
+            f'@field(state, "{name}") = @field(state, "{name}") + 1;' if args.access == "builtin-assign" else
+            f"state.{name} = state.{name} + 1;" if args.access == "assign" else
+            f'@field(state, "{name}") += 1;' if args.access == "builtin" else
+            f"state.{name} += 1;"
             for name in names
         )
         length, expected = f"state.{names[-1]}", args.iterations + 1

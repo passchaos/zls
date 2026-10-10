@@ -12,8 +12,10 @@ python3 src/tools/benchmark_lsp_comptime_fields.py zig-out/bin/zls --field-count
 python3 src/tools/benchmark_lsp_comptime_fields.py /path/to/baseline/zls --field-count 512 --access write
 ```
 
-`--access read` sums all fields, `write` increments all fields with dot syntax,
-and `builtin` increments them with `@field`. The generated function initializes
+`--access read` sums all fields, `write` increments all fields with `+=` via
+dot syntax, and `builtin` does the same with `@field`. `assign` and
+`builtin-assign` rewrite each field as `x = x + 1` (dot or `@field`) to
+exercise full read-modify-write paths. The generated function initializes
 every field and repeats its accesses four times by default (`--iterations`,
 1 through 8). `--field-count` accepts 1 through 4096. The function requests an
 evaluation quota of one million to keep the largest cases evaluable; the

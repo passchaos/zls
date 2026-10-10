@@ -62,6 +62,35 @@ test "comptime indexed fields agree with Zig" {
     });
 }
 
+
+test "comptime dynamic fields agree with Zig" {
+    try testCases(@import("../fixtures/comptime_dynamic_fields.zig"), @embedFile("../fixtures/comptime_dynamic_fields.zig"), .{
+        "scalar_name_effect",
+        "aggregate_name_effect",
+        "temporary_base",
+        "pointer_name_effect",
+        "function_base_once",
+        "nested_fields_and_index",
+        "saved_field_and_alias",
+        "dynamic_field_loop",
+        "optional_dynamic_field",
+        "union_name_effect",
+        "tuple_name_effect",
+        "field_pointer_name_effect",
+        "destructured_fields",
+        "escaped_local_and_field",
+        "function_field_name_effect",
+        "conditional_base",
+        "block_base",
+        "conditional_pointer_base",
+        "error_payload_base",
+        "type_namespace_field",
+        "bound_type_namespace",
+        "explicit_pointer_dereference",
+    });
+}
+
+
 fn testCases(comptime fixture: type, comptime fixture_source: []const u8, comptime cases: anytype) !void {
     inline for (cases) |name| {
         errdefer std.debug.print("comptime storage case: {s}\n", .{name});
@@ -79,3 +108,4 @@ fn testCases(comptime fixture: type, comptime fixture_source: []const u8, compti
         });
     }
 }
+

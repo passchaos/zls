@@ -6025,7 +6025,37 @@ pub fn resolveComptimeFieldValue(
         const declaration = try analyser.lookupSymbolContainer(container, field_name, .field);
         if (declaration != null) return try analyser.enumValue(container, field_name);
     }
+    if (container.is_type_val) {
+        if (try container.lookupSymbol(analyser, field_name)) |decl| {
+            if (decl.isConst()) {
+                if (try analyser.resolveTypeNamespaceDeclValue(decl)) |value| return value;
+            }
+        }
+    }
     return analyser.resolveFieldAccess(container, field_name);
+}
+
+fn resolveTypeNamespaceDeclValue(analyser: *Analyser, decl: DeclWithHandle) Error!?Type {
+    const declaration_node = switch (decl.decl) {
+        .ast_node => |node| node,
+        else => return null,
+    };
+    const variable = decl.handle.tree.fullVarDecl(declaration_node) orelse return null;
+    if (decl.handle.tree.tokenTag(variable.ast.mut_token) != .keyword_const) return null;
+    const initializer = variable.ast.init_node.unwrap() orelse return null;
+    const destination = if (variable.ast.type_node.unwrap()) |type_node|
+        try (try analyser.resolveTypeOfNode(.{
+            .node_handle = .of(type_node, decl.handle),
+            .container_type = decl.container_type,
+        }) orelse return null).instanceTypeVal(analyser) orelse return null
+    else
+        Type.fromIP(analyser, .comptime_int_type, null);
+    if (try comptime_eval.Interpreter.evaluateTyped(analyser, decl.handle, initializer, destination)) |value|
+        return value;
+    return try analyser.resolveComptimeValue(.{
+        .node_handle = .of(initializer, decl.handle),
+        .container_type = decl.container_type,
+    });
 }
 
 fn internPoolFieldType(analyser: *Analyser, container_type: Type, name: []const u8) ?Type {

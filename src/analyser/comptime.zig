@@ -378,6 +378,20 @@ pub const Value = struct {
         return .{ .data = .{ .comptime_value = value }, .is_type_val = false };
     }
 
+    /// Like `create`, but reuses a field-name index when the layout is unchanged.
+    pub fn createSharingIndex(
+        analyser: *Analyser,
+        ty: Type,
+        data: @FieldType(Value, "data"),
+        field_index: ?*const FieldIndex,
+    ) error{OutOfMemory}!Type {
+        const value = try analyser.arena.create(Value);
+        value.* = .{ .ty = ty, .data = data, .field_index = if (data == .fields) field_index else null };
+        if (data == .fields and value.field_index == null)
+            value.field_index = try FieldIndex.create(analyser.arena, data.fields);
+        return .{ .data = .{ .comptime_value = value }, .is_type_val = false };
+    }
+
     pub fn createExpression(analyser: *Analyser, ty: Type, node_handle: Analyser.NodeWithHandle) error{OutOfMemory}!Type {
         return create(analyser, ty, .{ .expression = node_handle });
     }
@@ -1264,23 +1278,46 @@ pub const Interpreter = struct {
             var buffer: [2]Ast.Node.Index = undefined;
             const params = tree.builtinCallParams(&buffer, unwrapped).?;
             if (params.len != 2) return null;
+            // Evaluate the base before the name. Aggregate lvalues keep that
+            // location; pointer lvalues reload the pointer after name effects;
+            // temporary pointers keep the pre-name pointer value.
             const base_operand = try self.captureOperand(handle, params[0], depth + 1) orelse return null;
+            var targeted_base = base_operand;
+            targeted_base.target = self.captureTargetOrTemporary(handle, params[0], base_operand);
             const name_value = try self.eval(handle, params[1]) orelse return null;
             if (name_value.data != .string_value) return null;
             const field_name = name_value.data.string_value.bytes;
-            const value = try self.analyser.resolveComptimeFieldValue(base_operand.value, field_name) orelse return null;
-            var targeted_base = base_operand;
-            targeted_base.target = self.captureTargetOrTemporary(handle, params[0], base_operand);
-            const target = try self.aggregateCaptureTarget(targeted_base);
-            if (target == null) return .{ .value = value, .target = null };
-            return .{
-                .value = value,
-                .target = try self.extendCaptureTarget(
-                    target.?,
-                    value,
-                    try self.aggregateFieldAccess(base_operand.value, field_name),
-                ),
+            const base_type = try targeted_base.value.typeOf(self.analyser);
+            const base_instance = try base_type.instanceUnchecked(self.analyser);
+            const current = if (base_instance.pointerSize(self.analyser) != null) blk: {
+                const pointer_value = if (targeted_base.target) |target| switch (target) {
+                    .reference => try self.borrowReference(target.reference) orelse return null,
+                    .pointee => targeted_base.value,
+                } else targeted_base.value;
+                break :blk pointer_value;
+            } else if (stableAggregateCaptureTarget(targeted_base)) |target| switch (target) {
+                .reference => try self.borrowReference(target.reference) orelse return null,
+                .pointee => |pointee| try self.readValuePath(pointee.value, pointee.path) orelse return null,
+            } else targeted_base.value;
+            const value = try self.analyser.resolveComptimeFieldValue(current, field_name) orelse return null;
+            // Type namespaces are declarations, not assignable aggregate fields.
+            if (current.is_type_val) return .{ .value = value, .target = null };
+            const aggregate_target = if (base_instance.pointerSize(self.analyser) != null)
+                stableAggregateCaptureTarget(.{ .value = current, .target = null })
+            else
+                stableAggregateCaptureTarget(targeted_base);
+            const target = aggregate_target orelse return .{ .value = value, .target = null };
+            const aggregate = switch (target) {
+                .reference => try self.borrowReference(target.reference) orelse current,
+                .pointee => |pointee| try self.readValuePath(pointee.value, pointee.path) orelse current,
             };
+            const extended = try self.extendCaptureTarget(
+                target,
+                value,
+                try self.aggregateFieldAccess(aggregate, field_name),
+            );
+            if (extended == .reference) extended.reference.storage.freezePath(extended.reference.path);
+            return .{ .value = value, .target = extended };
         }
         return self.captureOperandFallback(handle, unwrapped, depth);
     }
@@ -1329,6 +1366,19 @@ pub const Interpreter = struct {
             operand.value,
             try self.captureAggregateValue(operand.value),
         ) orelse operand.target;
+    }
+
+    /// Like `aggregateCaptureTarget`, but does not freeze owned storage. Used when
+    /// the location must remain writable until a later load or path freeze.
+    fn stableAggregateCaptureTarget(operand: CaptureOperand) ?CaptureTarget {
+        if (operand.value.data == .comptime_value) {
+            switch (operand.value.data.comptime_value.data) {
+                .reference => |reference| return .{ .reference = reference },
+                .pointee => |pointee| return .{ .pointee = pointee },
+                else => {},
+            }
+        }
+        return operand.target;
     }
 
     fn captureTargetFromPointer(
@@ -2335,7 +2385,7 @@ pub const Interpreter = struct {
                     try self.staticSequenceValue(handle, base) orelse try self.eval(handle, base) orelse return null
                 else
                     try self.eval(handle, base) orelse return null;
-                return self.analyser.resolveFieldAccess(value, field_name);
+                return self.analyser.resolveComptimeFieldValue(value, field_name);
             },
             .array_access => {
                 const base, const index_node = handle.tree.nodeData(node).node_and_node;
@@ -3070,13 +3120,14 @@ pub const Interpreter = struct {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 2) return null;
+                    if (std.mem.eql(u8, name, "@field")) {
+                        const captured = try self.captureOperand(handle, node, 0) orelse return null;
+                        return captured.value;
+                    }
                     const container = try self.eval(handle, params[0]) orelse return null;
                     const name_value = try self.eval(handle, params[1]) orelse return null;
                     if (name_value.data != .string_value) return null;
                     const field_name = name_value.data.string_value.bytes;
-                    if (std.mem.eql(u8, name, "@field")) {
-                        return self.analyser.resolveComptimeFieldValue(container, field_name);
-                    }
                     return self.analyser.resolveComptimeFieldTypeValue(container, field_name);
                 }
                 if (std.mem.eql(u8, name, "@clz") or
@@ -3856,6 +3907,13 @@ pub const Interpreter = struct {
             .array_access => tree.nodeData(node).node_and_node[0],
             .field_access, .unwrap_optional, .grouped_expression => tree.nodeData(node).node_and_token[0],
             .deref => tree.nodeData(node).node,
+            .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => blk: {
+                if (!std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@field")) return false;
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 2) return false;
+                break :blk params[0];
+            },
             else => return false,
         };
         return self.isLocalReferenceExpression(handle, base, depth + 1);
@@ -3874,11 +3932,24 @@ pub const Interpreter = struct {
             var buffer: [2]Ast.Node.Index = undefined;
             const params = tree.builtinCallParams(&buffer, node).?;
             if (params.len != 2) return null;
-            const parent = try self.aggregateReference(handle, params[0]) orelse return null;
-            const current = try self.borrowReference(parent) orelse return null;
+            // Capture the base location before name side effects. Pointer
+            // lvalues reload after the name; aggregate lvalues stay pinned.
+            const base_reference = try self.referenceForNode(handle, params[0]);
+            const base_value = if (base_reference == null) try self.eval(handle, params[0]) orelse return null else null;
             const name_value = try self.eval(handle, params[1]) orelse return null;
             if (name_value.data != .string_value) return null;
             const field_name = name_value.data.string_value.bytes;
+            const loaded = if (base_reference) |reference|
+                try self.borrowReference(reference) orelse return null
+            else
+                base_value.?;
+            const parent = if (loaded.data == .comptime_value and loaded.data.comptime_value.data == .reference)
+                loaded.data.comptime_value.data.reference
+            else
+                base_reference orelse return null;
+            const current = try self.borrowReference(parent) orelse return null;
+            // Declarations on type values are not aggregate field references.
+            if (current.is_type_val) return null;
             if (try self.analyser.resolveComptimeFieldValue(current, field_name) == null) return null;
             return self.extendReference(
                 parent,
@@ -4571,11 +4642,13 @@ pub const Interpreter = struct {
                 const old_value = try analyser.resolveFieldAccess(current, field_name) orelse return null;
                 const new_value = try self.replaceReferenceValue(old_value, child_destination, path[1..], value) orelse return null;
                 const fields = Value.fieldEntries(current) orelse &.{};
+                const shared_index = if (current.data == .comptime_value) current.data.comptime_value.field_index else null;
                 const updated = try analyser.arena.dupe(Value.Field, fields);
                 for (updated) |*field| {
                     if (!std.mem.eql(u8, field.name, field_name)) continue;
                     field.value = new_value;
-                    return try Value.create(analyser, destination, .{ .fields = updated });
+                    // Names and order are unchanged, so the index stays valid.
+                    return try Value.createSharingIndex(analyser, destination, .{ .fields = updated }, shared_index);
                 }
                 if (!destination.isStructType(analyser)) return null;
                 if (try analyser.lookupSymbolContainer(try destination.instanceUnchecked(analyser), field_name, .field) == null) return null;
