@@ -7971,10 +7971,15 @@ fn resolveTupleTypeConstructor(
     if (tree.nodeTag(node_handle.node) != .address_of) return null;
     const literal_node = tree.nodeData(node_handle.node).node;
     var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
-    if (literal.ast.type_expr.unwrap() != null) return null;
-    const element_types = try analyser.arena.alloc(Type, literal.ast.elements.len);
-    for (literal.ast.elements, element_types) |element_node, *element_type| {
+    const elements: []const Ast.Node.Index = if (tree.fullArrayInit(&buffer, literal_node)) |literal| elements: {
+        if (literal.ast.type_expr.unwrap() != null) return null;
+        break :elements literal.ast.elements;
+    } else if (tree.fullStructInit(&buffer, literal_node)) |literal| elements: {
+        if (literal.ast.type_expr.unwrap() != null or literal.ast.fields.len != 0) return null;
+        break :elements &.{};
+    } else return null;
+    const element_types = try analyser.arena.alloc(Type, elements.len);
+    for (elements, element_types) |element_node, *element_type| {
         element_type.* = try analyser.resolveTypeOfNodeInternal(.{
             .node_handle = .of(element_node, node_handle.handle),
             .container_type = literal_options.container_type,

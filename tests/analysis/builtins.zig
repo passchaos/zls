@@ -766,6 +766,15 @@ const UnsignedInt = @Int(.unsigned, 256);
 //    ^^^^^^^^^^^ (type)(u256)
 const Tuple = @Tuple(&.{ u8, i16 });
 //    ^^^^^ (type)(struct { u8, i16 })
+const EmptyTuple = @Tuple(&.{});
+//    ^^^^^^^^^^ (type)(struct {})
+const empty_tuple_is_tuple = @typeInfo(EmptyTuple).@"struct".is_tuple;
+//    ^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+const empty_tuple_field_count = @typeInfo(EmptyTuple).@"struct".fields.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
+const EmptyTupleFields = &.{};
+const AliasedEmptyTuple = @Tuple(EmptyTupleFields);
+//    ^^^^^^^^^^^^^^^^^ (type)(struct {})
 const TupleFields = &.{ i32, bool };
 const AliasedTuple = @Tuple(TupleFields);
 //    ^^^^^^^^^^^^ (type)(struct { i32, bool })
