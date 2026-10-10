@@ -992,6 +992,36 @@ const type_info_anyerror_if_fallback_len = reflectedErrorSetLengthIf(anyerror);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(99)
 const type_info_concrete_error_set_if_len = reflectedErrorSetLengthIf(error{ Oops, Failed });
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+fn reflectedErrorSetTailName(comptime E: type) u8 {
+    const errors = @typeInfo(E).error_set orelse return 0;
+    return errors[1..][0].name[0];
+}
+const type_info_error_set_tail_name = reflectedErrorSetTailName(error{ Alpha, Beta, Gamma });
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(66)
+fn reflectedErrorSetNestedTailName(comptime E: type) u8 {
+    const errors = @typeInfo(E).error_set orelse return 0;
+    return errors[1..][1..][0].name[0];
+}
+const type_info_error_set_nested_tail_name = reflectedErrorSetNestedTailName(error{ Alpha, Beta, Gamma });
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8)(71)
+fn reflectedErrorSetTailNameLength(comptime E: type) usize {
+    const errors = @typeInfo(E).error_set orelse return 0;
+    comptime var total: usize = 0;
+    inline for (errors[1..]) |error_info| total += error_info.name.len;
+    return total;
+}
+const type_info_error_set_tail_name_length = reflectedErrorSetTailNameLength(error{ Alpha, Beta, Gamma });
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(9)
+fn reflectedFirstErrorName(comptime errors: anytype) u8 {
+    return errors[0].name[0];
+}
+fn reflectedErrorSetSliceIdentity(comptime E: type) usize {
+    const errors = @typeInfo(E).error_set orelse return 0;
+    return @as(usize, reflectedFirstErrorName(errors[0..1])) * 100 +
+        reflectedFirstErrorName(errors[1..2]);
+}
+const type_info_error_set_slice_identity = reflectedErrorSetSliceIdentity(error{ Alpha, Beta });
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(6566)
 const type_info_struct_layout_auto = @typeInfo(ConcreteStruct).@"struct".layout == .auto;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backing_integer == null;
