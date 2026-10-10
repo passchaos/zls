@@ -243,12 +243,14 @@ test "comptime method on generated Struct default" {
         \\    comptime var types: [fields.len]type = undefined;
         \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
         \\    inline for (fields, 0..) |field, index| {
-        \\        const C = @field(capabilities, field.name);
-        \\        setField(index, field.name, makeModel(C), &names, &types, &attrs);
+        \\        const capability = @field(capabilities, field.name);
+        \\        const M = if (@TypeOf(capability) == type) makeModel(capability) else @TypeOf(capability);
+        \\        setField(index, field.name, M, &names, &types, &attrs);
         \\    }
         \\    return @Struct(.auto, null, &names, &types, &attrs);
         \\}
-        \\const models: Generated(.{ .reader = Reader, .seekable = Seekable }) = .{};
+        \\const broad_reader: Model(Reader, .{ .Error = anyerror }) = .{};
+        \\const models: Generated(.{ .reader = broad_reader, .seekable = Seekable }) = .{};
         \\comptime {
         \\    _ = models.reader.asso<>ciated();
         \\}

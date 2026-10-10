@@ -81,6 +81,7 @@ pub const BuildFile = struct {
     build_associated_config: ?std.json.Parsed(BuildAssociatedConfig) = null,
     impl: struct {
         mutex: std.Io.Mutex = .init,
+        initial_config_ready: std.Io.Event = .unset,
         build_runner_state: BuildRunnerState = .idle,
         version: u32 = 0,
         /// contains information extracted from running build.zig with a custom build runner
@@ -102,6 +103,17 @@ pub const BuildFile = struct {
             self.impl.mutex.unlock(io);
             return null;
         };
+    }
+
+    /// Returns the initial build configuration with `impl.mutex` held.
+    ///
+    /// A freshly discovered build file is loaded asynchronously. Callers that
+    /// need module mappings must wait for that first load instead of treating
+    /// the transient absence of a configuration as a permanent miss.
+    pub fn lockConfigAfterInitialLoad(self: *BuildFile, io: std.Io) std.Io.Cancelable!?BuildConfig {
+        if (self.tryLockConfig(io)) |config| return config;
+        try self.impl.initial_config_ready.wait(io);
+        return self.tryLockConfig(io);
     }
 
     pub fn unlockConfig(self: *BuildFile, io: std.Io) void {
@@ -137,7 +149,7 @@ pub const BuildFile = struct {
         var module_root_source_file_paths: std.ArrayList([]const u8) = .empty;
 
         {
-            const build_config = build_file.tryLockConfig(io) orelse return .unknown;
+            const build_config = try build_file.lockConfigAfterInitialLoad(io) orelse return .unknown;
             defer build_file.unlockConfig(io);
 
             const module_paths = build_config.modules.map.keys();
@@ -1124,12 +1136,16 @@ pub fn refreshDocumentFromFileSystem(self: *DocumentStore, uri: Uri, should_dele
 pub fn invalidateBuildFile(self: *DocumentStore, build_file_uri: Uri) void {
     comptime std.debug.assert(supports_build_system);
 
-    if (self.config.zig_exe_path == null) return;
-    if (self.config.build_runner_path == null) return;
-    if (self.config.global_cache_dir == null) return;
-    if (self.config.zig_lib_dir == null) return;
-
     const build_file = self.getBuildFile(build_file_uri) orelse return;
+
+    if (self.config.zig_exe_path == null or
+        self.config.build_runner_path == null or
+        self.config.global_cache_dir == null or
+        self.config.zig_lib_dir == null)
+    {
+        build_file.impl.initial_config_ready.set(self.io);
+        return;
+    }
 
     self.wait_group.async(self.io, invalidateBuildFileWorker, .{ self, build_file });
 }
@@ -1507,6 +1523,7 @@ fn invalidateBuildFileWorker(self: *DocumentStore, build_file: *BuildFile) std.I
             .running_but_already_invalidated => return,
         }
     }
+    defer build_file.impl.initial_config_ready.set(self.io);
 
     self.notifyBuildStart();
 
