@@ -269,6 +269,13 @@ test "generated Struct field falls back to its type definition" {
         \\const models: Generated() = .{};
         \\const selected = models.rea<>der;
     );
+    try testDefinition(
+        \\const Callback = <def><tdef>fn</tdef></def> (u8) void;
+        \\fn Generated() type {
+        \\    return @Struct(.auto, null, &.{"callback"}, &.{?Callback}, &.{.{} });
+        \\}
+        \\const value: Generated() = .{ .call<>back = null };
+    );
 }
 
 test "generic method definition keeps structural parameter type" {

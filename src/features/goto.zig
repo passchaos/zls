@@ -196,8 +196,30 @@ fn gotoDefinitionEnumLiteral(
         return gotoDefinitionStructInit(analyser, handle, source_index, kind, offset_encoding);
     };
     const name = offsets.locToSlice(handle.tree.source, name_loc);
-    const decl = (try analyser.getSymbolEnumLiteral(handle, source_index, name)) orelse return null;
-    return try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), decl, kind, offset_encoding);
+    if (try analyser.getSymbolEnumLiteral(handle, source_index, name)) |decl| {
+        return try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), decl, kind, offset_encoding);
+    }
+    if (kind == .declaration) return null;
+
+    // Fields of a type produced by `@Struct` have no declaration node. Fall
+    // back to the source of their concrete field type, matching field-access
+    // navigation on generated aggregates.
+    const container_type = try analyser.resolveStructInitType(handle, source_index) orelse return null;
+    var property_type = try analyser.resolvePropertyType(container_type, name) orelse return null;
+    while (true) {
+        property_type =
+            try analyser.resolveUnwrapErrorUnionType(property_type, .payload) orelse
+            try analyser.resolveDerefType(property_type) orelse
+            try analyser.resolveOptionalUnwrap(property_type) orelse break;
+    }
+    const target = property_type.typeDefinitionToken() orelse return null;
+    const target_range = offsets.tokenToRange(&target.handle.tree, target.token, offset_encoding);
+    return .{
+        .originSelectionRange = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
+        .targetUri = target.handle.uri.raw,
+        .targetRange = target_range,
+        .targetSelectionRange = target_range,
+    };
 }
 
 fn gotoDefinitionBuiltin(
