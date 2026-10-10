@@ -17888,6 +17888,33 @@ test "comptime interpreter eligibility cache" {
     try std.testing.expectEqual(@as(usize, 2), analyser.comptime_interpreter_needed.count());
 }
 
+test "unwrap error union alternatives" {
+    const source =
+        \\const first: error{Alpha}!u8 = undefined;
+        \\const second: error{Beta}!u8 = undefined;
+        \\const expected: u8 = undefined;
+    ;
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    const first_decl = try analyser.lookupSymbolGlobal(handle, "first", source.len) orelse return error.TestUnexpectedResult;
+    const second_decl = try analyser.lookupSymbolGlobal(handle, "second", source.len) orelse return error.TestUnexpectedResult;
+    const expected_decl = try analyser.lookupSymbolGlobal(handle, "expected", source.len) orelse return error.TestUnexpectedResult;
+    const first = try first_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const second = try second_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const expected = try expected_decl.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const entries = try ctx.arena.allocator().alloc(zls.Analyser.Type.Data.EitherEntry, 2);
+    entries[0] = .{ .type_data = first.data, .descriptor = "first" };
+    entries[1] = .{ .type_data = second.data, .descriptor = "second" };
+    const alternatives: zls.Analyser.Type = .{ .data = .{ .either = entries }, .is_type_val = false };
+    const payload = try analyser.resolveUnwrapErrorUnionType(alternatives, .payload) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(payload.eql(expected));
+}
+
 test "comptime pointer identities isolate generic containers" {
     const source =
         \\fn Holder(comptime T: type) type {

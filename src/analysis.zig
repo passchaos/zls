@@ -1587,6 +1587,18 @@ pub fn resolveUnwrapErrorUnionType(analyser: *Analyser, ty: Type, side: ErrorUni
             },
             else => return null,
         },
+        .either => |entries| blk: {
+            var unwrapped: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+            for (entries) |entry| {
+                const candidate: Type = .{ .data = entry.type_data, .is_type_val = false };
+                const selected = try analyser.resolveUnwrapErrorUnionType(candidate, side) orelse continue;
+                try unwrapped.append(analyser.arena, .{
+                    .type = selected,
+                    .descriptor = entry.descriptor,
+                });
+            }
+            break :blk try Type.fromEither(analyser, unwrapped.items);
+        },
         else => return null,
     };
 }
@@ -12371,6 +12383,57 @@ fn resolveEitherCallResult(
     return Type.fromEither(analyser, return_types.items);
 }
 
+fn isUnresolvedCallReturn(ty: Type) bool {
+    if (ty.hasUnresolvedGenericType()) return true;
+    return switch (ty.data) {
+        .ip_index => |payload| payload.type == .unknown_type or
+            (ty.is_type_val and payload.type == .type_type and payload.index == null),
+        else => false,
+    };
+}
+
+fn resolveSelectedFieldEnumReturn(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    call: Ast.full.Call,
+    function: Type,
+) Error!?Type {
+    const info = function.data.function;
+    const has_self = try analyser.isInstanceCall(handle, call, function);
+    const parameters = info.parameters[@intFromBool(has_self)..];
+    const count = @min(parameters.len, call.ast.params.len);
+    var returns: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+
+    for (parameters[0..count], call.ast.params[0..count]) |parameter, argument| {
+        if (parameter.modifier != .comptime_param) continue;
+        const parameter_type = if (parameter.type.is_type_val)
+            parameter.type
+        else
+            try parameter.type.typeOf(analyser);
+        const enum_index = parameter_type.ipIndex() orelse continue;
+        const sources = analyser.sequential_enum_sources.get(enum_index) orelse continue;
+        const tag = try analyser.resolveEnumValueTag(parameter_type, .of(argument, handle)) orelse continue;
+
+        for (sources) |source| {
+            if (source.kind != .field) continue;
+            const container = try source.source.instanceUnchecked(analyser);
+            const field = try analyser.lookupSymbolContainer(container, tag, .field) orelse continue;
+            const field_type = try field.resolveType(analyser) orelse continue;
+            const method = try analyser.resolveFuncProtoOfCallable(field_type) orelse continue;
+            const return_value = method.data.function.return_value.*;
+            for (returns.items) |existing| {
+                if (existing.type.eql(return_value)) break;
+            } else {
+                try returns.append(analyser.arena, .{
+                    .type = return_value,
+                    .descriptor = tag,
+                });
+            }
+        }
+    }
+    return Type.fromEither(analyser, returns.items);
+}
+
 fn isKnownEmptyIterable(analyser: *Analyser, iterable: Type) bool {
     return switch (iterable.data) {
         .array => |info| info.elem_count == 0,
@@ -12925,7 +12988,11 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (try comptime_eval.Interpreter.evaluateCall(analyser, handle, node)) |value| return value;
                 }
             }
-            return func_info.return_value.*;
+            const return_value = func_info.return_value.*;
+            if (isUnresolvedCallReturn(return_value)) {
+                if (try analyser.resolveSelectedFieldEnumReturn(handle, call, func_ty)) |selected| return selected;
+            }
+            return return_value;
         },
         .container_field,
         .container_field_init,
