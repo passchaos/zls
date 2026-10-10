@@ -1536,6 +1536,41 @@ test "pointer dereference" {
     });
 }
 
+test "call hover specializes comptime-selected parameter and return types" {
+    try testHoverWithOptions(
+        \\const std = @import("std");
+        \\fn Methods(comptime Self: type) type {
+        \\    return struct { combine: fn (Self, u8, u16) usize };
+        \\}
+        \\fn methodType(comptime Self: type, comptime method: std.meta.FieldEnum(Methods(Self))) type {
+        \\    return @FieldType(Methods(Self), @tagName(method));
+        \\}
+        \\fn argsAfterSelf(comptime F: type) type {
+        \\    const info = @typeInfo(F).@"fn";
+        \\    comptime var types: [info.params.len - 1]type = undefined;
+        \\    inline for (info.params[1..], 0..) |parameter, index| {
+        \\        types[index] = parameter.type.?;
+        \\    }
+        \\    return @Tuple(&types);
+        \\}
+        \\fn Dynamic(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(self: Self, comptime method: std.meta.FieldEnum(Methods(Subject)), args: argsAfterSelf(methodType(Subject, method))) usize {
+        \\            _ = self;
+        \\            _ = args;
+        \\            return 0;
+        \\        }
+        \\    };
+        \\}
+        \\const erased: Dynamic(*anyopaque) = undefined;
+        \\const result = erased.ca<cursor>ll(.combine, .{ 1, 2 });
+    ,
+        \\fn call(self: Self, comptime method: std.meta.FieldEnum(Methods(Subject)), args: argsAfterSelf(methodType(Subject, method))) usize
+        \\(fn (Dynamic(*anyopaque), comptime enum(u0) {...}, struct { u8, u16 }) usize)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "doctest" {
     try testHover(
         \\fn foo() void {}

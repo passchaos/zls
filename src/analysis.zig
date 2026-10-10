@@ -12467,6 +12467,40 @@ pub fn resolveFunctionTypeFromCall(
     return resolved;
 }
 
+/// Specializes a callable type using the call expression surrounding `absolute_index`.
+/// When `expression_loc` is provided, only a call whose callee exactly matches that
+/// source range is considered. This lets callers in nested expressions select the
+/// intended call while hover can specialize directly from a position on the callee.
+pub fn specializeFunctionTypeAtCall(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    absolute_index: usize,
+    expression_loc: ?offsets.Loc,
+    ty: Type,
+) Error!Type {
+    const nodes = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, absolute_index);
+    for (nodes) |node| {
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&buffer, node) orelse continue;
+        const fn_loc = offsets.nodeToLoc(&handle.tree, call.ast.fn_expr);
+        if (expression_loc) |expected_loc| {
+            if (fn_loc.start != expected_loc.start or fn_loc.end != expected_loc.end) continue;
+        } else if (absolute_index < fn_loc.start or absolute_index > fn_loc.end) continue;
+
+        const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
+        if (function.is_type_val) return ty;
+        const had_self = try analyser.hasSelfParam(function);
+        var specialized = try analyser.resolveFunctionTypeFromCall(handle, call, function);
+        if (had_self and !try analyser.hasSelfParam(specialized)) {
+            const parameters = try analyser.arena.dupe(Type.Data.Parameter, specialized.data.function.parameters);
+            parameters[0] = function.data.function.parameters[0];
+            specialized.data.function.parameters = parameters;
+        }
+        return specialized;
+    }
+    return ty;
+}
+
 fn resolveEitherCallResult(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,

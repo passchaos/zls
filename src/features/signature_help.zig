@@ -106,33 +106,6 @@ fn signatureInfosForType(
     return @as(?[]const types.SignatureHelp.Signature, try signatures.toOwnedSlice(arena));
 }
 
-fn specializeCallSignature(
-    analyser: *Analyser,
-    handle: *DocumentStore.Handle,
-    absolute_index: usize,
-    expression_loc: offsets.Loc,
-    ty: Analyser.Type,
-) Analyser.Error!Analyser.Type {
-    const nodes = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, absolute_index);
-    for (nodes) |node| {
-        var buffer: [1]Ast.Node.Index = undefined;
-        const call = handle.tree.fullCall(&buffer, node) orelse continue;
-        const fn_loc = offsets.nodeToLoc(&handle.tree, call.ast.fn_expr);
-        if (fn_loc.start != expression_loc.start or fn_loc.end != expression_loc.end) continue;
-        const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
-        if (function.is_type_val) return ty;
-        const had_self = try analyser.hasSelfParam(function);
-        var specialized = try analyser.resolveFunctionTypeFromCall(handle, call, function);
-        if (had_self and !try analyser.hasSelfParam(specialized)) {
-            const parameters = try analyser.arena.dupe(Analyser.Type.Data.Parameter, specialized.data.function.parameters);
-            parameters[0] = function.data.function.parameters[0];
-            specialized.data.function.parameters = parameters;
-        }
-        return specialized;
-    }
-    return ty;
-}
-
 pub fn getSignatureInfos(
     analyser: *Analyser,
     arena: std.mem.Allocator,
@@ -373,7 +346,7 @@ pub fn getSignatureInfos(
                     try symbol_stack.append(arena, .l_paren);
                     continue;
                 };
-                ty = try specializeCallSignature(analyser, handle, absolute_index, loc, ty);
+                ty = try analyser.specializeFunctionTypeAtCall(handle, absolute_index, loc, ty);
 
                 if (try signatureInfosForType(
                     analyser,

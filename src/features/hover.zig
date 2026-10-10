@@ -18,6 +18,7 @@ fn hoverSymbol(
     arena: std.mem.Allocator,
     param_decl_handle: Analyser.DeclWithHandle,
     markup_kind: types.MarkupKind,
+    resolved_type_override: ?Analyser.Type,
 ) Analyser.Error!?[]const u8 {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -25,7 +26,7 @@ fn hoverSymbol(
     var doc_strings: std.ArrayList([]const u8) = .empty;
 
     var decl_handle: Analyser.DeclWithHandle = param_decl_handle;
-    var maybe_resolved_type = try param_decl_handle.resolveType(analyser);
+    var maybe_resolved_type = resolved_type_override orelse try param_decl_handle.resolveType(analyser);
 
     while (true) {
         if (try decl_handle.docComments(arena)) |doc_string| {
@@ -207,7 +208,7 @@ fn hoverDefinitionLabel(
         .contents = .{
             .markup_content = .{
                 .kind = markup_kind,
-                .value = (try hoverSymbol(analyser, arena, decl, markup_kind)) orelse return null,
+                .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null)) orelse return null,
             },
         },
         .range = offsets.locToRange(handle.tree.source, loc, offset_encoding),
@@ -317,7 +318,11 @@ fn hoverDefinitionGlobal(
             }
         }
         const decl = (try analyser.lookupSymbolGlobal(handle, name, pos_index)) orelse return null;
-        break :blk (try hoverSymbol(analyser, arena, decl, markup_kind)) orelse return null;
+        const resolved_type = if (try decl.resolveType(analyser)) |ty|
+            try analyser.specializeFunctionTypeAtCall(handle, pos_index, null, ty)
+        else
+            null;
+        break :blk (try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type)) orelse return null;
     };
 
     return .{
@@ -391,7 +396,7 @@ fn hoverDefinitionEnumLiteral(
         .contents = .{
             .markup_content = .{
                 .kind = markup_kind,
-                .value = (try hoverSymbol(analyser, arena, decl, markup_kind)) orelse return null,
+                .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null)) orelse return null,
             },
         },
         .range = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
@@ -417,7 +422,11 @@ fn hoverDefinitionFieldAccess(
     var content: std.ArrayList([]const u8) = try .initCapacity(arena, decls.items.len + tys.items.len);
 
     for (decls.items) |decl| {
-        content.appendAssumeCapacity(try hoverSymbol(analyser, arena, decl, markup_kind) orelse continue);
+        const resolved_type = if (try decl.resolveType(analyser)) |ty|
+            try analyser.specializeFunctionTypeAtCall(handle, source_index, null, ty)
+        else
+            null;
+        content.appendAssumeCapacity(try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type) orelse continue);
     }
     for (tys.items) |ty| {
         const def_str = offsets.locToSlice(handle.tree.source, highlight_loc);
