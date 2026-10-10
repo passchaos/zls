@@ -20352,6 +20352,52 @@ pub fn collectErrorTokenDeclarations(
     }
 }
 
+pub fn collectHasDeclGuardedDeclarations(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+    container_loc: offsets.Loc,
+    name_filter: ?[]const u8,
+    declarations: *std.ArrayList(DeclWithHandle),
+) Error!void {
+    const tree = &handle.tree;
+    const held_source = std.mem.trim(u8, offsets.locToSlice(tree.source, container_loc), " \t\r\n");
+    const last_period = std.mem.lastIndexOfScalar(u8, held_source, '.') orelse return;
+    const container_source = std.mem.trim(u8, held_source[0..last_period], " \t\r\n");
+    const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(analyser.arena, tree, source_index);
+    for (nodes) |node| {
+        const if_node = ast.fullIf(tree, node) orelse continue;
+        var params_buffer: [2]Ast.Node.Index = undefined;
+        const params = tree.builtinCallParams(&params_buffer, if_node.ast.cond_expr) orelse continue;
+        if (params.len != 2 or
+            !std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(if_node.ast.cond_expr)), "@hasDecl") or
+            !std.mem.eql(u8, std.mem.trim(u8, offsets.nodeToSlice(tree, params[0]), " \t\r\n"), container_source))
+        {
+            continue;
+        }
+        const guarded_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse continue;
+        if (name_filter) |expected| {
+            if (!std.mem.eql(u8, guarded_name, expected)) continue;
+        }
+
+        const document_scope = try handle.getDocumentScope();
+        for (0..document_scope.declarations.len) |index| {
+            const declaration = document_scope.declarations.get(index);
+            const name_token = declaration.nameToken(tree);
+            const declaration_scope = innermostScopeAtIndex(document_scope, tree.tokenStart(name_token));
+            if (declaration_scope == .root or !document_scope.getScopeTag(declaration_scope).isContainer()) continue;
+            const name = try analyser.identifierTokenName(tree, name_token) orelse continue;
+            if (!std.mem.eql(u8, guarded_name, name)) continue;
+            const candidate: DeclWithHandle = .{ .decl = declaration, .handle = handle };
+            for (declarations.items) |existing| {
+                if (existing.eql(candidate)) break;
+            } else {
+                try declarations.append(analyser.arena, candidate);
+            }
+        }
+    }
+}
+
 fn lookupEnumLiteralCallParameterSource(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,

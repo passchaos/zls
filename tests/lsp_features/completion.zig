@@ -25466,6 +25466,19 @@ test "anytype resolution based on callsite-references" {
     });
 }
 
+test "hasDecl guard supplies members of an unresolved type" {
+    try testCompletion(
+        \\const Value = usize;
+        \\const S = struct { const Value = u8; };
+        \\fn inspect(comptime T: type) void {
+        \\    const Base = switch (@typeInfo(T)) { .pointer => |pointer| pointer.child, else => T };
+        \\    if (@hasDecl(Base, "Value")) _ = Base.<cursor>;
+        \\}
+    , &.{
+        .{ .label = "Value", .kind = .Constant, .detail = "u8" },
+    });
+}
+
 test "anytype method resolution from branching receiver callsites" {
     try testCompletion(
         \\const Argument = struct { field: u32 };

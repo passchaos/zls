@@ -962,8 +962,22 @@ fn completeFieldAccess(builder: *Builder, loc: offsets.Loc) Analyser.Error!void 
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
-    const ty = try builder.analyser.getFieldAccessType(builder.orig_handle, builder.source_index, loc) orelse return;
-    try typeToCompletion(builder, ty);
+    if (try builder.analyser.getFieldAccessType(builder.orig_handle, builder.source_index, loc)) |ty| {
+        try typeToCompletion(builder, ty);
+    }
+    if (builder.completions.items().len != 0) return;
+
+    var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    try builder.analyser.collectHasDeclGuardedDeclarations(
+        builder.orig_handle,
+        builder.source_index,
+        loc,
+        null,
+        &declarations,
+    );
+    for (declarations.items) |declaration| {
+        try declToCompletion(builder, declaration);
+    }
 }
 
 const max_score: usize = 9;

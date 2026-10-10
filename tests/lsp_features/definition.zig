@@ -323,6 +323,17 @@ test "generic method definition keeps structural parameter type" {
     );
 }
 
+test "hasDecl guard navigates members of an unresolved type" {
+    try testDefinition(
+        \\const Value = usize;
+        \\const S = struct { const <def><decl>Value</decl></def> = u8; };
+        \\fn inspect(comptime T: type) void {
+        \\    const Base = switch (@typeInfo(T)) { .pointer => |pointer| pointer.child, else => T };
+        \\    if (@hasDecl(Base, "Value")) _ = Base.Val<>ue;
+        \\}
+    );
+}
+
 test "decl literal pointer" {
     try testDefinition(
         \\const S = <tdef>struct</tdef> {

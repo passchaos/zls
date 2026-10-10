@@ -358,6 +358,15 @@ fn gotoDefinitionFieldAccess(
         }
     }
 
+    if (locs.items.len == 0) {
+        var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+        try analyser.collectHasDeclGuardedDeclarations(handle, source_index, loc, name, &declarations);
+        for (declarations.items) |declaration| {
+            if (try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), declaration, kind, offset_encoding)) |link|
+                try appendUniqueDefinitionLink(arena, &locs, link);
+        }
+    }
+
     if (locs.items.len == 0)
         return null;
 
