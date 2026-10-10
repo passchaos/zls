@@ -963,6 +963,22 @@ const type_info_error_set_present = @typeInfo(error{Oops}).error_set != null;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_anyerror_null = @typeInfo(anyerror).error_set == null;
 //    ^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
+fn genericTypeInfoParameter(_: anytype) void {}
+fn reflectedParameterTypeOr(comptime F: type, comptime Fallback: type) type {
+    return @typeInfo(F).@"fn".params[0].type orelse Fallback;
+}
+const TypeInfoGenericParameterFallback = reflectedParameterTypeOr(@TypeOf(genericTypeInfoParameter), u8);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+const TypeInfoConcreteParameterPreserved = reflectedParameterTypeOr(fn (i16) void, u8);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
+fn reflectedErrorSetLength(comptime E: type) usize {
+    const errors = @typeInfo(E).error_set orelse return 99;
+    return errors.len;
+}
+const type_info_anyerror_fallback_len = reflectedErrorSetLength(anyerror);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(99)
+const type_info_concrete_error_set_len = reflectedErrorSetLength(error{ Oops, Failed });
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const type_info_struct_layout_auto = @typeInfo(ConcreteStruct).@"struct".layout == .auto;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backing_integer == null;

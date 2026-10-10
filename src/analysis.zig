@@ -9690,7 +9690,7 @@ fn integerBoundary(
     };
 }
 
-fn knownOptionalNull(analyser: *Analyser, value: Type) ?bool {
+pub fn knownOptionalNull(analyser: *Analyser, value: Type) ?bool {
     if (value.data == .comptime_value) {
         return switch (value.data.comptime_value.data) {
             .optional => |payload| payload == null,

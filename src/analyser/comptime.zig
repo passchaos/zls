@@ -4917,6 +4917,7 @@ pub const Interpreter = struct {
             if (resolved.data.type_info_value.optional_type_payload) |payload| {
                 return .{ .payload = payload.* };
             }
+            if (self.analyser.knownOptionalNull(resolved) orelse false) return .absent;
         }
         if (resolved.data == .comptime_value) {
             return switch (resolved.data.comptime_value.data) {
