@@ -213,6 +213,19 @@ test "FieldEnum literal maps to source field" {
     );
 }
 
+test "enum literal through dependent generic function argument" {
+    try testDefinition(
+        \\const api = struct {
+        \\    const Access = <tdef>enum</tdef> { read_only, <def><decl>mutable</decl></def> };
+        \\    fn use(comptime T: type, comptime value: T, comptime access: Access) bool {
+        \\        _ = value;
+        \\        return access == .mutable;
+        \\    }
+        \\};
+        \\const result = api.use(u8, 0, .mut<>able);
+    );
+}
+
 test "comptime method on generated Struct default" {
     try testDefinition(
         \\const std = @import("std");

@@ -18882,6 +18882,14 @@ pub const DeclWithHandle = struct {
 
     pub fn definitionToken(self: DeclWithHandle, analyser: *Analyser, resolve_alias: bool) Error!TokenWithHandle {
         if (resolve_alias) {
+            if (self.container_type) |container_type| {
+                if (container_type.isEnumType(analyser) and
+                    self.decl == .ast_node and
+                    self.handle.tree.nodeTag(self.decl.ast_node).isContainerField())
+                {
+                    return .{ .token = self.nameToken(), .handle = self.handle };
+                }
+            }
             if (try analyser.resolveVarDeclAlias(self)) |result| {
                 return result.definitionToken(analyser, resolve_alias);
             }
@@ -20316,10 +20324,58 @@ pub fn getSymbolEnumLiteral(
         const enum_type = if (value_type.is_type_val) value_type else try value_type.typeOf(analyser);
         var declarations: std.ArrayList(DeclWithHandle) = .empty;
         try analyser.collectSequentialEnumSourceDeclarations(enum_type, name, &declarations);
-        break :generated if (declarations.items.len == 0) null else declarations.items[0];
+        if (declarations.items.len != 0) break :generated declarations.items[0];
+        break :generated try analyser.lookupEnumLiteralCallParameterSource(handle, nodes[0], nodes[1..], name);
     };
     analyser.resolved_enum_literals.getPtr(key).?.* = result;
     return result;
+}
+
+fn lookupEnumLiteralCallParameterSource(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    literal_node: Ast.Node.Index,
+    ancestors: []const Ast.Node.Index,
+    name: []const u8,
+) Error!?DeclWithHandle {
+    for (ancestors) |node| {
+        var call_buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&call_buffer, node) orelse continue;
+        const argument_index = std.mem.findScalar(Ast.Node.Index, call.ast.params, literal_node) orelse continue;
+
+        const old_collect_callsite_references = analyser.collect_callsite_references;
+        analyser.collect_callsite_references = false;
+        defer analyser.collect_callsite_references = old_collect_callsite_references;
+
+        const callable = try analyser.resolveTypeOfNode(.of(call.ast.fn_expr, handle)) orelse continue;
+        const function = try analyser.resolveFuncProtoOfCallable(callable) orelse continue;
+        if (function.is_type_val) continue;
+        const has_self_parameter = call.ast.params.len + 1 == function.data.function.parameters.len and
+            try analyser.isInstanceCall(handle, call, function);
+        const parameter_index = argument_index + @intFromBool(has_self_parameter);
+        if (parameter_index >= function.data.function.parameters.len) continue;
+
+        var enum_type = function.data.function.parameters[parameter_index].type;
+        if (!enum_type.is_type_val) enum_type = try enum_type.typeOf(analyser);
+        if (try enum_type.lookupSymbol(analyser, name)) |declaration| {
+            return declaration;
+        }
+
+        const function_tree = &function.data.function.handle.tree;
+        var parameter_buffer: [1]Ast.Node.Index = undefined;
+        const function_node = function_tree.fullFnProto(&parameter_buffer, function.data.function.fn_node) orelse continue;
+        var parameter_iterator: ast.FnParamIterator = .init(&function_node, function_tree);
+        var index: usize = 0;
+        while (parameter_iterator.next()) |parameter| : (index += 1) {
+            if (index != parameter_index) continue;
+            const type_node = parameter.type_expr orelse break;
+            var source_type = try analyser.resolveTypeOfNode(.of(type_node, function.data.function.handle)) orelse break;
+            if (!source_type.is_type_val) source_type = try source_type.typeOf(analyser);
+            const declaration = try source_type.lookupSymbol(analyser, name);
+            return declaration;
+        }
+    }
+    return null;
 }
 
 pub fn resolveStructInitType(
