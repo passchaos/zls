@@ -1259,6 +1259,22 @@ test "hover recovered comptime members" {
         \\error.ExpectedFailure
         \\(error{ExpectedFailure} = error.ExpectedFailure)
     , .{ .markup_kind = .plaintext });
+
+    try testHoverWithOptions(
+        \\fn Model(comptime T: type) type { return struct { value: T }; }
+        \\const Factory = struct {
+        \\    fn init(value: anytype, comptime model: Model(@TypeOf(value))) @This() {
+        \\        _ = value;
+        \\        _ = model;
+        \\        return .{};
+        \\    }
+        \\};
+        \\const item: u8 = 0;
+        \\const result = [_]Factory{ .in<cursor>it(&item, .{}) };
+    ,
+        \\fn init(value: anytype, comptime model: Model(@TypeOf(value))) @This()
+        \\(fn (*const u8, comptime Model(*const u8)) Factory)
+    , .{ .markup_kind = .plaintext });
 }
 
 test "alias with different type" {

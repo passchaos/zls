@@ -391,11 +391,15 @@ fn hoverDefinitionEnumLiteral(
     };
     const name = offsets.locToSlice(handle.tree.source, name_loc);
     if (try analyser.getSymbolEnumLiteral(handle, source_index, name)) |decl| {
+        const resolved_type = if (try decl.resolveType(analyser)) |ty|
+            try analyser.specializeFunctionTypeAtCall(handle, source_index, null, ty)
+        else
+            null;
         return .{
             .contents = .{
                 .markup_content = .{
                     .kind = markup_kind,
-                    .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null)) orelse return null,
+                    .value = (try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type)) orelse return null,
                 },
             },
             .range = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
