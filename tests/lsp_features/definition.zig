@@ -196,6 +196,42 @@ test "method on forwarded type function with dependent comptime value" {
     );
 }
 
+test "FieldEnum literal maps to source field" {
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Reader = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\    fn Methods(comptime Self: type, comptime assoc: Associated) type {
+        \\        return struct { <def><decl>read</decl></def>: <tdef>fn</tdef> (Self, []u8) assoc.Error!usize };
+        \\    }
+        \\};
+        \\fn Method(comptime Subject: type) type {
+        \\    return std.meta.FieldEnum(Reader.Methods(Subject, .{}));
+        \\}
+        \\fn use(comptime method: Method(*u8)) void { _ = method; }
+        \\comptime { use(.re<>ad); }
+    );
+}
+
+test "generic method definition keeps structural parameter type" {
+    try testDefinition(
+        \\fn Impl(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        pub <tdef>fn</tdef> <def><decl>call</decl></def>(comptime _: Self) void { _ = Subject; }
+        \\    };
+        \\}
+        \\fn generic(value: anytype, comptime impl: Impl(@TypeOf(value))) void {
+        \\    impl.ca<>ll();
+        \\}
+        \\comptime {
+        \\    generic(@as(u8, 0), .{});
+        \\    generic(@as(u16, 0), .{});
+        \\    generic(@as(u32, 0), .{});
+        \\}
+    );
+}
+
 test "decl literal pointer" {
     try testDefinition(
         \\const S = <tdef>struct</tdef> {

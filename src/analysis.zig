@@ -42,6 +42,7 @@ generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type,
 resolved_enum_literals: std.HashMapUnmanaged(EnumLiteralCacheKey, ?DeclWithHandle, EnumLiteralCacheKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 comptime_interpreter_needed: std.HashMapUnmanaged(NodeWithUri, bool, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
+sequential_enum_sources: std.AutoHashMapUnmanaged(InternPool.Index, []const SequentialEnumSource) = .empty,
 resolving_specialized_nodes: NodeSet = .empty,
 collect_callsite_references: bool,
 callsite_reference_depth: u8,
@@ -107,6 +108,7 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_enum_literals.deinit(self.gpa);
     self.comptime_interpreter_needed.deinit(self.gpa);
     self.sequential_enum_types.deinit(self.gpa);
+    self.sequential_enum_sources.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
     self.generated_struct_fields.deinit(self.gpa);
 }
@@ -1878,16 +1880,20 @@ fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
         }
         return tag_type;
     }
-    return analyser.createSequentialEnumType(.field, names);
+    return analyser.createSequentialEnumType(.field, names, container_type);
 }
 
 fn createSequentialEnumType(
     analyser: *Analyser,
     kind: SequentialEnumKey.Kind,
     names: []const []const u8,
+    source: Type,
 ) Error!?Type {
     const key: SequentialEnumKey = .{ .kind = kind, .names = names };
-    if (analyser.sequential_enum_types.get(key)) |enum_type| return enum_type;
+    if (analyser.sequential_enum_types.get(key)) |enum_type| {
+        try analyser.recordSequentialEnumSource(enum_type.ipIndex().?, .{ .kind = kind, .source = source });
+        return enum_type;
+    }
 
     const bits: u16 = if (names.len == 0) 0 else @intCast(std.math.log2_int_ceil(usize, names.len));
     const tag_type = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
@@ -1918,7 +1924,23 @@ fn createSequentialEnumType(
         owned_name.* = try analyser.arena.dupe(u8, name);
     }
     try analyser.sequential_enum_types.put(analyser.gpa, .{ .kind = kind, .names = owned_names }, enum_type);
+    try analyser.recordSequentialEnumSource(enum_type.ipIndex().?, .{ .kind = kind, .source = source });
     return enum_type;
+}
+
+fn recordSequentialEnumSource(
+    analyser: *Analyser,
+    enum_type: InternPool.Index,
+    source: SequentialEnumSource,
+) error{OutOfMemory}!void {
+    const existing = analyser.sequential_enum_sources.get(enum_type) orelse &.{};
+    for (existing) |item| {
+        if (item.kind == source.kind and item.source.eql(source.source)) return;
+    }
+    const updated = try analyser.arena.alloc(SequentialEnumSource, existing.len + 1);
+    @memcpy(updated[0..existing.len], existing);
+    updated[existing.len] = source;
+    try analyser.sequential_enum_sources.put(analyser.gpa, enum_type, updated);
 }
 
 fn metaDeclarationNames(analyser: *Analyser, container_type: Type) Error!?[]const []const u8 {
@@ -1951,7 +1973,7 @@ fn metaDeclarationNames(analyser: *Analyser, container_type: Type) Error!?[]cons
 
 fn resolveDeclEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
     const names = try analyser.metaDeclarationNames(container_type) orelse return null;
-    return analyser.createSequentialEnumType(.declaration, names);
+    return analyser.createSequentialEnumType(.declaration, names, container_type);
 }
 
 fn resolveMetaFieldsValue(
@@ -17758,6 +17780,11 @@ const SequentialEnumKey = struct {
     };
 };
 
+const SequentialEnumSource = struct {
+    kind: SequentialEnumKey.Kind,
+    source: Type,
+};
+
 pub const NodeWithHandle = struct {
     node: Ast.Node.Index,
     handle: *DocumentStore.Handle,
@@ -17795,7 +17822,24 @@ pub fn getFieldAccessType(
                     symbol_name,
                     source_index,
                 )) |child| {
-                    current_type = (try child.resolveType(analyser)) orelse return null;
+                    const has_explicit_parameter_type = switch (child.decl) {
+                        .function_parameter => |parameter| if (parameter.get(&child.handle.tree)) |info|
+                            info.type_expr != null
+                        else
+                            false,
+                        else => false,
+                    };
+                    current_type = if (has_explicit_parameter_type) structural: {
+                        // A declared parameter type may itself depend on a sibling
+                        // `anytype`, for example `Impl(Trait, @TypeOf(value))`.
+                        // Its member set is structural and should not be lost when
+                        // callsite inference produces several concrete `value` types.
+                        const old_collect_callsite_references = analyser.collect_callsite_references;
+                        analyser.collect_callsite_references = false;
+                        defer analyser.collect_callsite_references = old_collect_callsite_references;
+                        break :structural try child.resolveType(analyser);
+                    } else try child.resolveType(analyser);
+                    if (current_type == null) return null;
                 } else if (tokenizer.buffer[tok.loc.start] != '@') {
                     const value = try analyser.resolvePrimitive(symbol_name) orelse return null;
                     current_type = Type.fromIP(analyser, analyser.ip.typeOf(value), value);
@@ -19879,7 +19923,24 @@ pub fn getSymbolEnumLiteral(
     const tree = &handle.tree;
     const nodes = try ast.nodesOverlappingIndex(analyser.arena, tree, source_index);
     if (nodes.len == 0) return null;
-    const result = try analyser.lookupSymbolFieldInit(handle, name, nodes[0], nodes[1..]);
+    const result = try analyser.lookupSymbolFieldInit(handle, name, nodes[0], nodes[1..]) orelse generated: {
+        const value_type = try analyser.resolveExpressionType(handle, nodes[0], nodes[1..]) orelse break :generated null;
+        const enum_type = if (value_type.is_type_val) value_type else try value_type.typeOf(analyser);
+        const enum_index = enum_type.ipIndex() orelse break :generated null;
+        const sources = analyser.sequential_enum_sources.get(enum_index) orelse break :generated null;
+        for (sources) |source| {
+            const container = try source.source.instanceUnchecked(analyser);
+            if (try analyser.lookupSymbolContainer(
+                container,
+                name,
+                switch (source.kind) {
+                    .field => .field,
+                    .declaration => .other,
+                },
+            )) |declaration| break :generated declaration;
+        }
+        break :generated null;
+    };
     analyser.resolved_enum_literals.getPtr(key).?.* = result;
     return result;
 }

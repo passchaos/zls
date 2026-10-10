@@ -25088,6 +25088,25 @@ test "generic method from forwarded type function with dependent comptime value"
     });
 }
 
+test "generic method completion keeps structural parameter type" {
+    try testCompletion(
+        \\fn Impl(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        pub fn call(comptime _: Self) void { _ = Subject; }
+        \\    };
+        \\}
+        \\fn generic(value: anytype, comptime impl: Impl(@TypeOf(value))) void {
+        \\    _ = impl.ca<cursor>
+        \\}
+        \\comptime {
+        \\    generic(@as(u8, 0), .{});
+        \\    generic(@as(u16, 0), .{});
+        \\    generic(@as(u32, 0), .{});
+        \\}
+    , &.{.{ .label = "call", .kind = .Method }});
+}
+
 test "enum argument of method on generated type" {
     try testCompletion(
         \\const std = @import("std");
