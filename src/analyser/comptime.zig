@@ -4913,6 +4913,11 @@ pub const Interpreter = struct {
 
     fn optionalValue(self: *Interpreter, value: Type) Error!?OptionalValue {
         const resolved = try self.deref(value) orelse return null;
+        if (resolved.data == .type_info_value) {
+            if (resolved.data.type_info_value.optional_type_payload) |payload| {
+                return .{ .payload = payload.* };
+            }
+        }
         if (resolved.data == .comptime_value) {
             return switch (resolved.data.comptime_value.data) {
                 .optional => |payload| if (payload) |item| .{ .payload = item } else .absent,

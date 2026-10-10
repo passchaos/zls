@@ -1071,6 +1071,84 @@ const type_info_fn_param_noalias = @typeInfo(NoaliasFn).@"fn".params[0].is_noali
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const TypeInfoFnParamType = @typeInfo(NoaliasFn).@"fn".params[0].type.?;
 //    ^^^^^^^^^^^^^^^^^^^ (type)(*anyopaque)
+const TypeInfoFnParams = @typeInfo(fn (u8, i16, bool) void).@"fn".params;
+const type_info_fn_tail_len = TypeInfoFnParams[1..].len;
+//    ^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+const TypeInfoFnTailFirst = TypeInfoFnParams[1..][0].type.?;
+//    ^^^^^^^^^^^^^^^^^^^ (type)(i16)
+const type_info_fn_middle_len = TypeInfoFnParams[1..2].len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(1)
+const TypeInfoFnMiddleFirst = TypeInfoFnParams[1..2][0].type.?;
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)(i16)
+fn argsAfterSelfDirect(comptime F: type) type {
+    const params = @typeInfo(F).@"fn".params;
+    return @Tuple(&.{ params[1].type.?, params[2].type.? });
+}
+const ArgsAfterSelfDirect = argsAfterSelfDirect(fn (*anyopaque, u8, u16) usize);
+//    ^^^^^^^^^^^^^^^^^^^ (type)(struct { u8, u16 })
+fn argsAfterSelfSlicedDirect(comptime F: type) type {
+    const params = @typeInfo(F).@"fn".params[1..];
+    return @Tuple(&.{ params[0].type.?, params[1].type.? });
+}
+const ArgsAfterSelfSlicedDirect = argsAfterSelfSlicedDirect(fn (*anyopaque, u8, u16) usize);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(struct { u8, u16 })
+fn assignedKnownType(comptime T: type) type {
+    comptime var types: [1]type = undefined;
+    types[0] = T;
+    return types[0];
+}
+const AssignedKnownType = assignedKnownType(u8);
+//    ^^^^^^^^^^^^^^^^^ (type)(u8)
+fn reflectedParamAfterMutation(comptime F: type) type {
+    comptime var marker: usize = 0;
+    marker += 1;
+    return @typeInfo(F).@"fn".params[1].type.?;
+}
+const ReflectedParamAfterMutation = reflectedParamAfterMutation(fn (*anyopaque, u8) usize);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ (type)(u8)
+fn assignedParam(comptime F: type) type {
+    comptime var T: type = undefined;
+    T = @typeInfo(F).@"fn".params[1].type.?;
+    return T;
+}
+const AssignedParam = assignedParam(fn (*anyopaque, u8) usize);
+//    ^^^^^^^^^^^^^ (type)(u8)
+fn assignedParamArray(comptime F: type) type {
+    comptime var types: [1]type = undefined;
+    types[0] = @typeInfo(F).@"fn".params[1].type.?;
+    return types[0];
+}
+const AssignedParamArray = assignedParamArray(fn (*anyopaque, u8) usize);
+//    ^^^^^^^^^^^^^^^^^^ (type)(u8)
+fn argsAfterSelfAssignments(comptime F: type) type {
+    const info = @typeInfo(F).@"fn";
+    comptime var types: [info.params.len - 1]type = undefined;
+    types[0] = info.params[1].type.?;
+    types[1] = info.params[2].type.?;
+    return @Tuple(&types);
+}
+const ArgsAfterSelfAssignments = argsAfterSelfAssignments(fn (*anyopaque, u8, u16) usize);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (type)(struct { u8, u16 })
+fn argsAfterSelfSingleLoop(comptime F: type) type {
+    const info = @typeInfo(F).@"fn";
+    comptime var types: [info.params.len - 1]type = undefined;
+    inline for (info.params[1..]) |parameter| {
+        types[0] = parameter.type.?;
+    }
+    return @Tuple(&types);
+}
+const ArgsAfterSelfSingleLoop = argsAfterSelfSingleLoop(fn (*anyopaque, u8) usize);
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (type)(struct { u8 })
+fn argsAfterSelf(comptime F: type) type {
+    const info = @typeInfo(F).@"fn";
+    comptime var types: [info.params.len - 1]type = undefined;
+    inline for (info.params[1..], 0..) |parameter, index| {
+        types[index] = parameter.type.?;
+    }
+    return @Tuple(&types);
+}
+const ArgsAfterSelf = argsAfterSelf(fn (*anyopaque, u8, u16) usize);
+//    ^^^^^^^^^^^^^ (type)(struct { u8, u16 })
 const TypeInfoDecls = struct {
     field: u8,
     pub const Alpha = 1;

@@ -369,6 +369,77 @@ test "selected FieldEnum method specializes return type" {
     , "fn call(comptime _: Impl(anytype), comptime method: enum(u0) {...}, args: struct { anytype }) anyerror!usize", 2);
 }
 
+test "selected FieldEnum method preserves transformed argument tuple" {
+    try testSignatureHelp(
+        \\const std = @import("std");
+        \\fn Methods(comptime Self: type) type {
+        \\    return struct { combine: fn (Self, u8, u16) usize };
+        \\}
+        \\fn methodType(comptime Self: type, comptime method: std.meta.FieldEnum(Methods(Self))) type {
+        \\    return @FieldType(Methods(Self), @tagName(method));
+        \\}
+        \\fn argsAfterSelf(comptime F: type) type {
+        \\    const info = @typeInfo(F).@"fn";
+        \\    comptime var types: [info.params.len - 1]type = undefined;
+        \\    inline for (info.params[1..], 0..) |parameter, index| {
+        \\        types[index] = parameter.type.?;
+        \\    }
+        \\    return @Tuple(&types);
+        \\}
+        \\fn Dynamic(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(
+        \\            self: Self,
+        \\            comptime method: std.meta.FieldEnum(Methods(Subject)),
+        \\            args: argsAfterSelf(methodType(Subject, method)),
+        \\        ) usize {
+        \\            _ = self;
+        \\            _ = args;
+        \\            return 0;
+        \\        }
+        \\    };
+        \\}
+        \\const erased: Dynamic(*anyopaque) = undefined;
+        \\const result = erased.call(.combine, <cursor>.{ 1, 2 });
+    , "fn call(self: Dynamic(*anyopaque), comptime method: enum(u0) {...}, args: struct { u8, u16 }) usize", 2);
+}
+
+test "selected zero-argument FieldEnum method preserves empty argument tuple" {
+    try testSignatureHelp(
+        \\const std = @import("std");
+        \\fn Methods(comptime Self: type) type {
+        \\    return struct { ping: fn (Self) void };
+        \\}
+        \\fn methodType(comptime Self: type, comptime method: std.meta.FieldEnum(Methods(Self))) type {
+        \\    return @FieldType(Methods(Self), @tagName(method));
+        \\}
+        \\fn argsAfterSelf(comptime F: type) type {
+        \\    const info = @typeInfo(F).@"fn";
+        \\    comptime var types: [info.params.len - 1]type = undefined;
+        \\    inline for (info.params[1..], 0..) |parameter, index| {
+        \\        types[index] = parameter.type.?;
+        \\    }
+        \\    return @Tuple(&types);
+        \\}
+        \\fn Dynamic(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(
+        \\            self: Self,
+        \\            comptime method: std.meta.FieldEnum(Methods(Subject)),
+        \\            args: argsAfterSelf(methodType(Subject, method)),
+        \\        ) void {
+        \\            _ = self;
+        \\            _ = args;
+        \\        }
+        \\    };
+        \\}
+        \\const erased: Dynamic(*anyopaque) = undefined;
+        \\erased.call(.ping, <cursor>.{});
+    , "fn call(self: Dynamic(*anyopaque), comptime method: enum(u0) {...}, args: struct {}) void", 2);
+}
+
 test "generated Struct field preserves comptime value parameters" {
     try testSignatureHelp(
         \\const std = @import("std");

@@ -4163,7 +4163,8 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
         },
         .tuple_type => |tuple_info| {
             assert(tuple_info.types.len == tuple_info.values.len);
-            try writer.writeAll("struct { ");
+            try writer.writeAll("struct {");
+            if (tuple_info.types.len != 0) try writer.writeByte(' ');
 
             for (0..tuple_info.types.len) |i| {
                 const field_ty = tuple_info.types.at(@intCast(i), ip);
@@ -4179,7 +4180,8 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                     try ip.print(field_val, writer, options);
                 }
             }
-            try writer.writeAll(" }");
+            if (tuple_info.types.len != 0) try writer.writeByte(' ');
+            try writer.writeByte('}');
         },
         .vector_type => |vector_info| {
             try writer.print("@Vector({d},{f})", .{
@@ -4715,6 +4717,26 @@ test "array type" {
 
     try expectFmt("[3]i32", "{f}", .{i32_3_array_type.fmt(&ip)});
     try expectFmt("[3:0]u32", "{f}", .{u32_0_0_array_type.fmt(&ip)});
+}
+
+test "tuple type" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var ip: InternPool = try .init(io, gpa);
+    defer ip.deinit(gpa);
+
+    const empty_tuple_type = try ip.get(.{ .tuple_type = .{
+        .types = try ip.getIndexSlice(&.{}),
+        .values = try ip.getIndexSlice(&.{}),
+    } });
+    const pair_tuple_type = try ip.get(.{ .tuple_type = .{
+        .types = try ip.getIndexSlice(&.{ .u8_type, .bool_type }),
+        .values = try ip.getIndexSlice(&.{ .none, .none }),
+    } });
+
+    try expectFmt("struct {}", "{f}", .{empty_tuple_type.fmt(&ip)});
+    try expectFmt("struct { u8, bool }", "{f}", .{pair_tuple_type.fmt(&ip)});
 }
 
 test "struct value" {

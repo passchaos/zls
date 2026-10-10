@@ -3247,8 +3247,10 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
             .single => |index_optional| if (index_optional) |index| {
                 if (!collection.is_optional and collection.index == null and index < collection.len) {
                     const element_type = try analyser.resolveBracketAccessType(value.value_type.*, rhs) orelse return null;
+                    const absolute_index = std.math.add(u64, collection.offset, index) catch return null;
+                    const descriptor_index = std.math.cast(u32, absolute_index) orelse return null;
                     if (collection.kind == .field_names) {
-                        const name = try analyser.metaFieldNameAt(value.reflected_type.*, @intCast(index)) orelse return null;
+                        const name = try analyser.metaFieldNameAt(value.reflected_type.*, descriptor_index) orelse return null;
                         return .{
                             .type = try analyser.stringValueWithType(
                                 name,
@@ -3259,7 +3261,7 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                     }
                     if (collection.kind == .tags) {
                         return .{
-                            .type = try analyser.metaTagValueAt(value.reflected_type.*, @intCast(index)) orelse return null,
+                            .type = try analyser.metaTagValueAt(value.reflected_type.*, descriptor_index) orelse return null,
                             .is_const = true,
                         };
                     }
@@ -3272,14 +3274,31 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                             .collection = .{
                                 .kind = collection.kind,
                                 .len = collection.len,
-                                .index = @intCast(index),
+                                .index = descriptor_index,
                             },
                         } }, .is_type_val = false },
                         .is_const = true,
                     };
                 }
             },
-            .open, .range => {},
+            .open => |access| if (!collection.is_optional and collection.index == null and access.sentinel == .none) {
+                const start = access.start orelse return null;
+                if (start > collection.len) return null;
+                var sliced = value;
+                sliced.collection.?.offset = std.math.add(u64, collection.offset, start) catch return null;
+                sliced.collection.?.len = collection.len - start;
+                return .{ .type = .{ .data = .{ .type_info_value = sliced }, .is_type_val = false }, .is_const = true };
+            },
+            .range => |access| if (!collection.is_optional and collection.index == null and access.sentinel == .none) {
+                const bounds = access.bounds orelse return null;
+                const start = bounds[0];
+                const end = bounds[1];
+                if (start > end or end > collection.len) return null;
+                var sliced = value;
+                sliced.collection.?.offset = std.math.add(u64, collection.offset, start) catch return null;
+                sliced.collection.?.len = end - start;
+                return .{ .type = .{ .data = .{ .type_info_value = sliced }, .is_type_val = false }, .is_const = true };
+            },
         };
     }
     if (analyser.evaluate_comptime_values and lhs_binding.type.data == .string_value) {
@@ -12407,6 +12426,24 @@ pub fn resolveFunctionTypeFromCall(
             analyser.display_bindings = old_display_bindings;
         }
 
+        var parameter_buffer: [1]Ast.Node.Index = undefined;
+        const function_node = func_tree.fullFnProto(&parameter_buffer, func_info.fn_node).?;
+        var parameter_iterator: ast.FnParamIterator = .init(&function_node, func_tree);
+        var specialized_parameters: ?[]Type.Data.Parameter = null;
+        var parameter_index: usize = 0;
+        while (parameter_iterator.next()) |parameter| : (parameter_index += 1) {
+            if (parameter_index >= resolved.data.function.parameters.len) break;
+            if (!isUnresolvedCallReturn(analyser, resolved.data.function.parameters[parameter_index].type)) continue;
+            const type_node = parameter.type_expr orelse continue;
+            const type_value = try analyser.resolveTypeOfNodeInternal(.of(type_node, func_info.handle)) orelse continue;
+            if (!type_value.is_type_val) continue;
+            if (specialized_parameters == null) {
+                specialized_parameters = try analyser.arena.dupe(Type.Data.Parameter, resolved.data.function.parameters);
+            }
+            specialized_parameters.?[parameter_index].type = type_value;
+        }
+        if (specialized_parameters) |updated_parameters| resolved.data.function.parameters = updated_parameters;
+
         if (try analyser.resolveReturnValueOfFuncNode(func_info.handle, func_info.fn_node)) |return_value| {
             resolved.data.function.return_value = try analyser.allocType(return_value);
         }
@@ -15187,6 +15224,7 @@ pub const Type = struct {
 
         const Collection = struct {
             kind: TypeInfoCollectionKind,
+            offset: u64 = 0,
             len: u64,
             index: ?u32,
             is_optional: bool = false,
@@ -17483,6 +17521,10 @@ pub const Type = struct {
                 try writer.writeByte(')');
             },
             .tuple => |elem_ty_slice| {
+                if (elem_ty_slice.len == 0) {
+                    try writer.writeAll("struct {}");
+                    return;
+                }
                 try writer.writeAll("struct { ");
                 for (elem_ty_slice, 0..) |elem_ty, i| {
                     if (i != 0) {
