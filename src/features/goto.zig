@@ -266,12 +266,45 @@ fn gotoDefinitionFieldAccess(
     const name_token, const name_loc = offsets.identifierTokenAndLocFromIndex(&handle.tree, source_index) orelse return null;
     const name = offsets.locToSlice(handle.tree.source, name_loc);
     const held_loc = offsets.locMerge(loc, name_loc);
-    const accesses = (try analyser.getSymbolFieldAccesses(arena, handle, source_index, held_loc, name)) orelse return null;
+    var accesses: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    var property_types: std.ArrayList(Analyser.Type) = .empty;
+    try analyser.getSymbolFieldAccessesArrayList(
+        arena,
+        handle,
+        source_index,
+        held_loc,
+        name,
+        &accesses,
+        &property_types,
+    );
     var locs: std.ArrayList(types.Definition.Link) = .empty;
 
-    for (accesses) |access| {
+    for (accesses.items) |access| {
         if (try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), access, kind, offset_encoding)) |link|
             try appendUniqueDefinitionLink(arena, &locs, link);
+    }
+
+    // Runtime-created aggregate types (for example `@Struct`) have fields in
+    // the InternPool but no source declaration node. In that case, use the
+    // generated field's concrete type declaration as the most useful target.
+    if (locs.items.len == 0 and kind != .declaration) {
+        for (property_types.items) |property_type| {
+            var resolved_type = property_type;
+            while (true) {
+                resolved_type =
+                    try analyser.resolveUnwrapErrorUnionType(resolved_type, .payload) orelse
+                    try analyser.resolveDerefType(resolved_type) orelse
+                    try analyser.resolveOptionalUnwrap(resolved_type) orelse break;
+            }
+            const target = resolved_type.typeDefinitionToken() orelse continue;
+            const target_range = offsets.tokenToRange(&target.handle.tree, target.token, offset_encoding);
+            try appendUniqueDefinitionLink(arena, &locs, .{
+                .originSelectionRange = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
+                .targetUri = target.handle.uri.raw,
+                .targetRange = target_range,
+                .targetSelectionRange = target_range,
+            });
+        }
     }
 
     if (locs.items.len == 0)

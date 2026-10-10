@@ -257,6 +257,20 @@ test "comptime method on generated Struct default" {
     );
 }
 
+test "generated Struct field falls back to its type definition" {
+    try testDefinition(
+        \\const Model = struct {
+        \\    const <def><tdef>Self</tdef></def> = @This();
+        \\    value: u8 = 0,
+        \\};
+        \\fn Generated() type {
+        \\    return @Struct(.auto, null, &.{"reader"}, &.{Model}, &.{.{} });
+        \\}
+        \\const models: Generated() = .{};
+        \\const selected = models.rea<>der;
+    );
+}
+
 test "generic method definition keeps structural parameter type" {
     try testDefinition(
         \\fn Impl(comptime Subject: type) type {
