@@ -332,6 +332,43 @@ test "self parameter is anytype" {
     , "fn foo(self: anytype, a: u32, b: void) bool", 2);
 }
 
+test "selected FieldEnum method specializes return type" {
+    try testSignatureHelp(
+        \\const std = @import("std");
+        \\fn Methods(comptime Self: type) type {
+        \\    return struct { read: fn (Self) anyerror!usize };
+        \\}
+        \\fn methodType(
+        \\    comptime Self: type,
+        \\    comptime method: std.meta.FieldEnum(Methods(Self)),
+        \\) type {
+        \\    return @FieldType(Methods(Self), @tagName(method));
+        \\}
+        \\fn returnType(comptime F: type) type {
+        \\    return @typeInfo(F).@"fn".return_type.?;
+        \\}
+        \\fn Impl(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(
+        \\            comptime _: Self,
+        \\            comptime method: std.meta.FieldEnum(Methods(Subject)),
+        \\            args: std.meta.ArgsTuple(methodType(Subject, method)),
+        \\        ) returnType(methodType(Subject, method)) {
+        \\            return @call(.auto, @field(Subject, @tagName(method)), args);
+        \\        }
+        \\    };
+        \\}
+        \\const Source = struct {
+        \\    fn read(_: Source) anyerror!usize { return 1; }
+        \\};
+        \\fn generic(value: anytype, comptime impl: Impl(@TypeOf(value))) !void {
+        \\    _ = try impl.call(.read, <cursor>.{value});
+        \\}
+        \\comptime { _ = generic(Source{}, .{}) catch unreachable; }
+    , "fn call(comptime _: Impl(anytype), comptime method: enum(u0) {...}, args: struct { anytype }) anyerror!usize", 2);
+}
+
 test "branching receiver returns all method signatures" {
     try testSignatureHelps(
         \\const Alpha = struct {

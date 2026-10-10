@@ -12114,7 +12114,7 @@ pub fn resolveComptimeDisplayArgument(
         try analyser.resolveComptimeValue(.of(node_handle.node, node_handle.handle));
 }
 
-fn resolveFunctionTypeFromCall(
+pub fn resolveFunctionTypeFromCall(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
     call: Ast.full.Call,
@@ -12352,6 +12352,21 @@ fn resolveFunctionTypeFromCall(
         }
     }
 
+    if (try analyser.resolveSelectedFieldEnumMethod(handle, call, resolved)) |selected| {
+        if (isUnresolvedCallReturn(analyser, resolved.data.function.return_value.*)) {
+            resolved.data.function.return_value = try analyser.allocType(selected.return_type);
+        }
+        const arguments_index = selected.parameter_index + 1;
+        if (selected.arguments_type != null and
+            arguments_index < resolved.data.function.parameters.len and
+            isUnresolvedCallReturn(analyser, resolved.data.function.parameters[arguments_index].type))
+        {
+            const specialized_parameters = try analyser.arena.dupe(Type.Data.Parameter, resolved.data.function.parameters);
+            specialized_parameters[arguments_index].type = selected.arguments_type.?;
+            resolved.data.function.parameters = specialized_parameters;
+        }
+    }
+
     return resolved;
 }
 
@@ -12383,28 +12398,56 @@ fn resolveEitherCallResult(
     return Type.fromEither(analyser, return_types.items);
 }
 
-fn isUnresolvedCallReturn(ty: Type) bool {
+fn isUnresolvedCallReturn(analyser: *Analyser, ty: Type) bool {
     if (ty.hasUnresolvedGenericType()) return true;
     return switch (ty.data) {
         .ip_index => |payload| payload.type == .unknown_type or
-            (ty.is_type_val and payload.type == .type_type and payload.index == null),
+            (ty.is_type_val and payload.type == .type_type and payload.index == null) or
+            switch (analyser.ip.indexToKey(payload.type)) {
+                .error_union_type => |info| info.error_set_type == .unknown_type or info.payload_type == .unknown_type,
+                else => false,
+            },
+        .error_union => |info| isUnresolvedCallReturn(analyser, info.payload.*) or
+            if (info.error_set) |error_set| isUnresolvedCallReturn(analyser, error_set.*) else true,
         else => false,
     };
 }
 
-fn resolveSelectedFieldEnumReturn(
+const SelectedFieldEnumMethod = struct {
+    return_type: Type,
+    arguments_type: ?Type,
+    parameter_index: usize,
+};
+
+fn abstractSelectedMethodArguments(
+    analyser: *Analyser,
+    function: Type.Data.Function,
+    arguments: Type,
+) Error!Type {
+    if (function.container_type.data != .container) return arguments;
+    const subject = for (function.container_type.data.container.bound_params.values()) |bound| {
+        if (bound.is_type_val and bound.hasUnresolvedGenericType()) break bound;
+    } else return arguments;
+    const elements = try analyser.comptimeTupleTypeElements(arguments) orelse return arguments;
+    if (elements.len == 0) return arguments;
+    const abstract_elements = try analyser.arena.dupe(Type, elements);
+    abstract_elements[0] = subject;
+    return Type.createTupleType(analyser, abstract_elements);
+}
+
+fn resolveSelectedFieldEnumMethod(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
     call: Ast.full.Call,
     function: Type,
-) Error!?Type {
+) Error!?SelectedFieldEnumMethod {
     const info = function.data.function;
     const has_self = try analyser.isInstanceCall(handle, call, function);
-    const parameters = info.parameters[@intFromBool(has_self)..];
+    const parameter_offset: usize = @intFromBool(has_self);
+    const parameters = info.parameters[parameter_offset..];
     const count = @min(parameters.len, call.ast.params.len);
-    var returns: std.ArrayList(Type.TypeWithDescriptor) = .empty;
 
-    for (parameters[0..count], call.ast.params[0..count]) |parameter, argument| {
+    for (parameters[0..count], call.ast.params[0..count], 0..) |parameter, argument, parameter_index| {
         if (parameter.modifier != .comptime_param) continue;
         const parameter_type = if (parameter.type.is_type_val)
             parameter.type
@@ -12413,6 +12456,9 @@ fn resolveSelectedFieldEnumReturn(
         const enum_index = parameter_type.ipIndex() orelse continue;
         const sources = analyser.sequential_enum_sources.get(enum_index) orelse continue;
         const tag = try analyser.resolveEnumValueTag(parameter_type, .of(argument, handle)) orelse continue;
+        var returns: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+        var arguments_type: ?Type = null;
+        var arguments_match = false;
 
         for (sources) |source| {
             if (source.kind != .field) continue;
@@ -12421,6 +12467,26 @@ fn resolveSelectedFieldEnumReturn(
             const field_type = try field.resolveType(analyser) orelse continue;
             const method = try analyser.resolveFuncProtoOfCallable(field_type) orelse continue;
             const return_value = method.data.function.return_value.*;
+            const method_type = if (field_type.is_type_val) field_type else try field_type.typeOf(analyser);
+            if (try analyser.resolveArgsTupleType(method_type)) |resolved_arguments| {
+                const candidate_arguments = try analyser.abstractSelectedMethodArguments(info, resolved_arguments);
+                const receiver_type = if (method.data.function.parameters.len == 0)
+                    null
+                else
+                    method.data.function.parameters[0].type;
+                const matches_container = if (receiver_type) |receiver|
+                    if (info.container_type.data == .container) for (info.container_type.data.container.bound_params.values()) |bound| {
+                        if (bound.eql(receiver)) break true;
+                    } else false else false
+                else
+                    false;
+                if (matches_container or (!arguments_match and
+                    (arguments_type == null or candidate_arguments.hasUnresolvedGenericType())))
+                {
+                    arguments_type = candidate_arguments;
+                    arguments_match = matches_container;
+                }
+            }
             for (returns.items) |existing| {
                 if (existing.type.eql(return_value)) break;
             } else {
@@ -12430,8 +12496,26 @@ fn resolveSelectedFieldEnumReturn(
                 });
             }
         }
+        const has_resolved_return = for (returns.items) |item| {
+            if (!isUnresolvedCallReturn(analyser, item.type)) break true;
+        } else false;
+        if (has_resolved_return) {
+            var write_index: usize = 0;
+            for (returns.items) |item| {
+                if (isUnresolvedCallReturn(analyser, item.type)) continue;
+                returns.items[write_index] = item;
+                write_index += 1;
+            }
+            returns.shrinkRetainingCapacity(write_index);
+        }
+        const return_type = try Type.fromEither(analyser, returns.items) orelse continue;
+        return .{
+            .return_type = return_type,
+            .arguments_type = arguments_type,
+            .parameter_index = parameter_offset + parameter_index,
+        };
     }
-    return Type.fromEither(analyser, returns.items);
+    return null;
 }
 
 fn isKnownEmptyIterable(analyser: *Analyser, iterable: Type) bool {
@@ -12989,8 +13073,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
             }
             const return_value = func_info.return_value.*;
-            if (isUnresolvedCallReturn(return_value)) {
-                if (try analyser.resolveSelectedFieldEnumReturn(handle, call, func_ty)) |selected| return selected;
+            if (isUnresolvedCallReturn(analyser, return_value)) {
+                if (try analyser.resolveSelectedFieldEnumMethod(handle, call, func_ty)) |selected| return selected.return_type;
             }
             return return_value;
         },
