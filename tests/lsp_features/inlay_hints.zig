@@ -71,6 +71,44 @@ test "call hints specialize comptime-selected parameter types" {
         .expected_tooltips = &.{ "comptime enum(u0) {...}", "struct { u8, u16 }" },
         .allow_unexpected = true,
     });
+    try testInlayHints(
+        \\const std = @import("std");
+        \\fn Methods(comptime Self: type) type {
+        \\    return struct { read: fn (Self, []u8) usize };
+        \\}
+        \\fn methodType(comptime Self: type, comptime method: std.meta.FieldEnum(Methods(Self))) type {
+        \\    return @FieldType(Methods(Self), @tagName(method));
+        \\}
+        \\fn argsFor(comptime F: type) type {
+        \\    const info = @typeInfo(F).@"fn";
+        \\    comptime var types: [info.params.len]type = undefined;
+        \\    inline for (info.params, 0..) |parameter, index| {
+        \\        types[index] = parameter.type.?;
+        \\    }
+        \\    return @Tuple(&types);
+        \\}
+        \\fn Impl(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(comptime self: Self, comptime method: std.meta.FieldEnum(Methods(Subject)), args: argsFor(methodType(Subject, method))) usize {
+        \\            _ = self;
+        \\            _ = args;
+        \\            return 0;
+        \\        }
+        \\    };
+        \\}
+        \\fn read(reader: anytype, comptime impl: Impl(@TypeOf(reader)), out: []u8) usize {
+        \\    return impl.call(<method>.read, <args>.{ reader, out });
+        \\}
+        \\comptime {
+        \\    _ = read(@as(*u8, undefined), .{}, undefined);
+        \\    _ = read(@as(*u16, undefined), .{}, undefined);
+        \\}
+    , .{
+        .kind = .Parameter,
+        .expected_tooltips = &.{ "comptime enum(u0) {...}", "struct { anytype, []u8 }" },
+        .allow_unexpected = true,
+    });
 }
 
 test "function call with multiline string literal" {

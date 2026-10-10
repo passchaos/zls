@@ -271,24 +271,59 @@ fn writeCallHint(
     var candidates: std.ArrayList(Candidate) = .empty;
     if (handle.tree.nodeTag(call.ast.fn_expr) == .field_access) {
         const lhs_node, const field_token = handle.tree.nodeData(call.ast.fn_expr).node_and_token;
-        const lhs = try builder.analyser.resolveTypeOfNode(.of(lhs_node, handle)) orelse return;
-        const receiver = try builder.analyser.resolveDerefType(lhs) orelse lhs;
         const field_name = try builder.analyser.identifierTokenName(&handle.tree, field_token) orelse return;
-        for (try receiver.getAllTypesWithHandles(builder.analyser)) |receiver_type| {
-            const member = try receiver_type.lookupSymbol(builder.analyser, field_name) orelse continue;
-            const member_type = try member.resolveType(builder.analyser) orelse continue;
-            const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(member_type) orelse continue;
-            const has_self_param = try builder.analyser.isInstanceMemberAccess(receiver_type, member, fn_ty);
-            const specialized = try builder.analyser.specializeFunctionTypeAtCall(
-                handle,
-                callee_index,
-                callee_loc,
-                member_type,
-            );
-            const specialized_fn_ty = try builder.analyser.resolveFuncProtoOfCallable(specialized) orelse fn_ty;
-            try candidates.append(builder.arena, .{
-                .parameters = specialized_fn_ty.data.function.parameters[@intFromBool(has_self_param)..],
-            });
+
+        // Explicit parameter types can preserve a useful structural `anytype`
+        // shape even when callsite inference produces several incompatible
+        // concrete receiver types. Prefer that shape when it is unambiguous.
+        const structural_receiver = if (try builder.analyser.getFieldAccessType(
+            handle,
+            callee_loc.start,
+            callee_loc,
+        )) |receiver|
+            try builder.analyser.resolveDerefType(receiver) orelse receiver
+        else
+            null;
+        var used_structural_receiver = false;
+        if (structural_receiver) |receiver_type| {
+            if (receiver_type.data != .either) structural: {
+                const member = try receiver_type.lookupSymbol(builder.analyser, field_name) orelse break :structural;
+                const member_type = try member.resolveType(builder.analyser) orelse break :structural;
+                const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(member_type) orelse break :structural;
+                const has_self_param = try builder.analyser.isInstanceMemberAccess(receiver_type, member, fn_ty);
+                const specialized = try builder.analyser.specializeFunctionTypeAtCall(
+                    handle,
+                    callee_index,
+                    callee_loc,
+                    member_type,
+                );
+                const specialized_fn_ty = try builder.analyser.resolveFuncProtoOfCallable(specialized) orelse fn_ty;
+                try candidates.append(builder.arena, .{
+                    .parameters = specialized_fn_ty.data.function.parameters[@intFromBool(has_self_param)..],
+                });
+                used_structural_receiver = true;
+            }
+        }
+
+        if (!used_structural_receiver) {
+            const lhs = try builder.analyser.resolveTypeOfNode(.of(lhs_node, handle)) orelse return;
+            const receiver = try builder.analyser.resolveDerefType(lhs) orelse lhs;
+            for (try receiver.getAllTypesWithHandles(builder.analyser)) |receiver_type| {
+                const member = try receiver_type.lookupSymbol(builder.analyser, field_name) orelse continue;
+                const member_type = try member.resolveType(builder.analyser) orelse continue;
+                const fn_ty = try builder.analyser.resolveFuncProtoOfCallable(member_type) orelse continue;
+                const has_self_param = try builder.analyser.isInstanceMemberAccess(receiver_type, member, fn_ty);
+                const specialized = try builder.analyser.specializeFunctionTypeAtCall(
+                    handle,
+                    callee_index,
+                    callee_loc,
+                    member_type,
+                );
+                const specialized_fn_ty = try builder.analyser.resolveFuncProtoOfCallable(specialized) orelse fn_ty;
+                try candidates.append(builder.arena, .{
+                    .parameters = specialized_fn_ty.data.function.parameters[@intFromBool(has_self_param)..],
+                });
+            }
         }
     } else {
         for (try ty.getAllTypesWithHandles(builder.analyser)) |resolved_type| {
