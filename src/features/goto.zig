@@ -17,6 +17,23 @@ const tracy = @import("tracy");
 const Analyser = @import("../analysis.zig");
 const DocumentStore = @import("../DocumentStore.zig");
 
+fn definitionLinkEql(lhs: types.Definition.Link, rhs: types.Definition.Link) bool {
+    return std.mem.eql(u8, lhs.targetUri, rhs.targetUri) and
+        std.meta.eql(lhs.targetRange, rhs.targetRange) and
+        std.meta.eql(lhs.targetSelectionRange, rhs.targetSelectionRange);
+}
+
+fn appendUniqueDefinitionLink(
+    arena: std.mem.Allocator,
+    links: *std.ArrayList(types.Definition.Link),
+    link: types.Definition.Link,
+) error{OutOfMemory}!void {
+    for (links.items) |existing| {
+        if (definitionLinkEql(existing, link)) return;
+    }
+    try links.append(arena, link);
+}
+
 pub const GotoKind = enum {
     declaration,
     definition,
@@ -253,14 +270,28 @@ fn gotoDefinitionFieldAccess(
     var locs: std.ArrayList(types.Definition.Link) = .empty;
 
     for (accesses) |access| {
-        if (try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), access, kind, offset_encoding)) |l|
-            try locs.append(arena, l);
+        if (try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), access, kind, offset_encoding)) |link|
+            try appendUniqueDefinitionLink(arena, &locs, link);
     }
 
     if (locs.items.len == 0)
         return null;
 
     return try locs.toOwnedSlice(arena);
+}
+
+test "deduplicate identical definition links" {
+    var links: std.ArrayList(types.Definition.Link) = .empty;
+    defer links.deinit(std.testing.allocator);
+    const link: types.Definition.Link = .{
+        .originSelectionRange = .{ .start = .{ .line = 3, .character = 2 }, .end = .{ .line = 3, .character = 6 } },
+        .targetUri = "file:///impl.zig",
+        .targetRange = .{ .start = .{ .line = 10, .character = 4 }, .end = .{ .line = 12, .character = 5 } },
+        .targetSelectionRange = .{ .start = .{ .line = 10, .character = 7 }, .end = .{ .line = 10, .character = 11 } },
+    };
+    try appendUniqueDefinitionLink(std.testing.allocator, &links, link);
+    try appendUniqueDefinitionLink(std.testing.allocator, &links, link);
+    try std.testing.expectEqual(@as(usize, 1), links.items.len);
 }
 
 fn gotoDefinitionString(

@@ -19940,10 +19940,18 @@ pub fn getSymbolFieldAccessesArrayList(
         const container_handle_nodes = try container_handle.getAllTypesWithHandles(analyser);
 
         for (container_handle_nodes) |t| {
-            if (try t.lookupSymbol(analyser, name)) |decl_handle|
+            if (try t.lookupSymbol(analyser, name)) |decl_handle| unique: {
+                for (decls_with_handles.items) |existing| {
+                    if (existing.eql(decl_handle)) break :unique;
+                }
                 try decls_with_handles.append(arena, decl_handle);
-            if (try analyser.resolvePropertyType(ty, name)) |p|
+            }
+            if (try analyser.resolvePropertyType(ty, name)) |p| unique: {
+                for (property_types.items) |existing| {
+                    if (existing.eql(p)) break :unique;
+                }
                 try property_types.append(arena, p);
+            }
         }
     }
 }
