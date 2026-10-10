@@ -1079,7 +1079,31 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
     if (dot_token_index < 2) return;
 
     const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(builder.arena, tree, loc.start);
-    const dot_context = getEnumLiteralContext(tree, dot_token_index, nodes) orelse return;
+    var dot_context = getEnumLiteralContext(tree, dot_token_index, nodes) orelse return;
+    if (dot_context.likely == .struct_field and tree.tokenTag(dot_token_index - 1) != .number_literal) {
+        var has_array_init = false;
+        var has_struct_init = false;
+        for (nodes) |node| {
+            switch (tree.nodeTag(node)) {
+                .array_init,
+                .array_init_comma,
+                .array_init_one,
+                .array_init_one_comma,
+                => has_array_init = true,
+                .struct_init,
+                .struct_init_comma,
+                .struct_init_one,
+                .struct_init_one_comma,
+                .struct_init_dot,
+                .struct_init_dot_comma,
+                .struct_init_dot_two,
+                .struct_init_dot_two_comma,
+                => has_struct_init = true,
+                else => {},
+            }
+        }
+        if (has_array_init and !has_struct_init) dot_context.likely = .decl_literal;
+    }
     if (dot_context.likely == .invalid) return;
     const used_members_set = try collectUsedMembersSet(builder, dot_context.likely, dot_token_index);
     const containers = try collectContainerNodes(builder, builder.orig_handle, dot_context);
@@ -1743,6 +1767,8 @@ const EnumLiteralContext = struct {
         enum_arg,
         /// `S{.`, `var s:S = .{.`, `f(.{.` or `a.f(.{.`
         struct_field,
+        /// A declaration literal used as an array element, e.g. `[_]S{ .init() }`.
+        decl_literal,
         switch_case,
         invalid,
 
@@ -1753,6 +1779,7 @@ const EnumLiteralContext = struct {
                 .enum_break,
                 .enum_continue,
                 .enum_arg,
+                .decl_literal,
                 => true,
                 else => false,
             };
@@ -2108,6 +2135,7 @@ fn collectContainerFields(
 
                 const kind: types.completion.Item.Kind =
                     if (field.ast.tuple_like) .EnumMember else .Field;
+                if (likely == .decl_literal and kind == .Field) continue;
 
                 const insert_text, const insert_text_format: types.InsertTextFormat = insert_text: {
                     if (likely != .struct_field and likely != .enum_comparison and likely != .switch_case and kind == .Field) {

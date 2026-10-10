@@ -23722,6 +23722,21 @@ test "decl literal function" {
     });
 }
 
+test "decl literal function in array initializer" {
+    try testCompletion(
+        \\const S = struct {
+        \\    value: u8,
+        \\    fn init(value: u8) S { return .{ .value = value }; }
+        \\};
+        \\const values = [_]S{
+        \\    .in<cursor>it(1),
+        \\    .init(2),
+        \\};
+    , &.{
+        .{ .label = "init", .kind = .Function, .detail = "fn (value: u8) S" },
+    });
+}
+
 test "decl literal function call" {
     try testCompletion(
         \\const S = struct {
