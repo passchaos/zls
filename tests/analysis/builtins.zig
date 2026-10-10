@@ -775,6 +775,13 @@ const empty_tuple_field_count = @typeInfo(EmptyTuple).@"struct".fields.len;
 const EmptyTupleFields = &.{};
 const AliasedEmptyTuple = @Tuple(EmptyTupleFields);
 //    ^^^^^^^^^^^^^^^^^ (type)(struct {})
+fn emptyTupleAfterMutation() type {
+    comptime var marker: usize = 0;
+    marker += 1;
+    return @Tuple(&.{});
+}
+const InterpretedEmptyTuple = emptyTupleAfterMutation();
+//    ^^^^^^^^^^^^^^^^^^^^^ (type)(struct {})
 const TupleFields = &.{ i32, bool };
 const AliasedTuple = @Tuple(TupleFields);
 //    ^^^^^^^^^^^^ (type)(struct { i32, bool })
@@ -795,6 +802,17 @@ const Struct = @Struct(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //                                        ^ ([1][]const u8)()
 //                                                            ^ ([?]Attributes)()
 //                                                              ^ (Attributes)()
+const EmptyStruct = @Struct(.auto, null, &.{}, &.{}, &.{});
+//    ^^^^^^^^^^^ (type)(struct {})
+const empty_struct_field_count = @typeInfo(EmptyStruct).@"struct".fields.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
+fn emptyStructAfterMutation() type {
+    comptime var marker: usize = 0;
+    marker += 1;
+    return @Struct(.auto, null, &.{}, &.{}, &.{});
+}
+const InterpretedEmptyStruct = emptyStructAfterMutation();
+//    ^^^^^^^^^^^^^^^^^^^^^^ (type)(struct {})
 const ConcreteStruct = @Struct(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^^^^ (type)(struct { foo: u8, bar: i16 })
 const AlignedStruct = @Struct(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
@@ -823,6 +841,10 @@ const Union = @Union(.auto, undefined, &.{"foo"}, &.{i32}, &.{.{}});
 //                                      ^ ([1][]const u8)()
 //                                                          ^ ([?]Attributes)()
 //                                                            ^ (Attributes)()
+const EmptyUnion = @Union(.auto, null, &.{}, &.{}, &.{});
+//    ^^^^^^^^^^ (type)(union {})
+const empty_union_field_count = @typeInfo(EmptyUnion).@"union".fields.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
 const ConcreteUnion = @Union(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^^^ (type)(union { foo: u8, bar: i16 })
 const AlignedUnion = @Union(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
@@ -856,6 +878,10 @@ const generated_union_unknown_foo = generated_union_unknown.foo;
 const Enum = @Enum(undefined, .exhaustive, undefined, undefined);
 //    ^^^^ (type)()
 //                            ^^^^^^^^^^^ (Mode)()
+const EmptyEnum = @Enum(u0, .exhaustive, &.{}, &.{});
+//    ^^^^^^^^^ (type)(enum(u0) {})
+const empty_enum_field_count = @typeInfo(EmptyEnum).@"enum".fields.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
 const ConcreteEnum = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
 //    ^^^^^^^^^^^^ (type)(enum(u8) { low = 1, high = 7 })
 const NonexhaustiveEnum = @Enum(u8, .nonexhaustive, &.{"known"}, &.{1});
@@ -876,6 +902,10 @@ const Fn = @Fn(&.{i32}, &.{.{}}, undefined, .{});
 //                       ^ ([?]Attributes)()
 //                         ^ (Attributes)()
 //                                          ^ (Attributes)()
+const EmptyFn = @Fn(&.{}, &.{}, void, .{});
+//    ^^^^^^^ (type)(fn() void)
+const empty_fn_parameter_count = @typeInfo(EmptyFn).@"fn".params.len;
+//    ^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
 const ConcreteFn = @Fn(&.{ i32, bool }, &.{ .{}, .{} }, u8, .{});
 //    ^^^^^^^^^^ (type)(fn(i32, bool) u8)
 const NoaliasFn = @Fn(&.{*anyopaque}, &.{.{ .@"noalias" = true }}, void, .{});

@@ -7965,23 +7965,13 @@ fn resolveTupleTypeConstructor(
     }
 
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
-
-    const node_handle = literal_options.node_handle;
-    const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return null;
-    const literal_node = tree.nodeData(node_handle.node).node;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const elements: []const Ast.Node.Index = if (tree.fullArrayInit(&buffer, literal_node)) |literal| elements: {
-        if (literal.ast.type_expr.unwrap() != null) return null;
-        break :elements literal.ast.elements;
-    } else if (tree.fullStructInit(&buffer, literal_node)) |literal| elements: {
-        if (literal.ast.type_expr.unwrap() != null or literal.ast.fields.len != 0) return null;
-        break :elements &.{};
-    } else return null;
+    const handle = literal_options.node_handle.handle;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
     const element_types = try analyser.arena.alloc(Type, elements.len);
     for (elements, element_types) |element_node, *element_type| {
         element_type.* = try analyser.resolveTypeOfNodeInternal(.{
-            .node_handle = .of(element_node, node_handle.handle),
+            .node_handle = .of(element_node, handle),
             .container_type = literal_options.container_type,
         }) orelse return null;
         if (!element_type.is_type_val) return null;
@@ -8032,6 +8022,28 @@ fn resolveConstInitializer(analyser: *Analyser, options: ResolveOptions) Error!?
     };
 }
 
+/// Resolves the syntax backing an anonymous sequence literal such as `&.{ a, b }`.
+/// Zig represents the element-free form `&.{}` as a struct-init AST node, so it
+/// needs an explicit zero-element case when the surrounding builtin supplies the
+/// sequence element type.
+fn anonymousSequenceLiteralElements(
+    node_handle: NodeWithHandle,
+    buffer: *[2]Ast.Node.Index,
+) ?[]const Ast.Node.Index {
+    const tree = &node_handle.handle.tree;
+    if (tree.nodeTag(node_handle.node) != .address_of) return null;
+    const literal_node = tree.nodeData(node_handle.node).node;
+
+    if (tree.fullArrayInit(buffer, literal_node)) |literal| {
+        if (literal.ast.type_expr.unwrap() != null) return null;
+        return literal.ast.elements;
+    }
+
+    const literal = tree.fullStructInit(buffer, literal_node) orelse return null;
+    if (literal.ast.type_expr.unwrap() != null or literal.ast.fields.len != 0) return null;
+    return literal.ast.fields;
+}
+
 fn resolveStringListLiteral(
     analyser: *Analyser,
     options: ResolveOptions,
@@ -8048,18 +8060,13 @@ fn resolveStringListLiteral(
         }
     }
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
-    const node_handle = literal_options.node_handle;
-    const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return null;
-    const literal_node = tree.nodeData(node_handle.node).node;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
-    if (literal.ast.type_expr.unwrap() != null) return null;
-
-    const strings = try analyser.arena.alloc([]const u8, literal.ast.elements.len);
-    for (literal.ast.elements, strings, 0..) |element, *string, i| {
+    const handle = literal_options.node_handle.handle;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
+    const strings = try analyser.arena.alloc([]const u8, elements.len);
+    for (elements, strings, 0..) |element, *string, i| {
         string.* = try analyser.resolveStringLiteral(.{
-            .node_handle = .of(element, node_handle.handle),
+            .node_handle = .of(element, handle),
             .container_type = literal_options.container_type,
         }) orelse return null;
         for (strings[0..i]) |previous| {
@@ -8159,12 +8166,10 @@ fn isEmptyStructAttributeList(
     expected_len: usize,
 ) bool {
     const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return false;
-    const literal_node = tree.nodeData(node_handle.node).node;
     var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return false;
-    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return false;
-    for (literal.ast.elements) |element| {
+    const elements = anonymousSequenceLiteralElements(node_handle, &buffer) orelse return false;
+    if (elements.len != expected_len) return false;
+    for (elements) |element| {
         var struct_buffer: [2]Ast.Node.Index = undefined;
         const attributes = tree.fullStructInit(&struct_buffer, element) orelse return false;
         if (attributes.ast.type_expr.unwrap() != null or attributes.ast.fields.len != 0) return false;
@@ -8199,17 +8204,15 @@ fn resolveStructFieldAlignments(
         }
     }
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
-    const node_handle = literal_options.node_handle;
-    const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return null;
-    const literal_node = tree.nodeData(node_handle.node).node;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
-    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return null;
+    const handle = literal_options.node_handle.handle;
+    const tree = &handle.tree;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
+    if (elements.len != expected_len) return null;
 
     const alignments = try analyser.arena.alloc(u16, expected_len);
     @memset(alignments, 0);
-    for (literal.ast.elements, alignments) |element, *alignment| {
+    for (elements, alignments) |element, *alignment| {
         var struct_buffer: [2]Ast.Node.Index = undefined;
         const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
         if (attributes.ast.type_expr.unwrap() != null) return null;
@@ -8221,7 +8224,7 @@ fn resolveStructFieldAlignments(
             if (tree.tokenTag(field_name_token) != .identifier) return null;
             const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
             const field_options: ResolveOptions = .{
-                .node_handle = .of(field_node, node_handle.handle),
+                .node_handle = .of(field_node, handle),
                 .container_type = literal_options.container_type,
             };
             if (std.mem.eql(u8, field_name, "comptime")) {
@@ -8479,17 +8482,15 @@ fn resolveUnionFieldAlignments(
     expected_len: usize,
 ) Error!?[]const u16 {
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
-    const node_handle = literal_options.node_handle;
-    const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return null;
-    const literal_node = tree.nodeData(node_handle.node).node;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
-    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return null;
+    const handle = literal_options.node_handle.handle;
+    const tree = &handle.tree;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
+    if (elements.len != expected_len) return null;
 
     const alignments = try analyser.arena.alloc(u16, expected_len);
     @memset(alignments, 0);
-    for (literal.ast.elements, alignments) |element, *alignment| {
+    for (elements, alignments) |element, *alignment| {
         var struct_buffer: [2]Ast.Node.Index = undefined;
         const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
         if (attributes.ast.type_expr.unwrap() != null) return null;
@@ -8501,7 +8502,7 @@ fn resolveUnionFieldAlignments(
             if (!std.mem.eql(u8, field_name, "align") or seen_align) return null;
             seen_align = true;
             const field_options: ResolveOptions = .{
-                .node_handle = .of(field_node, node_handle.handle),
+                .node_handle = .of(field_node, handle),
                 .container_type = literal_options.container_type,
             };
             if (try analyser.isNullComptimeValue(field_options)) continue;
@@ -8721,18 +8722,13 @@ fn resolveIntegerValueList(
     options: ResolveOptions,
 ) Error!?[]const InternPool.Index {
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
-    const node_handle = literal_options.node_handle;
-    const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return null;
-    const literal_node = tree.nodeData(node_handle.node).node;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
-    if (literal.ast.type_expr.unwrap() != null) return null;
-
-    const values = try analyser.arena.alloc(InternPool.Index, literal.ast.elements.len);
-    for (literal.ast.elements, values) |element, *value| {
+    const handle = literal_options.node_handle.handle;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
+    const values = try analyser.arena.alloc(InternPool.Index, elements.len);
+    for (elements, values) |element, *value| {
         value.* = try analyser.resolveCoercedIPValue(result_type, .{
-            .node_handle = .of(element, node_handle.handle),
+            .node_handle = .of(element, handle),
             .container_type = literal_options.container_type,
         }) orelse return null;
     }
@@ -8852,16 +8848,14 @@ fn resolveFnParameterAttributes(
 ) Error!?std.StaticBitSet(32) {
     if (expected_len > 32) return null;
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
-    const node_handle = literal_options.node_handle;
-    const tree = &node_handle.handle.tree;
-    if (tree.nodeTag(node_handle.node) != .address_of) return null;
-    const literal_node = tree.nodeData(node_handle.node).node;
-    var buffer: [2]Ast.Node.Index = undefined;
-    const literal = tree.fullArrayInit(&buffer, literal_node) orelse return null;
-    if (literal.ast.type_expr.unwrap() != null or literal.ast.elements.len != expected_len) return null;
+    const handle = literal_options.node_handle.handle;
+    const tree = &handle.tree;
+    var literal_buffer: [2]Ast.Node.Index = undefined;
+    const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
+    if (elements.len != expected_len) return null;
 
     var noalias_bits: std.StaticBitSet(32) = .empty;
-    for (literal.ast.elements, 0..) |element, i| {
+    for (elements, 0..) |element, i| {
         var struct_buffer: [2]Ast.Node.Index = undefined;
         const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
         if (attributes.ast.type_expr.unwrap() != null) return null;
@@ -8871,7 +8865,7 @@ fn resolveFnParameterAttributes(
             const field_name = try analyser.identifierTokenName(tree, field_name_token) orelse return null;
             if (!std.mem.eql(u8, field_name, "noalias")) return null;
             const value = try analyser.resolveBoolValue(.{
-                .node_handle = .of(field_node, node_handle.handle),
+                .node_handle = .of(field_node, handle),
                 .container_type = literal_options.container_type,
             }) orelse return null;
             noalias_bits.setValue(i, value);

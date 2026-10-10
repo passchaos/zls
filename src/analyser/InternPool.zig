@@ -4027,7 +4027,8 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                     try writer.writeAll(" {...}");
                     return null;
                 }
-                try writer.writeAll(" { ");
+                try writer.writeAll(" {");
+                if (struct_info.fields.count() != 0) try writer.writeByte(' ');
                 for (struct_info.fields.keys(), struct_info.fields.values(), 0..) |name, field, i| {
                     if (i != 0) try writer.writeAll(", ");
                     if (field.is_comptime) try writer.writeAll("comptime ");
@@ -4037,7 +4038,8 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                         try writer.print(" = {f}", .{field.default_value.fmtOptions(ip, options)});
                     }
                 }
-                try writer.writeAll(" }");
+                if (struct_info.fields.count() != 0) try writer.writeByte(' ');
+                try writer.writeByte('}');
             }
         },
         .optional_type => |optional_info| {
@@ -4076,16 +4078,20 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                 try writer.writeAll(" {...}");
                 return null;
             }
-            try writer.writeAll(" { ");
+            try writer.writeAll(" {");
+            if (enum_info.fields.count() != 0) try writer.writeByte(' ');
             for (enum_info.fields.keys(), enum_info.values.keys(), 0..) |name, value, i| {
                 if (i != 0) try writer.writeAll(", ");
                 try writer.print("{f} = {f}", .{ ip.fmtId(name), value.fmtOptions(ip, options) });
             }
             if (enum_info.is_exhaustive) {
-                try writer.writeAll(" }");
+                if (enum_info.fields.count() != 0) try writer.writeByte(' ');
+                try writer.writeByte('}');
             } else {
-                if (enum_info.fields.count() != 0) try writer.writeAll(", ");
-                try writer.writeAll("_ }");
+                if (enum_info.fields.count() != 0)
+                    try writer.writeAll(", _ }")
+                else
+                    try writer.writeAll(" _ }");
             }
         },
         .function_type => |function_info| {
@@ -4153,13 +4159,15 @@ fn printInternal(ip: *InternPool, ty: Index, writer: *std.Io.Writer, options: Fo
                 try writer.writeAll(" {...}");
                 return null;
             }
-            try writer.writeAll(" { ");
+            try writer.writeAll(" {");
+            if (union_info.fields.count() != 0) try writer.writeByte(' ');
             for (union_info.fields.keys(), union_info.fields.values(), 0..) |name, field, i| {
                 if (i != 0) try writer.writeAll(", ");
                 try writer.print("{f}: {f}", .{ ip.fmtId(name), field.ty.fmtOptions(ip, options) });
                 if (field.alignment != 0) try writer.print(" align({d})", .{field.alignment});
             }
-            try writer.writeAll(" }");
+            if (union_info.fields.count() != 0) try writer.writeByte(' ');
+            try writer.writeByte('}');
         },
         .tuple_type => |tuple_info| {
             assert(tuple_info.types.len == tuple_info.values.len);
@@ -4759,6 +4767,7 @@ test "struct value" {
     });
     const struct_type = try ip.get(.{ .struct_type = struct_index });
     const struct_info = ip.getStructMut(struct_index);
+    try expectFmt("struct {}", "{f}", .{struct_type.fmt(&ip)});
     try struct_info.fields.put(gpa, foo_name_index, .{ .ty = .usize_type });
     try struct_info.fields.put(gpa, bar_name_index, .{ .ty = .bool_type });
     try expectFmt("struct { foo: usize, bar: bool }", "{f}", .{struct_type.fmt(&ip)});
