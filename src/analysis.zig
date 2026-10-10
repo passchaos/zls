@@ -12477,7 +12477,7 @@ pub fn specializeFunctionTypeAtCall(
     expression_loc: ?offsets.Loc,
     ty: Type,
 ) Error!Type {
-    const nodes = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, absolute_index);
+    const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(analyser.arena, &handle.tree, absolute_index);
     for (nodes) |node| {
         var buffer: [1]Ast.Node.Index = undefined;
         const call = handle.tree.fullCall(&buffer, node) orelse continue;

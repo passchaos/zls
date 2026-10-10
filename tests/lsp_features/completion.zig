@@ -3177,6 +3177,50 @@ test "generated Struct fields complete in struct initializer" {
         .{ .label = "callback", .kind = .Field, .detail = "?fn (u8) void" },
         .{ .label = "count", .kind = .Field, .detail = "usize" },
     });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\fn Inner(comptime T: type) type {
+        \\    return @Struct(.auto, null, &.{"item"}, &.{T}, &.{.{}});
+        \\}
+        \\fn Outer(comptime T: type) type {
+        \\    return struct { inner: Inner(T) };
+        \\}
+        \\const value: Outer(u8) = .{ .inner = .{ .<cursor> } };
+    , &.{
+        .{ .label = "item", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const std = @import("std");
+        \\const Reader = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\    fn Methods(comptime Self: type, comptime associated: Associated) type {
+        \\        return struct { read: fn (Self, []u8) associated.Error!usize };
+        \\    }
+        \\};
+        \\const Buffer = struct {};
+        \\fn Bindings(comptime Methods: type) type {
+        \\    const fields = @typeInfo(Methods).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        names[index] = field.name;
+        \\        types[index] = ?field.type;
+        \\        attrs[index] = .{};
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\fn ImplFn(comptime Contract: type, comptime Subject: type) type {
+        \\    const Methods = Contract.Methods(Subject, .{});
+        \\    return struct { bindings: Bindings(Methods) = .{} };
+        \\}
+        \\const api = struct { const Impl = ImplFn; };
+        \\const model: api.Impl(Reader, *Buffer) = .{ .bindings = .{ .<cursor> } };
+    , &.{
+        .{ .label = "read", .kind = .Field, .detail = "?fn (*Buffer, []u8) anyerror!usize" },
+    });
 }
 
 test "named generic Struct result preserves generated fields" {

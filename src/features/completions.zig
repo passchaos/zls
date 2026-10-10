@@ -2327,7 +2327,11 @@ fn collectContainerNodes(
 
     switch (handle.tree.nodeTag(nodes[0])) {
         .field_access => {
-            if (try builder.analyser.resolveTypeOfNode(.of(nodes[0], handle))) |ty| {
+            if (try builder.analyser.resolveTypeOfNode(.of(nodes[0], handle))) |resolved| {
+                const ty = if (dot_context.need_ret_type)
+                    try builder.analyser.specializeFunctionTypeAtCall(handle, source_index -| 1, null, resolved)
+                else
+                    resolved;
                 try collectFieldAccessTypes(builder, dot_context, ty, &types_with_handles);
                 return types_with_handles.keys();
             }
@@ -2416,7 +2420,10 @@ fn collectVarAccessContainerNodes(
         return;
     };
     const result = try symbol_decl.resolveType(analyser) orelse return;
-    const type_expr = try analyser.resolveDerefType(result) orelse result;
+    var type_expr = try analyser.resolveDerefType(result) orelse result;
+    if (dot_context.need_ret_type) {
+        type_expr = try analyser.specializeFunctionTypeAtCall(handle, loc.end -| 1, null, type_expr);
+    }
     if (!type_expr.isFunc()) {
         _ = try type_expr.getAllTypesWithHandlesArraySet(analyser, types_with_handles);
         return;
@@ -2548,7 +2555,10 @@ fn collectFieldAccessContainerNodes(
     const name = offsets.locToSlice(handle.tree.source, name_loc);
     const decls = try analyser.getSymbolFieldAccesses(arena, handle, loc.end, loc, name) orelse return;
     for (decls) |decl| {
-        const ty = try decl.resolveType(analyser) orelse continue;
+        var ty = try decl.resolveType(analyser) orelse continue;
+        if (dot_context.need_ret_type) {
+            ty = try analyser.specializeFunctionTypeAtCall(handle, loc.end -| 1, null, ty);
+        }
         try collectFieldAccessTypes(builder, dot_context, ty, types_with_handles);
     }
 }
