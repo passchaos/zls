@@ -454,6 +454,68 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
+const FunctionCompletionDisplay = struct {
+    label_details: ?types.completion.Item.LabelDetails,
+    detail: []const u8,
+};
+
+fn functionCompletionDisplay(
+    builder: *Builder,
+    callable_ty: Analyser.Type,
+    func_ty: Analyser.Type,
+    skip_first_param: bool,
+) error{OutOfMemory}!FunctionCompletionDisplay {
+    const info = func_ty.data.function;
+    const label_details: ?types.completion.Item.LabelDetails = blk: {
+        if (!builder.server.client_capabilities.label_details_support) break :blk null;
+
+        const detail = try builder.analyser.stringifyFunction(.{
+            .info = info,
+            .include_fn_keyword = false,
+            .include_name = false,
+            .skip_first_param = skip_first_param,
+            .parameters = if (builder.server.config_manager.config.completion_label_details)
+                .{ .show = .{
+                    .include_modifiers = true,
+                    .include_names = true,
+                    .include_types = true,
+                } }
+            else
+                .collapse,
+            .include_return_type = false,
+            .snippet_placeholders = false,
+        });
+
+        const description = try info.return_value.stringifyTypeOf(
+            builder.analyser,
+            .{ .truncate_container_decls = true },
+        );
+
+        break :blk .{
+            .detail = detail,
+            .description = description,
+        };
+    };
+
+    const detail = if (try builder.analyser.resolveDerefType(callable_ty) != null)
+        try callable_ty.stringifyTypeOf(builder.analyser, .{ .truncate_container_decls = false })
+    else
+        try builder.analyser.stringifyFunction(.{
+            .info = info,
+            .include_fn_keyword = true,
+            .include_name = false,
+            .parameters = .{ .show = .{
+                .include_modifiers = true,
+                .include_names = true,
+                .include_types = true,
+            } },
+            .include_return_type = true,
+            .snippet_placeholders = false,
+        });
+
+    return .{ .label_details = label_details, .detail = detail };
+}
+
 fn functionTypeCompletion(
     builder: *Builder,
     func_name: []const u8,
@@ -526,58 +588,13 @@ fn functionTypeCompletion(
     else
         .Function;
 
-    const label_details: ?types.completion.Item.LabelDetails = blk: {
-        if (!builder.server.client_capabilities.label_details_support) break :blk null;
-
-        const detail = try builder.analyser.stringifyFunction(.{
-            .info = info,
-            .include_fn_keyword = false,
-            .include_name = false,
-            .skip_first_param = has_self_param,
-            .parameters = if (config.completion_label_details)
-                .{ .show = .{
-                    .include_modifiers = true,
-                    .include_names = true,
-                    .include_types = true,
-                } }
-            else
-                .collapse,
-            .include_return_type = false,
-            .snippet_placeholders = false,
-        });
-
-        const description = try info.return_value.stringifyTypeOf(
-            builder.analyser,
-            .{ .truncate_container_decls = true },
-        );
-
-        break :blk .{
-            .detail = detail,
-            .description = description,
-        };
-    };
-
-    const details = if (try builder.analyser.resolveDerefType(callable_ty) != null)
-        try callable_ty.stringifyTypeOf(builder.analyser, .{ .truncate_container_decls = false })
-    else
-        try builder.analyser.stringifyFunction(.{
-            .info = info,
-            .include_fn_keyword = true,
-            .include_name = false,
-            .parameters = .{ .show = .{
-                .include_modifiers = true,
-                .include_names = true,
-                .include_types = true,
-            } },
-            .include_return_type = true,
-            .snippet_placeholders = false,
-        });
+    const display = try functionCompletionDisplay(builder, callable_ty, func_ty, has_self_param);
 
     return .{
         .label = func_name,
-        .labelDetails = label_details,
+        .labelDetails = display.label_details,
         .kind = kind,
-        .detail = details,
+        .detail = display.detail,
         .insertTextFormat = insert_text_format,
         .textEdit = createTextEdit(builder, .{ .newText = new_text, .insert = insert_range, .replace = replace_range }),
     };
@@ -1072,9 +1089,64 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
             container.isEnumType(builder.analyser))
         {
             try typeToCompletion(builder, container);
+            for (builder.completions.items()) |*item| {
+                if (item.kind != .EnumMember) continue;
+                try enrichEnumLiteralCompletionFromSource(builder, container, item);
+            }
             continue;
         }
         try collectContainerFields(builder, dot_context.likely, container, used_members_set);
+    }
+}
+
+/// `std.meta.FieldEnum` and `std.meta.DeclEnum` preserve the names of their
+/// source members but erase the source declarations from the generated enum.
+/// Recover that declaration here so a method selector such as `.read` carries
+/// the same signature and documentation that users would see on the original
+/// contract field.
+fn enrichEnumLiteralCompletionFromSource(
+    builder: *Builder,
+    enum_type: Analyser.Type,
+    item: *types.completion.Item,
+) Analyser.Error!void {
+    var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    try builder.analyser.collectSequentialEnumSourceDeclarations(enum_type, item.label, &declarations);
+    var selected_decl: ?Analyser.DeclWithHandle = null;
+    var selected_resolved_ty: ?Analyser.Type = null;
+    var selected_func_ty: ?Analyser.Type = null;
+    var selected_is_unresolved = true;
+    for (declarations.items) |decl| {
+        const resolved_ty = try decl.resolveType(builder.analyser) orelse continue;
+        const func_ty = try builder.analyser.resolveFuncProtoOfCallable(resolved_ty) orelse continue;
+        const info = func_ty.data.function;
+        const is_unresolved = builder.analyser.hasUnresolvedType(info.return_value.*) or for (info.parameters) |parameter| {
+            if (builder.analyser.hasUnresolvedType(parameter.type)) break true;
+        } else false;
+        if (selected_decl == null or (selected_is_unresolved and !is_unresolved)) {
+            selected_decl = decl;
+            selected_resolved_ty = resolved_ty;
+            selected_func_ty = func_ty;
+            selected_is_unresolved = is_unresolved;
+        }
+    }
+    const decl = selected_decl orelse return;
+    const resolved_ty = selected_resolved_ty.?;
+    const func_ty = selected_func_ty.?;
+    const display = try functionCompletionDisplay(builder, resolved_ty, func_ty, false);
+
+    if (selected_is_unresolved) {
+        const type_node = try decl.typeDeclarationNode() orelse return;
+        item.detail = offsets.nodeToSlice(&type_node.handle.tree, type_node.node);
+        item.labelDetails = null;
+    } else {
+        item.detail = display.detail;
+        item.labelDetails = display.label_details;
+    }
+    if (try decl.docComments(builder.arena)) |docs| {
+        item.documentation = .{ .markup_content = .{
+            .kind = if (builder.server.client_capabilities.completion_doc_supports_md) .markdown else .plaintext,
+            .value = docs,
+        } };
     }
 }
 

@@ -1955,6 +1955,41 @@ fn recordSequentialEnumSource(
     try analyser.sequential_enum_sources.put(analyser.gpa, enum_type, updated);
 }
 
+/// Collects the source declarations whose names were preserved by a generated
+/// `std.meta.FieldEnum` or `std.meta.DeclEnum` type. The generated enum itself
+/// only stores tag names, so editor features use this side table to recover
+/// signatures, documentation, and source locations.
+pub fn collectSequentialEnumSourceDeclarations(
+    analyser: *Analyser,
+    enum_type: Type,
+    name: []const u8,
+    declarations: *std.ArrayList(DeclWithHandle),
+) Error!void {
+    const enum_index = enum_type.ipIndex() orelse return;
+    const sources = analyser.sequential_enum_sources.get(enum_index) orelse return;
+    for (sources) |source| {
+        const container = try source.source.instanceUnchecked(analyser);
+        const declaration = try analyser.lookupSymbolContainer(
+            container,
+            name,
+            switch (source.kind) {
+                .field => .field,
+                .declaration => .other,
+            },
+        ) orelse continue;
+        for (declarations.items) |existing| {
+            if (!existing.eql(declaration)) continue;
+            const same_container = if (existing.container_type) |existing_container|
+                if (declaration.container_type) |declaration_container| existing_container.eql(declaration_container) else false
+            else
+                declaration.container_type == null;
+            if (same_container) break;
+        } else {
+            try declarations.append(analyser.arena, declaration);
+        }
+    }
+}
+
 fn metaDeclarationNames(analyser: *Analyser, container_type: Type) Error!?[]const []const u8 {
     return switch (container_type.data) {
         .tuple => &.{},
@@ -12413,6 +12448,10 @@ fn isUnresolvedCallReturn(analyser: *Analyser, ty: Type) bool {
     };
 }
 
+pub fn hasUnresolvedType(analyser: *Analyser, ty: Type) bool {
+    return isUnresolvedCallReturn(analyser, ty);
+}
+
 const SelectedFieldEnumMethod = struct {
     return_type: Type,
     arguments_type: ?Type,
@@ -20102,20 +20141,9 @@ pub fn getSymbolEnumLiteral(
     const result = try analyser.lookupSymbolFieldInit(handle, name, nodes[0], nodes[1..]) orelse generated: {
         const value_type = try analyser.resolveExpressionType(handle, nodes[0], nodes[1..]) orelse break :generated null;
         const enum_type = if (value_type.is_type_val) value_type else try value_type.typeOf(analyser);
-        const enum_index = enum_type.ipIndex() orelse break :generated null;
-        const sources = analyser.sequential_enum_sources.get(enum_index) orelse break :generated null;
-        for (sources) |source| {
-            const container = try source.source.instanceUnchecked(analyser);
-            if (try analyser.lookupSymbolContainer(
-                container,
-                name,
-                switch (source.kind) {
-                    .field => .field,
-                    .declaration => .other,
-                },
-            )) |declaration| break :generated declaration;
-        }
-        break :generated null;
+        var declarations: std.ArrayList(DeclWithHandle) = .empty;
+        try analyser.collectSequentialEnumSourceDeclarations(enum_type, name, &declarations);
+        break :generated if (declarations.items.len == 0) null else declarations.items[0];
     };
     analyser.resolved_enum_literals.getPtr(key).?.* = result;
     return result;

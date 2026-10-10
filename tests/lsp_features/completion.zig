@@ -25140,7 +25140,10 @@ test "enum argument of method on generated type" {
         \\const Reader = struct {
         \\    const Associated = struct { Error: type = anyerror };
         \\    fn Methods(comptime Subject: type, comptime assoc: Associated) type {
-        \\        return struct { read: fn (Subject, []u8) assoc.Error!usize };
+        \\        return struct {
+        \\            /// Reads bytes into the supplied buffer.
+        \\            read: fn (Subject, []u8) assoc.Error!usize,
+        \\        };
         \\    }
         \\};
         \\fn associatedFor(comptime C: type, comptime _: type) C.Associated {
@@ -25169,7 +25172,39 @@ test "enum argument of method on generated type" {
         \\    impl.call(.<cursor>);
         \\}
     , &.{
-        .{ .label = "read", .kind = .EnumMember },
+        .{
+            .label = "read",
+            .kind = .EnumMember,
+            .detail = "fn (Subject, []u8) assoc.Error!usize",
+            .documentation = "Reads bytes into the supplied buffer.",
+        },
+    });
+}
+
+test "FieldEnum method completion shows concrete signature" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\const Methods = struct {
+        \\    /// Reads bytes into the supplied buffer.
+        \\    read: fn (*u8, []u8) anyerror!usize,
+        \\};
+        \\fn call(comptime method: std.meta.FieldEnum(Methods)) void {
+        \\    _ = method;
+        \\}
+        \\fn use() void {
+        \\    call(.<cursor>);
+        \\}
+    , &.{
+        .{
+            .label = "read",
+            .labelDetails = .{
+                .detail = "(*u8, []u8)",
+                .description = "anyerror!usize",
+            },
+            .kind = .EnumMember,
+            .detail = "fn (*u8, []u8) anyerror!usize",
+            .documentation = "Reads bytes into the supplied buffer.",
+        },
     });
 }
 
