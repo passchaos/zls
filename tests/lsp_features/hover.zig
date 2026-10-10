@@ -1228,6 +1228,39 @@ test "comptime typeInfo reflection value" {
     , .{ .markup_kind = .plaintext });
 }
 
+test "hover recovered comptime members" {
+    try testHoverWithOptions(
+        \\const S = struct { const Value = u8; };
+        \\fn inspect(comptime T: type) void {
+        \\    const Base = switch (@typeInfo(T)) { .pointer => |pointer| pointer.child, else => T };
+        \\    if (@hasDecl(Base, "Value")) _ = Base.Val<cursor>ue;
+        \\}
+    ,
+        \\const Value = u8
+        \\(type = u8)
+    , .{ .markup_kind = .plaintext });
+
+    try testHoverWithOptions(
+        \\const std = @import("std");
+        \\fn Generated() type {
+        \\    return @Struct(.auto, null, &.{"callback"}, &.{?fn (u8) void}, &.{.{}});
+        \\}
+        \\const value: Generated() = .{ .call<cursor>back = null };
+    ,
+        \\callback
+        \\(?fn (u8) void)
+    , .{ .markup_kind = .plaintext });
+
+    try testHoverWithOptions(
+        \\const Failure = error { ExpectedFailure };
+        \\fn accepts(_: anyerror) void {}
+        \\const result = accepts(error.Exp<cursor>ectedFailure);
+    ,
+        \\error.ExpectedFailure
+        \\(error{ExpectedFailure} = error.ExpectedFailure)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "alias with different type" {
     try testHoverWithOptions(
         \\const foo: i32 = 1;

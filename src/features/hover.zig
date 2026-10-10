@@ -390,13 +390,26 @@ fn hoverDefinitionEnumLiteral(
         return try hoverDefinitionStructInit(analyser, arena, handle, source_index, markup_kind, offset_encoding);
     };
     const name = offsets.locToSlice(handle.tree.source, name_loc);
-    const decl = (try analyser.getSymbolEnumLiteral(handle, source_index, name)) orelse return null;
+    if (try analyser.getSymbolEnumLiteral(handle, source_index, name)) |decl| {
+        return .{
+            .contents = .{
+                .markup_content = .{
+                    .kind = markup_kind,
+                    .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null)) orelse return null,
+                },
+            },
+            .range = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
+        };
+    }
 
+    const container_type = try analyser.resolveStructInitType(handle, source_index) orelse return null;
+    const property_type = try analyser.resolvePropertyType(container_type, name) orelse return null;
+    var doc_strings: std.ArrayList([]const u8) = .empty;
     return .{
         .contents = .{
             .markup_content = .{
                 .kind = markup_kind,
-                .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null)) orelse return null,
+                .value = (try hoverSymbolResolvedType(analyser, arena, name, markup_kind, &doc_strings, property_type)) orelse return null,
             },
         },
         .range = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
@@ -434,6 +447,16 @@ fn hoverDefinitionFieldAccess(
         content.appendAssumeCapacity(try hoverSymbolResolvedType(analyser, arena, def_str, markup_kind, &doc_strings, ty) orelse continue);
     }
 
+    if (content.items.len == 0) {
+        const name = offsets.locToSlice(handle.tree.source, highlight_loc);
+        var guarded_declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+        try analyser.collectHasDeclGuardedDeclarations(handle, source_index, loc, name, &guarded_declarations);
+        try content.ensureUnusedCapacity(arena, guarded_declarations.items.len);
+        for (guarded_declarations.items) |declaration| {
+            content.appendAssumeCapacity(try hoverSymbol(analyser, arena, declaration, markup_kind, null) orelse continue);
+        }
+    }
+
     return .{
         .contents = .{ .markup_content = .{
             .kind = markup_kind,
@@ -445,6 +468,47 @@ fn hoverDefinitionFieldAccess(
         } },
         .range = offsets.locToRange(handle.tree.source, highlight_loc, offset_encoding),
     };
+}
+
+fn hoverDefinitionError(
+    analyser: *Analyser,
+    arena: std.mem.Allocator,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+    markup_kind: types.MarkupKind,
+    offset_encoding: offsets.Encoding,
+) Analyser.Error!?types.Hover {
+    const name_token, const name_loc = offsets.identifierTokenAndLocFromIndex(&handle.tree, source_index) orelse return null;
+    _ = name_token;
+    const name = offsets.locToSlice(handle.tree.source, name_loc);
+    var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    try analyser.collectErrorTokenDeclarations(handle, name, &declarations);
+    if (declarations.items.len == 0) return null;
+
+    var resolved_type: ?Analyser.Type = null;
+    const nodes = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, source_index);
+    for (nodes) |node| {
+        if (handle.tree.nodeTag(node) != .error_value) continue;
+        resolved_type = try analyser.resolveTypeOfNode(.of(node, handle));
+        break;
+    }
+    var doc_strings: std.ArrayList([]const u8) = .empty;
+    if (try declarations.items[0].docComments(arena)) |docs| try doc_strings.append(arena, docs);
+    const def_str = try std.fmt.allocPrint(arena, "error.{s}", .{name});
+    return .{
+        .contents = .{ .markup_content = .{
+            .kind = markup_kind,
+            .value = (try hoverSymbolResolvedType(analyser, arena, def_str, markup_kind, &doc_strings, resolved_type)) orelse return null,
+        } },
+        .range = offsets.locToRange(handle.tree.source, name_loc, offset_encoding),
+    };
+}
+
+fn isErrorAccessToken(handle: *DocumentStore.Handle, source_index: usize) bool {
+    const name_token = offsets.sourceIndexToTokenIndex(&handle.tree, source_index).pickPreferred(&.{.identifier}, &handle.tree) orelse return false;
+    return name_token >= 2 and
+        handle.tree.tokenTag(name_token - 1) == .period and
+        handle.tree.tokenTag(name_token - 2) == .keyword_error;
 }
 
 fn hoverNumberLiteral(
@@ -538,10 +602,15 @@ pub fn hover(
 
     const response = switch (pos_context) {
         .builtin => |loc| try hoverDefinitionBuiltin(analyser, arena, handle, source_index, loc, markup_kind, offset_encoding),
-        .var_access, .test_doctest_name => try hoverDefinitionGlobal(analyser, arena, handle, source_index, markup_kind, offset_encoding),
+        .var_access => if (isErrorAccessToken(handle, source_index))
+            try hoverDefinitionError(analyser, arena, handle, source_index, markup_kind, offset_encoding)
+        else
+            try hoverDefinitionGlobal(analyser, arena, handle, source_index, markup_kind, offset_encoding),
+        .test_doctest_name => try hoverDefinitionGlobal(analyser, arena, handle, source_index, markup_kind, offset_encoding),
         .field_access => |loc| try hoverDefinitionFieldAccess(analyser, arena, handle, source_index, loc, markup_kind, offset_encoding),
         .label_access, .label_decl => |loc| try hoverDefinitionLabel(analyser, arena, handle, source_index, loc, markup_kind, offset_encoding),
         .enum_literal => try hoverDefinitionEnumLiteral(analyser, arena, handle, source_index, markup_kind, offset_encoding),
+        .error_access => try hoverDefinitionError(analyser, arena, handle, source_index, markup_kind, offset_encoding),
         .number_literal, .char_literal => try hoverDefinitionNumberLiteral(arena, handle, source_index, markup_kind, offset_encoding),
         else => null,
     };
