@@ -14831,7 +14831,8 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
         .field_access => {
             const lhs_node, const field_name = tree.nodeData(node_handle.node).node_and_token;
 
-            var lhs = (try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle))) orelse return null;
+            var lhs = try analyser.resolveBindingOfNodeInternal(.of(lhs_node, handle)) orelse
+                try analyser.resolveStructuralParameterBinding(handle, lhs_node) orelse return null;
 
             const symbol = try analyser.identifierTokenName(tree, field_name) orelse return null;
             if (analyser.evaluate_comptime_values and
@@ -19311,6 +19312,30 @@ fn identifierSourceName(analyser: *Analyser, raw: []const u8) error{OutOfMemory}
     };
     if (decoded_result != .success) return null;
     return decoded;
+}
+
+fn resolveStructuralParameterBinding(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+) Error!?Binding {
+    if (handle.tree.nodeTag(node) != .identifier) return null;
+    const name_token = ast.identifierTokenFromIdentifierNode(&handle.tree, node) orelse return null;
+    const name = try analyser.identifierTokenName(&handle.tree, name_token) orelse return null;
+    const declaration = try analyser.lookupSymbolGlobal(handle, name, handle.tree.tokenStart(name_token)) orelse return null;
+    const parameter = switch (declaration.decl) {
+        .function_parameter => |payload| payload.get(&declaration.handle.tree) orelse return null,
+        else => return null,
+    };
+    if (parameter.type_expr == null) return null;
+
+    const old_collect_callsite_references = analyser.collect_callsite_references;
+    analyser.collect_callsite_references = false;
+    defer analyser.collect_callsite_references = old_collect_callsite_references;
+    return .{
+        .type = try declaration.resolveType(analyser) orelse return null,
+        .is_const = true,
+    };
 }
 
 fn areSameIdentifierExpression(
