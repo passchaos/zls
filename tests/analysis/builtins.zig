@@ -979,6 +979,19 @@ const type_info_anyerror_fallback_len = reflectedErrorSetLength(anyerror);
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(99)
 const type_info_concrete_error_set_len = reflectedErrorSetLength(error{ Oops, Failed });
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
+fn reflectedErrorSetLengthIf(comptime E: type) usize {
+    comptime var count: usize = 0;
+    if (@typeInfo(E).error_set) |errors| {
+        inline for (errors) |_| count += 1;
+    } else {
+        count = 99;
+    }
+    return count;
+}
+const type_info_anyerror_if_fallback_len = reflectedErrorSetLengthIf(anyerror);
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(99)
+const type_info_concrete_error_set_if_len = reflectedErrorSetLengthIf(error{ Oops, Failed });
+//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(2)
 const type_info_struct_layout_auto = @typeInfo(ConcreteStruct).@"struct".layout == .auto;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (bool)(true)
 const type_info_struct_backing_null = @typeInfo(ConcreteStruct).@"struct".backing_integer == null;
