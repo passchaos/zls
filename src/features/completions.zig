@@ -1083,6 +1083,10 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
     if (dot_context.likely == .invalid) return;
     const used_members_set = try collectUsedMembersSet(builder, dot_context.likely, dot_token_index);
     const containers = try collectContainerNodes(builder, builder.orig_handle, dot_context);
+    const call_function = if (dot_context.likely == .enum_arg)
+        try resolveEnclosingCallFunction(builder, nodes)
+    else
+        null;
     for (containers) |container| {
         if (dot_context.likely == .enum_arg and
             container.data == .ip_index and
@@ -1091,12 +1095,48 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
             try typeToCompletion(builder, container);
             for (builder.completions.items()) |*item| {
                 if (item.kind != .EnumMember) continue;
-                try enrichEnumLiteralCompletionFromSource(builder, container, item);
+                try enrichEnumLiteralCompletionFromSource(builder, container, call_function, item);
             }
             continue;
         }
         try collectContainerFields(builder, dot_context.likely, container, used_members_set);
     }
+}
+
+fn resolveEnclosingCallFunction(
+    builder: *Builder,
+    nodes: []const Ast.Node.Index,
+) Analyser.Error!?Analyser.Type {
+    const handle = builder.orig_handle;
+    for (nodes) |node| {
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&buffer, node) orelse continue;
+        const contains_cursor = for (call.ast.params) |argument| {
+            const argument_loc = offsets.nodeToLoc(&handle.tree, argument);
+            if (argument_loc.start <= builder.source_index and builder.source_index <= argument_loc.end) break true;
+        } else false;
+        if (!contains_cursor) continue;
+
+        const callable = try builder.analyser.resolveTypeOfNode(.of(call.ast.fn_expr, handle)) orelse continue;
+        var function = try builder.analyser.resolveFuncProtoOfCallable(callable) orelse continue;
+        if (function.is_type_val) continue;
+        function = try builder.analyser.resolveFunctionTypeFromCall(handle, call, function);
+        return function;
+    }
+    return null;
+}
+
+fn methodReceiverMatchesCallContainer(method: Analyser.Type, call_function: ?Analyser.Type) bool {
+    const function = call_function orelse return false;
+    if (function.data != .function or method.data != .function) return false;
+    if (method.data.function.parameters.len == 0) return false;
+    const call_container = function.data.function.container_type;
+    if (call_container.data != .container) return false;
+    const receiver = method.data.function.parameters[0].type;
+    for (call_container.data.container.bound_params.values()) |bound| {
+        if (bound.eql(receiver)) return true;
+    }
+    return false;
 }
 
 /// `std.meta.FieldEnum` and `std.meta.DeclEnum` preserve the names of their
@@ -1107,6 +1147,7 @@ fn completeDot(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
 fn enrichEnumLiteralCompletionFromSource(
     builder: *Builder,
     enum_type: Analyser.Type,
+    call_function: ?Analyser.Type,
     item: *types.completion.Item,
 ) Analyser.Error!void {
     var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
@@ -1114,19 +1155,25 @@ fn enrichEnumLiteralCompletionFromSource(
     var selected_decl: ?Analyser.DeclWithHandle = null;
     var selected_resolved_ty: ?Analyser.Type = null;
     var selected_func_ty: ?Analyser.Type = null;
-    var selected_is_unresolved = true;
+    var selected_matches_context = false;
+    var selected_has_unknown = true;
     for (declarations.items) |decl| {
         const resolved_ty = try decl.resolveType(builder.analyser) orelse continue;
         const func_ty = try builder.analyser.resolveFuncProtoOfCallable(resolved_ty) orelse continue;
         const info = func_ty.data.function;
-        const is_unresolved = builder.analyser.hasUnresolvedType(info.return_value.*) or for (info.parameters) |parameter| {
-            if (builder.analyser.hasUnresolvedType(parameter.type)) break true;
+        const has_unknown = builder.analyser.hasUnknownType(info.return_value.*) or for (info.parameters) |parameter| {
+            if (builder.analyser.hasUnknownType(parameter.type)) break true;
         } else false;
-        if (selected_decl == null or (selected_is_unresolved and !is_unresolved)) {
+        const matches_context = methodReceiverMatchesCallContainer(func_ty, call_function);
+        if (selected_decl == null or
+            (!selected_matches_context and matches_context) or
+            (selected_matches_context == matches_context and selected_has_unknown and !has_unknown))
+        {
             selected_decl = decl;
             selected_resolved_ty = resolved_ty;
             selected_func_ty = func_ty;
-            selected_is_unresolved = is_unresolved;
+            selected_matches_context = matches_context;
+            selected_has_unknown = has_unknown;
         }
     }
     const decl = selected_decl orelse return;
@@ -1134,7 +1181,7 @@ fn enrichEnumLiteralCompletionFromSource(
     const func_ty = selected_func_ty.?;
     const display = try functionCompletionDisplay(builder, resolved_ty, func_ty, false);
 
-    if (selected_is_unresolved) {
+    if (selected_has_unknown) {
         const type_node = try decl.typeDeclarationNode() orelse return;
         item.detail = offsets.nodeToSlice(&type_node.handle.tree, type_node.node);
         item.labelDetails = null;

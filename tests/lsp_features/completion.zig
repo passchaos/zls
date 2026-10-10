@@ -25168,18 +25168,23 @@ test "enum argument of method on generated type" {
         \\        }
         \\    };
         \\}
-        \\fn count(comptime impl: Impl(Reader, *u8)) void {
+        \\fn count(reader: anytype, comptime impl: Impl(Reader, @TypeOf(reader))) void {
+        \\    _ = reader;
         \\    impl.call(.<cursor>);
+        \\}
+        \\comptime {
+        \\    count(@as(*u8, undefined), .{});
+        \\    count(@as(*u16, undefined), .{});
         \\}
     , &.{
         .{
             .label = "read",
             .labelDetails = .{
-                .detail = "(*u8, []u8)",
+                .detail = "(anytype, []u8)",
                 .description = "anyerror!usize",
             },
             .kind = .EnumMember,
-            .detail = "fn (*u8, []u8) anyerror!usize",
+            .detail = "fn (anytype, []u8) anyerror!usize",
             .documentation = "Reads bytes into the supplied buffer.",
         },
     });

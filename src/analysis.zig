@@ -12457,17 +12457,43 @@ fn resolveEitherCallResult(
 }
 
 fn isUnresolvedCallReturn(analyser: *Analyser, ty: Type) bool {
-    if (ty.hasUnresolvedGenericType()) return true;
+    return ty.hasUnresolvedGenericType() or analyser.hasUnknownType(ty);
+}
+
+pub fn hasUnknownType(analyser: *Analyser, ty: Type) bool {
     return switch (ty.data) {
+        .pointer => |info| analyser.hasUnknownType(info.elem_ty.*),
+        .array => |info| analyser.hasUnknownType(info.elem_ty.*),
+        .vector => |info| analyser.hasUnknownType(info.elem_ty.*),
+        .tuple => |types| for (types) |item| {
+            if (analyser.hasUnknownType(item)) break true;
+        } else false,
+        .optional, .union_tag => |child| analyser.hasUnknownType(child.*),
         .ip_index => |payload| payload.type == .unknown_type or
             (ty.is_type_val and payload.type == .type_type and payload.index == null) or
             switch (analyser.ip.indexToKey(payload.type)) {
                 .error_union_type => |info| info.error_set_type == .unknown_type or info.payload_type == .unknown_type,
                 else => false,
             },
-        .error_union => |info| isUnresolvedCallReturn(analyser, info.payload.*) or
-            if (info.error_set) |error_set| isUnresolvedCallReturn(analyser, error_set.*) else true,
-        else => false,
+        .error_union => |info| analyser.hasUnknownType(info.payload.*) or
+            if (info.error_set) |error_set| analyser.hasUnknownType(error_set.*) else true,
+        .container => |info| for (info.bound_params.values()) |bound| {
+            if (analyser.hasUnknownType(bound)) break true;
+        } else false,
+        .function => |info| {
+            if (analyser.hasUnknownType(info.container_type.*) or analyser.hasUnknownType(info.return_value.*)) return true;
+            for (info.parameters) |parameter| {
+                if (analyser.hasUnknownType(parameter.type)) return true;
+            }
+            return false;
+        },
+        .either => |entries| for (entries) |entry| {
+            if (analyser.hasUnknownType(.{ .data = entry.type_data, .is_type_val = ty.is_type_val })) break true;
+        } else false,
+        .enum_value => |value| analyser.hasUnknownType(value.enum_type.*),
+        .string_value => |value| analyser.hasUnknownType(value.string_type.*),
+        .type_info_value => |value| analyser.hasUnknownType(value.value_type.*) or analyser.hasUnknownType(value.reflected_type.*),
+        .compile_error, .type_parameter, .anytype_parameter, .comptime_value => false,
     };
 }
 
