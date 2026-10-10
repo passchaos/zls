@@ -1955,6 +1955,26 @@ fn getSwitchOrStructInitContext(
                                 .identifier, // `const s: S = .{.`, `S{.name = .`
                                 .period_asterisk, //  `s.* = .{.`
                                 => break :find_identifier,
+                                .r_paren => {
+                                    need_ret_type = true;
+                                    var token_index = upper_index -| 1;
+                                    var nested_parens_depth: u32 = 1;
+                                    while (token_index > 0) : (token_index -= 1) {
+                                        switch (tree.tokenTag(token_index)) {
+                                            .r_paren => nested_parens_depth += 1,
+                                            .l_paren => {
+                                                nested_parens_depth -= 1;
+                                                if (nested_parens_depth == 0) {
+                                                    if (tree.tokenTag(token_index - 1) != .identifier) return null;
+                                                    upper_index = token_index - 1;
+                                                    break :find_identifier;
+                                                }
+                                            },
+                                            else => {},
+                                        }
+                                    }
+                                    return null;
+                                },
                                 else => return null,
                             }
                         }
@@ -2109,6 +2129,33 @@ fn collectContainerFields(
 
     const info = switch (container.data) {
         .container => |info| info,
+        .ip_index => |payload| {
+            if (likely != .struct_field) return;
+            const type_index = if (container.is_type_val) payload.index orelse return else payload.type;
+            const fields = builder.analyser.generated_struct_fields.get(type_index) orelse return;
+            for (fields) |field| {
+                if (omit_members.contains(field.name)) continue;
+                const detail = if (field.alignment != 0)
+                    try std.fmt.allocPrint(builder.arena, "align({d}) {s}", .{
+                        field.alignment,
+                        try field.ty.stringifyTypeVal(builder.analyser, .{ .truncate_container_decls = false }),
+                    })
+                else
+                    try field.ty.stringifyTypeVal(builder.analyser, .{ .truncate_container_decls = false });
+                try builder.completions.append(builder.arena, .{
+                    .label = field.name,
+                    .kind = .Field,
+                    .detail = detail,
+                    .insertTextFormat = if (builder.use_snippets) .Snippet else .PlainText,
+                    .insertText = if (builder.use_snippets)
+                        try std.fmt.allocPrint(builder.arena, "{f} = $0", .{Analyser.fmtEscapedSnippet(field.name)})
+                    else
+                        field.name,
+                    .sortText = try generateSortText(builder.arena, kindToSortScore(.Field), field.name),
+                });
+            }
+            return;
+        },
         else => return,
     };
 

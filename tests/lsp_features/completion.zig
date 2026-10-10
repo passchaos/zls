@@ -3166,6 +3166,19 @@ test "generic Struct with helper writes and AST field types" {
     });
 }
 
+test "generated Struct fields complete in struct initializer" {
+    try testCompletion(
+        \\const Callback = fn (u8) void;
+        \\fn Generated() type {
+        \\    return @Struct(.auto, null, &.{ "callback", "count" }, &.{ ?Callback, usize }, &.{ .{}, .{} });
+        \\}
+        \\const value: Generated() = .{ .<cursor> };
+    , &.{
+        .{ .label = "callback", .kind = .Field, .detail = "?fn (u8) void" },
+        .{ .label = "count", .kind = .Field, .detail = "usize" },
+    });
+}
+
 test "named generic Struct result preserves generated fields" {
     try testCompletion(
         \\const std = @import("std");
