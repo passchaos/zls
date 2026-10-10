@@ -310,6 +310,7 @@ pub fn getSignatureInfos(
                 }
 
                 var loc = offsets.tokensToLoc(tree, expr_first_token, expr_last_token);
+                const call_expression_loc = loc;
 
                 var ty = switch (tree.tokenTag(expr_first_token)) {
                     .period => blk: { // decl literal
@@ -323,6 +324,7 @@ pub fn getSignatureInfos(
                     },
                     else => try analyser.getFieldAccessType(handle, loc.start, loc) orelse continue,
                 };
+                ty = try analyser.specializeFunctionTypeAtCall(handle, absolute_index, call_expression_loc, ty);
 
                 if (try signatureInfosForType(
                     analyser,

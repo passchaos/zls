@@ -549,6 +549,21 @@ test "anytype" {
     , "fn foo(a: u32, b: anytype, c: u32) void", 1);
 }
 
+test "callsite specializes anytype and dependent parameters" {
+    try testSignatureHelp(
+        \\fn Model(comptime T: type) type { return struct { value: T }; }
+        \\const Factory = struct {
+        \\    fn init(value: anytype, comptime model: Model(@TypeOf(value))) @This() {
+        \\        _ = value;
+        \\        _ = model;
+        \\        return .{};
+        \\    }
+        \\};
+        \\const item: u8 = 0;
+        \\const result = [_]Factory{ .init(&item, <cursor>.{}) };
+    , "fn init(value: *const u8, comptime model: Model(*const u8)) Factory", 1);
+}
+
 test "variadic" {
     try testSignatureHelp(
         \\extern fn foo(format: [*:0]const u8, ...) callconv(.c) c_int;
