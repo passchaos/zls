@@ -33,7 +33,7 @@ gpa: std.mem.Allocator,
 arena: std.mem.Allocator,
 store: *DocumentStore,
 ip: *InternPool,
-resolved_callsites: std.AutoHashMapUnmanaged(Declaration.Param, ?Type) = .empty,
+resolved_callsites: std.HashMapUnmanaged(ParameterWithUri, ?Type, ParameterWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_nodes: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
@@ -72,6 +72,24 @@ pub const GeneratedField = struct {
 };
 
 const NodeSet = std.HashMapUnmanaged(NodeWithUri, void, NodeWithUri.Context, std.hash_map.default_max_load_percentage);
+
+const ParameterWithUri = struct {
+    parameter: Declaration.Param,
+    uri: Uri,
+
+    const Context = struct {
+        pub fn hash(_: Context, item: ParameterWithUri) u64 {
+            var hasher: std.hash.Wyhash = .init(0);
+            std.hash.autoHash(&hasher, item.parameter);
+            hasher.update(item.uri.raw);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, lhs: ParameterWithUri, rhs: ParameterWithUri) bool {
+            return std.meta.eql(lhs.parameter, rhs.parameter) and lhs.uri.eql(rhs.uri);
+        }
+    };
+};
 
 pub const Error = std.mem.Allocator.Error || std.Io.Cancelable;
 
@@ -11941,7 +11959,8 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
     if (is_cimport or !analyser.collect_callsite_references or analyser.callsite_reference_depth >= 1) return null;
 
     // protection against recursive callsite resolution
-    const gop_resolved = try analyser.resolved_callsites.getOrPut(analyser.gpa, pay);
+    const cache_key: ParameterWithUri = .{ .parameter = pay, .uri = decl_handle.handle.uri };
+    const gop_resolved = try analyser.resolved_callsites.getOrPut(analyser.gpa, cache_key);
     if (gop_resolved.found_existing) return gop_resolved.value_ptr.*;
     gop_resolved.value_ptr.* = null;
     analyser.callsite_reference_depth += 1;
@@ -11988,7 +12007,7 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
     }
 
     const maybe_type = try Type.fromEither(analyser, possible.items);
-    if (maybe_type) |ty| analyser.resolved_callsites.getPtr(pay).?.* = ty;
+    if (maybe_type) |ty| analyser.resolved_callsites.getPtr(cache_key).?.* = ty;
     return maybe_type;
 }
 

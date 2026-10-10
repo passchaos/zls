@@ -25606,6 +25606,45 @@ test "anytype resolution follows cross-file callsites" {
     try std.testing.expectEqualStrings("u32", completion.detail.?);
 }
 
+test "callsite inference caches parameters per source file" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    const callee_source =
+        \\pub fn inspect(value: anytype) void {
+        \\    _ = value;
+        \\}
+    ;
+    const first_uri = try ctx.addDocument(.{ .source = callee_source });
+    const second_uri = try ctx.addDocument(.{ .source = callee_source });
+    _ = try ctx.addDocument(.{ .source =
+        \\const first = @import("Untitled-0.zig");
+        \\const second = @import("Untitled-1.zig");
+        \\const Alpha = struct { alpha: u8 };
+        \\const Beta = struct { beta: u16 };
+        \\comptime {
+        \\    first.inspect(@as(Alpha, undefined));
+        \\    second.inspect(@as(Beta, undefined));
+        \\}
+    });
+
+    const first_handle = ctx.server.document_store.getHandle(first_uri).?;
+    const second_handle = ctx.server.document_store.getHandle(second_uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), first_handle);
+    defer analyser.deinit();
+    const source_index = std.mem.find(u8, callee_source, "_ = value").? + "_ = ".len;
+    const first_param = try analyser.lookupSymbolGlobal(first_handle, "value", source_index) orelse return error.TestUnexpectedResult;
+    const second_param = try analyser.lookupSymbolGlobal(second_handle, "value", source_index) orelse return error.TestUnexpectedResult;
+    const first_type = try first_param.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const second_type = try second_param.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+    const first_concrete = first_type.data.anytype_parameter.type_from_callsite_references orelse return error.TestUnexpectedResult;
+    const second_concrete = second_type.data.anytype_parameter.type_from_callsite_references orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try first_concrete.lookupSymbol(&analyser, "alpha")) != null);
+    try std.testing.expect((try first_concrete.lookupSymbol(&analyser, "beta")) == null);
+    try std.testing.expect((try second_concrete.lookupSymbol(&analyser, "beta")) != null);
+    try std.testing.expect((try second_concrete.lookupSymbol(&analyser, "alpha")) == null);
+}
+
 test "anytype resolution follows transitive cross-file callsites" {
     var ctx: Context = try .init();
     defer ctx.deinit();
