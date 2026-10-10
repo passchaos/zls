@@ -213,6 +213,48 @@ test "FieldEnum literal maps to source field" {
     );
 }
 
+test "comptime method on generated Struct default" {
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Reader = struct { const Associated = struct { Error: type = anyerror }; };
+        \\const Seekable = struct { const Associated = struct { Error: type = anyerror }; };
+        \\fn Model(comptime C: type, comptime associated: C.Associated) type {
+        \\    std.debug.assert(@sizeOf(C.Associated) != 0);
+        \\    const Methods = struct { read: fn () void };
+        \\    const Method = std.meta.FieldEnum(Methods);
+        \\    return struct {
+        \\        binding: ?@FieldType(Methods, @tagName(Method.read)) = null,
+        \\        const Self = @This();
+        \\        pub <tdef>fn</tdef> <def><decl>associated</decl></def>(comptime _: Self) C.Associated { return associated; }
+        \\    };
+        \\}
+        \\fn makeModel(comptime C: type) type { return Model(C, .{}); }
+        \\fn setField(comptime index: usize, comptime name: [:0]const u8, comptime M: type,
+        \\    names: anytype, types: anytype, attrs: anytype) void
+        \\{
+        \\    const Default = struct { const value: M = .{}; };
+        \\    names[index] = name;
+        \\    types[index] = M;
+        \\    attrs[index] = .{ .default_value_ptr = @ptrCast(&Default.value) };
+        \\}
+        \\fn Generated(comptime capabilities: anytype) type {
+        \\    const fields = @typeInfo(@TypeOf(capabilities)).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    comptime var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        const C = @field(capabilities, field.name);
+        \\        setField(index, field.name, makeModel(C), &names, &types, &attrs);
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\const models: Generated(.{ .reader = Reader, .seekable = Seekable }) = .{};
+        \\comptime {
+        \\    _ = models.reader.asso<>ciated();
+        \\}
+    );
+}
+
 test "generic method definition keeps structural parameter type" {
     try testDefinition(
         \\fn Impl(comptime Subject: type) type {

@@ -568,26 +568,28 @@ pub fn firstParamIs(
             return false;
         },
         .container => |actual| switch (deref_expected_type.data) {
-            .container => |expected| containersHaveCompatibleIdentity(actual, expected),
+            .container => |expected| containersHaveCompatibleIdentity(analyser, actual, expected),
             else => false,
         },
         else => deref_type.eql(deref_expected_type),
     };
 }
 
-fn containersHaveCompatibleIdentity(actual: Type.Data.Container, expected: Type.Data.Container) bool {
+fn containersHaveCompatibleIdentity(analyser: *Analyser, actual: Type.Data.Container, expected: Type.Data.Container) bool {
     if (!actual.scope_handle.eql(expected.scope_handle)) return false;
-    if (actual.bound_params.count() > expected.bound_params.count()) return false;
-    if (actual.bound_params.count() == 0) return expected.bound_params.count() == 0;
 
     // A generated container may be reached through a forwarding type function
-    // before ZLS can model every comptime value passed to it. Treat a missing
-    // binding as unknown, while still rejecting bindings that are known to
-    // disagree. This keeps instance methods visible without conflating
-    // concrete specializations such as Foo(u8) and Foo(u16).
+    // before ZLS can model every captured local or comptime value. Compare the
+    // bindings present on both sides and treat absent or value-unknown bindings
+    // as incomplete information, while still rejecting concrete disagreement.
     for (actual.bound_params.keys(), actual.bound_params.values()) |key, actual_value| {
-        const expected_value = expected.bound_params.get(key) orelse return false;
-        if (!actual_value.eql(expected_value)) return false;
+        const expected_value = expected.bound_params.get(key) orelse continue;
+        if (actual_value.eql(expected_value)) continue;
+        if (actual_value.is_type_val or expected_value.is_type_val or
+            (actual_value.hasKnownValue(analyser) and expected_value.hasKnownValue(analyser))) return false;
+        const actual_type = actual_value.typeOf(analyser) catch return false;
+        const expected_type = expected_value.typeOf(analyser) catch return false;
+        if (!actual_type.eql(expected_type)) return false;
     }
     return true;
 }
