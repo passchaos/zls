@@ -187,6 +187,22 @@ pub fn dynamic_field_names() type {
     return Result(saved.field_31, @field(values, "field_31"), @field(values, "field_15"));
 }
 
+pub fn builtin_assign_reads() type {
+    var values: Wide = .{};
+    const names = .{
+        "field_0",  "field_1",  "field_2",  "field_3",  "field_4",  "field_5",  "field_6",  "field_7",
+        "field_8",  "field_9",  "field_10", "field_11", "field_12", "field_13", "field_14", "field_15",
+        "field_16", "field_17", "field_18", "field_19", "field_20", "field_21", "field_22", "field_23",
+        "field_24", "field_25", "field_26", "field_27", "field_28", "field_29", "field_30", "field_31",
+    };
+    for (0..2) |_| {
+        for (names) |name| @field(values, name) = @field(values, name) + 1;
+    }
+    const saved = values;
+    @field(values, "field_31") = @field(values, "field_31") + 1;
+    return Result(saved.field_31, values.field_31, values.field_15);
+}
+
 pub fn nested_wide_snapshot() type {
     var outer = struct { wide: Wide, count: usize }{ .wide = .{}, .count = 0 };
     outer.wide.field_31 = 40;

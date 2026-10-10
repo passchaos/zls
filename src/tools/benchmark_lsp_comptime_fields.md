@@ -94,3 +94,31 @@ test and a field equality/hash test with different field orders and index
 metadata. Fifteen boundary probes cover 1, 15, 16, 17, and 4096 fields with eight
 iterations in each access mode; the five existing array initializer modes also
 pass through the shared measurement helper.
+
+## Dynamic `@field` read-modify-write
+
+2026-10-10, Apple M1 Pro, macOS, Zig 0.16.0, ReleaseSafe. Baseline `efea2e7b`.
+The `builtin-assign` workload uses explicit
+`@field(state, name) = @field(state, name) + 1` expressions. Each size used
+baseline/candidate/candidate/baseline order with the standard five warmups and
+twenty measured requests per process. Latencies are the mean of the two process
+medians.
+
+| Fields | Baseline (us) | Borrow field base (us) | Speedup |
+| --- | ---: | ---: | ---: |
+| 8 | 222.45 | 187.88 | 1.18x |
+| 512 | 57691.56 | 8425.07 | 6.85x |
+| 2048 | 797482.51 | 35333.14 | 22.57x |
+
+Previously, evaluating the base of every `@field` read published the whole
+local struct value. The next field write therefore cloned all fields even
+though only the selected scalar had escaped. Local bases are now borrowed until
+the field name has been evaluated; only the selected field path is frozen when
+its value escapes. At 2048 fields, peak process RSS dropped from about
+2068.0 MiB to 29.6 MiB. A read-only `@field` control differed by 1.0%, within
+run-to-run variation.
+
+The compiler/LSP fixture includes explicit wide `@field` assignments in
+addition to dynamic names, pointer bases, temporary bases, nested fields,
+aggregate snapshots, and name expressions with side effects. This protects the
+evaluation-order and copy-on-write boundary that enables the speedup.

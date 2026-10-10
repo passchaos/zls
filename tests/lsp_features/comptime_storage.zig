@@ -53,6 +53,7 @@ test "comptime indexed fields agree with Zig" {
         "appended_fields",
         "initializer_self_reads",
         "dynamic_field_names",
+        "builtin_assign_reads",
         "nested_wide_snapshot",
         "pointer_after_reordering",
         "generated_wide_type",
@@ -61,7 +62,6 @@ test "comptime indexed fields agree with Zig" {
         "concatenated_array_pointer",
     });
 }
-
 
 test "comptime dynamic fields agree with Zig" {
     try testCases(@import("../fixtures/comptime_dynamic_fields.zig"), @embedFile("../fixtures/comptime_dynamic_fields.zig"), .{
@@ -90,7 +90,6 @@ test "comptime dynamic fields agree with Zig" {
     });
 }
 
-
 fn testCases(comptime fixture: type, comptime fixture_source: []const u8, comptime cases: anytype) !void {
     inline for (cases) |name| {
         errdefer std.debug.print("comptime storage case: {s}\n", .{name});
@@ -108,4 +107,3 @@ fn testCases(comptime fixture: type, comptime fixture_source: []const u8, compti
         });
     }
 }
-

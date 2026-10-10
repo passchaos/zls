@@ -973,6 +973,28 @@ pub const Interpreter = struct {
         target: ?CaptureTarget,
     };
 
+    /// Capture an aggregate used as the base of `@field` without publishing
+    /// the whole local value. Only the selected field escapes from `@field`,
+    /// so freezing the root here would force a full copy before every later
+    /// field write. The local-reference check is deliberately separate from
+    /// `referenceForNode`: probing a temporary `@field` through that function
+    /// can evaluate its base and name before returning null.
+    fn captureFieldBaseOperand(
+        self: *Interpreter,
+        handle: *Handle,
+        node: Ast.Node.Index,
+        depth: u8,
+    ) Error!?CaptureOperand {
+        if (try self.isLocalReferenceExpression(handle, node, 0)) {
+            const reference = try self.referenceForNode(handle, node) orelse return null;
+            return .{
+                .value = try self.borrowReference(reference) orelse return null,
+                .target = .{ .reference = reference },
+            };
+        }
+        return self.captureOperand(handle, node, depth);
+    }
+
     fn captureOperand(
         self: *Interpreter,
         handle: *Handle,
@@ -1281,7 +1303,7 @@ pub const Interpreter = struct {
             // Evaluate the base before the name. Aggregate lvalues keep that
             // location; pointer lvalues reload the pointer after name effects;
             // temporary pointers keep the pre-name pointer value.
-            const base_operand = try self.captureOperand(handle, params[0], depth + 1) orelse return null;
+            const base_operand = try self.captureFieldBaseOperand(handle, params[0], depth + 1) orelse return null;
             var targeted_base = base_operand;
             targeted_base.target = self.captureTargetOrTemporary(handle, params[0], base_operand);
             const name_value = try self.eval(handle, params[1]) orelse return null;
