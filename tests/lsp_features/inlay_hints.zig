@@ -37,6 +37,42 @@ test "function call" {
     , .{ .kind = .Parameter });
 }
 
+test "call hints specialize comptime-selected parameter types" {
+    try testInlayHints(
+        \\const std = @import("std");
+        \\fn Methods(comptime Self: type) type {
+        \\    return struct { combine: fn (Self, u8, u16) usize };
+        \\}
+        \\fn methodType(comptime Self: type, comptime method: std.meta.FieldEnum(Methods(Self))) type {
+        \\    return @FieldType(Methods(Self), @tagName(method));
+        \\}
+        \\fn argsAfterSelf(comptime F: type) type {
+        \\    const info = @typeInfo(F).@"fn";
+        \\    comptime var types: [info.params.len - 1]type = undefined;
+        \\    inline for (info.params[1..], 0..) |parameter, index| {
+        \\        types[index] = parameter.type.?;
+        \\    }
+        \\    return @Tuple(&types);
+        \\}
+        \\fn Dynamic(comptime Subject: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(self: Self, comptime method: std.meta.FieldEnum(Methods(Subject)), args: argsAfterSelf(methodType(Subject, method))) usize {
+        \\            _ = self;
+        \\            _ = args;
+        \\            return 0;
+        \\        }
+        \\    };
+        \\}
+        \\const erased: Dynamic(*anyopaque) = undefined;
+        \\const result = erased.call(<method>.combine, <args>.{ 1, 2 });
+    , .{
+        .kind = .Parameter,
+        .expected_tooltips = &.{ "comptime enum(u0) {...}", "struct { u8, u16 }" },
+        .allow_unexpected = true,
+    });
+}
+
 test "function call with multiline string literal" {
     try testInlayHints(
         \\fn foo(bar: []const u8) void {}
@@ -755,6 +791,8 @@ const Options = struct {
     exclude_single_argument: bool = false,
     hide_redundant_param_names: bool = false,
     hide_redundant_param_names_last_token: bool = false,
+    expected_tooltips: []const ?[]const u8 = &.{},
+    allow_unexpected: bool = false,
 };
 
 fn testInlayHints(source: []const u8, options: Options) !void {
@@ -788,6 +826,7 @@ fn testInlayHints(source: []const u8, options: Options) !void {
         std.debug.print("Server returned `null` as the result\n", .{});
         return error.InvalidResponse;
     };
+    try std.testing.expect(options.expected_tooltips.len == 0 or options.expected_tooltips.len == phr.locations.len);
     for (hints[0..hints.len -| 1], hints[@min(1, hints.len)..]) |previous, current| {
         try std.testing.expect(offsets.orderPosition(previous.position, current.position) != .gt);
     }
@@ -801,7 +840,7 @@ fn testInlayHints(source: []const u8, options: Options) !void {
 
     try error_builder.addFile(test_uri.raw, phr.new_source);
 
-    outer: for (phr.locations.items(.old), phr.locations.items(.new)) |old_loc, new_loc| {
+    outer: for (phr.locations.items(.old), phr.locations.items(.new), 0..) |old_loc, new_loc, placeholder_index| {
         const expected_name = offsets.locToSlice(source, old_loc);
         const expected_label = expected_name[1 .. expected_name.len - 1]; // convert <name> to name
 
@@ -840,17 +879,37 @@ fn testInlayHints(source: []const u8, options: Options) !void {
                 try error_builder.msgAtLoc("expected label `{s}` here but got `{s}`!", test_uri.raw, new_loc, .err, .{ expected_label, actual_label });
             }
 
+            if (options.expected_tooltips.len != 0) {
+                if (options.expected_tooltips[placeholder_index]) |expected_tooltip| {
+                    const tooltip = hint.tooltip orelse {
+                        try error_builder.msgAtLoc("expected tooltip `{s}` here!", test_uri.raw, new_loc, .err, .{expected_tooltip});
+                        continue :outer;
+                    };
+                    const actual_tooltip = switch (tooltip) {
+                        .string => |text| text,
+                        .markup_content => |markup| markup.value,
+                    };
+                    if (!std.mem.eql(u8, expected_tooltip, actual_tooltip)) {
+                        try error_builder.msgAtLoc("expected tooltip `{s}` here but got `{s}`!", test_uri.raw, new_loc, .err, .{ expected_tooltip, actual_tooltip });
+                    }
+                } else if (hint.tooltip != null) {
+                    try error_builder.msgAtLoc("expected no tooltip here!", test_uri.raw, new_loc, .err, .{});
+                }
+            }
+
             continue :outer;
         }
         try error_builder.msgAtLoc("expected hint `{s}` here", test_uri.raw, new_loc, .err, .{expected_label});
     }
 
-    var it = visited.iterator(.{ .kind = .unset });
-    while (it.next()) |index| {
-        const hint = hints[index];
-        try std.testing.expectEqual(options.kind, hint.kind.?);
-        const source_index = offsets.positionToIndex(phr.new_source, hint.position, ctx.server.offset_encoding);
-        try error_builder.msgAtIndex("unexpected inlay hint `{s}` here!", test_uri.raw, source_index, .err, .{hint.label.string});
+    if (!options.allow_unexpected) {
+        var it = visited.iterator(.{ .kind = .unset });
+        while (it.next()) |index| {
+            const hint = hints[index];
+            try std.testing.expectEqual(options.kind, hint.kind.?);
+            const source_index = offsets.positionToIndex(phr.new_source, hint.position, ctx.server.offset_encoding);
+            try error_builder.msgAtIndex("unexpected inlay hint `{s}` here!", test_uri.raw, source_index, .err, .{hint.label.string});
+        }
     }
 
     if (error_builder.hasMessages()) return error.InvalidResponse;
