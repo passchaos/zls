@@ -813,6 +813,10 @@ fn emptyStructAfterMutation() type {
 }
 const InterpretedEmptyStruct = emptyStructAfterMutation();
 //    ^^^^^^^^^^^^^^^^^^^^^^ (type)(struct {})
+const EmptyExternStruct = @Struct(.@"extern", null, &.{}, &.{}, &.{});
+//    ^^^^^^^^^^^^^^^^^ (type)(extern struct {})
+const EmptyPackedStruct = @Struct(.@"packed", null, &.{}, &.{}, &.{});
+//    ^^^^^^^^^^^^^^^^^ (type)(packed struct(u0) {})
 const ConcreteStruct = @Struct(.auto, null, &.{ "foo", "bar" }, &.{ u8, i16 }, &.{ .{}, .{} });
 //    ^^^^^^^^^^^^^^ (type)(struct { foo: u8, bar: i16 })
 const AlignedStruct = @Struct(.auto, null, &.{"value"}, &.{u8}, &.{.{ .@"align" = 4 }});
@@ -882,6 +886,8 @@ const EmptyEnum = @Enum(u0, .exhaustive, &.{}, &.{});
 //    ^^^^^^^^^ (type)(enum(u0) {})
 const empty_enum_field_count = @typeInfo(EmptyEnum).@"enum".fields.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
+const EmptyOpenEnum = @Enum(u8, .nonexhaustive, &.{}, &.{});
+//    ^^^^^^^^^^^^^ (type)(enum(u8) { _ })
 const ConcreteEnum = @Enum(u8, .exhaustive, &.{ "low", "high" }, &.{ 1, 7 });
 //    ^^^^^^^^^^^^ (type)(enum(u8) { low = 1, high = 7 })
 const NonexhaustiveEnum = @Enum(u8, .nonexhaustive, &.{"known"}, &.{1});
@@ -906,6 +912,8 @@ const EmptyFn = @Fn(&.{}, &.{}, void, .{});
 //    ^^^^^^^ (type)(fn() void)
 const empty_fn_parameter_count = @typeInfo(EmptyFn).@"fn".params.len;
 //    ^^^^^^^^^^^^^^^^^^^^^^^^ (usize)(0)
+const EmptyVarArgsFn = @Fn(&.{}, &.{}, void, .{ .@"callconv" = .c, .varargs = true });
+//    ^^^^^^^^^^^^^^ (type)(fn(...) callconv(.c) void)
 const ConcreteFn = @Fn(&.{ i32, bool }, &.{ .{}, .{} }, u8, .{});
 //    ^^^^^^^^^^ (type)(fn(i32, bool) u8)
 const NoaliasFn = @Fn(&.{*anyopaque}, &.{.{ .@"noalias" = true }}, void, .{});
