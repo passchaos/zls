@@ -20331,6 +20331,27 @@ pub fn getSymbolEnumLiteral(
     return result;
 }
 
+pub fn collectErrorTokenDeclarations(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    name_filter: ?[]const u8,
+    declarations: *std.ArrayList(DeclWithHandle),
+) Error!void {
+    const document_scope = try handle.getDocumentScope();
+    for (0..document_scope.declarations.len) |index| {
+        const declaration = document_scope.declarations.get(index);
+        if (declaration != .error_token) continue;
+        const name = try analyser.identifierTokenName(&handle.tree, declaration.error_token) orelse continue;
+        if (name_filter) |expected| {
+            if (!std.mem.eql(u8, name, expected)) continue;
+        }
+        try declarations.append(analyser.arena, .{
+            .decl = declaration,
+            .handle = handle,
+        });
+    }
+}
+
 fn lookupEnumLiteralCallParameterSource(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,

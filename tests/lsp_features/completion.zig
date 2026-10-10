@@ -24302,6 +24302,14 @@ test "error set" {
         .{ .label = "baz", .kind = .Constant, .detail = "error.baz" },
         .{ .label = "qux", .kind = .Constant, .detail = "error.qux" },
     });
+
+    try testCompletion(
+        \\const LocalError = error { LocalFailure };
+        \\fn accepts(_: anyerror) void {}
+        \\const result = accepts(error.Local<cursor>);
+    , &.{
+        .{ .label = "error.LocalFailure", .kind = .Constant },
+    });
 }
 
 test "merged error sets" {

@@ -222,6 +222,35 @@ fn gotoDefinitionEnumLiteral(
     };
 }
 
+fn gotoDefinitionError(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+    kind: GotoKind,
+    offset_encoding: offsets.Encoding,
+) Analyser.Error!?types.Definition.Link {
+    const name_token, const name_loc = offsets.identifierTokenAndLocFromIndex(&handle.tree, source_index) orelse return null;
+    const name = offsets.locToSlice(handle.tree.source, name_loc);
+    var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    try analyser.collectErrorTokenDeclarations(handle, name, &declarations);
+    if (declarations.items.len == 0) return null;
+    const declaration = declarations.items[0];
+    return gotoDefinitionSymbol(
+        analyser,
+        offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
+        declaration,
+        kind,
+        offset_encoding,
+    );
+}
+
+fn isErrorAccessToken(handle: *DocumentStore.Handle, source_index: usize) bool {
+    const name_token = offsets.sourceIndexToTokenIndex(&handle.tree, source_index).pickPreferred(&.{.identifier}, &handle.tree) orelse return false;
+    return name_token >= 2 and
+        handle.tree.tokenTag(name_token - 1) == .period and
+        handle.tree.tokenTag(name_token - 2) == .keyword_error;
+}
+
 fn gotoDefinitionBuiltin(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -439,9 +468,14 @@ pub fn gotoHandler(
 
     const response: types.Definition.Link = blk: switch (pos_context) {
         .builtin => |loc| try gotoDefinitionBuiltin(&analyser, handle, loc, server.offset_encoding),
-        .var_access, .test_doctest_name => try gotoDefinitionGlobal(&analyser, handle, source_index, kind, server.offset_encoding),
+        .var_access => if (isErrorAccessToken(handle, source_index))
+            try gotoDefinitionError(&analyser, handle, source_index, kind, server.offset_encoding)
+        else
+            try gotoDefinitionGlobal(&analyser, handle, source_index, kind, server.offset_encoding),
+        .test_doctest_name => try gotoDefinitionGlobal(&analyser, handle, source_index, kind, server.offset_encoding),
         .label_access, .label_decl => |loc| try gotoDefinitionLabel(&analyser, handle, source_index, loc, kind, server.offset_encoding),
         .enum_literal => try gotoDefinitionEnumLiteral(&analyser, handle, source_index, kind, server.offset_encoding),
+        .error_access => try gotoDefinitionError(&analyser, handle, source_index, kind, server.offset_encoding),
 
         .field_access => |loc| {
             const links = try gotoDefinitionFieldAccess(&analyser, arena, handle, source_index, loc, kind, server.offset_encoding) orelse return null;
@@ -474,7 +508,6 @@ pub fn gotoHandler(
         .char_literal,
         .parens_expr,
         .keyword,
-        .error_access,
         .comment,
         .other,
         .empty,

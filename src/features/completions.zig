@@ -1226,18 +1226,54 @@ fn completeError(builder: *Builder, loc: offsets.Loc) Analyser.Error!void {
     defer tracy_zone.end();
 
     const tree = &builder.orig_handle.tree;
-
-    const err_token_index = offsets.sourceIndexToTokenIndex(tree, loc.start).pickPreferred(&.{.period}, tree) orelse return;
+    const err_token_index = offsets.sourceIndexToTokenIndex(tree, loc.start).pickPreferred(&.{.keyword_error}, tree) orelse return;
     if (err_token_index < 2) return;
     const dot_token_index = err_token_index + 1;
 
     const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(builder.arena, tree, loc.start);
-    const dot_context = getSwitchOrStructInitContext(tree, dot_token_index, nodes) orelse return;
-    const used_members_set = try collectUsedMembersSet(builder, dot_context.likely, dot_token_index);
-    const containers = try collectContainerNodes(builder, builder.orig_handle, dot_context);
-    for (containers) |container| {
-        try collectErrorSetNames(builder, container, used_members_set);
+    var used_members_set: std.BufSet = .init(builder.arena);
+    if (getSwitchOrStructInitContext(tree, dot_token_index, nodes)) |dot_context| {
+        used_members_set = try collectUsedMembersSet(builder, dot_context.likely, dot_token_index);
+        const containers = try collectContainerNodes(builder, builder.orig_handle, dot_context);
+        for (containers) |container| {
+            try collectErrorSetNames(builder, container, used_members_set);
+        }
     }
+    if (builder.completions.items().len != 0) return;
+
+    var declarations: std.ArrayList(Analyser.DeclWithHandle) = .empty;
+    try builder.analyser.collectErrorTokenDeclarations(builder.orig_handle, null, &declarations);
+    for (declarations.items) |declaration| {
+        const name = try builder.analyser.identifierTokenName(
+            &declaration.handle.tree,
+            declaration.nameToken(),
+        ) orelse continue;
+        if (used_members_set.contains(name)) continue;
+        const escaped_name = try std.fmt.allocPrint(builder.arena, "{f}", .{std.zig.fmtId(name)});
+        try builder.completions.append(builder.arena, .{
+            .label = try std.fmt.allocPrint(builder.arena, "error.{s}", .{escaped_name}),
+            .filterText = name,
+            .insertText = escaped_name,
+            .kind = .Constant,
+            .documentation = if (try declaration.docComments(builder.arena)) |docs| .{
+                .markup_content = .{
+                    .kind = if (builder.server.client_capabilities.completion_doc_supports_md) .markdown else .plaintext,
+                    .value = docs,
+                },
+            } else null,
+        });
+    }
+}
+
+fn errorAccessLocAtIndex(tree: *const Ast, source_index: usize) ?offsets.Loc {
+    const name_token = offsets.sourceIndexToTokenIndex(tree, source_index).pickPreferred(&.{.identifier}, tree) orelse return null;
+    if (name_token < 2 or
+        tree.tokenTag(name_token - 1) != .period or
+        tree.tokenTag(name_token - 2) != .keyword_error)
+    {
+        return null;
+    }
+    return offsets.tokenToLoc(tree, name_token - 2);
 }
 
 fn collectErrorSetNames(
@@ -1518,7 +1554,11 @@ fn completionAtIndexInternal(
     const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, false);
     switch (pos_context) {
         .builtin => try completeBuiltin(&builder),
-        .var_access, .empty => try completeGlobal(&builder),
+        .var_access => if (errorAccessLocAtIndex(&handle.tree, source_index)) |loc|
+            try completeError(&builder, loc)
+        else
+            try completeGlobal(&builder),
+        .empty => try completeGlobal(&builder),
         .field_access => |loc| try completeFieldAccess(&builder, loc),
         .enum_literal => |loc| try completeDot(&builder, loc),
         .error_access => |loc| try completeError(&builder, loc),

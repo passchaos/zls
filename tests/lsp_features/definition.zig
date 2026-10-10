@@ -226,6 +226,19 @@ test "enum literal through dependent generic function argument" {
     );
 }
 
+test "error literal maps to local error set member" {
+    try testDefinition(
+        \\const Failure = error { <def><decl>ExpectedFailure</decl></def> };
+        \\fn run() Failure!void { return error.Exp<>ectedFailure; }
+    );
+
+    try testDefinition(
+        \\const Failure = error { <def><decl>ExpectedFailure</decl></def> };
+        \\fn accepts(_: anyerror, _: anytype) void {}
+        \\const result = accepts(error.Exp<>ectedFailure, undefined);
+    );
+}
+
 test "comptime method on generated Struct default" {
     try testDefinition(
         \\const std = @import("std");
