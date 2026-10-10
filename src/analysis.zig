@@ -12486,18 +12486,46 @@ pub fn specializeFunctionTypeAtCall(
             if (fn_loc.start != expected_loc.start or fn_loc.end != expected_loc.end) continue;
         } else if (absolute_index < fn_loc.start or absolute_index > fn_loc.end) continue;
 
-        const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
-        if (function.is_type_val) return ty;
-        const had_self = try analyser.hasSelfParam(function);
-        var specialized = try analyser.resolveFunctionTypeFromCall(handle, call, function);
-        if (had_self and !try analyser.hasSelfParam(specialized)) {
-            const parameters = try analyser.arena.dupe(Type.Data.Parameter, specialized.data.function.parameters);
-            parameters[0] = function.data.function.parameters[0];
-            specialized.data.function.parameters = parameters;
-        }
-        return specialized;
+        return analyser.specializeFunctionTypeForCall(handle, call, ty);
     }
     return ty;
+}
+
+/// Like `specializeFunctionTypeAtCall`, but identifies the call by the end of
+/// its callee expression. This is useful while scanning an incomplete field
+/// access where the parser may have discarded the outer expression boundaries.
+fn specializeFunctionTypeAtCallEnd(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    callee_end: usize,
+    ty: Type,
+) Error!Type {
+    const nodes = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, callee_end -| 1);
+    for (nodes) |node| {
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&buffer, node) orelse continue;
+        if (offsets.nodeToLoc(&handle.tree, call.ast.fn_expr).end != callee_end) continue;
+        return analyser.specializeFunctionTypeForCall(handle, call, ty);
+    }
+    return ty;
+}
+
+fn specializeFunctionTypeForCall(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    call: Ast.full.Call,
+    ty: Type,
+) Error!Type {
+    const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
+    if (function.is_type_val) return ty;
+    const had_self = try analyser.hasSelfParam(function);
+    var specialized = try analyser.resolveFunctionTypeFromCall(handle, call, function);
+    if (had_self and !try analyser.hasSelfParam(specialized)) {
+        const parameters = try analyser.arena.dupe(Type.Data.Parameter, specialized.data.function.parameters);
+        parameters[0] = function.data.function.parameters[0];
+        specialized.data.function.parameters = parameters;
+    }
+    return specialized;
 }
 
 fn resolveEitherCallResult(
@@ -18230,12 +18258,15 @@ pub fn getFieldAccessType(
                     continue;
                 }
 
-                const ty = try analyser.resolveFuncProtoOfCallable(current_type.?) orelse return null;
-
                 // Can't call a function type, we need a function type instance.
                 if (current_type.?.is_type_val) return null;
 
-                // TODO Actually bind params here when calling functions instead of just skipping args.
+                current_type = try analyser.specializeFunctionTypeAtCallEnd(
+                    handle,
+                    loc.start + tok.loc.start,
+                    current_type.?,
+                );
+                const ty = try analyser.resolveFuncProtoOfCallable(current_type.?) orelse return null;
                 current_type = try analyser.resolveReturnType(ty) orelse return null;
 
                 if (do_unwrap_error_payload) {

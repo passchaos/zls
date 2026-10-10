@@ -22317,6 +22317,44 @@ test "function call" {
     });
 }
 
+test "direct generic call field access preserves comptime arguments" {
+    try testCompletion(
+        \\fn Box(comptime T: type) type {
+        \\    return struct {
+        \\        pub const item: T = undefined;
+        \\    };
+        \\}
+        \\const field = Box(u8).<cursor>
+    , &.{.{ .label = "item", .kind = .Constant, .detail = "u8" }});
+
+    try testCompletion(
+        \\fn Model(comptime T: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn associated(comptime _: Self) struct { value: T } {
+        \\            return .{ .value = undefined };
+        \\        }
+        \\    };
+        \\}
+        \\fn make(comptime T: type) Model(T) {
+        \\    return .{};
+        \\}
+        \\const field = make(u8).associated().<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\fn Box(comptime T: type) type {
+        \\    return struct { value: T };
+        \\}
+        \\fn make(comptime T: type) error{}!Box(T) {
+        \\    return .{ .value = undefined };
+        \\}
+        \\fn use() !void {
+        \\    const field = (try make(u8)).<cursor>
+        \\}
+    , &.{.{ .label = "value", .kind = .Field, .detail = "u8" }});
+}
+
 test "chained function call" {
     try testCompletion(
         \\const S1 = struct {

@@ -1442,14 +1442,26 @@ pub fn completionAtIndex(
     if (handle.tree.errors.len == 0) return regular_completion;
 
     const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, false);
-    if (regular_completion != null and pos_context != .var_access and pos_context != .empty) {
+    const call_result_field_access = switch (pos_context) {
+        .field_access => |loc| std.mem.indexOfScalar(u8, offsets.locToSlice(handle.tree.source, loc), ')') != null,
+        else => false,
+    };
+    if (regular_completion != null and
+        pos_context != .var_access and
+        pos_context != .empty and
+        !call_result_field_access)
+    {
         return regular_completion;
     }
 
     const recovered_completion = try completionWithPrefixSnapshot(server, arena, handle, source_index);
     if (regular_completion == null) return recovered_completion;
 
-    return try mergeCompletionLists(arena, regular_completion, recovered_completion);
+    return try mergeCompletionLists(
+        arena,
+        if (call_result_field_access) recovered_completion else regular_completion,
+        if (call_result_field_access) regular_completion else recovered_completion,
+    );
 }
 
 fn completionAtIndexInternal(
