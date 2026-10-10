@@ -18148,8 +18148,19 @@ pub fn getFieldAccessType(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
     source_index: usize,
-    loc: offsets.Loc,
+    initial_loc: offsets.Loc,
 ) Error!?Type {
+    var loc = initial_loc;
+    if (loc.start != 0 and handle.tree.source[loc.start - 1] == '.') {
+        const nodes = try ast.nodesOverlappingIndex(analyser.arena, &handle.tree, loc.start);
+        for (nodes) |node| {
+            if (handle.tree.nodeTag(node) != .field_access) continue;
+            const field_token = handle.tree.nodeData(node).node_and_token[1];
+            if (handle.tree.tokenStart(field_token) != loc.start) continue;
+            loc.start = offsets.nodeToLoc(&handle.tree, node).start;
+            break;
+        }
+    }
     const held_range = try analyser.arena.dupeSentinel(u8, offsets.locToSlice(handle.tree.source, loc), 0);
     var tokenizer: std.zig.Tokenizer = .init(held_range);
     var current_type: ?Type = null;
@@ -18261,9 +18272,14 @@ pub fn getFieldAccessType(
                 // Can't call a function type, we need a function type instance.
                 if (current_type.?.is_type_val) return null;
 
+                const l_paren_index = loc.start + tok.loc.start;
+                const callee_token = offsets.sourceIndexToTokenIndex(
+                    &handle.tree,
+                    l_paren_index -| 1,
+                ).preferLeft();
                 current_type = try analyser.specializeFunctionTypeAtCallEnd(
                     handle,
-                    loc.start + tok.loc.start,
+                    offsets.tokenToLoc(&handle.tree, callee_token).end,
                     current_type.?,
                 );
                 const ty = try analyser.resolveFuncProtoOfCallable(current_type.?) orelse return null;

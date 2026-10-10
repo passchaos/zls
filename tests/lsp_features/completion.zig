@@ -22355,6 +22355,71 @@ test "direct generic call field access preserves comptime arguments" {
     , &.{.{ .label = "value", .kind = .Field, .detail = "u8" }});
 }
 
+test "spaced direct generic call field access preserves comptime arguments" {
+    try testCompletion(
+        \\fn Box(comptime T: type) type {
+        \\    return struct { pub const item: T = undefined; };
+        \\}
+        \\const field = Box (u8).<cursor>
+    , &.{.{ .label = "item", .kind = .Constant, .detail = "u8" }});
+}
+
+test "line-commented direct generic call field access preserves comptime arguments" {
+    try testCompletion(
+        \\fn Box(comptime T: type) type {
+        \\    return struct { pub const item: T = undefined; };
+        \\}
+        \\const field = Box // bind T
+        \\    (u8).<cursor>
+    , &.{.{ .label = "item", .kind = .Constant, .detail = "u8" }});
+
+    try testCompletion(
+        \\fn Model(comptime T: type) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn associated(comptime _: Self) struct { value: T } {
+        \\            return .{ .value = undefined };
+        \\        }
+        \\    };
+        \\}
+        \\fn make(comptime T: type) Model(T) {
+        \\    return .{};
+        \\}
+        \\const field = make // bind T
+        \\    (u8).associated // preserve return binding
+        \\    ().<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\const factory = struct {
+        \\    fn Model(comptime T: type) type {
+        \\        return struct {
+        \\            const Self = @This();
+        \\            fn associated(comptime _: Self) struct { value: T } {
+        \\                return .{ .value = undefined };
+        \\            }
+        \\        };
+        \\    }
+        \\    fn make(comptime T: type) Model(T) {
+        \\        return .{};
+        \\    }
+        \\};
+        \\const field = factory.make // bind T
+        \\    (u8).associated // preserve return binding
+        \\    ().<cursor>
+    , &.{.{ .label = "value", .kind = .Field, .detail = "u8" }});
+}
+
+test "multiline direct generic call field access preserves comptime arguments" {
+    try testCompletion(
+        \\fn Box(comptime T: type) type {
+        \\    return struct { pub const item: T = undefined; };
+        \\}
+        \\const field = Box
+        \\    (u8).<cursor>
+    , &.{.{ .label = "item", .kind = .Constant, .detail = "u8" }});
+}
+
 test "chained function call" {
     try testCompletion(
         \\const S1 = struct {
