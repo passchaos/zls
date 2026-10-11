@@ -4043,7 +4043,8 @@ fn resolveCoercedIPValueFromIndex(
     cast: ?std.zig.BuiltinFn.Tag,
 ) error{OutOfMemory}!?InternPool.Index {
     if (analyser.ip.isUndefined(ip_index)) return null;
-    const source_tag = analyser.ip.zigTypeTag(analyser.ip.typeOf(ip_index)) orelse return null;
+    const source_type = analyser.ip.typeOf(ip_index);
+    const source_tag = analyser.ip.zigTypeTag(source_type) orelse return null;
     if (cast) |tag| {
         if (analyser.ip.zigTypeTag(ip_ty) == .vector and source_tag == .vector) {
             return try analyser.resolveVectorCastValue(
@@ -4067,7 +4068,14 @@ fn resolveCoercedIPValueFromIndex(
             if (source_tag != .float and source_tag != .comptime_float) return null;
             return try analyser.coerceFloatValue(ip_ty, ip_index);
         }
-        if (tag == .bit_cast) return try analyser.bitCastScalarValue(ip_ty, ip_index);
+        if (tag == .bit_cast) {
+            if (try analyser.resolveAggregateBitCastValue(
+                ip_ty,
+                Type.fromIP(analyser, source_type, ip_index),
+                source_type,
+            )) |result| return result;
+            return try analyser.bitCastScalarValue(ip_ty, ip_index);
+        }
         if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
         if (source_tag != .int and source_tag != .comptime_int) return null;
         if (tag == .truncate) return try analyser.truncateIntValue(ip_ty, ip_index);
@@ -4098,6 +4106,28 @@ fn resolveCoercedIPValueFromIndex(
 }
 
 pub const ComptimeCastKind = enum { int_cast, truncate, bit_cast, int_from_float, float_from_int, float_cast };
+
+const AggregateBitCastInfo = struct {
+    child: InternPool.Index,
+    value_len: u64,
+    trailing_value: InternPool.Index = .none,
+
+    fn runtimeLen(self: AggregateBitCastInfo) ?u64 {
+        return std.math.add(u64, self.value_len, @intFromBool(self.trailing_value != .none)) catch null;
+    }
+};
+
+fn aggregateBitCastInfo(analyser: *Analyser, type_index: InternPool.Index) ?AggregateBitCastInfo {
+    return switch (analyser.ip.indexToKey(type_index)) {
+        .array_type => |array| .{
+            .child = array.child,
+            .value_len = array.len,
+            .trailing_value = if (array.sentinel == .unknown_unknown) return null else array.sentinel,
+        },
+        .vector_type => |vector| .{ .child = vector.child, .value_len = vector.len },
+        else => null,
+    };
+}
 
 fn hasWellDefinedRuntimeLayout(analyser: *Analyser, type_index: InternPool.Index) bool {
     const type_tag = analyser.ip.zigTypeTag(type_index) orelse return false;
@@ -4208,6 +4238,10 @@ pub fn resolveComptimeCastValue(
         .float_from_int => .float_from_int,
         .float_cast => .float_cast,
     };
+    if (kind == .bit_cast and source.data != .ip_index) {
+        if (try analyser.resolveAggregateBitCastValue(destination_type, source, source_type)) |value|
+            return Type.fromIP(analyser, destination_type, value);
+    }
     if (analyser.ip.zigTypeTag(destination_type) == .vector and
         analyser.ip.zigTypeTag(source_type) == .vector and
         comptime_eval.Value.elements(source) != null)
@@ -4230,6 +4264,47 @@ pub fn resolveComptimeCastValue(
     }
     const value = try analyser.resolveCoercedIPValueFromIndex(destination_type, source_index, tag) orelse return null;
     return Type.fromIP(analyser, destination_type, value);
+}
+
+fn resolveAggregateBitCastValue(
+    analyser: *Analyser,
+    destination_type: InternPool.Index,
+    source: Type,
+    source_type: InternPool.Index,
+) error{OutOfMemory}!?InternPool.Index {
+    const destination_tag = analyser.ip.zigTypeTag(destination_type) orelse return null;
+    const source_tag = analyser.ip.zigTypeTag(source_type) orelse return null;
+    if (!((destination_tag == .array and source_tag == .vector) or
+        (destination_tag == .vector and source_tag == .array))) return null;
+
+    const destination_info = aggregateBitCastInfo(analyser, destination_type) orelse return null;
+    const source_info = aggregateBitCastInfo(analyser, source_type) orelse return null;
+    if (destination_info.trailing_value != .none or
+        destination_info.child != source_info.child or
+        destination_info.runtimeLen() != source_info.runtimeLen()) return null;
+
+    const source_items = comptime_eval.Value.elements(source);
+    const source_values = analyser.aggregateValues(source);
+    if (source_items == null and source_values == null) return null;
+    const value_len = std.math.cast(usize, source_info.value_len) orelse return null;
+    const result_len = std.math.cast(usize, destination_info.value_len) orelse return null;
+    if ((source_items != null and source_items.?.len != value_len) or
+        (source_values != null and source_values.?.len != value_len) or
+        result_len != value_len + @intFromBool(source_info.trailing_value != .none)) return null;
+
+    const values = try analyser.gpa.alloc(InternPool.Index, result_len);
+    defer analyser.gpa.free(values);
+    for (values[0..value_len], 0..) |*value, index| {
+        value.* = if (source_items) |items|
+            items[index].ipIndex() orelse try analyser.ip.getUnknown(source_info.child)
+        else
+            source_values.?.at(@intCast(index), analyser.ip);
+    }
+    if (source_info.trailing_value != .none) values[value_len] = source_info.trailing_value;
+    return @as(?InternPool.Index, try analyser.ip.get(.{ .aggregate = .{
+        .ty = destination_type,
+        .values = try analyser.ip.getIndexSlice(values),
+    } }));
 }
 
 fn coerceFloatValue(

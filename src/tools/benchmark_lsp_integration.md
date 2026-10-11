@@ -625,3 +625,22 @@ across the 16 existing cases had a geometric mean speedup of `1.0003x`, with no
 material performance change. All response hashes matched. Baseline binary
 SHA-256: `45d381f4d483269013eed70ff4b160a6f0a32514bb1602cb2d712f4232cfb6fb`.
 Candidate binary SHA-256: `1f511de7f62d5a122b658b237db054232b82fe4f9dc91bdf1b3047704c512f35`.
+
+## Array-vector bit casts
+
+2026-10-11, same machine, Zig version, and build options. Comptime `@bitCast`
+now preserves aggregate values between arrays and vectors when their runtime
+lane count and element type match. A known array sentinel is materialized as the
+final vector lane. Shape changes, destination sentinel constraints, element
+reinterpretation, and runtime-unknown elements remain conservative.
+
+All 1,278 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. Two runs reversed process and request order, with
+20 warmups and 500 measured rounds per run. The combined 1,000-sample medians
+across the 16 existing cases had a geometric mean speedup of `0.9968x`; the
+multi-millisecond requests remained within 0.8%, and the larger relative change
+was 8.9 us on package-import completion. This is treated as no material
+performance change. All response hashes matched. Baseline binary SHA-256:
+`1f511de7f62d5a122b658b237db054232b82fe4f9dc91bdf1b3047704c512f35`.
+Candidate binary SHA-256: `e431d94625a19345e0e97b4e6bea39b301c93479d7ab9d05ae4d1af33bd08146`.

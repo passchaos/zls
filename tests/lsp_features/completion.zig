@@ -5114,6 +5114,39 @@ test "comptime bitCast preserves boolean bit patterns" {
     , &.{.{ .label = "unknown", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime bitCast preserves array vector elements" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const source = [3]u8{ 2, 3, 5 };
+        \\    const vector: @Vector(3, u8) = @bitCast(source);
+        \\    const roundtrip: [3]u8 = @bitCast(vector);
+        \\    const sentinel = [3:0]u8{ 7, 11, 13 };
+        \\    const sentinel_vector: @Vector(4, u8) = @bitCast(sentinel);
+        \\    return struct {
+        \\        vector: [vector[2]]u8,
+        \\        roundtrip: [roundtrip[1]]u8,
+        \\        sentinel: [sentinel_vector[3]]u8,
+        \\    };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "vector", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "roundtrip", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "sentinel", .kind = .Field, .detail = "[0]u8" },
+    });
+
+    try testCompletion(
+        \\var runtime: [3]u8 = undefined;
+        \\fn Select() type {
+        \\    const vector: @Vector(3, u8) = @bitCast(runtime);
+        \\    return struct { unknown: [vector[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "unknown", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime overflow builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {

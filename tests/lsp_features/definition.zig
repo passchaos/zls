@@ -376,6 +376,22 @@ test "comptime boolean bitCast selects definition" {
     );
 }
 
+test "comptime array vector bitCast selects definition" {
+    try testDefinition(
+        \\const Wrong = struct { const selected: u16 = 0; };
+        \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
+        \\fn select() type {
+        \\    const array = [3]u8{ 2, 3, 5 };
+        \\    const vector: @Vector(3, u8) = @bitCast(array);
+        \\    const roundtrip: [3]u8 = @bitCast(vector);
+        \\    if (vector[2] == 5 and roundtrip[1] == 3) return Right;
+        \\    return Wrong;
+        \\}
+        \\const Choice = select();
+        \\const value = Choice.sel<>ected;
+    );
+}
+
 test "generated Struct fields navigate to reflected source names" {
     try testDefinition(
         \\const std = @import("std");
