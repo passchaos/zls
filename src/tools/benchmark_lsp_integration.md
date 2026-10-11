@@ -590,3 +590,22 @@ change was 14.6 us on package-import completion. This is treated as no material
 performance change. All response hashes matched. Baseline binary SHA-256:
 `de051c679b436bf58ae95a0920977058270137bbef4526f43a5cbda01eefc2b6`.
 Candidate binary SHA-256: `429924a9e118b5e5ed24d193faf619d126315f19534a1c727ee7a63de7b96915`.
+
+## Scalar floating-point bit casts
+
+2026-10-11, same machine, Zig version, and build options. Comptime `@bitCast`
+now preserves raw bit patterns between integers and `f16`, `f32`, `f64`, `f80`,
+or `f128`, and same-shaped vector casts reuse that scalar path. The conversion
+does not pass through `f128`, so NaN payloads and negative zero survive an
+integer-to-float-to-integer round trip. Runtime-unknown operands remain unknown.
+
+All 1,274 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. Two runs reversed process and request order, with
+20 warmups and 500 measured rounds per run. The combined 1,000-sample medians
+across the 16 existing cases had a geometric mean speedup of `0.9973x`; the
+multi-millisecond requests remained within 0.6%, and the larger relative change
+was 10.8 us on package-import completion. This is treated as no material
+performance change. All response hashes matched. Baseline binary SHA-256:
+`429924a9e118b5e5ed24d193faf619d126315f19534a1c727ee7a63de7b96915`.
+Candidate binary SHA-256: `45d381f4d483269013eed70ff4b160a6f0a32514bb1602cb2d712f4232cfb6fb`.

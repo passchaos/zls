@@ -348,6 +348,20 @@ test "comptime read-only pointer reinterpretation selects definition" {
     );
 }
 
+test "comptime float bitCast selects definition" {
+    try testDefinition(
+        \\const Wrong = struct { const selected: u16 = 0; };
+        \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
+        \\fn select() type {
+        \\    const bits: u32 = @bitCast(@as(f32, 1.0));
+        \\    if (bits == 0x3f800000) return Right;
+        \\    return Wrong;
+        \\}
+        \\const Choice = select();
+        \\const value = Choice.sel<>ected;
+    );
+}
+
 test "generated Struct fields navigate to reflected source names" {
     try testDefinition(
         \\const std = @import("std");

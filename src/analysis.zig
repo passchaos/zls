@@ -2757,7 +2757,7 @@ fn resolveVectorCastValue(
             .int_from_float => try analyser.intFromFloatValue(dest_vector.child, source_value),
             .float_from_int => try analyser.floatFromIntValue(dest_vector.child, source_value),
             .float_cast => try analyser.coerceFloatValue(dest_vector.child, source_value),
-            .bit_cast => try analyser.bitCastIntValue(dest_vector.child, source_value),
+            .bit_cast => try analyser.bitCastScalarValue(dest_vector.child, source_value),
             .truncate => try analyser.truncateIntValue(dest_vector.child, source_value),
             .int_cast => try analyser.coerceIP(dest_vector.child, source_value),
             else => return null,
@@ -4067,10 +4067,10 @@ fn resolveCoercedIPValueFromIndex(
             if (source_tag != .float and source_tag != .comptime_float) return null;
             return try analyser.coerceFloatValue(ip_ty, ip_index);
         }
+        if (tag == .bit_cast) return try analyser.bitCastScalarValue(ip_ty, ip_index);
         if (analyser.ip.zigTypeTag(ip_ty) != .int) return null;
         if (source_tag != .int and source_tag != .comptime_int) return null;
         if (tag == .truncate) return try analyser.truncateIntValue(ip_ty, ip_index);
-        if (tag == .bit_cast) return try analyser.bitCastIntValue(ip_ty, ip_index);
         if (tag == .int_cast) {
             const int = analyser.ip.toInt(ip_index, i256) orelse return null;
             return (try analyser.intValueWithType(ip_ty, int) orelse return null).ipIndex();
@@ -4735,39 +4735,57 @@ fn intFromFloatValue(
     };
 }
 
-fn bitCastIntValue(
+fn bitCastScalarValue(
     analyser: *Analyser,
     dest_ty: InternPool.Index,
     value: InternPool.Index,
 ) error{OutOfMemory}!?InternPool.Index {
-    if (analyser.ip.zigTypeTag(dest_ty) != .int) return null;
     const source_ty = analyser.ip.typeOf(value);
-    if (analyser.ip.zigTypeTag(source_ty) != .int) return null;
-    const dest_info = analyser.ip.intInfo(dest_ty, builtin.target);
-    const source_info = analyser.ip.intInfo(source_ty, builtin.target);
-    if (dest_info.bits != source_info.bits) return null;
-    if (dest_info.bits > 128) {
-        var source = try analyser.managedIntegerValue(value) orelse return null;
-        defer source.deinit();
-        var result: std.math.big.int.Managed = try .init(analyser.gpa);
-        defer result.deinit();
-        try result.truncate(&source, dest_info.signedness, dest_info.bits);
-        return try analyser.ip.getBigInt(dest_ty, result.toConst());
-    }
+    const destination_tag = analyser.ip.zigTypeTag(dest_ty) orelse return null;
+    const source_tag = analyser.ip.zigTypeTag(source_ty) orelse return null;
 
-    const raw: u128 = switch (source_info.signedness) {
-        .unsigned => analyser.ip.toInt(value, u128) orelse return null,
-        .signed => signed: {
-            const signed_value = analyser.ip.toInt(value, i128) orelse return null;
-            const bits: u128 = @bitCast(signed_value);
-            const mask = if (source_info.bits == 128)
-                std.math.maxInt(u128)
-            else if (source_info.bits == 0)
-                0
-            else
-                (@as(u128, 1) << @intCast(source_info.bits)) - 1;
-            break :signed bits & mask;
+    if (destination_tag == .float and source_tag == .int) {
+        const source_info = analyser.ip.intInfo(source_ty, builtin.target);
+        const destination_bits = analyser.ip.floatBits(dest_ty, builtin.target);
+        if (source_info.bits != destination_bits or source_info.bits > 128) return null;
+        const raw = integerBitPattern(analyser, value, source_info) orelse return null;
+        return switch (dest_ty) {
+            .f16_type => try analyser.ip.get(.{ .float_16_value = @bitCast(@as(u16, @intCast(raw))) }),
+            .f32_type => try analyser.ip.get(.{ .float_32_value = @bitCast(@as(u32, @intCast(raw))) }),
+            .f64_type => try analyser.ip.get(.{ .float_64_value = @bitCast(@as(u64, @intCast(raw))) }),
+            .f80_type => try analyser.ip.get(.{ .float_80_value = @bitCast(@as(u80, @intCast(raw))) }),
+            .f128_type => try analyser.ip.get(.{ .float_128_value = @bitCast(raw) }),
+            else => null,
+        };
+    }
+    if (destination_tag != .int) return null;
+    const dest_info = analyser.ip.intInfo(dest_ty, builtin.target);
+    const raw: u128 = switch (source_tag) {
+        .int => integer: {
+            const source_info = analyser.ip.intInfo(source_ty, builtin.target);
+            if (dest_info.bits != source_info.bits) return null;
+            if (dest_info.bits > 128) {
+                var source = try analyser.managedIntegerValue(value) orelse return null;
+                defer source.deinit();
+                var result: std.math.big.int.Managed = try .init(analyser.gpa);
+                defer result.deinit();
+                try result.truncate(&source, dest_info.signedness, dest_info.bits);
+                return try analyser.ip.getBigInt(dest_ty, result.toConst());
+            }
+            break :integer integerBitPattern(analyser, value, source_info) orelse return null;
         },
+        .float => float: {
+            if (dest_info.bits != analyser.ip.floatBits(source_ty, builtin.target)) return null;
+            break :float switch (analyser.ip.indexToKey(value)) {
+                .float_16_value => |float| @as(u16, @bitCast(float)),
+                .float_32_value => |float| @as(u32, @bitCast(float)),
+                .float_64_value => |float| @as(u64, @bitCast(float)),
+                .float_80_value => |float| @as(u80, @bitCast(float)),
+                .float_128_value => |float| @as(u128, @bitCast(float)),
+                else => return null,
+            };
+        },
+        else => return null,
     };
 
     const result: i256 = switch (dest_info.signedness) {
@@ -4783,6 +4801,28 @@ fn bitCastIntValue(
         },
     };
     return (try analyser.intValueWithType(dest_ty, result) orelse return null).ipIndex();
+}
+
+fn integerBitPattern(
+    analyser: *Analyser,
+    value: InternPool.Index,
+    info: std.builtin.Type.Int,
+) ?u128 {
+    if (info.bits > 128) return null;
+    return switch (info.signedness) {
+        .unsigned => analyser.ip.toInt(value, u128),
+        .signed => signed: {
+            const signed_value = analyser.ip.toInt(value, i128) orelse return null;
+            const bits: u128 = @bitCast(signed_value);
+            const mask = if (info.bits == 128)
+                std.math.maxInt(u128)
+            else if (info.bits == 0)
+                0
+            else
+                (@as(u128, 1) << @intCast(info.bits)) - 1;
+            break :signed bits & mask;
+        },
+    };
 }
 
 fn truncateIntValue(

@@ -5029,6 +5029,60 @@ test "comptime bitCast accepts same-shaped structured vectors" {
     });
 }
 
+test "comptime bitCast preserves scalar float bit patterns" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const one_bits: u32 = @bitCast(@as(f32, 1.0));
+        \\    const bits16: u16 = 0x7e01;
+        \\    const nan_bits: u32 = 0x7fc01234;
+        \\    const bits64: u64 = 0x7ff8000000001234;
+        \\    const bits80: u80 = 0x7fffc000000000001234;
+        \\    const bits128: u128 = 0x7fff8000000000000000000000001234;
+        \\    const roundtrip16: u16 = @bitCast(@as(f16, @bitCast(bits16)));
+        \\    const roundtrip32: u32 = @bitCast(@as(f32, @bitCast(nan_bits)));
+        \\    const roundtrip64: u64 = @bitCast(@as(f64, @bitCast(bits64)));
+        \\    const roundtrip80: u80 = @bitCast(@as(f80, @bitCast(bits80)));
+        \\    const roundtrip128: u128 = @bitCast(@as(f128, @bitCast(bits128)));
+        \\    const negative_zero: f32 = @bitCast(@as(u32, 0x80000000));
+        \\    const negative_zero_bits: u32 = @bitCast(negative_zero);
+        \\    return if (one_bits == 0x3f800000 and roundtrip16 == bits16 and
+        \\        roundtrip32 == nan_bits and roundtrip64 == bits64 and
+        \\        roundtrip80 == bits80 and roundtrip128 == bits128 and
+        \\        negative_zero_bits == 0x80000000)
+        \\        struct { exact_bits: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "exact_bits", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\const Bits = @Vector(2, u32);
+        \\fn Select() type {
+        \\    const source: Bits = .{ 0x3f800000, 0x80000000 };
+        \\    const floats: @Vector(2, f32) = @bitCast(source);
+        \\    const roundtrip: Bits = @bitCast(floats);
+        \\    return if (@reduce(.And, roundtrip == source))
+        \\        struct { vector_bits: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "vector_bits", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\var runtime_float: f32 = undefined;
+        \\fn Select() type {
+        \\    const bits: u32 = @bitCast(runtime_float);
+        \\    return struct { unknown: [if (bits == 0) 1 else 2]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "unknown", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime overflow builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {
