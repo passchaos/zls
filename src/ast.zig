@@ -1625,7 +1625,15 @@ pub fn nodesOverlappingIndexIncludingParseErrors(allocator: std.mem.Allocator, t
         loc: offsets.Loc,
 
         fn lessThan(_: void, lhs: @This(), rhs: @This()) bool {
-            return rhs.loc.start < lhs.loc.start and lhs.loc.end < rhs.loc.end;
+            // Parent and child expressions often share an endpoint. Comparing
+            // strict containment leaves them unordered and is not transitive
+            // for detached nodes that only partially overlap.
+            const lhs_len = lhs.loc.end - lhs.loc.start;
+            const rhs_len = rhs.loc.end - rhs.loc.start;
+            if (lhs_len != rhs_len) return lhs_len < rhs_len;
+            if (lhs.loc.start != rhs.loc.start) return lhs.loc.start > rhs.loc.start;
+            if (lhs.node == .root or rhs.node == .root) return rhs.node == .root and lhs.node != .root;
+            return @intFromEnum(lhs.node) < @intFromEnum(rhs.node);
         }
     };
 

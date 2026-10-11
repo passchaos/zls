@@ -9,6 +9,44 @@ const ast = zls.ast;
 
 const allocator = std.testing.allocator;
 
+test "recovered overlapping nodes keep inner expressions before their parents" {
+    const sources = [_][]const u8{
+        "const value: S = .{ .field = 42<cursor> };",
+        "const value = choose(u8, .{ .field = 42<cursor> });",
+        "fn value() void { consume(.{ .field = 42<cursor> }); }",
+        "const value = choose(u8, .{ .field = 42<cursor> });\nconst broken = ;",
+        "comptime { const value = (42<cursor>); }",
+    };
+    for (sources) |source| {
+        const cursor = std.mem.find(u8, source, "<cursor>").?;
+        const text = try std.mem.concatWithSentinel(allocator, u8, &.{ source[0..cursor], source[cursor + "<cursor>".len ..] }, 0);
+        defer allocator.free(text);
+        var tree = try std.zig.Ast.parse(allocator, text, .zig);
+        defer tree.deinit(allocator);
+
+        const recovered = try ast.nodesOverlappingIndexIncludingParseErrors(allocator, &tree, cursor);
+        defer allocator.free(recovered);
+        const reachable = try ast.nodesOverlappingIndex(allocator, &tree, cursor);
+        defer allocator.free(reachable);
+        try std.testing.expectEqualSlices(std.zig.Ast.Node.Index, reachable, recovered);
+    }
+}
+
+test "recovered overlapping nodes retain detached expressions" {
+    const source: [:0]const u8 = "const value: S = .{ .field = 42";
+    var tree = try std.zig.Ast.parse(allocator, source, .zig);
+    defer tree.deinit(allocator);
+    try std.testing.expect(tree.errors.len != 0);
+
+    const recovered = try ast.nodesOverlappingIndexIncludingParseErrors(allocator, &tree, source.len);
+    defer allocator.free(recovered);
+    const reachable = try ast.nodesOverlappingIndex(allocator, &tree, source.len);
+    defer allocator.free(reachable);
+    try std.testing.expect(recovered.len > reachable.len);
+    try std.testing.expectEqual(.number_literal, tree.nodeTag(recovered[0]));
+    try std.testing.expectEqual(.root, recovered[recovered.len - 1]);
+}
+
 test "nodesAtLoc" {
     try testNodesAtLoc(
         \\<outer><inner><inner><outer>
