@@ -709,3 +709,27 @@ material performance change. All response hashes matched. Baseline binary
 SHA-256: `c94555a7028847adc4ca7738c74e5371ad72451de17fceae0db2ffa0f5d0853b`.
 Candidate binary SHA-256:
 `1ad502d9f7edaf416ef6fb4fa27d4730a1323458f964cd6c0386034a6a2e7dc4`.
+
+## Comptime instance method evaluation
+
+2026-10-11, same machine, Zig version, and build options. The comptime
+interpreter now recognizes Zig method-call syntax, captures the evaluated base
+once, and supplies it as the implicit first argument. This preserves side
+effects for temporary receivers and supports value and comptime receivers with
+explicit literal or comptime arguments. Void-returning validation methods and
+calls with ordinary runtime arguments remain on the normal type-inference path,
+which avoids disturbing incomplete calls while they are being edited.
+
+All 1,284 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. A real-document overlay on `tests/integration.zig`
+also used the actual imported `zigraft.Check.isOk` method to select one
+completion branch and resolved its definition exactly to `src/contract.zig`.
+
+Two reversed runs with 20 warmups and 500 measured rounds per order produced a
+`0.9972x` geometric mean across the 16 existing request cases. The
+multi-millisecond requests remained within 1.1%, so this is treated as no
+material performance change. All response hashes matched. Baseline binary
+SHA-256: `bdffab11ab6c4bb1564a6818b430f203384d702cda4c60be97f9266c44f77c2a`.
+Candidate binary SHA-256:
+`b39e4ee68d1e21fc8a59e3caa4211d8722a45f8f0ad7506e065c4cef384a5269`.

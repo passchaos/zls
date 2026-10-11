@@ -11378,6 +11378,77 @@ test "generic function with comptime nested calls" {
     });
 }
 
+test "comptime interpreter evaluates local value-returning instance methods" {
+    try testCompletion(
+        \\const Check = struct {
+        \\    count: u8,
+        \\    fn isFour(self: @This()) bool { return self.count == 4; }
+        \\    fn matches(comptime self: @This(), expected: u8) bool { return self.count == expected; }
+        \\    fn next(self: @This()) @This() { return .{ .count = self.count + 1 }; }
+        \\    fn staticMatch(value: u8) bool { return value == 9; }
+        \\};
+        \\fn make() Check { return .{ .count = 7 }; }
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const direct = Check{ .count = 4 };
+        \\    return if (direct.isFour() and marker == 1)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "comptime interpreter evaluates temporary value-returning methods" {
+    try testCompletion(
+        \\const Check = struct {
+        \\    count: u8,
+        \\    fn matches(comptime self: @This(), expected: u8) bool { return self.count == expected; }
+        \\    fn next(self: @This()) @This() { return .{ .count = self.count + 1 }; }
+        \\    fn staticMatch(value: u8) bool { return value == 9; }
+        \\};
+        \\fn make(executions: *usize) Check {
+        \\    executions.* += 1;
+        \\    return .{ .count = 7 };
+        \\}
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    return if (make(&executions).matches(7) and make(&executions).next().matches(8) and
+        \\        Check.staticMatch(9) and executions == 2)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "comptime interpreter preserves unknown instance method results" {
+    try testCompletion(
+        \\const Check = struct {
+        \\    ok: bool,
+        \\    fn isOk(self: @This()) bool { return self.ok; }
+        \\};
+        \\var runtime: Check = undefined;
+        \\fn Select() type {
+        \\    return if (runtime.isOk()) struct { matched: u8 } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime call builtin" {
     try testCompletion(
         \\fn combine(a: usize, b: usize) usize { return a * 10 + b; }

@@ -318,6 +318,26 @@ test "definition through runtime struct size selection" {
     );
 }
 
+test "definition through comptime instance method selection" {
+    try testDefinition(
+        \\const Decision = struct {
+        \\    enabled: bool,
+        \\    fn select(self: @This()) type {
+        \\        return if (self.enabled)
+        \\            struct { <def><decl>matched</decl></def>: <tdef>u8</tdef> }
+        \\        else
+        \\            struct { fallback: u8 };
+        \\    }
+        \\};
+        \\fn Select() type {
+        \\    const decision = Decision{ .enabled = true };
+        \\    return decision.select();
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.mat<>ched;
+    );
+}
+
 test "generated Struct field falls back to its type definition" {
     try testDefinition(
         \\const Model = struct {

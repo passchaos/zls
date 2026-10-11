@@ -756,6 +756,10 @@ pub const Interpreter = struct {
     return_type: ?Type = null,
     pending_flow: ?Flow = null,
     break_context: ?*const BreakContext = null,
+    /// Populated only while evaluating a call's callee so an implicit method
+    /// receiver can be passed without evaluating its source expression twice.
+    capture_call_receiver: bool = false,
+    pending_call_receiver: ?NodeReceiver = null,
 
     const ResultLocation = union(enum) {
         none,
@@ -2484,13 +2488,26 @@ pub const Interpreter = struct {
                     try self.isLocalReferenceExpression(handle, node, 0))
                 {
                     const reference = try self.referenceForNode(handle, node) orelse return null;
-                    return self.readReference(reference);
+                    const result = try self.readReference(reference) orelse return null;
+                    // `invoke` consumes this immediately after the complete
+                    // field access has resolved to a callable declaration.
+                    if (self.capture_call_receiver) if (try self.captureOperand(handle, base, 0)) |receiver| {
+                        self.pending_call_receiver = .{ .node = base, .value = receiver.value };
+                    };
+                    return result;
                 }
                 const value = if (std.mem.eql(u8, field_name, "ptr") or std.mem.eql(u8, field_name, "len"))
                     try self.staticSequenceValue(handle, base) orelse try self.eval(handle, base) orelse return null
                 else
                     try self.eval(handle, base) orelse return null;
-                return self.analyser.resolveComptimeFieldValue(value, field_name);
+                const result = try self.analyser.resolveComptimeFieldValue(value, field_name) orelse return null;
+                if (self.capture_call_receiver and !value.is_type_val) {
+                    self.pending_call_receiver = .{
+                        .node = base,
+                        .value = value,
+                    };
+                }
+                return result;
             },
             .array_access => {
                 const base, const index_node = handle.tree.nodeData(node).node_and_node;
@@ -6394,13 +6411,22 @@ pub const Interpreter = struct {
         }
     }
 
+    const NodeReceiver = struct {
+        node: Ast.Node.Index,
+        value: Type,
+    };
+
     const CallArguments = union(enum) {
-        nodes: []const Ast.Node.Index,
+        nodes: struct {
+            explicit: []const Ast.Node.Index,
+            receiver: ?NodeReceiver = null,
+        },
         values: []const Type,
 
         fn len(arguments: CallArguments) usize {
             return switch (arguments) {
-                inline else => |items| items.len,
+                .nodes => |nodes| nodes.explicit.len + @intFromBool(nodes.receiver != null),
+                .values => |values| values.len,
             };
         }
     };
@@ -6605,8 +6631,54 @@ pub const Interpreter = struct {
     fn invoke(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!Flow {
         var buffer: [1]Ast.Node.Index = undefined;
         const call_node = handle.tree.fullCall(&buffer, node).?;
-        const callable = try self.eval(handle, call_node.ast.fn_expr) orelse return .unknown;
-        return self.invokeFunction(handle, callable, .{ .nodes = call_node.ast.params });
+        const target = target: {
+            const previous_receiver = self.pending_call_receiver;
+            const previous_capture = self.capture_call_receiver;
+            self.pending_call_receiver = null;
+            self.capture_call_receiver = true;
+            defer {
+                self.capture_call_receiver = previous_capture;
+                self.pending_call_receiver = previous_receiver;
+            }
+            const callable = try self.eval(handle, call_node.ast.fn_expr) orelse return .unknown;
+            var receiver = if (callable.isFunc() and
+                // Validation and other void-returning methods do not provide
+                // a value for comptime propagation. Keep those on the normal
+                // type-inference path, where incomplete calls remain usable.
+                (try callable.data.function.return_value.typeOf(self.analyser)).ipIndex() != .void_type and
+                try self.analyser.isInstanceCall(handle, call_node, callable))
+                self.pending_call_receiver
+            else
+                null;
+            if (receiver) |*value| {
+                if (!Value.isKnown(value.value, self.analyser, 0) and
+                    handle.tree.nodeTag(value.node) == .identifier)
+                {
+                    value.value = try self.staticCaptureValue(handle, value.node) orelse value.value;
+                }
+            }
+            break :target .{ .callable = callable, .receiver = receiver };
+        };
+        const callable = target.callable;
+        const receiver = target.receiver;
+        if (receiver != null) {
+            const parameters = callable.data.function.parameters;
+            if (parameters.len != call_node.ast.params.len + 1) return .unknown;
+            // Avoid executing ordinary runtime methods merely because their
+            // return type is needed by analysis. Comptime parameters and pure
+            // literals are safe to interpret here.
+            for (parameters[1..], call_node.ast.params) |parameter, argument| {
+                if (parameter.modifier != .comptime_param and
+                    !isLiteralInitializer(&handle.tree, argument, 0))
+                {
+                    return .unknown;
+                }
+            }
+        }
+        return self.invokeFunction(handle, callable, .{ .nodes = .{
+            .explicit = call_node.ast.params,
+            .receiver = receiver,
+        } });
     }
 
     fn invokeFunction(
@@ -6644,10 +6716,23 @@ pub const Interpreter = struct {
         for (info.parameters, 0..) |parameter, index| {
             const parameter_type = try analyser.resolveGenericType(parameter.type, child.bindings);
             const value = switch (arguments) {
-                .nodes => |nodes| if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val)
-                    try self.eval(handle, nodes[index]) orelse return .unknown
-                else value: {
-                    const evaluated = try self.evalTypedSource(handle, nodes[index], parameter_type) orelse return .unknown;
+                .nodes => |nodes| value: {
+                    const is_receiver = nodes.receiver != null and index == 0;
+                    const argument_node = if (is_receiver)
+                        nodes.receiver.?.node
+                    else
+                        nodes.explicit[index - @intFromBool(nodes.receiver != null)];
+                    const captured = if (is_receiver)
+                        nodes.receiver.?.value
+                    else
+                        null;
+                    if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val) {
+                        break :value captured orelse try self.eval(handle, argument_node) orelse return .unknown;
+                    }
+                    const evaluated = if (captured) |value|
+                        EvaluatedSource{ .value = value, .source_node = argument_node }
+                    else
+                        try self.evalTypedSource(handle, argument_node, parameter_type) orelse return .unknown;
                     break :value try self.coerceFromSource(
                         handle,
                         parameter_type,
