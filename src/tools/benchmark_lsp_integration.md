@@ -305,3 +305,49 @@ The complete integration audit passed all 661 exact definition destinations and
 1,626 completion edits.
 Baseline binary SHA-256: `569b538860d7400ee00db844de28141208dbd532fe5828fde4f78cc75e479c03`.
 Candidate binary SHA-256: `60d34f6f09cf7fab09ba6c077e136dff580ade9530050392cf5aeb176fbb5f88`.
+
+## Active binding digest reuse
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`7d21af97` includes single-probe specialization insertion. A specialization key
+uses order-independent digests of its active generic and display bindings. The
+candidate caches those digests while the same immutable map storage remains
+active, instead of recursively hashing every bound type for each resolved AST
+node. Interpreter-owned mutable maps deliberately bypass this cache, and the
+one ordinary path that overwrites an active map explicitly invalidates it.
+
+Two runs reverse process startup and request order. Each process excludes 20
+warmups per request and records 500 measured requests; the table reports the
+median of each binary's 1,000 combined samples. All response hashes match
+between binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 3640.77 | 3372.40 | 1.080x |
+| definition | comptime_method | 3659.77 | 3444.42 | 1.063x |
+| completion | generated_binding | 639.44 | 624.54 | 1.024x |
+| definition | generated_binding | 633.21 | 627.31 | 1.009x |
+| completion | generic_return_method | 2959.23 | 2781.52 | 1.064x |
+| definition | generic_return_method | 375.94 | 369.54 | 1.017x |
+| completion | generated_capability | 1249.60 | 1234.48 | 1.012x |
+| definition | generated_capability | 1257.90 | 1235.46 | 1.018x |
+| completion | dynamic_initializer | 4351.71 | 4154.88 | 1.047x |
+| definition | dynamic_initializer | 603.10 | 597.50 | 1.009x |
+| completion | standard_library | 5578.00 | 5531.69 | 1.008x |
+| definition | standard_library | 44.04 | 44.48 | 0.990x |
+| completion | reflection_member | 68.58 | 68.71 | 0.998x |
+| definition | reflection_member | 62.10 | 61.98 | 1.002x |
+| completion | package_import | 187.15 | 196.10 | 0.954x |
+| definition | package_import | 28.75 | 28.65 | 1.004x |
+
+The geometric mean speedup across all 16 requests is `1.018x`. The expensive
+comptime method and generic-return paths improve by 6.3-8.0%, and dynamic
+initializer completion improves by 4.7%. The package-import completion change
+is nine microseconds on a sub-200 us request.
+
+All 1,267 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits.
+A separate 1,000-sample experiment that only bypassed equality work for maps
+sharing storage measured a `1.000x` overall geometric mean and was not retained.
+Baseline binary SHA-256: `00c6460fe4da9e8bc6d6065b2e3fd9bea81b586e65fa0f8c12c07a9dced34b0f`.
+Candidate binary SHA-256: `ef2310b5550d7b0303a9d90a84ce2a16b219473be60bfe4119933408123e3526`.

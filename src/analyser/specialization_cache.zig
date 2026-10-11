@@ -9,16 +9,29 @@ const TokenWithHandle = Analyser.TokenWithHandle;
 const TokenToTypeMap = Analyser.TokenToTypeMap;
 const TokenToNodeMap = Analyser.TokenToNodeMap;
 
-pub fn hashTypeBindings(hasher: anytype, bindings: TokenToTypeMap) void {
-    var bindings_hash: u64 = 0;
+const BindingsDigest = struct {
+    count: usize,
+    entries_hash: u64,
+};
+
+fn writeBindingsDigest(hasher: anytype, digest: BindingsDigest) void {
+    std.hash.autoHash(hasher, digest.count);
+    std.hash.autoHash(hasher, digest.entries_hash);
+}
+
+fn typeBindingsDigest(bindings: TokenToTypeMap) BindingsDigest {
+    var entries_hash: u64 = 0;
     for (bindings.keys(), bindings.values()) |token_handle, ty| {
         var binding_hasher: std.hash.Wyhash = .init(0);
         token_handle.hashWithHasher(&binding_hasher);
         ty.hashWithHasher(&binding_hasher);
-        bindings_hash ^= binding_hasher.final();
+        entries_hash ^= binding_hasher.final();
     }
-    std.hash.autoHash(hasher, bindings.count());
-    std.hash.autoHash(hasher, bindings_hash);
+    return .{ .count = bindings.count(), .entries_hash = entries_hash };
+}
+
+pub fn hashTypeBindings(hasher: anytype, bindings: TokenToTypeMap) void {
+    writeBindingsDigest(hasher, typeBindingsDigest(bindings));
 }
 
 /// Exact representation comparison also preserves navigation and presentation
@@ -86,6 +99,10 @@ test "generic container cache hashes ignore binding insertion order" {
     const node: NodeWithUri = .{ .uri = handle.uri, .node = .root };
     const first_key = Key.init(node, first_type, forward, .empty);
     const second_key = Key.init(node, second_type, reverse, .empty);
+    var hash_cache: BindingHashCache = .{};
+    const cached_key = Key.initCached(node, first_type, forward, .empty, &hash_cache);
+    try std.testing.expectEqual(first_key.hash, cached_key.hash);
+    try std.testing.expect(Key.Context.eql(.{}, first_key, cached_key));
     try std.testing.expect(Key.Context.eql(.{}, first_key, second_key));
     try std.testing.expectEqual(first_key.hash, second_key.hash);
     var cache: std.HashMapUnmanaged(Key, u8, Key.Context, 80) = .empty;
@@ -104,6 +121,25 @@ test "generic container cache hashes ignore binding insertion order" {
     try std.testing.expect(cache.get(display_key) == null);
 }
 
+test "binding hash cache invalidates same-storage value updates" {
+    const allocator = std.testing.allocator;
+    var handle: DocumentStore.Handle = undefined;
+    handle.uri = .{ .raw = "file:///bindings.zig" };
+    const token: TokenWithHandle = .{ .handle = &handle, .token = 0 };
+    const u8_type: Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u8_type } } };
+    const u16_type: Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u16_type } } };
+    var bindings: TokenToTypeMap = .empty;
+    defer bindings.deinit(allocator);
+    try bindings.put(allocator, token, u8_type);
+
+    var hash_cache: BindingHashCache = .{};
+    const first = Key.initCached(.{ .uri = handle.uri, .node = .root }, null, bindings, .empty, &hash_cache);
+    try bindings.put(allocator, token, u16_type);
+    hash_cache.invalidateType();
+    const second = Key.initCached(.{ .uri = handle.uri, .node = .root }, null, bindings, .empty, &hash_cache);
+    try std.testing.expect(first.hash != second.hash);
+}
+
 pub fn eqlTypeBindings(a: TokenToTypeMap, b: TokenToTypeMap) bool {
     if (a.count() != b.count()) return false;
     for (a.keys(), a.values()) |token_handle, ty| {
@@ -114,16 +150,19 @@ pub fn eqlTypeBindings(a: TokenToTypeMap, b: TokenToTypeMap) bool {
 }
 
 pub fn hashDisplayBindings(hasher: anytype, bindings: TokenToNodeMap) void {
-    var bindings_hash: u64 = 0;
+    writeBindingsDigest(hasher, displayBindingsDigest(bindings));
+}
+
+fn displayBindingsDigest(bindings: TokenToNodeMap) BindingsDigest {
+    var entries_hash: u64 = 0;
     for (bindings.keys(), bindings.values()) |token_handle, node_handle| {
         var binding_hasher: std.hash.Wyhash = .init(0);
         token_handle.hashWithHasher(&binding_hasher);
         std.hash.autoHash(&binding_hasher, node_handle.node);
         std.hash.autoHash(&binding_hasher, node_handle.handle.uri.hash());
-        bindings_hash ^= binding_hasher.final();
+        entries_hash ^= binding_hasher.final();
     }
-    std.hash.autoHash(hasher, bindings.count());
-    std.hash.autoHash(hasher, bindings_hash);
+    return .{ .count = bindings.count(), .entries_hash = entries_hash };
 }
 
 pub fn eqlDisplayBindings(a: TokenToNodeMap, b: TokenToNodeMap) bool {
@@ -135,6 +174,58 @@ pub fn eqlDisplayBindings(a: TokenToNodeMap, b: TokenToNodeMap) bool {
     return true;
 }
 
+const StorageIdentity = struct {
+    keys: usize,
+    values: usize,
+    count: usize,
+
+    fn of(map: anytype) StorageIdentity {
+        if (map.count() == 0) return .{ .keys = 0, .values = 0, .count = 0 };
+        return .{
+            .keys = @intFromPtr(map.keys().ptr),
+            .values = @intFromPtr(map.values().ptr),
+            .count = map.count(),
+        };
+    }
+};
+
+/// Reuses binding digests while an immutable binding map remains active.
+/// Call `invalidateType` before resolving through a type-binding map whose
+/// values were overwritten without changing its storage or item count.
+pub const BindingHashCache = struct {
+    type_entry: ?Entry = null,
+    display_entry: ?Entry = null,
+
+    const Entry = struct {
+        storage: StorageIdentity,
+        digest: BindingsDigest,
+    };
+
+    fn typeDigest(self: *BindingHashCache, bindings: TokenToTypeMap) BindingsDigest {
+        const storage = StorageIdentity.of(bindings);
+        if (self.type_entry) |entry| {
+            if (std.meta.eql(entry.storage, storage)) return entry.digest;
+        }
+        const digest = typeBindingsDigest(bindings);
+        self.type_entry = .{ .storage = storage, .digest = digest };
+        return digest;
+    }
+
+    fn displayDigest(self: *BindingHashCache, bindings: TokenToNodeMap) BindingsDigest {
+        const storage = StorageIdentity.of(bindings);
+        if (self.display_entry) |entry| {
+            if (std.meta.eql(entry.storage, storage)) return entry.digest;
+        }
+        const digest = displayBindingsDigest(bindings);
+        self.display_entry = .{ .storage = storage, .digest = digest };
+        return digest;
+    }
+
+    pub fn invalidateType(self: *BindingHashCache) void {
+        self.type_entry = null;
+    }
+};
+
 pub const Key = struct {
     node: NodeWithUri,
     container_type: ?Type,
@@ -143,6 +234,41 @@ pub const Key = struct {
     hash: u64,
 
     pub fn init(node: NodeWithUri, container_type: ?Type, bindings: TokenToTypeMap, display_bindings: TokenToNodeMap) Key {
+        return initWithDigests(
+            node,
+            container_type,
+            bindings,
+            display_bindings,
+            typeBindingsDigest(bindings),
+            displayBindingsDigest(display_bindings),
+        );
+    }
+
+    pub fn initCached(
+        node: NodeWithUri,
+        container_type: ?Type,
+        bindings: TokenToTypeMap,
+        display_bindings: TokenToNodeMap,
+        cache: *BindingHashCache,
+    ) Key {
+        return initWithDigests(
+            node,
+            container_type,
+            bindings,
+            display_bindings,
+            cache.typeDigest(bindings),
+            cache.displayDigest(display_bindings),
+        );
+    }
+
+    fn initWithDigests(
+        node: NodeWithUri,
+        container_type: ?Type,
+        bindings: TokenToTypeMap,
+        display_bindings: TokenToNodeMap,
+        bindings_digest: BindingsDigest,
+        display_bindings_digest: BindingsDigest,
+    ) Key {
         const key: Key = .{
             .node = node,
             .container_type = container_type,
@@ -151,11 +277,11 @@ pub const Key = struct {
             .hash = undefined,
         };
         var result = key;
-        result.hash = result.computeHash();
+        result.hash = result.computeHash(bindings_digest, display_bindings_digest);
         return result;
     }
 
-    fn computeHash(key: Key) u64 {
+    fn computeHash(key: Key, bindings_digest: BindingsDigest, display_bindings_digest: BindingsDigest) u64 {
         var hasher: std.hash.Wyhash = .init(0);
         std.hash.autoHash(&hasher, key.node.node);
         std.hash.autoHash(&hasher, key.node.uri.hash());
@@ -165,8 +291,8 @@ pub const Key = struct {
         } else {
             hasher.update(&.{0});
         }
-        hashTypeBindings(&hasher, key.bindings);
-        hashDisplayBindings(&hasher, key.display_bindings);
+        writeBindingsDigest(&hasher, bindings_digest);
+        writeBindingsDigest(&hasher, display_bindings_digest);
         return hasher.final();
     }
 

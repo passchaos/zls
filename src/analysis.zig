@@ -64,6 +64,9 @@ comptime_interpreter: ?*comptime_eval.Interpreter = null,
 generated_struct_fields: std.AutoHashMapUnmanaged(InternPool.Index, []const GeneratedField) = .empty,
 /// Standard-library reflection types are independent of caller specialization.
 std_builtin_types: std.StringHashMapUnmanaged(Type) = .empty,
+/// Active generic/display maps are immutable throughout ordinary recursive
+/// resolution, so their order-independent digests can be reused between keys.
+specialization_binding_hashes: specialization_cache.BindingHashCache = .{},
 
 /// handle of the doc where the request originated
 root_handle: ?*DocumentStore.Handle,
@@ -12948,6 +12951,7 @@ fn materializeContainerDisplayBindings(analyser: *Analyser, container: Type) Err
     for (info.display_params.keys(), info.display_params.values()) |parameter, argument| {
         const value = try analyser.resolveComptimeDisplayArgument(parameter, argument) orelse continue;
         try bindings.put(analyser.arena, parameter, value);
+        analyser.specialization_binding_hashes.invalidateType();
     }
     info.bound_params = bindings;
     result.data = .{ .container = info };
@@ -13252,7 +13256,7 @@ fn resolveTypeOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Error
 
 fn cachedGeneratedContainerType(analyser: *Analyser, options: ResolveOptions) ?Type {
     const bindings = analyser.generic_bindings orelse return null;
-    return analyser.generated_container_types.get(GeneratedContainerTypeKey.init(
+    return analyser.generated_container_types.get(analyser.specializationKey(
         .{
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
@@ -13269,7 +13273,7 @@ fn cacheGeneratedContainerType(
     generated_type: Type,
 ) error{OutOfMemory}!void {
     const bindings = analyser.generic_bindings orelse return;
-    try analyser.generated_container_types.put(analyser.gpa, analyser.arena, GeneratedContainerTypeKey.init(
+    try analyser.generated_container_types.put(analyser.gpa, analyser.arena, analyser.specializationKey(
         .{
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
@@ -13281,6 +13285,19 @@ fn cacheGeneratedContainerType(
         else
             .empty,
     ), generated_type);
+}
+
+fn specializationKey(
+    analyser: *Analyser,
+    node: NodeWithUri,
+    container_type: ?Type,
+    bindings: TokenToTypeMap,
+    display_bindings: TokenToNodeMap,
+) GeneratedContainerTypeKey {
+    if (analyser.comptime_interpreter != null) {
+        return .init(node, container_type, bindings, display_bindings);
+    }
+    return .initCached(node, container_type, bindings, display_bindings, &analyser.specialization_binding_hashes);
 }
 
 pub fn resolveBindingOfNode(analyser: *Analyser, options: ResolveOptions) Error!?Binding {
@@ -13375,7 +13392,7 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
         };
-        const key = GeneratedContainerTypeKey.init(
+        const key = analyser.specializationKey(
             node_with_uri,
             options.container_type,
             bindings.*,
