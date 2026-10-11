@@ -319,6 +319,19 @@ test "generated Struct field falls back to its type definition" {
     );
 }
 
+test "comptime error integer roundtrip selects definition" {
+    try testDefinition(
+        \\const Wrong = struct { const selected: u16 = 0; };
+        \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
+        \\fn select() type {
+        \\    if (@errorFromInt(@intFromError(error.Failure)) == error.Failure) return Right;
+        \\    return Wrong;
+        \\}
+        \\const Choice = select();
+        \\const value = Choice.sel<>ected;
+    );
+}
+
 test "generated Struct fields navigate to reflected source names" {
     try testDefinition(
         \\const std = @import("std");

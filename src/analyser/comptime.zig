@@ -24,6 +24,10 @@ pub const Value = struct {
         reference: *Reference,
         pointee: Pointee,
         numeric_pointer: u64,
+        /// Symbolic integer identity for `@intFromError`. Zig assigns the
+        /// concrete integer globally, so ZLS only preserves the source error
+        /// value for equality and `@errorFromInt` round trips.
+        error_code: Type,
         /// Source-backed value used when an aggregate element cannot be
         /// materialized by the intern pool but can still be copied at comptime.
         expression: Analyser.NodeWithHandle,
@@ -168,6 +172,7 @@ pub const Value = struct {
             .reference => |reference| reference.hash(hasher),
             .pointee => |pointee| pointee.hash(hasher),
             .numeric_pointer => |numeric_address| std.hash.autoHash(hasher, numeric_address),
+            .error_code => |error_value| error_value.hashWithHasher(hasher),
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
                 std.hash.autoHash(hasher, node_handle.handle.uri.hash());
@@ -213,6 +218,7 @@ pub const Value = struct {
             .reference => |reference| return reference.eql(other.data.reference.*),
             .pointee => |pointee| return pointee.eql(other.data.pointee),
             .numeric_pointer => |numeric_address| return numeric_address == other.data.numeric_pointer,
+            .error_code => |error_value| return error_value.eql(other.data.error_code),
             .expression => |node_handle| return node_handle.eql(other.data.expression),
         }
         return true;
@@ -241,6 +247,7 @@ pub const Value = struct {
                     inline else => |item| isKnown(item, analyser, depth + 1),
                 },
                 .reference, .pointee, .numeric_pointer => true,
+                .error_code => |error_value| isKnown(error_value, analyser, depth + 1),
                 .expression => false,
             },
             else => value.is_type_val,
@@ -808,6 +815,8 @@ pub const Interpreter = struct {
                 if ((name.len == "@addrSpaceCast".len and std.mem.eql(u8, name, "@addrSpaceCast")) or
                     std.mem.eql(u8, name, "@alignCast") or
                     std.mem.eql(u8, name, "@atomicLoad") or
+                    std.mem.eql(u8, name, "@errorFromInt") or
+                    std.mem.eql(u8, name, "@intFromError") or
                     std.mem.eql(u8, name, "@intFromPtr") or
                     std.mem.eql(u8, name, "@ptrFromInt")) return true;
             },
@@ -2564,6 +2573,20 @@ pub const Interpreter = struct {
                     const operand = try self.eval(handle, params[0]) orelse return null;
                     return self.analyser.resolveComptimeIntFromBoolValue(operand);
                 }
+                if (std.mem.eql(u8, name, "@intFromError")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    return self.intFromErrorValue(operand);
+                }
+                if (std.mem.eql(u8, name, "@errorFromInt")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 1) return null;
+                    const operand = try self.eval(handle, params[0]) orelse return null;
+                    return self.errorFromIntValue(operand);
+                }
                 if (std.mem.eql(u8, name, "@intFromPtr")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
@@ -4232,6 +4255,24 @@ pub const Interpreter = struct {
         return Type.fromIP(self.analyser, destination_type, casted);
     }
 
+    fn intFromErrorValue(self: *Interpreter, value: Type) Error!?Type {
+        const result_type = Type.fromIP(self.analyser, .type_type, .u16_type);
+        const anyerror_type = Type.fromIP(self.analyser, .type_type, .anyerror_type);
+        const error_value = try self.errorSetCastValue(anyerror_type, value) orelse return null;
+        if (!self.isErrorValue(error_value)) return result_type.instanceTypeVal(self.analyser);
+        return @as(?Type, try Value.create(self.analyser, result_type, .{ .error_code = error_value }));
+    }
+
+    fn errorFromIntValue(self: *Interpreter, value: Type) Error!?Type {
+        const anyerror_type = Type.fromIP(self.analyser, .type_type, .anyerror_type);
+        const error_int_type = Type.fromIP(self.analyser, .type_type, .u16_type);
+        const code = try self.coerce(error_int_type, value) orelse return null;
+        if (code.data == .comptime_value and code.data.comptime_value.data == .error_code) {
+            return self.errorSetCastValue(anyerror_type, code.data.comptime_value.data.error_code);
+        }
+        return anyerror_type.instanceTypeVal(self.analyser);
+    }
+
     fn errorCastValue(self: *Interpreter, destination: Type, value: Type) Error!?Type {
         const source_type = try value.typeOf(self.analyser);
         const source_error_union = self.errorUnionTypes(source_type);
@@ -5547,6 +5588,7 @@ pub const Interpreter = struct {
             .error_union => |result| switch (result) {
                 inline else => |item| self.containsOwnedReference(item, depth + 1),
             },
+            .error_code => |error_value| self.containsOwnedReference(error_value, depth + 1),
             .numeric_pointer, .expression => false,
         };
     }

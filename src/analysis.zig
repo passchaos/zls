@@ -9804,6 +9804,16 @@ fn resolveComparisonValue(
     const lhs_index = lhs.ipIndex();
     const rhs_index = rhs.ipIndex();
     if (tag == .equal_equal or tag == .bang_equal) {
+        if (lhs.data == .comptime_value and rhs.data == .comptime_value and
+            lhs.data.comptime_value.data == .error_code and
+            rhs.data.comptime_value.data == .error_code)
+        {
+            return analyser.resolveComparisonValue(
+                tag,
+                lhs.data.comptime_value.data.error_code,
+                rhs.data.comptime_value.data.error_code,
+            );
+        }
         if (comptime_eval.Value.pointerIdentityEql(analyser, lhs, rhs)) |equal| {
             return Type.fromIP(
                 analyser,

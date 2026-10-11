@@ -22299,6 +22299,36 @@ test "comptime address-space casts preserve pointer identity" {
     });
 }
 
+test "comptime error integer conversions preserve symbolic identity" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    var restored: usize = 2;
+        \\    if (@errorFromInt(@intFromError(error.Failure)) == error.Failure) restored = 1;
+        \\    var same: usize = 4;
+        \\    if (@intFromError(error.Failure) == @intFromError(error.Failure)) same = 3;
+        \\    var distinct: usize = 6;
+        \\    if (@intFromError(error.Failure) != @intFromError(error.Other)) distinct = 5;
+        \\    return struct { restored: [restored]u8, same: [same]u8, distinct: [distinct]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "restored", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "same", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "distinct", .kind = .Field, .detail = "[5]u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var size: usize = 2;
+        \\    if (@errorFromInt(@as(u16, 1)) == error.Failure) size = 1;
+        \\    return struct { items: [size]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime field parent pointers preserve identity" {
     try testCompletion(
         \\const Record = struct { first: usize, second: usize };

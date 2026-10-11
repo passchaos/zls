@@ -542,3 +542,17 @@ and `@intFromPtr` after an address-space change. The complete integration audit
 passed all 661 exact definition destinations and 1,626 completion edits.
 Baseline binary SHA-256: `75f9abaa2728cc2c9a6e764aa0fec41611191c8e42fc33ea11b322f4895e0c50`.
 Candidate binary SHA-256: `dec5e68bbb3c681752b3fa3795fbbb3416f3652ef4fa09ada08fee77ee107edd`.
+
+## Comptime error-integer round trips
+
+2026-10-11, Zig 0.16.0. The comptime interpreter now represents
+`@intFromError` results symbolically instead of guessing Zig's compilation-global
+error number assignment. This permits same/different error-code comparisons and
+lossless `@errorFromInt(@intFromError(error.Name))` round trips while keeping a
+bare integer passed to `@errorFromInt` unknown.
+
+All 1,271 ZLS tests and all 17 zigraft tests passed. The new LSP regressions
+cover generated-type completion, exact definition selection, symbolic equality,
+symbolic inequality, and the unknown bare-integer boundary. The complete
+integration audit passed all 661 exact definition destinations and 1,626
+completion edits across 698 scanned elements.
