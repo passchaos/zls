@@ -22272,6 +22272,33 @@ test "comptime pointer casts preserve address identity" {
     });
 }
 
+test "comptime address-space casts preserve pointer identity" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const source: *addrspace(.gs) const u8 = @ptrFromInt(16);
+        \\    const changed: *addrspace(.fs) const u8 = @addrSpaceCast(source);
+        \\    const roundtrip: *addrspace(.gs) const u8 = @addrSpaceCast(changed);
+        \\    const optional_source: ?*addrspace(.gs) const u8 = source;
+        \\    const optional_changed: ?*addrspace(.fs) const u8 = @addrSpaceCast(optional_source);
+        \\    const absent_source: ?*addrspace(.gs) const u8 = null;
+        \\    const absent_changed: ?*addrspace(.fs) const u8 = @addrSpaceCast(absent_source);
+        \\    var identity: usize = 2;
+        \\    if (@intFromPtr(changed) == 16 and roundtrip == source) identity = 1;
+        \\    var optional_identity: usize = 4;
+        \\    if (optional_changed.? == changed) optional_identity = 3;
+        \\    var absent: usize = 6;
+        \\    if (absent_changed == null) absent = 5;
+        \\    return struct { identity: [identity]u8, optional_identity: [optional_identity]u8, absent: [absent]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "identity", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "optional_identity", .kind = .Field, .detail = "[3]u8" },
+        .{ .label = "absent", .kind = .Field, .detail = "[5]u8" },
+    });
+}
+
 test "comptime field parent pointers preserve identity" {
     try testCompletion(
         \\const Record = struct { first: usize, second: usize };

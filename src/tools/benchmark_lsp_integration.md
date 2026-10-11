@@ -518,3 +518,27 @@ was retained:
 
 The experiments also confirmed that their response hashes matched the baseline,
 so the rejection is performance-based rather than caused by semantic drift.
+
+## Comptime address-space cast values
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`fa347359`. The candidate preserves reference, sequence, optional, and numeric
+pointer identity through Zig 0.16 `@addrSpaceCast` when the destination type is
+supplied by the result location. Pointer compatibility still checks size,
+element type, qualifiers, alignment, packed offsets, and requires the address
+space to change. Calls without a result type continue through ordinary type
+analysis because Zig cannot infer their destination address space.
+
+Two runs reverse process startup and request order. Each process excludes 20
+warmups and records 500 requests per case, for 1,000 combined samples. All
+response hashes match. The geometric mean across the 16 existing integration
+requests is `0.9956x`; multi-millisecond requests remain within 0.4%, while the
+largest absolute change is 7.5 us on package-import completion. This small code
+layout cost is accepted for the newly supported comptime value semantics.
+
+All 1,269 ZLS tests and all 17 zigraft tests passed. The new regression covers
+numeric pointers, optional pointer payloads, null preservation, round trips,
+and `@intFromPtr` after an address-space change. The complete integration audit
+passed all 661 exact definition destinations and 1,626 completion edits.
+Baseline binary SHA-256: `75f9abaa2728cc2c9a6e764aa0fec41611191c8e42fc33ea11b322f4895e0c50`.
+Candidate binary SHA-256: `dec5e68bbb3c681752b3fa3795fbbb3416f3652ef4fa09ada08fee77ee107edd`.

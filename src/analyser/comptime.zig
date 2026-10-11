@@ -805,7 +805,8 @@ pub const Interpreter = struct {
             .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
                 const name = tree.tokenSlice(tree.nodeMainToken(node));
-                if (std.mem.eql(u8, name, "@alignCast") or
+                if ((name.len == "@addrSpaceCast".len and std.mem.eql(u8, name, "@addrSpaceCast")) or
+                    std.mem.eql(u8, name, "@alignCast") or
                     std.mem.eql(u8, name, "@atomicLoad") or
                     std.mem.eql(u8, name, "@intFromPtr") or
                     std.mem.eql(u8, name, "@ptrFromInt")) return true;
@@ -3689,6 +3690,7 @@ pub const Interpreter = struct {
                 .increase_alignment
             else
                 null;
+            const is_addr_space_cast = name.len == "@addrSpaceCast".len and std.mem.eql(u8, name, "@addrSpaceCast");
             if (is_field_parent) {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
@@ -3707,7 +3709,9 @@ pub const Interpreter = struct {
                     .source_node = null,
                 };
             }
-            if (kind != null or is_splat or is_enum or is_error or is_pointer or is_pointer_from_int or qualifier_cast != null) {
+            if (kind != null or is_splat or is_enum or is_error or is_pointer or is_pointer_from_int or
+                qualifier_cast != null or is_addr_space_cast)
+            {
                 if (!self.tick()) return null;
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
@@ -3729,6 +3733,8 @@ pub const Interpreter = struct {
                     try self.errorCastValue(result_type, operand)
                 else if (is_pointer_from_int)
                     try self.pointerFromIntValue(ty, operand)
+                else if (is_addr_space_cast)
+                    try self.pointerCastValue(ty, operand, .change_address_space)
                 else
                     try self.pointerCastValue(ty, operand, qualifier_cast);
                 return .{ .value = value orelse return null, .source_node = null };

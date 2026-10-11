@@ -17505,7 +17505,7 @@ pub const Type = struct {
         return self.isStructType(analyser) and analyser.containerTypeLayout(self) == .@"packed";
     }
 
-    pub const PointerQualifierCast = enum { discard_const, discard_volatile, increase_alignment };
+    pub const PointerQualifierCast = enum { discard_const, discard_volatile, increase_alignment, change_address_space };
 
     pub fn qualifierCastType(
         source: Type,
@@ -17535,7 +17535,7 @@ pub const Type = struct {
                 if (!flags.is_volatile) return null;
                 flags.is_volatile = false;
             },
-            .increase_alignment => return null,
+            .increase_alignment, .change_address_space => return null,
         }
         const pointer = try Type.createPointerTypeWithFlags(
             analyser,
@@ -17562,7 +17562,7 @@ pub const Type = struct {
             dest.pointer.size != src.pointer.size or
             !dest.pointer.elem_ty.eql(src.pointer.elem_ty) or
             dest.pointer.is_allowzero != src.pointer.is_allowzero or
-            dest.pointer.address_space != src.pointer.address_space or
+            (kind != .change_address_space and dest.pointer.address_space != src.pointer.address_space) or
             !std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset)) return false;
         switch (dest.pointer.size) {
             .one, .many, .slice => {},
@@ -17578,6 +17578,10 @@ pub const Type = struct {
             .increase_alignment => dest.pointer.is_const == src.pointer.is_const and
                 dest.pointer.is_volatile == src.pointer.is_volatile and
                 dest.pointer.alignment >= src.pointer.alignment,
+            .change_address_space => dest.pointer.is_const == src.pointer.is_const and
+                dest.pointer.is_volatile == src.pointer.is_volatile and
+                dest.pointer.alignment == src.pointer.alignment and
+                dest.pointer.address_space != src.pointer.address_space,
         };
     }
 
