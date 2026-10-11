@@ -513,7 +513,7 @@ pub fn isInstanceCall(
         break :blk try container_instance.typeOf(analyser);
     } else func_ty.data.function.container_type.*;
 
-    std.debug.assert(container_ty.is_type_val);
+    if (!container_ty.is_type_val) return false;
 
     return analyser.firstParamIs(func_ty, container_ty);
 }
@@ -13102,7 +13102,10 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
     }
 
     if (analyser.comptime_interpreter) |interpreter| {
-        if (!interpreter.enterExpression()) return null;
+        // An analyser fallback adds substantially more native stack frames
+        // than an interpreter-only expression. Keep that nested path tighter
+        // while leaving the interpreter's normal expression budget unchanged.
+        if (!interpreter.enterExpressionWithLimit(16)) return null;
         defer interpreter.leaveExpression();
         return analyser.resolveBindingOfNodeUncached(options);
     }

@@ -54,6 +54,17 @@ test "access root scope through '@This()' builtin" {
     });
 }
 
+test "standard library member completion stays within comptime analysis depth" {
+    try testCompletionWithOptions(
+        \\const std = @import("std");
+        \\test {
+        \\    try std.testing.expect<cursor>(true);
+        \\}
+    , &.{
+        .{ .label = "expect", .kind = .Function },
+    }, .{ .allow_additional_completions = true });
+}
+
 test "root scope with self referential decl" {
     try testCompletion(
         \\const foo = foo;

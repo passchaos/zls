@@ -1806,7 +1806,11 @@ pub const Interpreter = struct {
     }
 
     pub fn enterExpression(self: *Interpreter) bool {
-        if (self.pending_flow != null or self.budget.expression_depth >= 128 or !self.tick()) return false;
+        return self.enterExpressionWithLimit(128);
+    }
+
+    pub fn enterExpressionWithLimit(self: *Interpreter, max_depth: usize) bool {
+        if (self.pending_flow != null or self.budget.expression_depth >= max_depth or !self.tick()) return false;
         self.budget.expression_depth += 1;
         return true;
     }
