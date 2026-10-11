@@ -46,7 +46,9 @@ resolved_enum_literals: std.HashMapUnmanaged(EnumLiteralCacheKey, ?DeclWithHandl
 comptime_interpreter_needed: std.HashMapUnmanaged(NodeWithUri, bool, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_sources: std.AutoHashMapUnmanaged(InternPool.Index, []const SequentialEnumSource) = .empty,
-resolving_specialized_nodes: NodeSet = .empty,
+/// Active specialized resolutions form a strict call stack. A short linear
+/// scan avoids allocating and hashing a separate set on every request.
+resolving_specialized_nodes: std.ArrayList(NodeWithUri) = .empty,
 collect_callsite_references: bool,
 callsite_reference_depth: u8,
 /// avoid unnecessarily parsing number literals
@@ -13403,12 +13405,17 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
         cached.value_ptr.* = null;
         errdefer _ = analyser.resolved_specialized_nodes.remove(key);
 
-        const gop = try analyser.resolving_specialized_nodes.getOrPut(analyser.gpa, node_with_uri);
-        if (gop.found_existing) {
-            _ = analyser.resolved_specialized_nodes.remove(key);
-            return null;
+        for (analyser.resolving_specialized_nodes.items) |resolving| {
+            if (resolving.node == node_with_uri.node and resolving.uri.eql(node_with_uri.uri)) {
+                _ = analyser.resolved_specialized_nodes.remove(key);
+                return null;
+            }
         }
-        defer std.debug.assert(analyser.resolving_specialized_nodes.remove(node_with_uri));
+        try analyser.resolving_specialized_nodes.append(analyser.gpa, node_with_uri);
+        defer {
+            const finished = analyser.resolving_specialized_nodes.pop().?;
+            std.debug.assert(finished.node == node_with_uri.node and finished.uri.eql(node_with_uri.uri));
+        }
         const binding = try analyser.resolveBindingOfNodeUncached(options);
         analyser.resolved_specialized_nodes.getPtr(key).?.* = binding;
         return binding;

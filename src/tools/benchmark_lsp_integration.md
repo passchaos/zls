@@ -351,3 +351,47 @@ A separate 1,000-sample experiment that only bypassed equality work for maps
 sharing storage measured a `1.000x` overall geometric mean and was not retained.
 Baseline binary SHA-256: `00c6460fe4da9e8bc6d6065b2e3fd9bea81b586e65fa0f8c12c07a9dced34b0f`.
 Candidate binary SHA-256: `ef2310b5550d7b0303a9d90a84ce2a16b219473be60bfe4119933408123e3526`.
+
+## Stack-based specialization recursion guard
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`c317d08d` includes active binding digest reuse. Specialized resolutions are
+synchronous and strictly nested, but the baseline tracked their active source
+nodes in a hash set. The candidate uses a short LIFO stack: it scans only the
+currently active recursion depth, appends before uncached resolution, and
+asserts that the same node is popped on every exit path. This removes hash-table
+allocation, growth, and URI hashing from the recursion guard.
+
+Two runs reverse process startup and request order. Each process excludes 20
+warmups per request and records 500 measured requests; the table reports the
+median of each binary's 1,000 combined samples. All response hashes match
+between binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 3271.85 | 3168.71 | 1.033x |
+| definition | comptime_method | 3374.73 | 3268.35 | 1.033x |
+| completion | generated_binding | 582.44 | 574.15 | 1.014x |
+| definition | generated_binding | 542.42 | 540.04 | 1.004x |
+| completion | generic_return_method | 2709.04 | 2619.15 | 1.034x |
+| definition | generic_return_method | 327.46 | 324.38 | 1.010x |
+| completion | generated_capability | 1156.19 | 1150.19 | 1.005x |
+| definition | generated_capability | 1159.02 | 1156.98 | 1.002x |
+| completion | dynamic_initializer | 3931.08 | 3782.71 | 1.039x |
+| definition | dynamic_initializer | 519.90 | 518.94 | 1.002x |
+| completion | standard_library | 5550.29 | 5542.44 | 1.001x |
+| definition | standard_library | 38.46 | 38.19 | 1.007x |
+| completion | reflection_member | 65.06 | 65.25 | 0.997x |
+| definition | reflection_member | 60.21 | 60.17 | 1.001x |
+| completion | package_import | 168.10 | 177.94 | 0.945x |
+| definition | package_import | 27.81 | 28.08 | 0.990x |
+
+The geometric mean speedup across all 16 requests is `1.007x`. The expensive
+comptime/generic completions improve by 3.3-3.9%. The package-import completion
+change is ten microseconds on a sub-180 us request.
+
+All 1,267 ZLS tests and all 17 zigraft tests passed. Recursive generic tests
+exercise the guard directly, and the complete integration audit passed all 661
+exact definition destinations and 1,626 completion edits.
+Baseline binary SHA-256: `ef2310b5550d7b0303a9d90a84ce2a16b219473be60bfe4119933408123e3526`.
+Candidate binary SHA-256: `69970cab0a051709f24239b0ac2269a4f0acec39730e7d3b6cf8f0fffa24b7dc`.
