@@ -1683,10 +1683,12 @@ fn createCompletionPrefixSource(
     var tokenizer: std.zig.Tokenizer = .init(token_source);
     var delimiters: std.ArrayList(std.zig.Token.Tag) = .empty;
     var last_tag: std.zig.Token.Tag = .eof;
+    var previous_tag: std.zig.Token.Tag = .eof;
     var continue_delimiter_depth: ?usize = null;
     while (true) {
         const token = tokenizer.next();
         if (token.tag == .eof) break;
+        previous_tag = last_tag;
         last_tag = token.tag;
         switch (token.tag) {
             .l_paren, .l_bracket, .l_brace => try delimiters.append(arena, token.tag),
@@ -1717,9 +1719,13 @@ fn createCompletionPrefixSource(
         }
     }
 
+    const completing_struct_field = last_tag == .period and
+        delimiters.getLastOrNull() == .l_brace and
+        (previous_tag == .l_brace or previous_tag == .comma);
     switch (last_tag) {
         .period, .period_asterisk => {
             try source.appendSlice(arena, "__zls_completion");
+            if (completing_struct_field) try source.appendSlice(arena, " = undefined");
             if (has_trailing_comma and delimiters.items.len != 0) try source.append(arena, ',');
         },
         else => {},
@@ -1727,6 +1733,7 @@ fn createCompletionPrefixSource(
 
     var inserted_statement_terminator = has_trailing_comma and delimiters.items.len != 0;
     var delimiter_index = delimiters.items.len;
+    var close_struct_initializer = completing_struct_field;
     if (last_tag == .period) {
         if (continue_delimiter_depth) |outer_depth| {
             if (outer_depth < delimiter_index) {
@@ -1745,6 +1752,11 @@ fn createCompletionPrefixSource(
         switch (delimiter) {
             .l_paren, .l_bracket => try source.append(arena, closingDelimiter(delimiter)),
             .l_brace => {
+                if (close_struct_initializer) {
+                    close_struct_initializer = false;
+                    try source.append(arena, '}');
+                    continue;
+                }
                 if (!inserted_statement_terminator) {
                     try source.append(arena, ';');
                     inserted_statement_terminator = true;
@@ -2382,10 +2394,17 @@ fn collectContainerNodes(
     switch (handle.tree.nodeTag(nodes[0])) {
         .field_access => {
             if (try builder.analyser.resolveTypeOfNode(.of(nodes[0], handle))) |resolved| {
-                const ty = if (dot_context.need_ret_type)
+                var ty = try builder.analyser.specializeFunctionTypeAtCallPrefix(
+                    handle,
+                    builder.source_index,
+                    offsets.nodeToLoc(&handle.tree, nodes[0]),
+                    dot_context.fn_arg_index,
+                    resolved,
+                );
+                ty = if (dot_context.need_ret_type)
                     try builder.analyser.specializeFunctionTypeAtCall(handle, source_index -| 1, null, resolved)
                 else
-                    resolved;
+                    ty;
                 try collectFieldAccessTypes(builder, dot_context, ty, &types_with_handles);
                 return types_with_handles.keys();
             }
@@ -2475,6 +2494,13 @@ fn collectVarAccessContainerNodes(
     };
     const result = try symbol_decl.resolveType(analyser) orelse return;
     var type_expr = try analyser.resolveDerefType(result) orelse result;
+    type_expr = try analyser.specializeFunctionTypeAtCallPrefix(
+        handle,
+        builder.source_index,
+        loc,
+        dot_context.fn_arg_index,
+        type_expr,
+    );
     if (dot_context.need_ret_type) {
         type_expr = try analyser.specializeFunctionTypeAtCall(handle, loc.end -| 1, null, type_expr);
     }
@@ -2610,6 +2636,13 @@ fn collectFieldAccessContainerNodes(
     const decls = try analyser.getSymbolFieldAccesses(arena, handle, loc.end, loc, name) orelse return;
     for (decls) |decl| {
         var ty = try decl.resolveType(analyser) orelse continue;
+        ty = try analyser.specializeFunctionTypeAtCallPrefix(
+            handle,
+            builder.source_index,
+            loc,
+            dot_context.fn_arg_index,
+            ty,
+        );
         if (dot_context.need_ret_type) {
             ty = try analyser.specializeFunctionTypeAtCall(handle, loc.end -| 1, null, ty);
         }

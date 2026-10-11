@@ -386,6 +386,28 @@ test "inferred struct init" {
     );
 }
 
+test "struct init field through dependent generic call parameter" {
+    try testHover(
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\const implementation = struct {
+        \\    fn make(comptime C: type, comptime associated: C.Associated) void {
+        \\        _ = associated;
+        \\    }
+        \\};
+        \\const api = struct { const make = implementation.make; };
+        \\comptime { api.make(Contract, .{ .Err<cursor>or = anyerror }); }
+    ,
+        \\```zig
+        \\Error: type = anyerror
+        \\```
+        \\```zig
+        \\(type)
+        \\```
+    );
+}
+
 test "decl literal" {
     try testHover(
         \\const S = struct {

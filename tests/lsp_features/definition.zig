@@ -102,6 +102,21 @@ test "inferred struct init" {
     );
 }
 
+test "struct init field through dependent generic call parameter" {
+    try testDefinition(
+        \\const Contract = struct {
+        \\    const Associated = struct { <def><decl>Error</decl></def>: <tdef>type</tdef> = anyerror };
+        \\};
+        \\const implementation = struct {
+        \\    fn make(comptime C: type, comptime associated: C.Associated) void {
+        \\        _ = associated;
+        \\    }
+        \\};
+        \\const api = struct { const make = implementation.make; };
+        \\comptime { api.make(Contract, .{ .<>Error = anyerror }); }
+    );
+}
+
 test "field access" {
     try testDefinition(
         \\const S = struct { <def><decl>alpha</decl></def>: <tdef>u32</tdef> };

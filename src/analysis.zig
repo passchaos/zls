@@ -503,6 +503,9 @@ pub fn isInstanceCall(
     const container_node, const field_token = call_handle.tree.nodeData(call.ast.fn_expr).node_and_token;
 
     const container_ty = if (try analyser.resolveTypeOfNodeInternal(.of(container_node, call_handle))) |container_instance| blk: {
+        // Calling a declaration through a namespace/type never supplies an
+        // implicit receiver, even when its first parameter is itself generic.
+        if (container_instance.is_type_val) return false;
         const member_container = try analyser.resolveDerefType(container_instance) orelse container_instance;
         const field_name = try analyser.identifierTokenName(&call_handle.tree, field_token) orelse return false;
         if (try member_container.lookupSymbol(analyser, field_name)) |member| {
@@ -12021,6 +12024,10 @@ fn isAggregateComptimeArgument(tree: *const Ast, node: Ast.Node.Index) bool {
         .array_init_dot_comma,
         .array_init,
         .array_init_comma,
+        .struct_init_dot_two,
+        .struct_init_dot_two_comma,
+        .struct_init_dot,
+        .struct_init_dot_comma,
         .struct_init,
         .struct_init_comma,
         .struct_init_one,
@@ -12217,6 +12224,20 @@ pub fn resolveFunctionTypeFromCall(
     call: Ast.full.Call,
     func_ty: Type,
 ) Error!Type {
+    return analyser.resolveFunctionTypeFromCallPrefix(handle, call, func_ty, call.ast.params.len);
+}
+
+/// Specializes a function using only arguments before `argument_count`.
+/// This is used while deriving the expected type of an aggregate argument:
+/// evaluating that same aggregate to specialize its own parameter would form
+/// a cycle, while earlier parameters may already provide every dependency.
+fn resolveFunctionTypeFromCallPrefix(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    call: Ast.full.Call,
+    func_ty: Type,
+    argument_count: usize,
+) Error!Type {
     const func_info = func_ty.data.function;
     const func_tree = &func_info.handle.tree;
     const can_evaluate_type_function = func_ty.isTypeFunc() and
@@ -12242,7 +12263,7 @@ pub fn resolveFunctionTypeFromCall(
         try analyser.isInstanceCall(handle, call, func_ty);
 
     const parameters = func_info.parameters[@intFromBool(has_self_param)..];
-    const arguments = call.ast.params;
+    const arguments = call.ast.params[0..@min(argument_count, call.ast.params.len)];
     const min_len = @min(parameters.len, arguments.len);
     var has_callsite_bindings = false;
     for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
@@ -12467,6 +12488,7 @@ pub fn resolveFunctionTypeFromCall(
         }
     }
 
+    if (arguments.len != call.ast.params.len) return resolved;
     return analyser.applySelectedFieldEnumMethod(handle, call, resolved);
 }
 
@@ -12516,6 +12538,31 @@ pub fn specializeFunctionTypeAtCall(
         } else if (absolute_index < fn_loc.start or absolute_index > fn_loc.end) continue;
 
         return analyser.specializeFunctionTypeForCall(handle, call, ty);
+    }
+    return ty;
+}
+
+/// Specializes a callable at its surrounding call using only arguments before
+/// `argument_count`. Completion uses this for the expected type of the current
+/// argument, which may not be syntactically complete yet.
+pub fn specializeFunctionTypeAtCallPrefix(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    absolute_index: usize,
+    expression_loc: ?offsets.Loc,
+    argument_count: usize,
+    ty: Type,
+) Error!Type {
+    const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(analyser.arena, &handle.tree, absolute_index);
+    for (nodes) |node| {
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&buffer, node) orelse continue;
+        const fn_loc = offsets.nodeToLoc(&handle.tree, call.ast.fn_expr);
+        if (expression_loc) |expected_loc| {
+            if (fn_loc.start != expected_loc.start or fn_loc.end != expected_loc.end) continue;
+        } else if (absolute_index < fn_loc.start or absolute_index > fn_loc.end) continue;
+
+        return analyser.specializeFunctionTypeForCallPrefix(handle, call, argument_count, ty);
     }
     return ty;
 }
@@ -12580,12 +12627,22 @@ fn specializeFunctionTypeForCall(
     call: Ast.full.Call,
     ty: Type,
 ) Error!Type {
+    return analyser.specializeFunctionTypeForCallPrefix(handle, call, call.ast.params.len, ty);
+}
+
+fn specializeFunctionTypeForCallPrefix(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    call: Ast.full.Call,
+    argument_count: usize,
+    ty: Type,
+) Error!Type {
     if (ty.data == .either) {
         var candidates: std.ArrayList(Type.TypeWithDescriptor) = .empty;
         for (ty.data.either) |entry| {
             const candidate: Type = .{ .data = entry.type_data, .is_type_val = ty.is_type_val };
             try candidates.append(analyser.arena, .{
-                .type = try analyser.specializeFunctionTypeForCall(handle, call, candidate),
+                .type = try analyser.specializeFunctionTypeForCallPrefix(handle, call, argument_count, candidate),
                 .descriptor = entry.descriptor,
             });
         }
@@ -12594,7 +12651,7 @@ fn specializeFunctionTypeForCall(
     const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
     if (function.is_type_val) return ty;
     const had_self = try analyser.hasSelfParam(function);
-    var specialized = try analyser.resolveFunctionTypeFromCall(handle, call, function);
+    var specialized = try analyser.resolveFunctionTypeFromCallPrefix(handle, call, function, argument_count);
     if (had_self and !try analyser.hasSelfParam(specialized)) {
         const parameters = try analyser.arena.dupe(Type.Data.Parameter, specialized.data.function.parameters);
         parameters[0] = function.data.function.parameters[0];
@@ -20210,8 +20267,12 @@ pub fn resolveExpressionTypeFromAncestors(
             };
             if (fn_type.is_type_val) return null;
 
-            fn_type = try analyser.resolveFunctionTypeFromCall(handle, call, fn_type);
-            const has_self_param = try analyser.isInstanceCall(handle, call, fn_type);
+            fn_type = if (isAggregateComptimeArgument(tree, node))
+                try analyser.resolveFunctionTypeFromCallPrefix(handle, call, fn_type, arg_index)
+            else
+                try analyser.resolveFunctionTypeFromCall(handle, call, fn_type);
+            const has_self_param = call.ast.params.len + 1 == fn_type.data.function.parameters.len and
+                try analyser.isInstanceCall(handle, call, fn_type);
             const parameters = fn_type.data.function.parameters[@intFromBool(has_self_param)..];
             if (arg_index >= parameters.len) return null;
             const param_ty = parameters[arg_index].type;

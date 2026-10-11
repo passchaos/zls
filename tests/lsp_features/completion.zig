@@ -65,6 +65,90 @@ test "standard library member completion stays within comptime analysis depth" {
     }, .{ .allow_additional_completions = true });
 }
 
+test "struct init completion through dependent generic call parameter" {
+    try testCompletion(
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\const implementation = struct {
+        \\    fn make(comptime C: type, comptime associated: C.Associated) void {
+        \\        _ = associated;
+        \\    }
+        \\};
+        \\const api = struct { const make = implementation.make; };
+        \\comptime { api.make(Contract, .{ .<cursor> }); }
+    , &.{
+        .{ .label = "Error", .kind = .Field },
+    });
+
+    try testCompletion(
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\const implementation = struct {
+        \\    fn Model(comptime _: type, comptime _: type) type { return struct {}; }
+        \\    fn make(comptime C: type, comptime Subject: type, comptime _: Model(C, Subject), comptime associated: C.Associated, comptime _: bool) void {
+        \\        _ = associated;
+        \\    }
+        \\};
+        \\const api = struct { const make = implementation.make; };
+        \\const model = implementation.Model(Contract, u8){};
+        \\comptime {
+        \\    api.make(
+        \\        Contract,
+        \\        u8,
+        \\        model,
+        \\        .{ .<cursor> },
+        \\        true,
+        \\    );
+        \\}
+    , &.{
+        .{ .label = "Error", .kind = .Field },
+    });
+}
+
+test "struct init completion through imported dependent generic alias" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+
+    _ = try ctx.addDocument(.{ .source =
+        \\pub fn Model(comptime _: type, comptime _: type) type { return struct {}; }
+        \\pub fn make(comptime C: type, comptime Subject: type, comptime _: Model(C, Subject), comptime associated: C.Associated, comptime _: bool) void {
+        \\    _ = associated;
+        \\}
+    });
+    _ = try ctx.addDocument(.{ .source =
+        \\const implementation = @import("Untitled-0.zig");
+        \\pub const Model = implementation.Model;
+        \\pub const make = implementation.make;
+    });
+    const source =
+        \\const api = @import("Untitled-1.zig");
+        \\const Contract = struct { const Associated = struct { Error: type = anyerror }; };
+        \\const model = api.Model(Contract, u8){};
+        \\comptime {
+        \\    api.make(
+        \\        Contract,
+        \\        u8,
+        \\        model,
+        \\        .{ .<cursor> },
+        \\        true,
+        \\    );
+        \\}
+    ;
+    const cursor_idx = std.mem.find(u8, source, "<cursor>").?;
+    const text = try std.mem.concat(allocator, u8, &.{ source[0..cursor_idx], source[cursor_idx + "<cursor>".len ..] });
+    defer allocator.free(text);
+    const uri = try ctx.addDocument(.{ .source = text });
+
+    const response = (try ctx.server.sendRequestSync(ctx.arena.allocator(), "textDocument/completion", types.completion.Params{
+        .textDocument = .{ .uri = uri.raw },
+        .position = offsets.indexToPosition(source, cursor_idx, ctx.server.offset_encoding),
+    })) orelse return error.InvalidResponse;
+    const completion = try searchCompletionItemWithLabel(response.completion_list, "Error");
+    try std.testing.expectEqual(types.completion.Item.Kind.Field, completion.kind.?);
+}
+
 test "root scope with self referential decl" {
     try testCompletion(
         \\const foo = foo;
