@@ -11999,7 +11999,12 @@ fn resolveCallsiteReferences(analyser: *Analyser, decl_handle: DeclWithHandle) E
             defer analyser.collect_callsite_references = old_collect_callsite_references;
             analyser.collect_callsite_references = false;
 
-            break :resolve_ty try analyser.resolveTypeOfNode(.of(argument.node, argument.handle)) orelse continue;
+            break :resolve_ty try analyser.resolveTypeOfNode(.of(argument.node, argument.handle)) orelse
+                try analyser.resolveExpressionTypeFromAncestors(
+                    argument.handle,
+                    argument.node,
+                    &.{ref.call.node},
+                ) orelse continue;
         };
 
         const loc = offsets.tokenToPosition(&argument.handle.tree, argument.handle.tree.nodeMainToken(argument.node), .@"utf-8");
@@ -12891,7 +12896,16 @@ fn abstractSelectedMethodArguments(
     const elements = try analyser.comptimeTupleTypeElements(arguments) orelse return arguments;
     if (elements.len == 0) return arguments;
     const abstract_elements = try analyser.arena.dupe(Type, elements);
-    abstract_elements[0] = subject;
+    abstract_elements[0] = switch (subject.data) {
+        .type_parameter => |token_handle| .{
+            .data = .{ .anytype_parameter = .{
+                .token_handle = token_handle,
+                .type_from_callsite_references = null,
+            } },
+            .is_type_val = true,
+        },
+        else => subject,
+    };
     return Type.createTupleType(analyser, abstract_elements);
 }
 
@@ -16294,12 +16308,12 @@ pub const Type = struct {
                 => unreachable,
                 .type_parameter => |token_handle| {
                     const t = bound_params.get(token_handle) orelse return data;
-                    std.debug.assert(t.is_type_val);
+                    if (!t.is_type_val) return data;
                     return t.data.resolveGeneric(analyser, bound_params, visiting);
                 },
                 .anytype_parameter => |info| {
                     const t = bound_params.get(info.token_handle) orelse return data;
-                    std.debug.assert(t.is_type_val);
+                    if (!t.is_type_val) return data;
                     return t.data.resolveGeneric(analyser, bound_params, visiting);
                 },
                 .pointer => |info| {
