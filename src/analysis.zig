@@ -87,7 +87,7 @@ const ParameterWithUri = struct {
         pub fn hash(_: Context, item: ParameterWithUri) u64 {
             var hasher: std.hash.Wyhash = .init(0);
             std.hash.autoHash(&hasher, item.parameter);
-            hasher.update(item.uri.raw);
+            std.hash.autoHash(&hasher, item.uri.hash());
             return hasher.final();
         }
 
@@ -16074,7 +16074,7 @@ pub const Type = struct {
                     if (info.name != null) {
                         std.hash.autoHash(hasher, info.fn_node);
                         std.hash.autoHash(hasher, info.fn_token);
-                        hasher.update(info.handle.uri.raw);
+                        std.hash.autoHash(hasher, info.handle.uri.hash());
                         info.container_type.hashWithHasher(hasher);
                     }
                     for (info.parameters) |param| {
@@ -16087,7 +16087,7 @@ pub const Type = struct {
                 },
                 .compile_error => |node_handle| {
                     std.hash.autoHash(hasher, node_handle.node);
-                    hasher.update(node_handle.handle.uri.raw);
+                    std.hash.autoHash(hasher, node_handle.handle.uri.hash());
                 },
                 .type_parameter => |token_handle| token_handle.hashWithHasher(hasher),
                 .anytype_parameter => |info| {
@@ -18220,7 +18220,7 @@ pub const ScopeWithHandle = struct {
     }
 
     pub fn hashWithHasher(scope_handle: ScopeWithHandle, hasher: anytype) void {
-        hasher.update(scope_handle.handle.uri.raw);
+        std.hash.autoHash(hasher, scope_handle.handle.uri.hash());
         std.hash.autoHash(hasher, scope_handle.scope);
     }
 
@@ -18409,7 +18409,7 @@ pub const NodeWithUri = struct {
             _ = self;
             var hasher: std.hash.Wyhash = .init(0);
             std.hash.autoHash(&hasher, item.node);
-            hasher.update(item.uri.raw);
+            std.hash.autoHash(&hasher, item.uri.hash());
             return hasher.final();
         }
 
@@ -18431,7 +18431,7 @@ const EnumLiteralCacheKey = struct {
     const Context = struct {
         pub fn hash(_: Context, key: EnumLiteralCacheKey) u64 {
             var hasher: std.hash.Wyhash = .init(0);
-            hasher.update(key.uri.raw);
+            std.hash.autoHash(&hasher, key.uri.hash());
             std.hash.autoHash(&hasher, key.source_index);
             hasher.update(key.name);
             specialization_cache.hashTypeBindings(&hasher, key.bindings);
@@ -19250,7 +19250,7 @@ pub const TokenWithHandle = struct {
 
     pub fn hashWithHasher(token_handle: TokenWithHandle, hasher: anytype) void {
         std.hash.autoHash(hasher, token_handle.token);
-        hasher.update(token_handle.handle.uri.raw);
+        std.hash.autoHash(hasher, token_handle.handle.uri.hash());
     }
 
     pub fn eql(a: TokenWithHandle, b: TokenWithHandle) bool {
@@ -20991,7 +20991,7 @@ pub const ReferencedType = struct {
             _ = self;
             var hasher: std.hash.Wyhash = .init(0);
             hasher.update(item.str);
-            hasher.update(item.handle.uri.raw);
+            std.hash.autoHash(&hasher, item.handle.uri.hash());
             hasher.update(&std.mem.toBytes(item.token));
             return @truncate(hasher.final());
         }

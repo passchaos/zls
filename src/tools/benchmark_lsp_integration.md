@@ -216,3 +216,47 @@ of caller bindings after builtin reflection lookup. The actual LSP integration
 audit passed all 661 exact destinations and 1,626 completion edits.
 Baseline binary SHA-256: `bcc2f6454599db93c6e3abc0345cdf28703da95b346dd6aa3a7e5a868f3aba01`.
 Candidate binary SHA-256: `926896420a6dbc75bca54985f2e4b59af439501de353a7ffa75bef0f92f39ed6`.
+
+## Cached normalized URI hashes
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`2a6b6208` includes the smaller specialization tables above. Sampling the full
+integration workload still showed repeated Wyhash work in node, token, type,
+comptime-value, and specialization keys. All of those keys refer to normalized
+URIs, so the candidate computes the URI hash once when the URI is created and
+reuses it when composing higher-level hashes. Equality continues to compare the
+complete normalized URI, and directly constructed URIs fall back to computing
+the same hash on demand.
+
+Two runs reverse process startup and request order. Each process excludes ten
+warmups per request and records 100 measured requests; the table reports the
+median of each binary's 200 combined samples. All response hashes match between
+binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 3772.94 | 3522.90 | 1.071x |
+| definition | comptime_method | 3746.77 | 3585.33 | 1.045x |
+| completion | generated_binding | 620.17 | 599.92 | 1.034x |
+| definition | generated_binding | 602.60 | 570.83 | 1.056x |
+| completion | generic_return_method | 3074.96 | 2899.98 | 1.060x |
+| definition | generic_return_method | 349.19 | 332.46 | 1.050x |
+| completion | generated_capability | 1207.83 | 1164.75 | 1.037x |
+| definition | generated_capability | 1209.62 | 1171.15 | 1.033x |
+| completion | dynamic_initializer | 4312.31 | 4158.50 | 1.037x |
+| definition | dynamic_initializer | 564.92 | 544.00 | 1.038x |
+| completion | standard_library | 5552.42 | 5551.35 | 1.000x |
+| definition | standard_library | 39.69 | 37.98 | 1.045x |
+| completion | reflection_member | 63.56 | 63.38 | 1.003x |
+| definition | reflection_member | 61.23 | 60.81 | 1.007x |
+| completion | package_import | 230.08 | 237.92 | 0.967x |
+| definition | package_import | 27.46 | 27.81 | 0.987x |
+
+The geometric mean speedup across all 16 requests is `1.029x`. The comptime
+method and generic-return paths improve by 4.5-7.1%; the two sub-250 us package
+import requests remain small and noisy, with the completion median 3.3% slower.
+
+All 1,265 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits.
+Baseline binary SHA-256: `a3b47a2fb42a9b5f200ce030f10889fb0d87c8fdd14e0ebf351bfcbebafc2d1a`.
+Candidate binary SHA-256: `569b538860d7400ee00db844de28141208dbd532fe5828fde4f78cc75e479c03`.

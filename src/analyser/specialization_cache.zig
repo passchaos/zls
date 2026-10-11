@@ -119,7 +119,7 @@ pub fn hashDisplayBindings(hasher: anytype, bindings: TokenToNodeMap) void {
         var binding_hasher: std.hash.Wyhash = .init(0);
         token_handle.hashWithHasher(&binding_hasher);
         std.hash.autoHash(&binding_hasher, node_handle.node);
-        binding_hasher.update(node_handle.handle.uri.raw);
+        std.hash.autoHash(&binding_hasher, node_handle.handle.uri.hash());
         bindings_hash ^= binding_hasher.final();
     }
     std.hash.autoHash(hasher, bindings.count());
@@ -158,7 +158,7 @@ pub const Key = struct {
     fn computeHash(key: Key) u64 {
         var hasher: std.hash.Wyhash = .init(0);
         std.hash.autoHash(&hasher, key.node.node);
-        hasher.update(key.node.uri.raw);
+        std.hash.autoHash(&hasher, key.node.uri.hash());
         if (key.container_type) |container_type| {
             hasher.update(&.{1});
             container_type.hashWithHasher(&hasher);

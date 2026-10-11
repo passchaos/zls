@@ -78,7 +78,7 @@ pub const Value = struct {
             std.hash.autoHash(hasher, self.is_static);
             if (!self.is_static) (self.root_value orelse self.value).hashWithHasher(hasher);
             std.hash.autoHash(hasher, self.source.node);
-            hasher.update(self.source.handle.uri.raw);
+            std.hash.autoHash(hasher, self.source.handle.uri.hash());
             std.hash.autoHash(hasher, self.container_type != null);
             if (self.container_type) |container_type| container_type.hashWithHasher(hasher);
             hashPath(self.path, hasher);
@@ -170,7 +170,7 @@ pub const Value = struct {
             .numeric_pointer => |numeric_address| std.hash.autoHash(hasher, numeric_address),
             .expression => |node_handle| {
                 std.hash.autoHash(hasher, node_handle.node);
-                hasher.update(node_handle.handle.uri.raw);
+                std.hash.autoHash(hasher, node_handle.handle.uri.hash());
             },
         }
     }

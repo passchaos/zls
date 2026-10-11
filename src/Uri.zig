@@ -10,6 +10,17 @@ const Uri = @This();
 ///   - always add an authority component even if unnecessary
 ///   - remove query and fragment component
 raw: []const u8,
+/// Hash of the normalized URI. A zero value keeps directly constructed test
+/// URIs valid and falls back to computing the hash on demand.
+cached_hash: u64 = 0,
+
+fn fromOwnedRaw(raw: []const u8) Uri {
+    return .{ .raw = raw, .cached_hash = std.hash.Wyhash.hash(0, raw) };
+}
+
+pub fn hash(uri: Uri) u64 {
+    return if (uri.cached_hash != 0) uri.cached_hash else std.hash.Wyhash.hash(0, uri.raw);
+}
 
 pub fn parse(allocator: std.mem.Allocator, text: []const u8) (std.Uri.ParseError || error{OutOfMemory})!Uri {
     return try parseWithOs(allocator, text, builtin.os.tag == .windows);
@@ -88,7 +99,7 @@ fn parseWithOs(
         }
     }
 
-    return .{ .raw = try result.toOwnedSlice(allocator) };
+    return .fromOwnedRaw(try result.toOwnedSlice(allocator));
 }
 
 test "parse (posix)" {
@@ -150,7 +161,7 @@ pub fn deinit(uri: Uri, allocator: std.mem.Allocator) void {
 }
 
 pub fn dupe(uri: Uri, allocator: std.mem.Allocator) error{OutOfMemory}!Uri {
-    return .{ .raw = try allocator.dupe(u8, uri.raw) };
+    return .{ .raw = try allocator.dupe(u8, uri.raw), .cached_hash = uri.hash() };
 }
 
 pub fn eql(a: Uri, b: Uri) bool {
@@ -206,7 +217,7 @@ pub fn ArrayHashMap(comptime V: type) type {
 const Context = struct {
     pub fn hash(self: @This(), s: Uri) u32 {
         _ = self;
-        return std.array_hash_map.hashString(s.raw);
+        return @truncate(s.hash());
     }
     pub fn eql(self: @This(), a: Uri, b: Uri, b_index: usize) bool {
         _ = self;
@@ -266,7 +277,7 @@ fn fromPathWithOs(
         }
     }
 
-    return .{ .raw = try buf.toOwnedSlice(allocator) };
+    return .fromOwnedRaw(try buf.toOwnedSlice(allocator));
 }
 
 test "fromPath (posix)" {
@@ -507,7 +518,19 @@ pub fn resolveImport(
         buffer.appendSliceAssumeCapacity(joined_path);
     }
 
-    return .{ .raw = try buffer.toOwnedSlice(allocator) };
+    return .fromOwnedRaw(try buffer.toOwnedSlice(allocator));
+}
+
+test "cached hash matches directly constructed URI" {
+    const parsed = try Uri.parse(std.testing.allocator, "file:///workspace/main.zig");
+    defer parsed.deinit(std.testing.allocator);
+    const direct: Uri = .{ .raw = "file:///workspace/main.zig" };
+    try std.testing.expectEqual(parsed.cached_hash, parsed.hash());
+    try std.testing.expectEqual(parsed.hash(), direct.hash());
+
+    const duplicate = try parsed.dupe(std.testing.allocator);
+    defer duplicate.deinit(std.testing.allocator);
+    try std.testing.expectEqual(parsed.cached_hash, duplicate.cached_hash);
 }
 
 test "resolve" {
