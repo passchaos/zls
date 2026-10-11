@@ -15,6 +15,7 @@ const Uri = @import("../Uri.zig");
 const DocumentScope = @import("../DocumentScope.zig");
 const analyser_completions = @import("../analyser/completions.zig");
 const partial_calls = @import("completion_partial_call.zig");
+const recovery = @import("completion_recovery.zig");
 
 const version_data = @import("version_data");
 const snippets = @import("../snippets.zig");
@@ -28,6 +29,7 @@ const Builder = struct {
     completions: Completions,
     cached_prepare_function_completion_result: ?PrepareFunctionCompletionResult = null,
     use_snippets: bool,
+    recovering_identifier: bool = false,
 };
 
 pub const Completions = struct {
@@ -953,6 +955,20 @@ fn completeGlobal(builder: *Builder) Analyser.Error!void {
     var decls: std.ArrayList(Analyser.DeclWithHandle) = .empty;
     try builder.analyser.collectAllSymbolsAtSourceIndex(builder.orig_handle, builder.source_index, &decls);
     for (decls.items) |decl_with_handle| {
+        // A placeholder makes malformed initializers syntactically valid.
+        // Keep their enclosing variables hidden while filling that hole;
+        // actual container declarations can still refer to themselves.
+        if (builder.recovering_identifier and decl_with_handle.decl == .ast_node) {
+            const tree = &decl_with_handle.handle.tree;
+            const node = decl_with_handle.decl.ast_node;
+            if (tree.fullVarDecl(node)) |decl| {
+                const loc = offsets.nodeToLoc(tree, node);
+                if (loc.start <= builder.source_index and builder.source_index <= loc.end) {
+                    const init_node = decl.ast.init_node.unwrap() orelse continue;
+                    if (!ast.isContainer(tree, init_node)) continue;
+                }
+            }
+        }
         try declToCompletion(builder, decl_with_handle);
     }
     try populateSnippedCompletions(builder, .generic);
@@ -1040,7 +1056,7 @@ fn collectUsedMembersSet(builder: *Builder, likely: EnumLiteralContext.Likely, d
 
     var depth: usize = 0;
     var i: Ast.TokenIndex = @max(dot_token_index, 2);
-    while (i > 0) : (i -= 1) {
+    while (i >= 2) : (i -= 1) {
         switch (tree.tokenTag(i)) {
             .r_brace => {
                 depth += 1;
@@ -1514,10 +1530,23 @@ pub fn completionAtIndex(
     handle: *DocumentStore.Handle,
     source_index: usize,
 ) Analyser.Error!?types.completion.List {
-    const regular_completion = try completionAtIndexInternal(server, analyser, arena, handle, source_index);
+    const regular_completion = try completionAtIndexInternal(server, analyser, arena, handle, source_index, false);
     if (handle.tree.errors.len == 0) return regular_completion;
 
     const pos_context = try Analyser.getPositionContext(arena, &handle.tree, source_index, false);
+    const following_source = std.mem.trimStart(u8, handle.tree.source[source_index..], " \t\r\n");
+    const missing_callee = (pos_context == .enum_literal or pos_context == .field_access) and std.mem.startsWith(u8, following_source, "(");
+    if ((regular_completion == null or pos_context == .var_access or pos_context == .empty or missing_callee) and
+        (source_index == 0 or !offsets.isSymbolChar(handle.tree.source[source_index - 1])) and
+        (source_index == handle.tree.source.len or !offsets.isSymbolChar(handle.tree.source[source_index])))
+    {
+        switch (pos_context) {
+            .field_access, .enum_literal, .var_access, .empty => {
+                if (try completionWithIdentifierSnapshot(server, arena, handle, source_index)) |completed| return completed;
+            },
+            else => {},
+        }
+    }
     const call_result_field_access = switch (pos_context) {
         .field_access => |loc| std.mem.indexOfScalar(u8, offsets.locToSlice(handle.tree.source, loc), ')') != null,
         else => false,
@@ -1546,6 +1575,7 @@ fn completionAtIndexInternal(
     arena: std.mem.Allocator,
     handle: *DocumentStore.Handle,
     source_index: usize,
+    recovering_identifier: bool,
 ) Analyser.Error!?types.completion.List {
     std.debug.assert(source_index <= handle.tree.source.len);
 
@@ -1555,6 +1585,7 @@ fn completionAtIndexInternal(
         .arena = arena,
         .orig_handle = handle,
         .source_index = source_index,
+        .recovering_identifier = recovering_identifier,
         .completions = .empty,
         .use_snippets = server.config_manager.config.enable_snippets and server.client_capabilities.supports_snippets,
     };
@@ -1621,6 +1652,29 @@ fn completionAtIndexInternal(
     return .{ .isIncomplete = false, .items = completions };
 }
 
+/// Fill an empty expression/member slot so the AST keeps lexical scopes,
+/// switch captures, chained accesses, and declaration-literal calls intact.
+fn completionWithIdentifierSnapshot(
+    server: *Server,
+    arena: std.mem.Allocator,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+) Analyser.Error!?types.completion.List {
+    const source = try recovery.createIdentifierSource(arena, handle.tree.source, source_index);
+    var tree = try Ast.parse(arena, source, .zig);
+    defer tree.deinit(arena);
+    if (tree.errors.len != 0) return null;
+
+    var snapshot = DocumentStore.Handle.initAnalysisSnapshot(handle, tree);
+    defer snapshot.deinitAnalysisSnapshot(server.allocator);
+    var analyser = server.initAnalyser(arena, &snapshot);
+    defer analyser.deinit();
+
+    const result = try completionAtIndexInternal(server, &analyser, arena, &snapshot, source_index + recovery.identifier_placeholder.len, true) orelse return null;
+    recovery.restoreIdentifierRanges(@constCast(result.items), offsets.indexToPosition(handle.tree.source, source_index, server.offset_encoding));
+    return result;
+}
+
 /// The Zig parser can lose the current scope when valid tokens after an
 /// incomplete expression are interpreted as part of that expression. Parse a
 /// cursor-prefix snapshot so those future tokens cannot corrupt completion.
@@ -1631,7 +1685,7 @@ fn completionWithPrefixSnapshot(
     source_index: usize,
 ) Analyser.Error!?types.completion.List {
     const source = handle.tree.source;
-    const prefix_source = try createCompletionPrefixSource(arena, source, source_index);
+    const prefix_source = try recovery.createPrefixSource(arena, source, source_index);
     var prefix_tree = try Ast.parse(arena, prefix_source, .zig);
     defer prefix_tree.deinit(arena);
 
@@ -1640,7 +1694,7 @@ fn completionWithPrefixSnapshot(
     var prefix_analyser = server.initAnalyser(arena, &prefix_handle);
     defer prefix_analyser.deinit();
 
-    return try completionAtIndexInternal(server, &prefix_analyser, arena, &prefix_handle, source_index);
+    return try completionAtIndexInternal(server, &prefix_analyser, arena, &prefix_handle, source_index, false);
 }
 
 fn mergeCompletionLists(
@@ -1661,128 +1715,6 @@ fn mergeCompletionLists(
         .isIncomplete = preferred.?.isIncomplete or fallback.?.isIncomplete,
         .items = completions.items(),
     };
-}
-
-fn createCompletionPrefixSource(
-    arena: std.mem.Allocator,
-    original_source: []const u8,
-    source_index: usize,
-) error{OutOfMemory}![:0]const u8 {
-    var completion_end = source_index;
-    while (completion_end < original_source.len and offsets.isSymbolChar(original_source[completion_end])) {
-        completion_end += 1;
-    }
-    const prefix = original_source[0..completion_end];
-    const has_trailing_comma = completion_end < original_source.len and original_source[completion_end] == ',';
-
-    var source: std.ArrayList(u8) = .empty;
-    try source.appendSlice(arena, prefix);
-    for (original_source[completion_end..]) |char| {
-        try source.append(arena, if (char == '\n') '\n' else ' ');
-    }
-
-    const token_source = try arena.dupeZ(u8, prefix);
-    var tokenizer: std.zig.Tokenizer = .init(token_source);
-    var delimiters: std.ArrayList(std.zig.Token.Tag) = .empty;
-    var last_tag: std.zig.Token.Tag = .eof;
-    var previous_tag: std.zig.Token.Tag = .eof;
-    var continue_delimiter_depth: ?usize = null;
-    while (true) {
-        const token = tokenizer.next();
-        if (token.tag == .eof) break;
-        previous_tag = last_tag;
-        last_tag = token.tag;
-        switch (token.tag) {
-            .l_paren, .l_bracket, .l_brace => try delimiters.append(arena, token.tag),
-            .r_paren => {
-                popMatchingDelimiter(&delimiters, .l_paren);
-                if (continue_delimiter_depth) |depth| {
-                    if (delimiters.items.len < depth) continue_delimiter_depth = null;
-                }
-            },
-            .r_bracket => {
-                popMatchingDelimiter(&delimiters, .l_bracket);
-                if (continue_delimiter_depth) |depth| {
-                    if (delimiters.items.len < depth) continue_delimiter_depth = null;
-                }
-            },
-            .r_brace => {
-                popMatchingDelimiter(&delimiters, .l_brace);
-                if (continue_delimiter_depth) |depth| {
-                    if (delimiters.items.len < depth) continue_delimiter_depth = null;
-                }
-            },
-            .keyword_continue => continue_delimiter_depth = delimiters.items.len,
-            .semicolon => continue_delimiter_depth = null,
-            .comma => if (continue_delimiter_depth) |depth| {
-                if (delimiters.items.len <= depth) continue_delimiter_depth = null;
-            },
-            else => {},
-        }
-    }
-
-    const completing_struct_field = last_tag == .period and
-        delimiters.getLastOrNull() == .l_brace and
-        (previous_tag == .l_brace or previous_tag == .comma);
-    switch (last_tag) {
-        .period, .period_asterisk => {
-            try source.appendSlice(arena, "__zls_completion");
-            if (completing_struct_field) try source.appendSlice(arena, " = undefined");
-            if (has_trailing_comma and delimiters.items.len != 0) try source.append(arena, ',');
-        },
-        else => {},
-    }
-
-    var inserted_statement_terminator = has_trailing_comma and delimiters.items.len != 0;
-    var delimiter_index = delimiters.items.len;
-    var close_struct_initializer = completing_struct_field;
-    if (last_tag == .period) {
-        if (continue_delimiter_depth) |outer_depth| {
-            if (outer_depth < delimiter_index) {
-                while (delimiter_index > outer_depth) {
-                    delimiter_index -= 1;
-                    try source.append(arena, closingDelimiter(delimiters.items[delimiter_index]));
-                }
-                try source.append(arena, ',');
-                inserted_statement_terminator = true;
-            }
-        }
-    }
-    while (delimiter_index > 0) {
-        delimiter_index -= 1;
-        const delimiter = delimiters.items[delimiter_index];
-        switch (delimiter) {
-            .l_paren, .l_bracket => try source.append(arena, closingDelimiter(delimiter)),
-            .l_brace => {
-                if (close_struct_initializer) {
-                    close_struct_initializer = false;
-                    try source.append(arena, '}');
-                    continue;
-                }
-                if (!inserted_statement_terminator) {
-                    try source.append(arena, ';');
-                    inserted_statement_terminator = true;
-                }
-                try source.append(arena, '}');
-            },
-            else => unreachable,
-        }
-    }
-    if (!inserted_statement_terminator or completing_struct_field) try source.append(arena, ';');
-    return try source.toOwnedSliceSentinel(arena, 0);
-}
-
-fn closingDelimiter(open: std.zig.Token.Tag) u8 {
-    return switch (open) {
-        .l_paren => ')',
-        .l_bracket => ']',
-        .l_brace => '}',
-        else => unreachable,
-    };
-}
-
-fn popMatchingDelimiter(delimiters: *std.ArrayList(std.zig.Token.Tag), expected: std.zig.Token.Tag) void {
-    if (delimiters.getLastOrNull() == expected) _ = delimiters.pop();
 }
 
 fn callExpressionBeforeAssignment(tree: *const Ast, equal_token: Ast.TokenIndex) bool {

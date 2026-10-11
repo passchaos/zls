@@ -328,6 +328,85 @@ test "generated field completion preserves existing assignment" {
     });
 }
 
+test "completion recovers missing members without discarding following context" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn Box(comptime T: type) type {
+        \\    return struct { fn check() T { return 0; } };
+        \\}
+        \\const result = Box(u8).<cursor>();
+        ,
+        .label = "check",
+        .expected_insert_line = "const result = Box(u8).check();",
+        .expected_replace_line = "const result = Box(u8).check();",
+        .enable_snippets = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\const S = struct { bytes: []const u8 };
+        \\fn size(self: S) usize { return self.<cursor>.len; }
+        ,
+        .label = "bytes",
+        .expected_insert_line = "fn size(self: S) usize { return self.bytes.len; }",
+        .expected_replace_line = "fn size(self: S) usize { return self.bytes.len; }",
+        .enable_snippets = true,
+    });
+    try testCompletionWithOptions(
+        \\fn child(comptime T: type) type {
+        \\    return switch (@typeInfo(T)) {
+        \\        .pointer => |pointer| pointer.<cursor>,
+        \\        else => T,
+        \\    };
+        \\}
+    , &.{
+        .{ .label = "child", .kind = .Field, .detail = "type" },
+    }, .{ .allow_additional_completions = true });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn Box(comptime T: type) type {
+        \\    return struct {
+        \\        value: T,
+        \\        fn init(value: T) @This() { return .{ .value = value }; }
+        \\    };
+        \\}
+        \\const boxes = [_]Box(u8){ .<cursor>(42) };
+        ,
+        .label = "init",
+        .expected_insert_line = "const boxes = [_]Box(u8){ .init(42) };",
+        .expected_replace_line = "const boxes = [_]Box(u8){ .init(42) };",
+        .enable_snippets = true,
+    });
+}
+
+test "completion recovers empty expressions in nested generic arguments" {
+    try testCompletionWithOptions(
+        \\fn consume(value: anytype) void { _ = value; }
+        \\const S = struct {
+        \\    fn read(reader: anytype, out: []u8) void {
+        \\        const offset: usize = 0;
+        \\        consume(.{ <cursor>, out[offset..] });
+        \\        _ = reader;
+        \\    }
+        \\};
+    , &.{
+        .{ .label = "reader", .kind = .Constant },
+        .{ .label = "out", .kind = .Constant },
+        .{ .label = "offset", .kind = .Constant },
+    }, .{ .allow_additional_completions = true });
+    try testCompletionWithOptions(
+        \\const Box = struct {
+        \\    fn init(value: *const u8) @This() { _ = value; return .{}; }
+        \\};
+        \\test {
+        \\    const second: u8 = 42;
+        \\    const values = [_]Box{ .init(&<cursor>) };
+        \\    _ = values;
+        \\}
+    , &.{
+        .{ .label = "second", .kind = .Constant },
+    }, .{ .allow_additional_completions = true });
+}
+
 test "completion prefix recovery preserves the original text edit range" {
     try testCompletionTextEdit(.{
         .source =
