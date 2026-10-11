@@ -71,6 +71,8 @@ std_builtin_types: std.StringHashMapUnmanaged(Type) = .empty,
 specialization_binding_hashes: specialization_cache.BindingHashCache = .{},
 /// Mutable binding environments require specialization keys to own snapshots.
 specialization_bindings_mutable: bool = false,
+/// Invalid source may contain structs that recursively embed themselves by value.
+runtime_struct_layout_depth: u8 = 0,
 
 /// handle of the doc where the request originated
 root_handle: ?*DocumentStore.Handle,
@@ -10726,6 +10728,108 @@ pub fn resolveComptimeUnaryValue(
     };
 }
 
+const RuntimeStructLayout = struct {
+    byte_size: u64,
+    alignment: u64,
+};
+
+const max_runtime_struct_layout_depth = 64;
+
+const StructLayoutAccumulator = struct {
+    layout: std.builtin.Type.ContainerLayout,
+    byte_size: u64 = 0,
+    alignment: u64 = 1,
+    first_field_size: ?u64 = null,
+    first_field_alignment: ?u64 = null,
+
+    fn addField(self: *StructLayoutAccumulator, field_size: u64, field_alignment: u64) bool {
+        if (field_alignment == 0 or !std.math.isPowerOfTwo(field_alignment)) return false;
+        if (self.layout == .auto) {
+            if (self.first_field_size) |first_size| {
+                if (first_size != field_size or self.first_field_alignment.? != field_alignment) return false;
+            } else {
+                self.first_field_size = field_size;
+                self.first_field_alignment = field_alignment;
+            }
+        }
+        self.byte_size = alignForwardFieldOffset(self.byte_size, field_alignment) orelse return false;
+        self.byte_size = std.math.add(u64, self.byte_size, field_size) catch return false;
+        self.alignment = @max(self.alignment, field_alignment);
+        return true;
+    }
+
+    fn finish(self: StructLayoutAccumulator) ?RuntimeStructLayout {
+        return .{
+            .byte_size = alignForwardFieldOffset(self.byte_size, self.alignment) orelse return null,
+            .alignment = self.alignment,
+        };
+    }
+};
+
+fn resolveAstStructLayout(
+    analyser: *Analyser,
+    container_type: Type,
+    declaration: Ast.full.ContainerDecl,
+    handle: *DocumentStore.Handle,
+    layout: std.builtin.Type.ContainerLayout,
+) Error!?RuntimeStructLayout {
+    if (layout == .@"packed") return null;
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+
+    var result: StructLayoutAccumulator = .{ .layout = layout };
+    for (declaration.ast.members) |member| {
+        const field = handle.tree.fullContainerField(member) orelse continue;
+        if (field.comptime_token != null) continue;
+        const field_type_node = field.ast.type_expr.unwrap() orelse return null;
+        const field_type = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(field_type_node, handle),
+            .container_type = container_type,
+        }) orelse return null;
+        const field_alignment = if (field.ast.align_expr.unwrap()) |align_expr|
+            try analyser.resolveIntegerLiteral(u64, .{
+                .node_handle = .of(align_expr, handle),
+                .container_type = container_type,
+            }) orelse return null
+        else
+            try analyser.resolveTypeAlignment(field_type) orelse return null;
+        const field_size = analyser.resolveTypeByteSize(field_type) orelse return null;
+        if (!result.addField(field_size, field_alignment)) return null;
+    }
+    return result.finish();
+}
+
+fn resolveInternPoolStructLayout(
+    analyser: *Analyser,
+    type_index: InternPool.Index,
+    struct_info: *const InternPool.Struct,
+) Error!?RuntimeStructLayout {
+    if (struct_info.layout == .@"packed") return null;
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+
+    const generated_fields = analyser.generated_struct_fields.get(type_index);
+    if (generated_fields) |fields| if (fields.len != struct_info.fields.count()) return null;
+
+    var result: StructLayoutAccumulator = .{ .layout = struct_info.layout };
+    for (struct_info.fields.values(), 0..) |field, index| {
+        if (field.is_comptime) continue;
+        const field_type = if (generated_fields) |fields|
+            fields[index].ty
+        else
+            Type.fromIP(analyser, .type_type, field.ty);
+        const field_alignment = if (field.alignment != 0)
+            field.alignment
+        else
+            try analyser.resolveTypeAlignment(field_type) orelse return null;
+        const field_size = analyser.resolveTypeByteSize(field_type) orelse return null;
+        if (!result.addField(field_size, field_alignment)) return null;
+    }
+    return result.finish();
+}
+
 fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
@@ -10737,10 +10841,19 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                     break :blk null;
                 break :blk analyser.resolveTypeBitSize(tag_type);
             }
-            if (ty.getContainerKind() != .keyword_struct or info.layout != .@"packed") break :blk null;
-            const backing_type = (analyser.astPackedStructBackingType(ty, info.declaration, info.handle) catch break :blk null) orelse
-                break :blk null;
-            break :blk analyser.resolveTypeBitSize(backing_type);
+            if (ty.getContainerKind() != .keyword_struct) break :blk null;
+            if (info.layout == .@"packed") {
+                const backing_type = (analyser.astPackedStructBackingType(ty, info.declaration, info.handle) catch break :blk null) orelse
+                    break :blk null;
+                break :blk analyser.resolveTypeBitSize(backing_type);
+            }
+            const layout = (analyser.resolveAstStructLayout(
+                ty,
+                info.declaration,
+                info.handle,
+                info.layout,
+            ) catch break :blk null) orelse break :blk null;
+            break :blk std.math.mul(u64, layout.byte_size, 8) catch null;
         },
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
@@ -10792,8 +10905,13 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                 },
                 .@"struct" => {
                     const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
-                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
-                    break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    if (info.layout == .@"packed") {
+                        if (info.backing_int_ty == .none) break :blk null;
+                        break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    }
+                    const layout = (analyser.resolveInternPoolStructLayout(type_index, info) catch break :blk null) orelse
+                        break :blk null;
+                    break :blk std.math.mul(u64, layout.byte_size, 8) catch null;
                 },
                 .@"union" => {
                     const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
@@ -10818,10 +10936,18 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                     break :blk null;
                 break :blk analyser.resolveTypeByteSize(tag_type);
             }
-            if (ty.getContainerKind() != .keyword_struct or info.layout != .@"packed") break :blk null;
-            const backing_type = (analyser.astPackedStructBackingType(ty, info.declaration, info.handle) catch break :blk null) orelse
-                break :blk null;
-            break :blk analyser.resolveTypeByteSize(backing_type);
+            if (ty.getContainerKind() != .keyword_struct) break :blk null;
+            if (info.layout == .@"packed") {
+                const backing_type = (analyser.astPackedStructBackingType(ty, info.declaration, info.handle) catch break :blk null) orelse
+                    break :blk null;
+                break :blk analyser.resolveTypeByteSize(backing_type);
+            }
+            break :blk ((analyser.resolveAstStructLayout(
+                ty,
+                info.declaration,
+                info.handle,
+                info.layout,
+            ) catch break :blk null) orelse break :blk null).byte_size;
         },
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
@@ -10877,8 +11003,12 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                 },
                 .@"struct" => {
                     const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
-                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
-                    break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    if (info.layout == .@"packed") {
+                        if (info.backing_int_ty == .none) break :blk null;
+                        break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    }
+                    break :blk ((analyser.resolveInternPoolStructLayout(type_index, info) catch break :blk null) orelse
+                        break :blk null).byte_size;
                 },
                 .@"union" => {
                     const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
@@ -10912,9 +11042,17 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                 const tag_type = try analyser.astEnumTagType(ty, info.declaration, info.handle) orelse break :blk null;
                 break :blk try analyser.resolveTypeAlignment(tag_type);
             }
-            if (ty.getContainerKind() != .keyword_struct or info.layout != .@"packed") break :blk null;
-            const backing_type = try analyser.astPackedStructBackingType(ty, info.declaration, info.handle) orelse break :blk null;
-            break :blk try analyser.resolveTypeAlignment(backing_type);
+            if (ty.getContainerKind() != .keyword_struct) break :blk null;
+            if (info.layout == .@"packed") {
+                const backing_type = try analyser.astPackedStructBackingType(ty, info.declaration, info.handle) orelse break :blk null;
+                break :blk try analyser.resolveTypeAlignment(backing_type);
+            }
+            break :blk (try analyser.resolveAstStructLayout(
+                ty,
+                info.declaration,
+                info.handle,
+                info.layout,
+            ) orelse break :blk null).alignment;
         },
         .ip_index => |payload| blk: {
             const type_index = payload.index orelse break :blk null;
@@ -10953,10 +11091,14 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                     .type_type,
                     analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type).tag_type,
                 )),
-                .@"struct" => packed_layout: {
+                .@"struct" => {
                     const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
-                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :packed_layout null;
-                    break :packed_layout try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    if (info.layout == .@"packed") {
+                        if (info.backing_int_ty == .none) break :blk null;
+                        break :blk try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    }
+                    break :blk (try analyser.resolveInternPoolStructLayout(type_index, info) orelse
+                        break :blk null).alignment;
                 },
                 .@"union" => packed_layout: {
                     const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);

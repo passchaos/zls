@@ -683,3 +683,29 @@ relative difference was 7.6 us on package-import completion, so this is treated
 as no material performance change. All response hashes matched. Baseline binary
 SHA-256: `e431d94625a19345e0e97b4e6bea39b301c93479d7ab9d05ae4d1af33bd08146`.
 Candidate binary SHA-256: `68cd54a6709de0fe4b4c044cc63b5c47ab127a2ad04922f5cfe7db0eecd7b50c`.
+
+## Runtime struct layouts for size builtins
+
+2026-10-11, same machine, Zig version, and build options. Comptime `@sizeOf`,
+`@bitSizeOf`, and `@alignOf` now resolve runtime layouts for AST and generated
+struct types. Extern structs use declaration-order padding and tail alignment.
+Auto-layout structs are intentionally limited to runtime fields with identical
+size and alignment, which is order-independent and covers zigraft's two-pointer
+`DynRef` and `DynMut` wrappers without guessing Zig's backend-dependent field
+reordering. Comptime fields are excluded, and heterogeneous auto structs remain
+unknown. A bounded recursion guard keeps invalid by-value recursive structs from
+overflowing the analysis stack while the user is still editing them.
+
+All 1,280 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. A real-document overlay on `tests/integration.zig`
+also selected only the `DynMut` two-pointer success branch for completion and
+resolved its field definition to the exact declaration.
+
+Two reversed runs with 20 warmups and 500 measured rounds per order produced a
+`0.9990x` geometric mean across the 16 existing request cases. The
+multi-millisecond requests remained within 0.9%, so this is treated as no
+material performance change. All response hashes matched. Baseline binary
+SHA-256: `c94555a7028847adc4ca7738c74e5371ad72451de17fceae0db2ffa0f5d0853b`.
+Candidate binary SHA-256:
+`1ad502d9f7edaf416ef6fb4fa27d4730a1323458f964cd6c0386034a6a2e7dc4`.

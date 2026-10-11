@@ -2904,6 +2904,82 @@ test "generic function with comptime size builtins" {
     });
 }
 
+test "generic function with comptime runtime struct layout builtins" {
+    try testCompletion(
+        \\fn Dynamic(comptime Context: type, comptime Table: type) type {
+        \\    return struct {
+        \\        context: *Context,
+        \\        vtable: *const Table,
+        \\        pub const contract = Context;
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const AnyReader = Dynamic(u8, u16);
+        \\    return if (@sizeOf(AnyReader) == 2 * @sizeOf(usize) and
+        \\        @bitSizeOf(AnyReader) == 2 * @bitSizeOf(usize) and
+        \\        @alignOf(AnyReader) == @alignOf(usize))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    const Padded = extern struct { first: u8, second: u32, third: u8 };
+        \\    return if (@sizeOf(Padded) == 12 and @bitSizeOf(Padded) == 96 and @alignOf(Padded) == 4)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    const Generated = @Struct(.auto, null, &.{ "context", "vtable" },
+        \\        &.{ *u8, *const u16 }, &.{ .{}, .{} });
+        \\    return if (@sizeOf(Generated) == 2 * @sizeOf(usize) and
+        \\        @bitSizeOf(Generated) == 2 * @bitSizeOf(usize) and
+        \\        @alignOf(Generated) == @alignOf(usize))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\fn Buffer() type {
+        \\    const Heterogeneous = struct { byte: u8, word: u32 };
+        \\    const Recursive = struct { child: Recursive };
+        \\    return struct {
+        \\        bits: [@bitSizeOf(Heterogeneous)]u8,
+        \\        bytes: [@sizeOf(Heterogeneous)]u8,
+        \\        alignment: [@alignOf(Heterogeneous)]u8,
+        \\        recursive: [@sizeOf(Recursive)]u8,
+        \\    };
+        \\}
+        \\const buffer: Buffer() = undefined;
+        \\const field = buffer.<cursor>
+    , &.{
+        .{ .label = "bits", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "bytes", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "alignment", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "recursive", .kind = .Field, .detail = "[?]u8" },
+    });
+}
+
 test "generic function with comptime field offsets" {
     try testCompletion(
         \\fn Select(comptime T: type) type {

@@ -298,6 +298,26 @@ test "comptime method on generated Struct default" {
     );
 }
 
+test "definition through runtime struct size selection" {
+    try testDefinition(
+        \\fn Dynamic(comptime Context: type, comptime Table: type) type {
+        \\    return struct {
+        \\        context: *Context,
+        \\        vtable: *const Table,
+        \\    };
+        \\}
+        \\fn Select() type {
+        \\    const AnyReader = Dynamic(u8, u16);
+        \\    return if (@sizeOf(AnyReader) == 2 * @sizeOf(usize))
+        \\        struct { <def><decl>matched</decl></def>: <tdef>u8</tdef> }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.mat<>ched;
+    );
+}
+
 test "generated Struct field falls back to its type definition" {
     try testDefinition(
         \\const Model = struct {
