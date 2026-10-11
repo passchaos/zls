@@ -25843,6 +25843,32 @@ test "anytype resolution follows function aliases" {
         \\fn inspect(value: anytype) void {
         \\    value.<cursor>
         \\}
+        \\const final = intermediate;
+        \\const intermediate = inspect;
+        \\const argument: Argument = undefined;
+        \\comptime { final(argument); }
+    , &.{.{ .label = "field", .kind = .Field, .detail = "u32" }});
+    try testCompletion(
+        \\const Argument = struct { field: u32 };
+        \\const S = struct {
+        \\    fn inspect(value: anytype) void { value.<cursor> }
+        \\    const invoke = inspect;
+        \\};
+        \\const argument: Argument = undefined;
+        \\comptime { S.invoke(argument); }
+    , &.{.{ .label = "field", .kind = .Field, .detail = "u32" }});
+    try testCompletion(
+        \\const Argument = struct { field: u32 };
+        \\fn @"inspect fn"(value: anytype) void { value.<cursor> }
+        \\const @"invoke fn" = @"inspect fn";
+        \\const argument: Argument = undefined;
+        \\comptime { @"invoke fn"(argument); }
+    , &.{.{ .label = "field", .kind = .Field, .detail = "u32" }});
+    try testCompletion(
+        \\const Argument = struct { field: u32 };
+        \\fn inspect(value: anytype) void {
+        \\    value.<cursor>
+        \\}
         \\const invoke = inspect;
         \\const argument: Argument = undefined;
         \\comptime {
@@ -25955,14 +25981,14 @@ test "anytype resolution follows transitive cross-file callsites" {
     const uri = try ctx.addDocument(.{ .source = text });
 
     _ = try ctx.addDocument(.{ .source =
-        \\pub const inspect = @import("Untitled-0.zig").inspect;
+        \\pub const renamed = @import("Untitled-0.zig").inspect;
     });
     _ = try ctx.addDocument(.{ .source =
         \\const api = @import("Untitled-1.zig");
         \\const Argument = struct { field: u32 };
         \\const argument: Argument = undefined;
         \\comptime {
-        \\    api.inspect(argument);
+        \\    api.renamed(argument);
         \\}
     });
 

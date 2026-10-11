@@ -629,6 +629,7 @@ const CallBuilder = struct {
     /// this is the declaration we are searching for
     target_decl: Analyser.DeclWithHandle,
     analyser: *Analyser,
+    possible_names: std.BufSet,
 
     fn matchesTarget(self: *CallBuilder, candidate: Analyser.DeclWithHandle) Analyser.Error!bool {
         if (self.target_decl.eql(candidate)) return true;
@@ -686,6 +687,8 @@ const CallBuilder = struct {
                 switch (tree.nodeTag(called_node)) {
                     .identifier => {
                         const identifier_token = ast.identifierTokenFromIdentifierNode(tree, called_node) orelse return;
+                        const name = try builder.analyser.identifierTokenName(tree, identifier_token) orelse return;
+                        if (!builder.possible_names.contains(name)) return;
 
                         const child = (try builder.analyser.lookupSymbolGlobal(
                             handle,
@@ -699,10 +702,12 @@ const CallBuilder = struct {
                     },
                     .field_access => {
                         const lhs_node, const field_name = tree.nodeData(called_node).node_and_token;
+                        const name = try builder.analyser.identifierTokenName(tree, field_name) orelse return;
+                        if (!builder.possible_names.contains(name)) return;
                         const lhs = (try builder.analyser.resolveTypeOfNode(.of(lhs_node, handle))) orelse return;
                         const deref_lhs = try builder.analyser.resolveDerefType(lhs) orelse lhs;
 
-                        const symbol = offsets.tokenToSlice(tree, field_name);
+                        const symbol = name;
                         for (try deref_lhs.getAllTypesWithHandles(builder.analyser)) |ty| {
                             const child = (try ty.lookupSymbol(builder.analyser, symbol)) orelse continue;
                             if (try builder.matchesTarget(child)) {
@@ -730,13 +735,8 @@ pub fn callsiteReferences(
 
     std.debug.assert(decl_handle.decl == .ast_node);
 
-    var builder: CallBuilder = .{
-        .analyser = analyser,
-        .target_decl = decl_handle,
-    };
-
-    try builder.collectReferences(decl_handle.handle, .root);
-
+    var handles: std.ArrayList(*DocumentStore.Handle) = .empty;
+    try handles.append(analyser.arena, decl_handle.handle);
     if (workspace) {
         var uris = try gatherWorkspaceReferenceCandidates(
             analyser.store,
@@ -747,9 +747,18 @@ pub fn callsiteReferences(
         for (uris.keys()) |uri| {
             if (uri.eql(decl_handle.handle.uri)) continue;
             const dependency_handle = try analyser.store.getOrLoadHandle(uri) orelse continue;
-            try builder.collectReferences(dependency_handle, .root);
+            try handles.append(analyser.arena, dependency_handle);
         }
     }
+
+    var names = try @import("../analyser/callsite_names.zig").collect(analyser, decl_handle, handles.items);
+    defer names.deinit();
+    var builder: CallBuilder = .{
+        .analyser = analyser,
+        .target_decl = decl_handle,
+        .possible_names = names,
+    };
+    for (handles.items) |handle| try builder.collectReferences(handle, .root);
 
     return builder.callsites;
 }
