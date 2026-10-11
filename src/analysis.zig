@@ -14235,6 +14235,22 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                     return Type.fromIP(analyser, .u1_type, null);
                 },
+                .int_from_error => {
+                    if (params.len != 1) return null;
+                    const fallback = Type.fromIP(analyser, .u16_type, null);
+                    if (!analyser.evaluate_comptime_values) return fallback;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse
+                        return fallback;
+                    return try comptime_eval.resolveIntFromErrorValue(analyser, operand) orelse fallback;
+                },
+                .error_from_int => {
+                    if (params.len != 1) return null;
+                    const fallback = Type.fromIP(analyser, .anyerror_type, null);
+                    if (!analyser.evaluate_comptime_values) return fallback;
+                    const operand = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse
+                        return fallback;
+                    return try comptime_eval.resolveErrorFromIntValue(analyser, operand) orelse fallback;
+                },
                 .in_comptime => {
                     if (params.len != 0) return null;
                     if (analyser.evaluate_comptime_control_flow or analyser.generic_bindings != null) {

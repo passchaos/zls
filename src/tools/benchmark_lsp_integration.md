@@ -556,3 +556,17 @@ cover generated-type completion, exact definition selection, symbolic equality,
 symbolic inequality, and the unknown bare-integer boundary. The complete
 integration audit passed all 661 exact definition destinations and 1,626
 completion edits across 698 scanned elements.
+
+The follow-up shares the conversion helpers with ordinary comptime resolution,
+so symbolic codes also survive top-level `const` aliases used by array lengths
+and other value-required contexts. It intentionally does not force direct
+conditional type declarations to one branch: the existing editor behavior of
+retaining all branch candidates remains unchanged.
+
+The follow-up used the previous commit as its baseline. Two runs reversed the
+process and request order, with 5 warmups and 24 measured rounds per run. Across
+the 16 existing request cases, the combined 48-sample medians had a geometric
+mean speedup of `1.0049x`; the per-case differences were small and mixed, so
+this is treated as no material performance change. All response hashes matched.
+Baseline binary SHA-256: `2a2161e3083e63b8557a9e9428bad2bc0eda9bac14017f26539a39e868ebcbff`.
+Candidate binary SHA-256: `de051c679b436bf58ae95a0920977058270137bbef4526f43a5cbda01eefc2b6`.

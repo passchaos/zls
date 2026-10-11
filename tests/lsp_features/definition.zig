@@ -324,7 +324,8 @@ test "comptime error integer roundtrip selects definition" {
         \\const Wrong = struct { const selected: u16 = 0; };
         \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
         \\fn select() type {
-        \\    if (@errorFromInt(@intFromError(error.Failure)) == error.Failure) return Right;
+        \\    const code = @intFromError(error.Failure);
+        \\    if (@errorFromInt(code) == error.Failure) return Right;
         \\    return Wrong;
         \\}
         \\const Choice = select();

@@ -22327,6 +22327,16 @@ test "comptime error integer conversions preserve symbolic identity" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "items", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\const failure_code = @intFromError(error.Failure);
+        \\const other_code = @intFromError(error.Other);
+        \\const restored = @errorFromInt(failure_code);
+        \\const size = if (restored == error.Failure and failure_code != other_code) 1 else 2;
+        \\const Selected = struct { chosen: [size]u8 };
+        \\const selected: Selected = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "chosen", .kind = .Field, .detail = "[1]u8" }});
 }
 
 test "comptime field parent pointers preserve identity" {

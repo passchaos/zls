@@ -700,6 +700,53 @@ pub const Value = struct {
     }
 };
 
+fn errorSetCastValue(analyser: *Analyser, destination: Type, value: Type) Error!?Type {
+    if (!destination.isErrorSetType(analyser)) return null;
+    const destination_type = destination.ipIndex() orelse return null;
+    const source_type = try value.typeOf(analyser);
+    if (!source_type.isErrorSetType(analyser)) return null;
+
+    const value_index = value.ipIndex() orelse return destination.instanceTypeVal(analyser);
+    if (analyser.ip.isUndefined(value_index)) return null;
+    if (analyser.ip.isUnknown(value_index)) return destination.instanceTypeVal(analyser);
+    const error_value = switch (analyser.ip.indexToKey(value_index)) {
+        .error_value => |error_value| error_value,
+        else => return null,
+    };
+    if (destination_type != .anyerror_type) {
+        const error_set = switch (analyser.ip.indexToKey(destination_type)) {
+            .error_set_type => |error_set| error_set,
+            else => return null,
+        };
+        for (0..error_set.names.len) |index| {
+            if (error_set.names.at(@intCast(index), analyser.ip) == error_value.error_tag_name) break;
+        } else return null;
+    }
+    const casted = try analyser.ip.get(.{ .error_value = .{
+        .ty = destination_type,
+        .error_tag_name = error_value.error_tag_name,
+    } });
+    return Type.fromIP(analyser, destination_type, casted);
+}
+
+pub fn resolveIntFromErrorValue(analyser: *Analyser, value: Type) Error!?Type {
+    const result_type = Type.fromIP(analyser, .type_type, .u16_type);
+    const anyerror_type = Type.fromIP(analyser, .type_type, .anyerror_type);
+    const error_value = try errorSetCastValue(analyser, anyerror_type, value) orelse return null;
+    const value_index = error_value.ipIndex() orelse return result_type.instanceTypeVal(analyser);
+    if (analyser.ip.indexToKey(value_index) != .error_value)
+        return result_type.instanceTypeVal(analyser);
+    return @as(?Type, try Value.create(analyser, result_type, .{ .error_code = error_value }));
+}
+
+pub fn resolveErrorFromIntValue(analyser: *Analyser, value: Type) Error!?Type {
+    const anyerror_type = Type.fromIP(analyser, .type_type, .anyerror_type);
+    if (value.data == .comptime_value and value.data.comptime_value.data == .error_code) {
+        return errorSetCastValue(analyser, anyerror_type, value.data.comptime_value.data.error_code);
+    }
+    return anyerror_type.instanceTypeVal(analyser);
+}
+
 pub const Interpreter = struct {
     analyser: *Analyser,
     bindings: Analyser.TokenToTypeMap,
@@ -2578,14 +2625,16 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 1) return null;
                     const operand = try self.eval(handle, params[0]) orelse return null;
-                    return self.intFromErrorValue(operand);
+                    return resolveIntFromErrorValue(self.analyser, operand);
                 }
                 if (std.mem.eql(u8, name, "@errorFromInt")) {
                     var buffer: [2]Ast.Node.Index = undefined;
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 1) return null;
                     const operand = try self.eval(handle, params[0]) orelse return null;
-                    return self.errorFromIntValue(operand);
+                    const error_int_type = Type.fromIP(self.analyser, .type_type, .u16_type);
+                    const code = try self.coerce(error_int_type, operand) orelse return null;
+                    return resolveErrorFromIntValue(self.analyser, code);
                 }
                 if (std.mem.eql(u8, name, "@intFromPtr")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -4226,53 +4275,6 @@ pub const Interpreter = struct {
         return null;
     }
 
-    fn errorSetCastValue(self: *Interpreter, destination: Type, value: Type) Error!?Type {
-        if (!destination.isErrorSetType(self.analyser)) return null;
-        const destination_type = destination.ipIndex() orelse return null;
-        const source_type = try value.typeOf(self.analyser);
-        if (!source_type.isErrorSetType(self.analyser)) return null;
-
-        const value_index = value.ipIndex() orelse return destination.instanceTypeVal(self.analyser);
-        if (self.analyser.ip.isUndefined(value_index)) return null;
-        if (self.analyser.ip.isUnknown(value_index)) return destination.instanceTypeVal(self.analyser);
-        const error_value = switch (self.analyser.ip.indexToKey(value_index)) {
-            .error_value => |error_value| error_value,
-            else => return null,
-        };
-        if (destination_type != .anyerror_type) {
-            const error_set = switch (self.analyser.ip.indexToKey(destination_type)) {
-                .error_set_type => |error_set| error_set,
-                else => return null,
-            };
-            for (0..error_set.names.len) |index| {
-                if (error_set.names.at(@intCast(index), self.analyser.ip) == error_value.error_tag_name) break;
-            } else return null;
-        }
-        const casted = try self.analyser.ip.get(.{ .error_value = .{
-            .ty = destination_type,
-            .error_tag_name = error_value.error_tag_name,
-        } });
-        return Type.fromIP(self.analyser, destination_type, casted);
-    }
-
-    fn intFromErrorValue(self: *Interpreter, value: Type) Error!?Type {
-        const result_type = Type.fromIP(self.analyser, .type_type, .u16_type);
-        const anyerror_type = Type.fromIP(self.analyser, .type_type, .anyerror_type);
-        const error_value = try self.errorSetCastValue(anyerror_type, value) orelse return null;
-        if (!self.isErrorValue(error_value)) return result_type.instanceTypeVal(self.analyser);
-        return @as(?Type, try Value.create(self.analyser, result_type, .{ .error_code = error_value }));
-    }
-
-    fn errorFromIntValue(self: *Interpreter, value: Type) Error!?Type {
-        const anyerror_type = Type.fromIP(self.analyser, .type_type, .anyerror_type);
-        const error_int_type = Type.fromIP(self.analyser, .type_type, .u16_type);
-        const code = try self.coerce(error_int_type, value) orelse return null;
-        if (code.data == .comptime_value and code.data.comptime_value.data == .error_code) {
-            return self.errorSetCastValue(anyerror_type, code.data.comptime_value.data.error_code);
-        }
-        return anyerror_type.instanceTypeVal(self.analyser);
-    }
-
     fn errorCastValue(self: *Interpreter, destination: Type, value: Type) Error!?Type {
         const source_type = try value.typeOf(self.analyser);
         const source_error_union = self.errorUnionTypes(source_type);
@@ -4286,14 +4288,14 @@ pub const Interpreter = struct {
             const casted: Value.ErrorUnion = switch (resolved) {
                 .payload => |payload| .{ .payload = payload },
                 .failure => |failure| .{ .failure = if (destination_types.error_set) |error_set|
-                    try self.errorSetCastValue(error_set, failure) orelse return null
+                    try errorSetCastValue(self.analyser, error_set, failure) orelse return null
                 else
                     failure },
             };
             return @as(?Type, try Value.create(self.analyser, destination, .{ .error_union = casted }));
         }
         if (source_error_union != null) return null;
-        return self.errorSetCastValue(destination, value);
+        return errorSetCastValue(self.analyser, destination, value);
     }
 
     fn catchCaptureToken(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) ?Ast.TokenIndex {
