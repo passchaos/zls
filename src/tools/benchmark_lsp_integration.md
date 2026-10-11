@@ -493,3 +493,21 @@ caching complete global-symbol lookups (`0.9892x`) were separately measured and
 rejected.
 Baseline binary SHA-256: `7a35be9be02f578fdb0805de21c9e0bb7d7db0f4f05c9cbae0fcf0bd33213c7c`.
 Candidate binary SHA-256: `75f9abaa2728cc2c9a6e764aa0fec41611191c8e42fc33ea11b322f4895e0c50`.
+
+## Rejected post-borrow micro-optimizations
+
+After stable specialization bindings removed the dominant clone cost, several
+smaller caches and allocation strategies were tested bidirectionally against
+`fa347359`. Each result below combines 200 measured samples per request. None
+was retained:
+
+| Experiment | Geomean | Reason rejected |
+| --- | ---: | --- |
+| Hash-map cache for bound-identifier declarations | 0.9997x | Lookup/allocation cost offset the repeated lexical lookup wins. |
+| Four-slot direct cache for bound-identifier declarations | 0.9970x | Avoided allocation but did not have enough locality. |
+| Last-handle `DocumentScope` cache | 0.9978x | The existing lazy lock path was cheaper than extra analyser state. |
+| Reserve 64 specialization entries on first use | 0.9997x | Avoided growth but over-allocated for smaller requests. |
+| Reserve 16 specialization entries on first use | 0.9966x | Smaller reservation still lost to demand-driven growth. |
+
+The experiments also confirmed that their response hashes matched the baseline,
+so the rejection is performance-based rather than caused by semantic drift.
