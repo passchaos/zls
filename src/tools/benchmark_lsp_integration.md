@@ -508,6 +508,8 @@ was retained:
 | Last-handle `DocumentScope` cache | 0.9978x | The existing lazy lock path was cheaper than extra analyser state. |
 | Reserve 64 specialization entries on first use | 0.9997x | Avoided growth but over-allocated for smaller requests. |
 | Reserve 16 specialization entries on first use | 0.9966x | Smaller reservation still lost to demand-driven growth. |
+| Pre-scan for unresolved parameters before `fullFnProto` | 0.9951x | The extra type scan cost more than the avoided parsing. |
+| Persist parameter `type_expr` nodes in function types | 0.9984x | Larger parameter metadata offset removal of the AST iterator. |
 
 The experiments also confirmed that their response hashes matched the baseline,
 so the rejection is performance-based rather than caused by semantic drift.
