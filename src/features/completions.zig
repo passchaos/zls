@@ -2181,6 +2181,15 @@ fn getReturnTypeNode(tree: *const Ast, nodes: []const Ast.Node.Index) ?Ast.Node.
     return null;
 }
 
+fn hasFieldAssignmentAtCursor(builder: *Builder) bool {
+    const tree = &builder.orig_handle.tree;
+    return switch (offsets.sourceIndexToTokenIndex(tree, builder.source_index)) {
+        .none => |data| if (data.right) |right| tree.tokenTag(right) == .equal else false,
+        .one => |token| token + 1 < tree.tokens.len and tree.tokenTag(token + 1) == .equal,
+        .between => |data| tree.tokenTag(data.right) == .equal,
+    };
+}
+
 /// Given a Type that is a container, adds it's `.container_field*`s to completions
 fn collectContainerFields(
     builder: *Builder,
@@ -2215,7 +2224,7 @@ fn collectContainerFields(
                     .kind = .Field,
                     .detail = detail,
                     .insertTextFormat = if (builder.use_snippets) .Snippet else .PlainText,
-                    .insertText = if (builder.use_snippets)
+                    .insertText = if (builder.use_snippets and !hasFieldAssignmentAtCursor(builder))
                         try std.fmt.allocPrint(builder.arena, "{f} = $0", .{Analyser.fmtEscapedSnippet(field.name)})
                     else
                         field.name,
@@ -2282,12 +2291,7 @@ fn collectContainerFields(
                     if (kind == .EnumMember or likely == .enum_comparison or likely == .switch_case)
                         break :insert_text .{ name, .PlainText };
 
-                    const is_following_by_equal_token = switch (offsets.sourceIndexToTokenIndex(&builder.orig_handle.tree, builder.source_index)) {
-                        .none => |data| if (data.right) |right| builder.orig_handle.tree.tokenTag(right) == .equal else false,
-                        .one => |token| token + 1 < builder.orig_handle.tree.tokens.len and builder.orig_handle.tree.tokenTag(token + 1) == .equal,
-                        .between => |data| builder.orig_handle.tree.tokenTag(data.right) == .equal,
-                    };
-                    if (is_following_by_equal_token)
+                    if (hasFieldAssignmentAtCursor(builder))
                         break :insert_text .{ name, .PlainText };
 
                     break :insert_text .{

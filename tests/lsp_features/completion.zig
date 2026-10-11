@@ -315,6 +315,19 @@ test "completion with incomplete surrounding code" {
     });
 }
 
+test "generated field completion preserves existing assignment" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\const S = @Struct(.auto, null, &.{"value"}, &.{u8}, &.{.{}});
+        \\const value: S = .{ .val<cursor>ue = 1 };
+        ,
+        .label = "value",
+        .expected_insert_line = "const value: S = .{ .valueue = 1 };",
+        .expected_replace_line = "const value: S = .{ .value = 1 };",
+        .enable_snippets = true,
+    });
+}
+
 test "completion prefix recovery preserves the original text edit range" {
     try testCompletionTextEdit(.{
         .source =
