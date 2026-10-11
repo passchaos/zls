@@ -65,6 +65,39 @@ test "standard library member completion stays within comptime analysis depth" {
     }, .{ .allow_additional_completions = true });
 }
 
+test "completion keeps the member being edited" {
+    try testCompletion(
+        \\const S = struct { before: u8, current: u16, after: u32 };
+        \\const value: S = .{ .before = 0, .cur<cursor>rent = 1, .after = 2 };
+    , &.{
+        .{ .label = "current", .kind = .Field },
+    });
+    try testCompletion(
+        \\fn Model(comptime T: type) type {
+        \\    return @Struct(.auto, null, &.{"value", "other"}, &.{T, bool}, &.{.{}, .{}});
+        \\}
+        \\const model: Model(u8) = .{ .value<cursor> = 1, .other = false };
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "u8" },
+    });
+    try testCompletion(
+        \\const Tag = enum { before, current, after, last };
+        \\fn f(tag: Tag) void {
+        \\    switch (tag) { .before, .cur<cursor>rent => {}, .after, .last => {} }
+        \\}
+    , &.{
+        .{ .label = "current", .kind = .EnumMember },
+    });
+    // A separate occurrence still excludes the name, even if the cursor
+    // occurrence is a duplicate in temporarily invalid code.
+    try testCompletion(
+        \\const S = struct { current: u8, other: u8 };
+        \\const value: S = .{ .current = 0, .cur<cursor>rent = 1 };
+    , &.{
+        .{ .label = "other", .kind = .Field },
+    });
+}
+
 test "struct init completion through dependent generic call parameter" {
     try testCompletion(
         \\const Contract = struct {

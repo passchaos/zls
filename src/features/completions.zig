@@ -1051,7 +1051,7 @@ fn collectUsedMembersSet(builder: *Builder, likely: EnumLiteralContext.Likely, d
             },
             .equal, .equal_angle_bracket_right, .comma => {
                 if (depth > 0) continue;
-                if (tree.tokenTag(i - 1) == .identifier and tree.tokenTag(i - 2) == .period) {
+                if (i - 2 != dot_token_index and tree.tokenTag(i - 1) == .identifier and tree.tokenTag(i - 2) == .period) {
                     try used_members_set.insert(tree.tokenSlice(i - 1));
                     i -= 1;
                 }
@@ -1072,7 +1072,9 @@ fn collectUsedMembersSet(builder: *Builder, likely: EnumLiteralContext.Likely, d
             },
             .equal, .equal_angle_bracket_right, .comma => {
                 if (depth > 0) continue;
-                if (tree.tokenTag(i - 1) == .identifier and tree.tokenTag(i - 2) == .period) {
+                // The current token is being replaced. Only other member
+                // occurrences make its name unavailable for completion.
+                if (i - 2 != dot_token_index and tree.tokenTag(i - 1) == .identifier and tree.tokenTag(i - 2) == .period) {
                     try used_members_set.insert(tree.tokenSlice(i - 1));
                 }
             },
