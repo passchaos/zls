@@ -24228,6 +24228,16 @@ test "switch cases" {
     , &.{
         .{ .label = "sef2", .kind = .EnumMember },
     });
+
+    try testCompletionWithOptions(
+        \\fn inspect(comptime T: type) void {
+        \\    switch (@typeInfo(T)) {
+        \\        .<cursor>
+        \\    }
+        \\}
+    , &.{
+        .{ .label = "pointer", .kind = .Field },
+    }, .{ .allow_additional_completions = true });
 }
 
 test "switch on error set - all values are suggested" {

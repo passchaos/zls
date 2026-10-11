@@ -2464,11 +2464,16 @@ fn collectBuiltinContainerNodes(
     dot_context: EnumLiteralContext,
     types_with_handles: *Analyser.Type.ArraySet,
 ) Analyser.Error!void {
-    if (dot_context.need_ret_type) return;
-    if (try resolveBuiltinFnArg(
+    const name = handle.tree.source[loc.start..loc.end];
+    if (dot_context.need_ret_type) {
+        const builtin = version_data.builtins.get(name) orelse return;
+        var return_type = try builder.analyser.resolveLangrefType(builtin.return_type) orelse return;
+        return_type = try return_type.instanceTypeVal(builder.analyser) orelse return_type;
+        _ = try return_type.getAllTypesWithHandlesArraySet(builder.analyser, types_with_handles);
+    } else if (try resolveBuiltinFnArg(
         builder.analyser,
         dot_context.fn_arg_index,
-        handle.tree.source[loc.start..loc.end],
+        name,
     )) |ty| {
         _ = try ty.getAllTypesWithHandlesArraySet(builder.analyser, types_with_handles);
     }

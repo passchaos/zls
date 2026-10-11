@@ -18086,7 +18086,7 @@ pub fn resolveComptimeEmbedFileValue(
     return value;
 }
 
-fn resolveLangrefType(analyser: *Analyser, type_str: []const u8) Error!?Type {
+pub fn resolveLangrefType(analyser: *Analyser, type_str: []const u8) Error!?Type {
     if (try analyser.resolvePrimitive(type_str)) |primitive|
         return Type.fromIP(analyser, primitive, null);
 
