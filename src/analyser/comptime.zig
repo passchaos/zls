@@ -6659,9 +6659,15 @@ pub const Interpreter = struct {
             }
             break :target .{ .callable = callable, .receiver = receiver };
         };
-        const callable = target.callable;
+        var callable = target.callable;
         const receiver = target.receiver;
-        if (receiver != null) {
+        if (receiver) |value| {
+            const receiver_type = try value.value.typeOf(self.analyser);
+            if (receiver_type.data == .container) {
+                const container_type = try self.analyser.arena.create(Type);
+                container_type.* = receiver_type;
+                callable.data.function.container_type = container_type;
+            }
             const parameters = callable.data.function.parameters;
             if (parameters.len != call_node.ast.params.len + 1) return .unknown;
             // Avoid executing ordinary runtime methods merely because their
@@ -6764,18 +6770,27 @@ pub const Interpreter = struct {
             Type.fromIP(analyser, .type_type, .type_type)
         else return_type: {
             var return_value = try analyser.resolveGenericType(info.return_value.*, child.bindings);
-            if (analyser.hasUnresolvedType(return_value)) {
-                return_value = resolve: {
-                    const old_interpreter = analyser.comptime_interpreter;
-                    const old_bindings = analyser.generic_bindings;
-                    analyser.comptime_interpreter = &child;
-                    analyser.generic_bindings = &child.bindings;
-                    defer {
-                        analyser.comptime_interpreter = old_interpreter;
-                        analyser.generic_bindings = old_bindings;
-                    }
-                    break :resolve try analyser.resolveReturnValueOfFuncNode(info.handle, info.fn_node) orelse return .unknown;
-                };
+            const return_type_node = fn_proto.ast.return_type.unwrap();
+            const has_nested_container_return = return_value.data == .container and
+                if (return_type_node) |return_node| switch (info.handle.tree.nodeTag(unwrapGroupedSource(
+                    &info.handle.tree,
+                    return_node,
+                ))) {
+                    .call, .call_comma, .call_one, .call_one_comma => true,
+                    else => false,
+                } else false;
+            if (has_nested_container_return or analyser.hasUnresolvedType(return_value)) {
+                const old_interpreter = analyser.comptime_interpreter;
+                const old_bindings = analyser.generic_bindings;
+                analyser.comptime_interpreter = &child;
+                analyser.generic_bindings = &child.bindings;
+                defer {
+                    analyser.comptime_interpreter = old_interpreter;
+                    analyser.generic_bindings = old_bindings;
+                }
+                if (try analyser.resolveReturnValueOfFuncNode(info.handle, info.fn_node)) |specialized_return| {
+                    return_value = specialized_return;
+                }
             }
             break :return_type try return_value.typeOf(analyser);
         };

@@ -338,6 +338,30 @@ test "definition through comptime instance method selection" {
     );
 }
 
+test "definition through nested aggregate comptime value" {
+    try testDefinition(
+        \\const ConcreteError = error{Failed};
+        \\const Contract = struct { const Associated = struct { Error: type = anyerror }; };
+        \\fn associatedFor() Contract.Associated {
+        \\    return .{ .Error = ConcreteError };
+        \\}
+        \\fn Inner(comptime associated: Contract.Associated) type {
+        \\    return struct { const stored = associated; };
+        \\}
+        \\fn Outer() type {
+        \\    return Inner(associatedFor());
+        \\}
+        \\fn Select() type {
+        \\    return if (Outer().stored.Error == ConcreteError)
+        \\        struct { <def><decl>matched</decl></def>: <tdef>u8</tdef> }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.mat<>ched;
+    );
+}
+
 test "generated Struct field falls back to its type definition" {
     try testDefinition(
         \\const Model = struct {

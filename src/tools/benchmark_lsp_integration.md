@@ -733,3 +733,31 @@ material performance change. All response hashes matched. Baseline binary
 SHA-256: `bdffab11ab6c4bb1564a6818b430f203384d702cda4c60be97f9266c44f77c2a`.
 Candidate binary SHA-256:
 `b39e4ee68d1e21fc8a59e3caa4211d8722a45f8f0ad7506e065c4cef384a5269`.
+
+## Nested aggregate comptime values through type calls
+
+2026-10-12, same machine, Zig version, and build options. Later comptime
+parameter types are now resolved in argument order when an aggregate-producing
+call is evaluated by the comptime interpreter. Struct and union results keep
+their field values through nested type-function return calls, and instance
+methods use the concrete receiver specialization. This lets the real
+`zigraft.auto(Reader, *Buffer)` value preserve the `ReaderError` selected by
+`associatedFor`, so `BufferReader.associated().Error` resolves without also
+retaining the `anyerror` fallback. The incremental binding map is treated as
+mutable while resolving dependent parameter types so specialization cache keys
+own stable snapshots.
+
+All 1,286 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. A real-document overlay also selected only the
+concrete associated-error branch and resolved `associated` exactly to
+`src/impl.zig`.
+
+Two reversed runs with 20 warmups and 500 measured rounds per order produced a
+`1.0031x` geometric mean across the 16 existing integration request cases. The
+multi-millisecond requests remained within 2.7%; their largest absolute
+difference was 29.2 us, so this is treated as no material performance change.
+All response hashes matched. Baseline binary
+SHA-256: `956c7a4f66a7559ffc32eb1d78836df300d5204d38b648c4d1338daa7baad2b3`.
+Candidate binary SHA-256:
+`901593dd6eba5b9a0d453b6caa20f56a2f4b70896804641e078f7093e86dc05f`.

@@ -11378,6 +11378,126 @@ test "generic function with comptime nested calls" {
     });
 }
 
+test "generic function preserves aggregate values across nested type calls" {
+    try testCompletion(
+        \\const ConcreteError = error{Failed};
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\fn associatedFor() Contract.Associated {
+        \\    return .{ .Error = ConcreteError };
+        \\}
+        \\fn Inner(comptime associated: Contract.Associated) type {
+        \\    return struct { const stored = associated; };
+        \\}
+        \\fn Outer() type {
+        \\    return Inner(associatedFor());
+        \\}
+        \\fn Select() type {
+        \\    return if (Outer().stored.Error == ConcreteError)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\fn associatedFor() Contract.Associated {
+        \\    return .{};
+        \\}
+        \\fn Inner(comptime associated: Contract.Associated) type {
+        \\    return struct { const stored = associated; };
+        \\}
+        \\fn Outer() type {
+        \\    return Inner(associatedFor());
+        \\}
+        \\fn Select() type {
+        \\    return if (Outer().stored.Error == anyerror)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const ConcreteError = error{Failed};
+        \\const Subject = struct { const Error = ConcreteError; };
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\};
+        \\fn associatedFor(comptime C: type, comptime S: type) C.Associated {
+        \\    return .{ .Error = S.Error };
+        \\}
+        \\fn Inner(comptime C: type, comptime S: type, comptime associated_value: C.Associated) type {
+        \\    return struct {
+        \\        binding: u8 = 0,
+        \\        const Self = @This();
+        \\        const stored = associated_value;
+        \\        fn associated(comptime _: Self) C.Associated { _ = S; return associated_value; }
+        \\    };
+        \\}
+        \\fn Outer(comptime C: type, comptime S: type) type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    return Inner(C, S, associatedFor(C, S));
+        \\}
+        \\fn make(comptime C: type, comptime S: type) Outer(C, S) {
+        \\    return .{};
+        \\}
+        \\const model = make(Contract, Subject);
+        \\fn Select() type {
+        \\    return if (model.associated().Error == ConcreteError)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+
+    try testCompletion(
+        \\const ConcreteError = error{Failed};
+        \\const Associated = struct { Error: type = anyerror };
+        \\const Check = struct {
+        \\    ok: bool,
+        \\    fn require(self: @This()) void {
+        \\        if (!self.ok) @compileError("invalid");
+        \\    }
+        \\};
+        \\fn Inner(comptime associated: Associated) type {
+        \\    const check = Check{ .ok = true };
+        \\    check.require();
+        \\    return struct { const stored = associated; };
+        \\}
+        \\fn Outer() type {
+        \\    return Inner(.{ .Error = ConcreteError });
+        \\}
+        \\fn Select() type {
+        \\    return if (Outer().stored.Error == ConcreteError)
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "comptime interpreter evaluates local value-returning instance methods" {
     try testCompletion(
         \\const Check = struct {

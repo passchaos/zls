@@ -6342,14 +6342,16 @@ fn resolveTypeNamespaceDeclValue(analyser: *Analyser, decl: DeclWithHandle) Erro
     if (decl.handle.tree.tokenTag(variable.ast.mut_token) != .keyword_const) return null;
     const initializer = variable.ast.init_node.unwrap() orelse return null;
     const destination = if (variable.ast.type_node.unwrap()) |type_node|
-        try (try analyser.resolveTypeOfNode(.{
+        try analyser.resolveTypeOfNode(.{
             .node_handle = .of(type_node, decl.handle),
             .container_type = decl.container_type,
-        }) orelse return null).instanceTypeVal(analyser) orelse return null
+        }) orelse return null
     else
-        Type.fromIP(analyser, .comptime_int_type, null);
-    if (try comptime_eval.Interpreter.evaluateTyped(analyser, decl.handle, initializer, destination)) |value|
-        return value;
+        null;
+    if (destination) |ty| {
+        if (try comptime_eval.Interpreter.evaluateTyped(analyser, decl.handle, initializer, ty)) |value|
+            return value;
+    }
     return try analyser.resolveComptimeValue(.{
         .node_handle = .of(initializer, decl.handle),
         .container_type = decl.container_type,
@@ -12436,6 +12438,20 @@ pub fn resolveAggregateComptimeArgument(
 ) Error!?Type {
     const node = unwrapAggregateComptimeArgument(&handle.tree, argument);
     const aggregate_type = if (parameter_type.is_type_val) parameter_type else try parameter_type.typeOf(analyser);
+    // A nested call is normally resolved to its return type while another
+    // comptime interpreter is active. Evaluate it in that existing context so
+    // aggregate arguments retain their field values.
+    if (aggregate_type.isUnionType() or aggregate_type.isStructType(analyser)) {
+        switch (handle.tree.nodeTag(node)) {
+            .call, .call_comma, .call_one, .call_one_comma => {
+                const value = try comptime_eval.Interpreter.evaluateTyped(analyser, handle, node, aggregate_type) orelse
+                    return null;
+                if (value.hasKnownValue(analyser)) return value;
+                return null;
+            },
+            else => {},
+        }
+    }
     if (aggregate_type.isUnionType()) {
         var buffer: [2]Ast.Node.Index = undefined;
         const literal = handle.tree.fullStructInit(&buffer, node) orelse return null;
@@ -12601,13 +12617,47 @@ fn resolveFunctionTypeFromCallPrefix(
     const parameters = func_info.parameters[@intFromBool(has_self_param)..];
     const arguments = call.ast.params[0..@min(argument_count, call.ast.params.len)];
     const min_len = @min(parameters.len, arguments.len);
+    var source_parameter_buffer: [1]Ast.Node.Index = undefined;
+    const source_function = func_tree.fullFnProto(&source_parameter_buffer, func_info.fn_node).?;
+    var source_parameter_iterator: ast.FnParamIterator = .init(&source_function, func_tree);
+    if (has_self_param) _ = source_parameter_iterator.next();
     var has_callsite_bindings = false;
     for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
+        const source_parameter = source_parameter_iterator.next();
         const param_name_token = param.name_token orelse continue;
-        const param_type = if (param.type.isGenericType())
+        var param_type = if (param.type.isGenericType())
             try analyser.resolveGenericType(param.type, meta_params)
         else
             param.type;
+        // Later parameter types may depend on earlier arguments. The original
+        // prototype can only represent those as unknown, so resolve the source
+        // type again with the bindings accumulated for this call.
+        const argument_is_call = switch (handle.tree.nodeTag(unwrapAggregateComptimeArgument(&handle.tree, arg))) {
+            .call, .call_comma, .call_one, .call_one_comma => true,
+            else => false,
+        };
+        if (param.modifier == .comptime_param and
+            analyser.comptime_interpreter != null and
+            argument_is_call and
+            isUnresolvedCallReturn(analyser, param_type))
+        resolve_parameter: {
+            const type_node = (source_parameter orelse break :resolve_parameter).type_expr orelse
+                break :resolve_parameter;
+            const old_bindings = analyser.generic_bindings;
+            const old_display_bindings = analyser.display_bindings;
+            const old_bindings_mutable = analyser.specialization_bindings_mutable;
+            analyser.generic_bindings = &value_params;
+            analyser.display_bindings = &display_params;
+            analyser.specialization_bindings_mutable = true;
+            defer {
+                analyser.generic_bindings = old_bindings;
+                analyser.display_bindings = old_display_bindings;
+                analyser.specialization_bindings_mutable = old_bindings_mutable;
+            }
+            const resolved_param = try analyser.resolveTypeOfNodeInternal(.of(type_node, func_info.handle)) orelse
+                break :resolve_parameter;
+            if (resolved_param.is_type_val) param_type = resolved_param;
+        }
         const parameter_token_handle: TokenWithHandle = .{
             .token = param_name_token,
             .handle = func_info.handle,
@@ -15944,6 +15994,15 @@ fn resolveBindingOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Er
                         .type = try analyser.enumValue(lhs.type, symbol),
                         .is_const = true,
                     };
+                }
+            }
+            const should_resolve_comptime_field = lhs.type.data == .comptime_value or
+                (lhs.type.data == .container and lhs.type.data.container.bound_params.count() != 0);
+            if (analyser.evaluate_comptime_values and should_resolve_comptime_field) {
+                if (try analyser.resolveComptimeFieldValue(lhs.type, symbol)) |value| {
+                    if (value.is_type_val or value.hasKnownValue(analyser)) {
+                        return .{ .type = value, .is_const = true };
+                    }
                 }
             }
 
