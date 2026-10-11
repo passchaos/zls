@@ -323,27 +323,27 @@ between binaries and runs.
 
 | Request | Case | Baseline (us) | Candidate (us) | Speedup |
 | --- | --- | ---: | ---: | ---: |
-| completion | comptime_method | 3640.77 | 3372.40 | 1.080x |
-| definition | comptime_method | 3659.77 | 3444.42 | 1.063x |
-| completion | generated_binding | 639.44 | 624.54 | 1.024x |
-| definition | generated_binding | 633.21 | 627.31 | 1.009x |
-| completion | generic_return_method | 2959.23 | 2781.52 | 1.064x |
-| definition | generic_return_method | 375.94 | 369.54 | 1.017x |
-| completion | generated_capability | 1249.60 | 1234.48 | 1.012x |
-| definition | generated_capability | 1257.90 | 1235.46 | 1.018x |
-| completion | dynamic_initializer | 4351.71 | 4154.88 | 1.047x |
-| definition | dynamic_initializer | 603.10 | 597.50 | 1.009x |
-| completion | standard_library | 5578.00 | 5531.69 | 1.008x |
-| definition | standard_library | 44.04 | 44.48 | 0.990x |
-| completion | reflection_member | 68.58 | 68.71 | 0.998x |
-| definition | reflection_member | 62.10 | 61.98 | 1.002x |
-| completion | package_import | 187.15 | 196.10 | 0.954x |
-| definition | package_import | 28.75 | 28.65 | 1.004x |
+| completion | comptime_method | 3525.08 | 3279.58 | 1.075x |
+| definition | comptime_method | 3568.65 | 3327.48 | 1.072x |
+| completion | generated_binding | 612.98 | 591.79 | 1.036x |
+| definition | generated_binding | 565.73 | 547.79 | 1.033x |
+| completion | generic_return_method | 2846.44 | 2690.42 | 1.058x |
+| definition | generic_return_method | 338.73 | 330.71 | 1.024x |
+| completion | generated_capability | 1178.06 | 1171.23 | 1.006x |
+| definition | generated_capability | 1181.40 | 1172.25 | 1.008x |
+| completion | dynamic_initializer | 4221.60 | 4024.19 | 1.049x |
+| definition | dynamic_initializer | 552.19 | 544.40 | 1.014x |
+| completion | standard_library | 5564.48 | 5542.50 | 1.004x |
+| definition | standard_library | 37.75 | 37.92 | 0.996x |
+| completion | reflection_member | 64.92 | 65.35 | 0.993x |
+| definition | reflection_member | 59.54 | 59.62 | 0.999x |
+| completion | package_import | 168.65 | 180.29 | 0.935x |
+| definition | package_import | 27.88 | 27.56 | 1.011x |
 
-The geometric mean speedup across all 16 requests is `1.018x`. The expensive
-comptime method and generic-return paths improve by 6.3-8.0%, and dynamic
-initializer completion improves by 4.7%. The package-import completion change
-is nine microseconds on a sub-200 us request.
+The geometric mean speedup across all 16 requests is `1.019x`. The expensive
+comptime method and generic-return paths improve by 5.8-7.5%, and dynamic
+initializer completion improves by 4.9%. The package-import completion change
+is twelve microseconds on a sub-200 us request.
 
 All 1,267 ZLS tests and all 17 zigraft tests passed. The complete integration
 audit passed all 661 exact definition destinations and 1,626 completion edits.
