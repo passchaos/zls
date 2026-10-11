@@ -4280,8 +4280,13 @@ fn resolveAggregateBitCastValue(
     const destination_info = aggregateBitCastInfo(analyser, destination_type) orelse return null;
     const source_info = aggregateBitCastInfo(analyser, source_type) orelse return null;
     if (destination_info.trailing_value != .none or
-        destination_info.child != source_info.child or
         destination_info.runtimeLen() != source_info.runtimeLen()) return null;
+    const same_element_type = destination_info.child == source_info.child;
+    if (!same_element_type and !analyser.isValidRuntimeCast(
+        destination_info.child,
+        source_info.child,
+        .bit_cast,
+    )) return null;
 
     const source_items = comptime_eval.Value.elements(source);
     const source_values = analyser.aggregateValues(source);
@@ -4295,12 +4300,30 @@ fn resolveAggregateBitCastValue(
     const values = try analyser.gpa.alloc(InternPool.Index, result_len);
     defer analyser.gpa.free(values);
     for (values[0..value_len], 0..) |*value, index| {
-        value.* = if (source_items) |items|
+        const source_value = if (source_items) |items|
             items[index].ipIndex() orelse try analyser.ip.getUnknown(source_info.child)
         else
             source_values.?.at(@intCast(index), analyser.ip);
+        if (source_value == .none) return null;
+        value.* = if (same_element_type)
+            source_value
+        else
+            try analyser.resolveCoercedIPValueFromIndex(
+                destination_info.child,
+                source_value,
+                .bit_cast,
+            ) orelse return null;
     }
-    if (source_info.trailing_value != .none) values[value_len] = source_info.trailing_value;
+    if (source_info.trailing_value != .none) {
+        values[value_len] = if (same_element_type)
+            source_info.trailing_value
+        else
+            try analyser.resolveCoercedIPValueFromIndex(
+                destination_info.child,
+                source_info.trailing_value,
+                .bit_cast,
+            ) orelse return null;
+    }
     return @as(?InternPool.Index, try analyser.ip.get(.{ .aggregate = .{
         .ty = destination_type,
         .values = try analyser.ip.getIndexSlice(values),

@@ -644,3 +644,24 @@ was 8.9 us on package-import completion. This is treated as no material
 performance change. All response hashes matched. Baseline binary SHA-256:
 `1f511de7f62d5a122b658b237db054232b82fe4f9dc91bdf1b3047704c512f35`.
 Candidate binary SHA-256: `e431d94625a19345e0e97b4e6bea39b301c93479d7ab9d05ae4d1af33bd08146`.
+
+The follow-up applies the scalar bit-cast rules independently to each lane, so
+equal-lane array/vector conversions may also change between compatible scalar
+element types, such as `[3]u8` and `@Vector(3, i8)`. Conversions that change the
+lane count and therefore require target-endian byte redistribution remain
+unknown.
+
+The lane-preserving path now also applies each existing scalar bit-cast rule to
+the corresponding destination lane. This preserves values for conversions such
+as `[3]u8` to `@Vector(3, i8)` and back, including signed bit patterns and known
+sentinels, without enabling target-endian scalar-to-multiple-lane casts.
+
+All 1,278 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. Two reversed runs with 20 warmups and 500 measured
+rounds per order produced a `0.9978x` geometric mean across the 16 existing
+request cases; multi-millisecond requests remained within 0.9%. The largest
+relative difference was 7.6 us on package-import completion, so this is treated
+as no material performance change. All response hashes matched. Baseline binary
+SHA-256: `e431d94625a19345e0e97b4e6bea39b301c93479d7ab9d05ae4d1af33bd08146`.
+Candidate binary SHA-256: `68cd54a6709de0fe4b4c044cc63b5c47ab127a2ad04922f5cfe7db0eecd7b50c`.
