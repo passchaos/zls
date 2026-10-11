@@ -4279,8 +4279,7 @@ fn resolveAggregateBitCastValue(
 
     const destination_info = aggregateBitCastInfo(analyser, destination_type) orelse return null;
     const source_info = aggregateBitCastInfo(analyser, source_type) orelse return null;
-    if (destination_info.trailing_value != .none or
-        destination_info.runtimeLen() != source_info.runtimeLen()) return null;
+    if (destination_info.runtimeLen() != source_info.runtimeLen()) return null;
     const same_element_type = destination_info.child == source_info.child;
     if (!same_element_type and !analyser.isValidRuntimeCast(
         destination_info.child,
@@ -4291,16 +4290,18 @@ fn resolveAggregateBitCastValue(
     const source_items = comptime_eval.Value.elements(source);
     const source_values = analyser.aggregateValues(source);
     if (source_items == null and source_values == null) return null;
-    const value_len = std.math.cast(usize, source_info.value_len) orelse return null;
+    const source_value_len = std.math.cast(usize, source_info.value_len) orelse return null;
     const result_len = std.math.cast(usize, destination_info.value_len) orelse return null;
-    if ((source_items != null and source_items.?.len != value_len) or
-        (source_values != null and source_values.?.len != value_len) or
-        result_len != value_len + @intFromBool(source_info.trailing_value != .none)) return null;
+    if ((source_items != null and source_items.?.len != source_value_len) or
+        (source_values != null and source_values.?.len != source_value_len) or
+        result_len > source_value_len + @intFromBool(source_info.trailing_value != .none)) return null;
 
     const values = try analyser.gpa.alloc(InternPool.Index, result_len);
     defer analyser.gpa.free(values);
-    for (values[0..value_len], 0..) |*value, index| {
-        const source_value = if (source_items) |items|
+    for (values, 0..) |*value, index| {
+        const source_value = if (index == source_value_len)
+            source_info.trailing_value
+        else if (source_items) |items|
             items[index].ipIndex() orelse try analyser.ip.getUnknown(source_info.child)
         else
             source_values.?.at(@intCast(index), analyser.ip);
@@ -4311,16 +4312,6 @@ fn resolveAggregateBitCastValue(
             try analyser.resolveCoercedIPValueFromIndex(
                 destination_info.child,
                 source_value,
-                .bit_cast,
-            ) orelse return null;
-    }
-    if (source_info.trailing_value != .none) {
-        values[value_len] = if (same_element_type)
-            source_info.trailing_value
-        else
-            try analyser.resolveCoercedIPValueFromIndex(
-                destination_info.child,
-                source_info.trailing_value,
                 .bit_cast,
             ) orelse return null;
     }

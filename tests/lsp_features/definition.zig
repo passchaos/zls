@@ -381,10 +381,9 @@ test "comptime array vector bitCast selects definition" {
         \\const Wrong = struct { const selected: u16 = 0; };
         \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
         \\fn select() type {
-        \\    const array = [3]u8{ 2, 3, 255 };
-        \\    const vector: @Vector(3, i8) = @bitCast(array);
-        \\    const roundtrip: [3]u8 = @bitCast(vector);
-        \\    if (vector[2] == -1 and roundtrip[1] == 3) return Right;
+        \\    const vector: @Vector(4, i8) = .{ 2, 3, -1, 1 };
+        \\    const array: [3:0]u8 = @bitCast(vector);
+        \\    if (array[2] == 255 and array[3] == 0) return Right;
         \\    return Wrong;
         \\}
         \\const Choice = select();

@@ -5122,10 +5122,13 @@ test "comptime bitCast preserves array vector elements" {
         \\    const roundtrip: [3]u8 = @bitCast(vector);
         \\    const sentinel = [3:0]u8{ 7, 11, 13 };
         \\    const sentinel_vector: @Vector(4, i8) = @bitCast(sentinel);
+        \\    const source_with_tail: @Vector(4, u8) = .{ 17, 19, 23, 1 };
+        \\    const sentinel_array: [3:0]u8 = @bitCast(source_with_tail);
         \\    return struct {
         \\        vector: [if (vector[2] == -1) 5 else 99]u8,
         \\        roundtrip: [roundtrip[1]]u8,
         \\        sentinel: [sentinel_vector[3]]u8,
+        \\        destination_sentinel: [sentinel_array[3]]u8,
         \\    };
         \\}
         \\const selected: Select() = undefined;
@@ -5134,6 +5137,7 @@ test "comptime bitCast preserves array vector elements" {
         .{ .label = "vector", .kind = .Field, .detail = "[5]u8" },
         .{ .label = "roundtrip", .kind = .Field, .detail = "[3]u8" },
         .{ .label = "sentinel", .kind = .Field, .detail = "[0]u8" },
+        .{ .label = "destination_sentinel", .kind = .Field, .detail = "[0]u8" },
     });
 
     try testCompletion(
@@ -5145,6 +5149,19 @@ test "comptime bitCast preserves array vector elements" {
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{.{ .label = "unknown", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\var runtime: @Vector(4, u8) = undefined;
+        \\fn Select() type {
+        \\    const array: [3:0]u8 = @bitCast(runtime);
+        \\    return struct { unknown: [array[0]]u8, sentinel: [array[3]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "unknown", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "sentinel", .kind = .Field, .detail = "[0]u8" },
+    });
 
     try testCompletion(
         \\fn Select() type {
