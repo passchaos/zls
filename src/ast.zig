@@ -1620,6 +1620,10 @@ pub fn nodesOverlappingIndex(allocator: std.mem.Allocator, tree: *const Ast, ind
 /// caller owns the returned memory.
 /// this function can be removed when the parser has been improved.
 pub fn nodesOverlappingIndexIncludingParseErrors(allocator: std.mem.Allocator, tree: *const Ast, source_index: usize) error{OutOfMemory}![]Ast.Node.Index {
+    // Valid documents need only the reachable enclosing branch. Scan detached
+    // parser nodes only when error recovery may have removed that branch.
+    if (tree.errors.len == 0) return nodesOverlappingIndex(allocator, tree, source_index);
+
     const NodeLoc = struct {
         node: Ast.Node.Index,
         loc: offsets.Loc,

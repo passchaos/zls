@@ -205,6 +205,22 @@ pub fn build(b: *Build) !void {
         b.step("bench-offsets", "Benchmark source position conversion on Zig files").dependOn(&run.step);
     }
 
+    { // zig build bench-ast -Doptimize=ReleaseSafe -- path/to/source.zig ...
+        const benchmark = b.addExecutable(.{
+            .name = "bench-ast",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tools/benchmark_ast.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "zls", .module = zls_module }},
+            }),
+            .use_llvm = use_llvm,
+        });
+        const run = b.addRunArtifact(benchmark);
+        if (b.args) |args| run.addArgs(args);
+        b.step("bench-ast", "Benchmark enclosing AST node queries").dependOn(&run.step);
+    }
+
     { // zig build bench-trigrams -Doptimize=ReleaseFast -- [declaration-count] [rounds]
         const benchmark = b.addExecutable(.{
             .name = "bench-trigrams",

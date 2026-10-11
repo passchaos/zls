@@ -17,7 +17,12 @@ test "recovered overlapping nodes keep inner expressions before their parents" {
         "const value = choose(u8, .{ .field = 42<cursor> });\nconst broken = ;",
         "comptime { const value = (42<cursor>); }",
     };
-    for (sources) |source| {
+    for (sources) |base| for ([_]bool{ false, true }) |with_parse_error| {
+        const source = if (with_parse_error)
+            try std.mem.concat(allocator, u8, &.{ base, "\nconst broken_after = ;" })
+        else
+            try allocator.dupe(u8, base);
+        defer allocator.free(source);
         const cursor = std.mem.find(u8, source, "<cursor>").?;
         const text = try std.mem.concatWithSentinel(allocator, u8, &.{ source[0..cursor], source[cursor + "<cursor>".len ..] }, 0);
         defer allocator.free(text);
@@ -29,7 +34,7 @@ test "recovered overlapping nodes keep inner expressions before their parents" {
         const reachable = try ast.nodesOverlappingIndex(allocator, &tree, cursor);
         defer allocator.free(reachable);
         try std.testing.expectEqualSlices(std.zig.Ast.Node.Index, reachable, recovered);
-    }
+    };
 }
 
 test "recovered overlapping nodes retain detached expressions" {
