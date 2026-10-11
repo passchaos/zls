@@ -514,6 +514,7 @@ was retained:
 | Cache stable `FnProto` values and parameter slices per request | 0.9950x | Hash-map and slice-copy costs exceeded reuse across specializations. |
 | Defer `value_params` construction through a difference overlay | 0.9952x | Final cloning plus overlay replay cost more than paired small-map writes. |
 | Skip the first field-enum method selection before restoring a concrete container | 0.9936x | The supposedly duplicate selection affected later specialization locality. |
+| Short-circuit stable container equality by storage identity | 0.9984x | Existing shared-binding checks had already removed most deep-comparison cost. |
 
 The experiments also confirmed that their response hashes matched the baseline,
 so the rejection is performance-based rather than caused by semantic drift.
