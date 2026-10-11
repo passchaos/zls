@@ -86,9 +86,19 @@ fn signatureInfosForType(
     skip_self_param: bool,
     ty: Analyser.Type,
     markup_kind: types.MarkupKind,
+    expand_nested_conditionals: bool,
 ) Analyser.Error!?[]const types.SignatureHelp.Signature {
     var signatures: std.ArrayList(types.SignatureHelp.Signature) = .empty;
-    for (try ty.getAllTypesWithHandles(analyser)) |candidate| {
+    var candidates: Analyser.Type.ArraySet = .empty;
+    if (expand_nested_conditionals) {
+        _ = try ty.getAllTypesWithHandlesArraySet(analyser, &candidates);
+    } else switch (ty.data) {
+        .either => |entries| for (entries) |entry| {
+            try candidates.put(arena, .{ .data = entry.type_data, .is_type_val = ty.is_type_val }, {});
+        },
+        else => try candidates.put(arena, ty, {}),
+    }
+    for (candidates.keys()) |candidate| {
         const func_type = try analyser.resolveFuncProtoOfCallable(candidate) orelse continue;
         const signature = try fnProtoToSignatureInfo(
             analyser,
@@ -333,6 +343,7 @@ pub fn getSignatureInfos(
                     false,
                     ty,
                     markup_kind,
+                    true,
                 )) |signatures| {
                     return signatures;
                 }
@@ -348,7 +359,16 @@ pub fn getSignatureInfos(
                     try symbol_stack.append(arena, .l_paren);
                     continue;
                 };
-                ty = try analyser.specializeFunctionTypeAtCall(handle, absolute_index, loc, ty);
+                const structural_type = try analyser.specializeFunctionTypeAtCall(handle, absolute_index, loc, ty);
+                var has_callsite_type = false;
+                if (try analyser.resolveCallsiteFieldAccessType(handle, absolute_index, call_expression_loc)) |candidate| {
+                    ty = try analyser.specializeFunctionTypeAtCall(handle, absolute_index, call_expression_loc, candidate);
+                    ty = try analyser.fillUnknownFunctionParts(ty, structural_type);
+                    ty = try analyser.specializeSelectedFieldEnumMethodAtCall(handle, absolute_index, call_expression_loc, ty);
+                    has_callsite_type = true;
+                } else {
+                    ty = structural_type;
+                }
 
                 if (try signatureInfosForType(
                     analyser,
@@ -357,6 +377,7 @@ pub fn getSignatureInfos(
                     skip_self_param,
                     ty,
                     markup_kind,
+                    !has_callsite_type,
                 )) |signatures| {
                     return signatures;
                 }

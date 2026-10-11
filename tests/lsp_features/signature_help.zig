@@ -365,8 +365,9 @@ test "selected FieldEnum method specializes return type" {
         \\fn generic(value: anytype, comptime impl: Impl(@TypeOf(value))) !void {
         \\    _ = try impl.call(.read, <cursor>.{value});
         \\}
-        \\comptime { _ = generic(Source{}, .{}) catch unreachable; }
-    , "fn call(comptime _: Impl(anytype), comptime method: enum(u0) {...}, args: struct { anytype }) anyerror!usize", 2);
+        \\const model: Impl(Source) = .{};
+        \\comptime { _ = generic(Source{}, model) catch unreachable; }
+    , "fn call(comptime _: Impl(Source), comptime method: enum(u0) {...}, args: struct { Source }) anyerror!usize", 2);
 }
 
 test "selected FieldEnum method preserves transformed argument tuple" {
@@ -562,6 +563,20 @@ test "callsite specializes anytype and dependent parameters" {
         \\const item: u8 = 0;
         \\const result = [_]Factory{ .init(&item, <cursor>.{}) };
     , "fn init(value: *const u8, comptime model: Model(*const u8)) Factory", 1);
+}
+
+test "callsite specializes a member of an explicit generic parameter" {
+    try testSignatureHelp(
+        \\fn Model(comptime T: type) type {
+        \\    return struct { fn call(_: @This(), value: T) T { return value; } };
+        \\}
+        \\fn generic(value: anytype, model: Model(@TypeOf(value))) void {
+        \\    _ = model.call(<cursor>value);
+        \\}
+        \\const item: u8 = 0;
+        \\const model: Model(u8) = .{};
+        \\comptime { generic(item, model); }
+    , "fn call(_: Model(u8), value: u8) u8", 1);
 }
 
 test "variadic" {

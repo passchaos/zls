@@ -1277,6 +1277,23 @@ test "hover recovered comptime members" {
     , .{ .markup_kind = .plaintext });
 }
 
+test "hover specializes a member of an explicit generic parameter from callsites" {
+    try testHoverWithOptions(
+        \\fn Model(comptime T: type) type {
+        \\    return struct { fn call(_: @This(), value: T) T { return value; } };
+        \\}
+        \\fn generic(value: anytype, model: Model(@TypeOf(value))) void {
+        \\    _ = model.ca<cursor>ll(value);
+        \\}
+        \\const item: u8 = 0;
+        \\const model: Model(u8) = .{};
+        \\comptime { generic(item, model); }
+    ,
+        \\fn call(_: @This(), value: T) T
+        \\(fn (Model(u8), u8) u8)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "alias with different type" {
     try testHoverWithOptions(
         \\const foo: i32 = 1;

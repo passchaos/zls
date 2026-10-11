@@ -12467,6 +12467,16 @@ pub fn resolveFunctionTypeFromCall(
         }
     }
 
+    return analyser.applySelectedFieldEnumMethod(handle, call, resolved);
+}
+
+fn applySelectedFieldEnumMethod(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    call: Ast.full.Call,
+    resolved_param: Type,
+) Error!Type {
+    var resolved = resolved_param;
     if (try analyser.resolveSelectedFieldEnumMethod(handle, call, resolved)) |selected| {
         if (isUnresolvedCallReturn(analyser, resolved.data.function.return_value.*)) {
             resolved.data.function.return_value = try analyser.allocType(selected.return_type);
@@ -12510,6 +12520,41 @@ pub fn specializeFunctionTypeAtCall(
     return ty;
 }
 
+pub fn specializeSelectedFieldEnumMethodAtCall(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    absolute_index: usize,
+    expression_loc: ?offsets.Loc,
+    ty: Type,
+) Error!Type {
+    const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(analyser.arena, &handle.tree, absolute_index);
+    for (nodes) |node| {
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&buffer, node) orelse continue;
+        const fn_loc = offsets.nodeToLoc(&handle.tree, call.ast.fn_expr);
+        if (expression_loc) |expected_loc| {
+            if (fn_loc.start != expected_loc.start or fn_loc.end != expected_loc.end) continue;
+        } else if (absolute_index < fn_loc.start or absolute_index > fn_loc.end) continue;
+        if (ty.data == .either) {
+            var candidates: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+            for (ty.data.either) |entry| {
+                const candidate: Type = .{ .data = entry.type_data, .is_type_val = ty.is_type_val };
+                try candidates.append(analyser.arena, .{
+                    .type = if (candidate.data == .function)
+                        try analyser.applySelectedFieldEnumMethod(handle, call, candidate)
+                    else
+                        candidate,
+                    .descriptor = entry.descriptor,
+                });
+            }
+            return try Type.fromEither(analyser, candidates.items) orelse ty;
+        }
+        if (ty.data != .function) return ty;
+        return analyser.applySelectedFieldEnumMethod(handle, call, ty);
+    }
+    return ty;
+}
+
 /// Like `specializeFunctionTypeAtCall`, but identifies the call by the end of
 /// its callee expression. This is useful while scanning an incomplete field
 /// access where the parser may have discarded the outer expression boundaries.
@@ -12535,6 +12580,17 @@ fn specializeFunctionTypeForCall(
     call: Ast.full.Call,
     ty: Type,
 ) Error!Type {
+    if (ty.data == .either) {
+        var candidates: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+        for (ty.data.either) |entry| {
+            const candidate: Type = .{ .data = entry.type_data, .is_type_val = ty.is_type_val };
+            try candidates.append(analyser.arena, .{
+                .type = try analyser.specializeFunctionTypeForCall(handle, call, candidate),
+                .descriptor = entry.descriptor,
+            });
+        }
+        return try Type.fromEither(analyser, candidates.items) orelse ty;
+    }
     const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
     if (function.is_type_val) return ty;
     const had_self = try analyser.hasSelfParam(function);
@@ -12545,6 +12601,71 @@ fn specializeFunctionTypeForCall(
         specialized.data.function.parameters = parameters;
     }
     return specialized;
+}
+
+pub fn fillUnknownFunctionParts(
+    analyser: *Analyser,
+    primary: Type,
+    fallback: Type,
+) error{OutOfMemory}!Type {
+    if (primary.data == .either) {
+        var candidates: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+        for (primary.data.either) |entry| {
+            const candidate: Type = .{ .data = entry.type_data, .is_type_val = primary.is_type_val };
+            try candidates.append(analyser.arena, .{
+                .type = try analyser.fillUnknownFunctionParts(candidate, fallback),
+                .descriptor = entry.descriptor,
+            });
+        }
+        return try Type.fromEither(analyser, candidates.items) orelse primary;
+    }
+    if (primary.data != .function or fallback.data != .function) return primary;
+    const primary_info = primary.data.function;
+    const fallback_info = fallback.data.function;
+    if (primary_info.parameters.len != fallback_info.parameters.len) return primary;
+
+    var substitutions: TokenToTypeMap = .empty;
+    if (primary_info.container_type.data == .container and fallback_info.container_type.data == .container) {
+        const primary_bindings = primary_info.container_type.data.container.bound_params;
+        const fallback_bindings = fallback_info.container_type.data.container.bound_params;
+        for (fallback_bindings.keys(), fallback_bindings.values()) |key, fallback_bound| {
+            const primary_bound = primary_bindings.get(key) orelse continue;
+            const token_handle = switch (fallback_bound.data) {
+                .type_parameter => |token| token,
+                .anytype_parameter => |info| info.token_handle,
+                else => continue,
+            };
+            try substitutions.put(analyser.arena, token_handle, primary_bound);
+        }
+    }
+
+    var result = primary;
+    var parameters: ?[]Type.Data.Parameter = null;
+    const primary_has_unknown = analyser.hasUnknownType(primary_info.return_value.*) or for (primary_info.parameters) |parameter| {
+        if (analyser.hasUnknownType(parameter.type)) break true;
+    } else false;
+    for (primary_info.parameters, fallback_info.parameters, 0..) |primary_parameter, fallback_parameter, index| {
+        const fallback_type = if (substitutions.count() == 0)
+            fallback_parameter.type
+        else
+            try analyser.resolveGenericType(fallback_parameter.type, substitutions);
+        const should_replace = analyser.hasUnknownType(primary_parameter.type) or
+            (primary_has_unknown and index != 0);
+        if (!should_replace or analyser.hasUnknownType(fallback_type)) continue;
+        if (parameters == null) parameters = try analyser.arena.dupe(Type.Data.Parameter, primary_info.parameters);
+        parameters.?[index].type = fallback_type;
+    }
+    if (parameters) |resolved_parameters| result.data.function.parameters = resolved_parameters;
+    const fallback_return = if (substitutions.count() == 0)
+        fallback_info.return_value.*
+    else
+        try analyser.resolveGenericType(fallback_info.return_value.*, substitutions);
+    if (analyser.hasUnknownType(primary_info.return_value.*) and
+        !analyser.hasUnknownType(fallback_return))
+    {
+        result.data.function.return_value = try analyser.allocType(fallback_return);
+    }
+    return result;
 }
 
 fn resolveEitherCallResult(
@@ -18415,6 +18536,28 @@ pub fn getFieldAccessType(
     }
 
     return current_type;
+}
+
+/// Resolves `parameter.member` through the concrete values supplied to that
+/// parameter's enclosing function. Callers use this to improve type display;
+/// structural field access remains the primary path for completion.
+pub fn resolveCallsiteFieldAccessType(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    source_index: usize,
+    loc: offsets.Loc,
+) Error!?Type {
+    if (!analyser.collect_callsite_references) return null;
+    const access_source = std.mem.trim(u8, offsets.locToSlice(handle.tree.source, loc), " \t\r\n");
+    const period_index = std.mem.lastIndexOfScalar(u8, access_source, '.') orelse return null;
+    const lhs_name = std.mem.trim(u8, access_source[0..period_index], " \t\r\n");
+    const field_name = std.mem.trim(u8, access_source[period_index + 1 ..], " \t\r\n");
+    if (!std.zig.isValidId(lhs_name) or !std.zig.isValidId(field_name)) return null;
+
+    const declaration = try analyser.lookupSymbolGlobal(handle, lhs_name, source_index) orelse return null;
+    if (declaration.decl != .function_parameter) return null;
+    const callsite_types = try analyser.resolveCallsiteReferences(declaration) orelse return null;
+    return analyser.resolveFieldAccess(callsite_types, field_name);
 }
 
 pub const PositionContext = union(enum) {

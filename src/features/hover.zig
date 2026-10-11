@@ -19,6 +19,7 @@ fn hoverSymbol(
     param_decl_handle: Analyser.DeclWithHandle,
     markup_kind: types.MarkupKind,
     resolved_type_override: ?Analyser.Type,
+    expand_nested_conditionals: bool,
 ) Analyser.Error!?[]const u8 {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -85,6 +86,7 @@ fn hoverSymbol(
         markup_kind,
         &doc_strings,
         maybe_resolved_type,
+        expand_nested_conditionals,
     );
 }
 
@@ -95,6 +97,7 @@ fn hoverSymbolResolvedType(
     markup_kind: types.MarkupKind,
     doc_strings: *std.ArrayList([]const u8),
     resolved_type_maybe: ?Analyser.Type,
+    expand_nested_conditionals: bool,
 ) error{OutOfMemory}!?[]const u8 {
     var referenced: Analyser.ReferencedType.Set = .empty;
     var resolved_type_strings: std.ArrayList([]const u8) = .empty;
@@ -104,7 +107,14 @@ fn hoverSymbolResolvedType(
             try doc_strings.append(arena, doc);
 
         var possible_types: Analyser.Type.ArraySet = .empty;
-        has_more = try resolved_type.getAllTypesWithHandlesArraySet(analyser, &possible_types);
+        if (expand_nested_conditionals) {
+            has_more = try resolved_type.getAllTypesWithHandlesArraySet(analyser, &possible_types);
+        } else switch (resolved_type.data) {
+            .either => |entries| for (entries) |entry| {
+                try possible_types.put(arena, .{ .data = entry.type_data, .is_type_val = resolved_type.is_type_val }, {});
+            },
+            else => try possible_types.put(arena, resolved_type, {}),
+        }
 
         const options: Analyser.Type.FormatOptions = .{
             .referenced = &referenced,
@@ -208,7 +218,7 @@ fn hoverDefinitionLabel(
         .contents = .{
             .markup_content = .{
                 .kind = markup_kind,
-                .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null)) orelse return null,
+                .value = (try hoverSymbol(analyser, arena, decl, markup_kind, null, true)) orelse return null,
             },
         },
         .range = offsets.locToRange(handle.tree.source, loc, offset_encoding),
@@ -322,7 +332,7 @@ fn hoverDefinitionGlobal(
             try analyser.specializeFunctionTypeAtCall(handle, pos_index, null, ty)
         else
             null;
-        break :blk (try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type)) orelse return null;
+        break :blk (try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type, true)) orelse return null;
     };
 
     return .{
@@ -399,7 +409,7 @@ fn hoverDefinitionEnumLiteral(
             .contents = .{
                 .markup_content = .{
                     .kind = markup_kind,
-                    .value = (try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type)) orelse return null,
+                    .value = (try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type, true)) orelse return null,
                 },
             },
             .range = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
@@ -413,7 +423,7 @@ fn hoverDefinitionEnumLiteral(
         .contents = .{
             .markup_content = .{
                 .kind = markup_kind,
-                .value = (try hoverSymbolResolvedType(analyser, arena, name, markup_kind, &doc_strings, property_type)) orelse return null,
+                .value = (try hoverSymbolResolvedType(analyser, arena, name, markup_kind, &doc_strings, property_type, true)) orelse return null,
             },
         },
         .range = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
@@ -439,16 +449,25 @@ fn hoverDefinitionFieldAccess(
     var content: std.ArrayList([]const u8) = try .initCapacity(arena, decls.items.len + tys.items.len);
 
     for (decls.items) |decl| {
-        const resolved_type = if (try decl.resolveType(analyser)) |ty|
+        const structural_type = if (try decl.resolveType(analyser)) |ty|
             try analyser.specializeFunctionTypeAtCall(handle, source_index, null, ty)
         else
             null;
-        content.appendAssumeCapacity(try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type) orelse continue);
+        const callsite_type = try analyser.resolveCallsiteFieldAccessType(handle, source_index, loc);
+        const resolved_type = if (callsite_type) |candidate| callsite: {
+            var specialized = try analyser.specializeFunctionTypeAtCall(handle, source_index, null, candidate);
+            if (structural_type) |fallback| {
+                specialized = try analyser.fillUnknownFunctionParts(specialized, fallback);
+                specialized = try analyser.specializeSelectedFieldEnumMethodAtCall(handle, source_index, null, specialized);
+            }
+            break :callsite specialized;
+        } else structural_type;
+        content.appendAssumeCapacity(try hoverSymbol(analyser, arena, decl, markup_kind, resolved_type, callsite_type == null) orelse continue);
     }
     for (tys.items) |ty| {
         const def_str = offsets.locToSlice(handle.tree.source, highlight_loc);
         var doc_strings: std.ArrayList([]const u8) = .empty;
-        content.appendAssumeCapacity(try hoverSymbolResolvedType(analyser, arena, def_str, markup_kind, &doc_strings, ty) orelse continue);
+        content.appendAssumeCapacity(try hoverSymbolResolvedType(analyser, arena, def_str, markup_kind, &doc_strings, ty, true) orelse continue);
     }
 
     if (content.items.len == 0) {
@@ -457,7 +476,7 @@ fn hoverDefinitionFieldAccess(
         try analyser.collectHasDeclGuardedDeclarations(handle, source_index, loc, name, &guarded_declarations);
         try content.ensureUnusedCapacity(arena, guarded_declarations.items.len);
         for (guarded_declarations.items) |declaration| {
-            content.appendAssumeCapacity(try hoverSymbol(analyser, arena, declaration, markup_kind, null) orelse continue);
+            content.appendAssumeCapacity(try hoverSymbol(analyser, arena, declaration, markup_kind, null, true) orelse continue);
         }
     }
 
@@ -502,7 +521,7 @@ fn hoverDefinitionError(
     return .{
         .contents = .{ .markup_content = .{
             .kind = markup_kind,
-            .value = (try hoverSymbolResolvedType(analyser, arena, def_str, markup_kind, &doc_strings, resolved_type)) orelse return null,
+            .value = (try hoverSymbolResolvedType(analyser, arena, def_str, markup_kind, &doc_strings, resolved_type, true)) orelse return null,
         } },
         .range = offsets.locToRange(handle.tree.source, name_loc, offset_encoding),
     };
