@@ -69,6 +69,8 @@ std_builtin_types: std.StringHashMapUnmanaged(Type) = .empty,
 /// Active generic/display maps are immutable throughout ordinary recursive
 /// resolution, so their order-independent digests can be reused between keys.
 specialization_binding_hashes: specialization_cache.BindingHashCache = .{},
+/// Mutable binding environments require specialization keys to own snapshots.
+specialization_bindings_mutable: bool = false,
 
 /// handle of the doc where the request originated
 root_handle: ?*DocumentStore.Handle,
@@ -12947,8 +12949,13 @@ fn materializeContainerDisplayBindings(analyser: *Analyser, container: Type) Err
     var info = container.data.container;
     var bindings = try info.bound_params.clone(analyser.arena);
     const old_bindings = analyser.generic_bindings;
+    const old_bindings_mutable = analyser.specialization_bindings_mutable;
     analyser.generic_bindings = &bindings;
-    defer analyser.generic_bindings = old_bindings;
+    analyser.specialization_bindings_mutable = true;
+    defer {
+        analyser.generic_bindings = old_bindings;
+        analyser.specialization_bindings_mutable = old_bindings_mutable;
+    }
 
     for (info.display_params.keys(), info.display_params.values()) |parameter, argument| {
         const value = try analyser.resolveComptimeDisplayArgument(parameter, argument) orelse continue;
@@ -13296,7 +13303,7 @@ fn specializationKey(
     bindings: TokenToTypeMap,
     display_bindings: TokenToNodeMap,
 ) GeneratedContainerTypeKey {
-    if (analyser.comptime_interpreter != null) {
+    if (analyser.comptime_interpreter != null or analyser.specialization_bindings_mutable) {
         return .init(node, container_type, bindings, display_bindings);
     }
     return .initCached(node, container_type, bindings, display_bindings, &analyser.specialization_binding_hashes);

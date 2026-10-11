@@ -444,3 +444,52 @@ container-type hashes (`0.9955x` overall), adding an inline buffer in front of
 the recursion stack (`0.9956x`), using linear search for small child-scope lists
 (`0.9902x`), and a direct-mapped innermost-scope cache (`0.9966x`). None of
 these changes are present in the final candidate.
+
+## Borrow stable specialization bindings
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`49efa126` includes the lexical field-lookup pruning above. Specialization keys
+must remain valid for the request lifetime. The baseline therefore cloned both
+binding maps for every new node key, even when the maps already lived for the
+request or document lifetime and were immutable. The candidate marks keys created from the
+ordinary cached-analysis path as stable and borrows those maps. Interpreter
+bindings and the display-materialization path remain explicitly mutable and
+continue to receive independent snapshots. Same-storage equality then avoids
+deep comparison on cache hits without weakening collision checks.
+
+Two runs reverse process startup and request order. Each process excludes 20
+warmups per request and records 500 measured requests; the table reports the
+median of each binary's 1,000 combined samples. All response hashes match
+between binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 3106.50 | 2520.88 | 1.232x |
+| definition | comptime_method | 3094.50 | 2536.35 | 1.220x |
+| completion | generated_binding | 553.98 | 515.56 | 1.075x |
+| definition | generated_binding | 542.23 | 498.77 | 1.087x |
+| completion | generic_return_method | 2591.88 | 2177.65 | 1.190x |
+| definition | generic_return_method | 325.58 | 302.56 | 1.076x |
+| completion | generated_capability | 1143.33 | 1106.92 | 1.033x |
+| definition | generated_capability | 1112.54 | 1080.42 | 1.030x |
+| completion | dynamic_initializer | 3727.69 | 3093.12 | 1.205x |
+| definition | dynamic_initializer | 509.54 | 471.23 | 1.081x |
+| completion | standard_library | 5502.17 | 5440.37 | 1.011x |
+| definition | standard_library | 37.94 | 38.08 | 0.996x |
+| completion | reflection_member | 64.56 | 64.90 | 0.995x |
+| definition | reflection_member | 61.94 | 61.88 | 1.001x |
+| completion | package_import | 172.46 | 185.56 | 0.929x |
+| definition | package_import | 27.81 | 27.71 | 1.004x |
+
+The geometric mean speedup across all 16 requests is `1.069x`. The expensive
+comptime method, generic-return, and dynamic-initializer completions improve by
+19.0-23.2%; their definition requests improve by 7.6-22.0%.
+
+All 1,268 ZLS tests and all 17 zigraft tests passed. New tests prove that stable
+keys borrow their backing maps while ordinary keys still snapshot mutable maps.
+The complete integration audit passed all 661 exact definition destinations and
+1,626 completion edits. Prehashing declaration names (`0.9926x` overall) and
+caching complete global-symbol lookups (`0.9892x`) were separately measured and
+rejected.
+Baseline binary SHA-256: `7a35be9be02f578fdb0805de21c9e0bb7d7db0f4f05c9cbae0fcf0bd33213c7c`.
+Candidate binary SHA-256: `75f9abaa2728cc2c9a6e764aa0fec41611191c8e42fc33ea11b322f4895e0c50`.

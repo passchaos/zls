@@ -141,6 +141,7 @@ test "binding hash cache invalidates same-storage value updates" {
 }
 
 pub fn eqlTypeBindings(a: TokenToTypeMap, b: TokenToTypeMap) bool {
+    if (sameMapStorage(a, b)) return true;
     if (a.count() != b.count()) return false;
     for (a.keys(), a.values()) |token_handle, ty| {
         const other = b.get(token_handle) orelse return false;
@@ -166,6 +167,7 @@ fn displayBindingsDigest(bindings: TokenToNodeMap) BindingsDigest {
 }
 
 pub fn eqlDisplayBindings(a: TokenToNodeMap, b: TokenToNodeMap) bool {
+    if (sameMapStorage(a, b)) return true;
     if (a.count() != b.count()) return false;
     for (a.keys(), a.values()) |token_handle, node_handle| {
         const other = b.get(token_handle) orelse return false;
@@ -188,6 +190,10 @@ const StorageIdentity = struct {
         };
     }
 };
+
+fn sameMapStorage(a: anytype, b: @TypeOf(a)) bool {
+    return std.meta.eql(StorageIdentity.of(a), StorageIdentity.of(b));
+}
 
 /// Reuses binding digests while an immutable binding map remains active.
 /// Call `invalidateType` before resolving through a type-binding map whose
@@ -231,6 +237,7 @@ pub const Key = struct {
     container_type: ?Type,
     bindings: TokenToTypeMap,
     display_bindings: TokenToNodeMap,
+    bindings_are_stable: bool,
     hash: u64,
 
     pub fn init(node: NodeWithUri, container_type: ?Type, bindings: TokenToTypeMap, display_bindings: TokenToNodeMap) Key {
@@ -239,6 +246,7 @@ pub const Key = struct {
             container_type,
             bindings,
             display_bindings,
+            false,
             typeBindingsDigest(bindings),
             displayBindingsDigest(display_bindings),
         );
@@ -256,6 +264,7 @@ pub const Key = struct {
             container_type,
             bindings,
             display_bindings,
+            true,
             cache.typeDigest(bindings),
             cache.displayDigest(display_bindings),
         );
@@ -266,6 +275,7 @@ pub const Key = struct {
         container_type: ?Type,
         bindings: TokenToTypeMap,
         display_bindings: TokenToNodeMap,
+        bindings_are_stable: bool,
         bindings_digest: BindingsDigest,
         display_bindings_digest: BindingsDigest,
     ) Key {
@@ -274,6 +284,7 @@ pub const Key = struct {
             .container_type = container_type,
             .bindings = bindings,
             .display_bindings = display_bindings,
+            .bindings_are_stable = bindings_are_stable,
             .hash = undefined,
         };
         var result = key;
@@ -364,8 +375,10 @@ pub fn Map(comptime V: type) type {
 
             const snapshot = try arena.create(Key);
             snapshot.* = key;
-            snapshot.bindings = try key.bindings.clone(arena);
-            snapshot.display_bindings = try key.display_bindings.clone(arena);
+            if (!key.bindings_are_stable) {
+                snapshot.bindings = try key.bindings.clone(arena);
+                snapshot.display_bindings = try key.display_bindings.clone(arena);
+            }
             entry.key_ptr.* = snapshot;
             return .{ .value_ptr = entry.value_ptr, .found_existing = false };
         }
@@ -419,6 +432,31 @@ test "specialization map snapshots bindings and preserves pending entries during
     try std.testing.expectEqual(@as(usize, 100), cache.count());
     try std.testing.expect(cache.remove(original));
     try std.testing.expect(cache.getPtr(original) == null);
+}
+
+test "specialization map borrows stable cached bindings" {
+    const allocator = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    var handle: DocumentStore.Handle = undefined;
+    handle.uri = .{ .raw = "file:///stable.zig" };
+    const token: TokenWithHandle = .{ .handle = &handle, .token = 0 };
+    const u8_type: Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u8_type } } };
+    var bindings: TokenToTypeMap = .empty;
+    try bindings.put(arena.allocator(), token, u8_type);
+
+    var hash_cache: BindingHashCache = .{};
+    const key = Key.initCached(.{ .uri = handle.uri, .node = .root }, null, bindings, .empty, &hash_cache);
+    var cache: Map(u8) = .{};
+    defer cache.deinit(allocator);
+    const inserted = try cache.getOrPut(allocator, arena.allocator(), key);
+    try std.testing.expect(!inserted.found_existing);
+    inserted.value_ptr.* = 42;
+
+    var keys = cache.table.keyIterator();
+    const stored = keys.next().?.*;
+    try std.testing.expect(stored.bindings.keys().ptr == bindings.keys().ptr);
+    try std.testing.expectEqual(@as(?u8, 42), cache.get(key));
 }
 
 test "specialization map removes an uninitialized entry when snapshot allocation fails" {
