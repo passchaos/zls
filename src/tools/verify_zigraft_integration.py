@@ -25,6 +25,34 @@ bool noreturn anyerror anyopaque usize isize comptime_int comptime_float c_char
 c_short c_ushort c_int c_uint c_long c_ulong c_longlong c_ulonglong c_longdouble _""".split())
 MASK = re.compile(r'//[^\n]*|"(?:\\.|[^"\\])*"')
 IDENTIFIER = re.compile(r'[A-Za-z_]\w*')
+TARGETS = Path(__file__).with_suffix(".targets.tsv")
+
+
+def target_path(path, root):
+    path = Path(path)
+    if path.is_relative_to(root):
+        return path.relative_to(root).as_posix()
+    parts = path.parts
+    for index in range(len(parts) - 2):
+        if parts[index:index + 2] == ("lib", "std"):
+            return "/".join(("std", *parts[index + 2:]))
+    raise AssertionError(f"definition outside zigraft and Zig standard library: {path}")
+
+
+def expected_targets(source):
+    lines = TARGETS.read_text().splitlines()
+    expected_hash = lines[0].removeprefix("# source_sha256=")
+    if hashlib.sha256(source.encode()).hexdigest() != expected_hash:
+        raise AssertionError("integration.zig changed; review and update the definition target manifest")
+    expected = {}
+    for row in lines[2:]:
+        name, queries, path, line, column, text = row.split("\t")
+        for query in queries.split(","):
+            key = (*map(int, query.split(":")), name)
+            if key in expected:
+                raise AssertionError(f"duplicate definition expectation: {key}")
+            expected[key] = [dict(path=path, line=int(line), column=int(column), text=text)]
+    return expected
 
 
 def positions(source):
@@ -45,6 +73,16 @@ def positions(source):
             yield dict(line=row, character=match.start(), start=offset + match.start(),
                        end=offset + match.end(), name=name, member=member,
                        declaration=declaration, builtin=builtin)
+        imported = re.search(r'@import\("(std|zigraft)"\)', line)
+        if imported:
+            yield dict(line=row, character=imported.start(1), start=offset + imported.start(1),
+                       end=offset + imported.end(1), name=imported[1], member=False,
+                       declaration=False, builtin=False, import_path=True)
+        member_name = re.search(r'@hasDecl\([^,]+, "([A-Za-z_]\w*)"\)', line)
+        if member_name:
+            yield dict(line=row, character=member_name.start(1), start=offset + member_name.start(1),
+                       end=offset + member_name.end(1), name=member_name[1], member=True,
+                       declaration=False, builtin=False, member_name_string=True)
         offset += len(line)
 
 
@@ -67,9 +105,10 @@ def targets(result):
         target_range = link.get("targetSelectionRange", link.get("range"))
         source = path.read_text()
         start, end = at(source, target_range["start"]), at(source, target_range["end"])
-        if not 0 <= start < end <= len(source):
+        if not 0 <= start <= end <= len(source):
             raise AssertionError(f"invalid definition range: {link}")
         locations.append(dict(path=str(path), line=target_range["start"]["line"] + 1,
+                              column=target_range["start"]["character"] + 1,
                               text=source[start:end]))
     return locations
 
@@ -115,12 +154,20 @@ def main():
     root = args.project.resolve()
     document = root / "tests/integration.zig"
     source = document.read_text()
+    expected = expected_targets(source)
     # All identifiers in this reference file are ASCII; LSP still negotiates
     # UTF-16 explicitly, and edit/target ranges are decoded in that encoding.
     if not source.isascii():
         parser.error("this fixture scanner currently requires ASCII integration source")
     uri = document.as_uri()
     tokens = list(positions(source))
+    required = {(token["line"] + 1, token["character"] + 1, token["name"])
+                for token in tokens if not token["declaration"]
+                and not (token["builtin"] and token["name"] != "This")
+                and not (token["member"] and token["name"] == "len")}
+    if required != set(expected):
+        raise AssertionError(f"definition manifest coverage mismatch: missing={required - set(expected)}, "
+                             f"extra={set(expected) - required}")
     if args.lines:
         lines = set(map(int, args.lines.split(",")))
         tokens = [t for t in tokens if t["line"] + 1 in lines]
@@ -164,7 +211,15 @@ def main():
                         entry["targets"] = targets(response)
                         if not entry["targets"]:
                             failures.append(dict(**entry, error="missing definition"))
-                    complete = token["member"] or token["builtin"]
+                        else:
+                            key = (entry["line"], entry["column"], entry["name"])
+                            wanted = expected.get(key)
+                            actual = [dict(target, path=target_path(target["path"], root))
+                                      for target in entry["targets"]]
+                            entry["exact_target_passed"] = actual == wanted
+                            if actual != wanted:
+                                failures.append(dict(**entry, error="incorrect definition target", expected=wanted))
+                    complete = token["member"] or token["builtin"] or token.get("import_path", False)
                     if not complete:
                         declarations = client.request("textDocument/declaration", dict(
                             textDocument=dict(uri=uri), position=dict(line=token["line"], character=token["character"]))) or []
@@ -207,6 +262,7 @@ def main():
                 report["failures"] = failures
                 args.output.write_text(json.dumps(report, indent=2) + "\n")
     summary = dict(identifiers=len(tokens), definitions=sum("targets" in c for c in report["checks"]),
+                   exact_targets=sum(c.get("exact_target_passed", False) for c in report["checks"]),
                    completions=sum(len(c["completions"]) for c in report["checks"]), failures=len(failures))
     print(json.dumps(summary, indent=2))
     for failure in failures:
