@@ -20294,6 +20294,14 @@ pub fn resolveExpressionTypeFromAncestors(
                 if (try analyser.lookupSymbolFieldInit(handle, field_name, ancestors[0], ancestors[1..])) |field_decl| {
                     return try field_decl.resolveType(analyser);
                 }
+                // Generated fields have no AST declaration. Their concrete
+                // property type still constrains this initializer expression.
+                const container = try analyser.resolveExpressionType(handle, ancestors[0], ancestors[1..]) orelse return null;
+                const instance = if (container.is_type_val)
+                    try container.instanceTypeVal(analyser) orelse return null
+                else
+                    container;
+                return try analyser.resolvePropertyType(instance, field_name);
             }
         },
         .array_init_one,

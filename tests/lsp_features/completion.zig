@@ -407,6 +407,41 @@ test "completion recovers empty expressions in nested generic arguments" {
     }, .{ .allow_additional_completions = true });
 }
 
+test "function value completion keeps callable result locations" {
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn callback(_: u8) void {}
+        \\const S = @Struct(.auto, null, &.{"callback"}, &.{?*const fn (u8) void}, &.{.{}});
+        \\const value: S = .{ .callback = call<cursor>back };
+        ,
+        .label = "callback",
+        .expected_insert_line = "const value: S = .{ .callback = callbackback };",
+        .expected_replace_line = "const value: S = .{ .callback = callback };",
+        .enable_snippets = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn callback(_: u8) void {}
+        \\fn consume(comptime F: type, value: F) void { _ = value; }
+        \\const result = consume(*const fn (u8) void, call<cursor>back);
+        ,
+        .label = "callback",
+        .expected_insert_line = "const result = consume(*const fn (u8) void, callbackback);",
+        .expected_replace_line = "const result = consume(*const fn (u8) void, callback);",
+        .enable_snippets = true,
+    });
+    try testCompletionTextEdit(.{
+        .source =
+        \\fn make() u8 { return 0; }
+        \\const result = (ma<cursor>ke);
+        ,
+        .label = "make",
+        .expected_insert_line = "const result = (make()ke);",
+        .expected_replace_line = "const result = (make());",
+        .enable_snippets = true,
+    });
+}
+
 test "completion prefix recovery preserves the original text edit range" {
     try testCompletionTextEdit(.{
         .source =

@@ -525,7 +525,7 @@ fn functionTypeCompletion(
     can_have_implicit_self: bool,
     callable_ty: Analyser.Type,
     func_ty: Analyser.Type,
-) error{OutOfMemory}!?types.completion.Item {
+) Analyser.Error!?types.completion.Item {
     std.debug.assert(func_ty.isFunc());
 
     const info = func_ty.data.function;
@@ -780,7 +780,7 @@ fn prepareCompletionLoc(tree: *const Ast, source_index: usize) offsets.Loc {
 const FunctionCompletionFormat = enum { snippet, only_name };
 const PrepareFunctionCompletionResult = struct { types.Range, types.Range, FunctionCompletionFormat, ?partial_calls.PartialCall };
 
-fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFunctionCompletionResult {
+fn prepareFunctionCompletion(builder: *Builder) Analyser.Error!PrepareFunctionCompletionResult {
     if (builder.cached_prepare_function_completion_result) |result| return result;
 
     const tree = &builder.orig_handle.tree;
@@ -804,7 +804,7 @@ fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFuncti
     } else if (insert_can_be_snippet or replace_can_be_snippet) {
         // snippet completions would be possible but insert and replace would need different `newText`
     } else if (builder.use_snippets and !has_existing_call) {
-        format = .snippet;
+        if (!try completionExpectsFunctionValue(builder)) format = .snippet;
     }
 
     const insert_range = offsets.locToRange(source, insert_loc, builder.server.offset_encoding);
@@ -819,6 +819,27 @@ fn prepareFunctionCompletion(builder: *Builder) error{OutOfMemory}!PrepareFuncti
 
     builder.cached_prepare_function_completion_result = .{ insert_range, replace_range, format, partial_call };
     return builder.cached_prepare_function_completion_result.?;
+}
+
+fn completionExpectsFunctionValue(builder: *Builder) Analyser.Error!bool {
+    const tree = &builder.orig_handle.tree;
+    const nodes = try ast.nodesOverlappingIndex(builder.arena, tree, builder.source_index);
+    if (nodes.len < 2) return false;
+    // An unannotated variable infers its type from the expression being
+    // completed; that inference is not a callable destination constraint.
+    var context_index: usize = 1;
+    while (context_index + 1 < nodes.len and tree.nodeTag(nodes[context_index]) == .grouped_expression) : (context_index += 1) {}
+    if (tree.fullVarDecl(nodes[context_index])) |decl| {
+        if (decl.ast.type_node == .none) return false;
+    }
+    var expected = try builder.analyser.resolveExpressionTypeFromAncestors(builder.orig_handle, nodes[0], nodes[1..]) orelse return false;
+    if (expected.is_type_val) expected = try expected.instanceTypeVal(builder.analyser) orelse return false;
+    expected = try builder.analyser.resolveOptionalUnwrap(expected) orelse expected;
+    expected = try builder.analyser.resolveDerefType(expected) orelse expected;
+    if (expected.isFunc()) return true;
+    const expected_type = try expected.typeOf(builder.analyser);
+    const type_index = expected_type.ipIndex() orelse return false;
+    return builder.analyser.ip.zigTypeTag(type_index) == .@"fn";
 }
 
 fn createPartialFunctionSnippet(
@@ -861,7 +882,7 @@ fn createPartialFunctionSnippet(
     return snippet.items;
 }
 
-fn completeBuiltin(builder: *Builder) error{OutOfMemory}!void {
+fn completeBuiltin(builder: *Builder) Analyser.Error!void {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
 
