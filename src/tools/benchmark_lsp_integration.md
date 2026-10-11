@@ -510,6 +510,7 @@ was retained:
 | Reserve 16 specialization entries on first use | 0.9966x | Smaller reservation still lost to demand-driven growth. |
 | Pre-scan for unresolved parameters before `fullFnProto` | 0.9951x | The extra type scan cost more than the avoided parsing. |
 | Persist parameter `type_expr` nodes in function types | 0.9984x | Larger parameter metadata offset removal of the AST iterator. |
+| Reuse the caller's parsed `FnProto` for initial return resolution | 0.9918x | Reduced parsing but worsened code layout and hot completion paths. |
 
 The experiments also confirmed that their response hashes matched the baseline,
 so the rejection is performance-based rather than caused by semantic drift.
