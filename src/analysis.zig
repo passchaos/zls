@@ -20022,21 +20022,23 @@ pub fn lookupSymbolGlobalFromScope(
     var current_scope = initial_scope;
 
     while (true) {
-        const field_decl = document_scope.getScopeDeclaration(.{
-            .scope = current_scope,
-            .name = symbol,
-            .kind = .field,
-        }).unwrap() orelse try analyser.lookupEscapedScopeDeclaration(document_scope, tree, current_scope, symbol, .field);
-        if (field_decl) |decl_index| {
-            const decl = document_scope.declarations.get(@intFromEnum(decl_index));
-            std.debug.assert(decl == .ast_node);
+        if (document_scope.getScopeTag(current_scope).isContainer()) {
+            const field_decl = document_scope.getScopeDeclaration(.{
+                .scope = current_scope,
+                .name = symbol,
+                .kind = .field,
+            }).unwrap() orelse try analyser.lookupEscapedScopeDeclaration(document_scope, tree, current_scope, symbol, .field);
+            if (field_decl) |decl_index| {
+                const decl = document_scope.declarations.get(@intFromEnum(decl_index));
+                std.debug.assert(decl == .ast_node);
 
-            var field = tree.fullContainerField(decl.ast_node).?;
-            field.convertToNonTupleLike(tree);
+                var field = tree.fullContainerField(decl.ast_node).?;
+                field.convertToNonTupleLike(tree);
 
-            const field_name = offsets.tokenToLoc(tree, field.ast.main_token);
-            if (field_name.start <= source_index and source_index <= field_name.end) {
-                return .{ .decl = decl, .handle = handle };
+                const field_name = offsets.tokenToLoc(tree, field.ast.main_token);
+                if (field_name.start <= source_index and source_index <= field_name.end) {
+                    return .{ .decl = decl, .handle = handle };
+                }
             }
         }
 

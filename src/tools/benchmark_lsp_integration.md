@@ -395,3 +395,52 @@ exercise the guard directly, and the complete integration audit passed all 661
 exact definition destinations and 1,626 completion edits.
 Baseline binary SHA-256: `ef2310b5550d7b0303a9d90a84ce2a16b219473be60bfe4119933408123e3526`.
 Candidate binary SHA-256: `69970cab0a051709f24239b0ac2269a4f0acec39730e7d3b6cf8f0fffa24b7dc`.
+
+## Skip impossible lexical field lookups
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`26b7bda4` includes the stack-based specialization recursion guard. Global
+symbol lookup used to query both field and ordinary declaration indexes at
+every enclosing scope. `DocumentScope` only registers fields in container
+scopes, so the candidate skips the field-index lookup for function, block, and
+other scopes while preserving field-definition lookup inside containers.
+
+Two runs reverse process startup and request order. Each process excludes 20
+warmups per request and records 500 measured requests; the table reports the
+median of each binary's 1,000 combined samples. All response hashes match
+between binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 3184.48 | 3151.23 | 1.011x |
+| definition | comptime_method | 3256.35 | 3201.92 | 1.017x |
+| completion | generated_binding | 561.40 | 553.73 | 1.014x |
+| definition | generated_binding | 556.10 | 547.96 | 1.015x |
+| completion | generic_return_method | 2614.48 | 2581.10 | 1.013x |
+| definition | generic_return_method | 330.25 | 325.90 | 1.013x |
+| completion | generated_capability | 1169.19 | 1133.52 | 1.031x |
+| definition | generated_capability | 1155.62 | 1124.71 | 1.027x |
+| completion | dynamic_initializer | 3828.35 | 3763.04 | 1.017x |
+| definition | dynamic_initializer | 525.96 | 519.96 | 1.012x |
+| completion | standard_library | 5559.98 | 5537.25 | 1.004x |
+| definition | standard_library | 37.21 | 36.90 | 1.008x |
+| completion | reflection_member | 66.52 | 67.00 | 0.993x |
+| definition | reflection_member | 60.54 | 60.48 | 1.001x |
+| completion | package_import | 178.58 | 188.56 | 0.947x |
+| definition | package_import | 28.46 | 28.71 | 0.991x |
+
+The geometric mean speedup across all 16 requests is `1.007x`. The comptime,
+generic-return, generated-binding, generated-capability, and dynamic-initializer
+paths all improve; the largest gains are 3.1% for generated-capability
+completion and 2.7% for its definition.
+
+All 1,267 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits.
+Baseline binary SHA-256: `69970cab0a051709f24239b0ac2269a4f0acec39730e7d3b6cf8f0fffa24b7dc`.
+Candidate binary SHA-256: `7a35be9be02f578fdb0805de21c9e0bb7d7db0f4f05c9cbae0fcf0bd33213c7c`.
+
+Several adjacent ideas were rejected after bidirectional measurements: caching
+container-type hashes (`0.9955x` overall), adding an inline buffer in front of
+the recursion stack (`0.9956x`), using linear search for small child-scope lists
+(`0.9902x`), and a direct-mapped innermost-scope cache (`0.9966x`). None of
+these changes are present in the final candidate.
