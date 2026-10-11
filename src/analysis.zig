@@ -40,8 +40,8 @@ resolved_callsites: std.HashMapUnmanaged(ParameterWithUri, ?Type, ParameterWithU
 resolved_nodes: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
-resolved_specialized_nodes: std.HashMapUnmanaged(GeneratedContainerTypeKey, ?Binding, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
-generated_container_types: std.HashMapUnmanaged(GeneratedContainerTypeKey, Type, GeneratedContainerTypeKey.Context, std.hash_map.default_max_load_percentage) = .empty,
+resolved_specialized_nodes: specialization_cache.Map(?Binding) = .{},
+generated_container_types: specialization_cache.Map(Type) = .{},
 resolved_enum_literals: std.HashMapUnmanaged(EnumLiteralCacheKey, ?DeclWithHandle, EnumLiteralCacheKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 comptime_interpreter_needed: std.HashMapUnmanaged(NodeWithUri, bool, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
@@ -62,6 +62,8 @@ generic_bindings: ?*const TokenToTypeMap,
 display_bindings: ?*const TokenToNodeMap,
 comptime_interpreter: ?*comptime_eval.Interpreter = null,
 generated_struct_fields: std.AutoHashMapUnmanaged(InternPool.Index, []const GeneratedField) = .empty,
+/// Standard-library reflection types are independent of caller specialization.
+std_builtin_types: std.StringHashMapUnmanaged(Type) = .empty,
 
 /// handle of the doc where the request originated
 root_handle: ?*DocumentStore.Handle,
@@ -133,6 +135,7 @@ pub fn deinit(self: *Analyser) void {
     self.sequential_enum_sources.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
     self.generated_struct_fields.deinit(self.gpa);
+    self.std_builtin_types.deinit(self.gpa);
 }
 
 fn allocType(analyser: *Analyser, ty: Type) error{OutOfMemory}!*Type {
@@ -13266,15 +13269,15 @@ fn cacheGeneratedContainerType(
     generated_type: Type,
 ) error{OutOfMemory}!void {
     const bindings = analyser.generic_bindings orelse return;
-    try analyser.generated_container_types.put(analyser.gpa, GeneratedContainerTypeKey.init(
+    try analyser.generated_container_types.put(analyser.gpa, analyser.arena, GeneratedContainerTypeKey.init(
         .{
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
         },
         options.container_type,
-        try bindings.clone(analyser.arena),
+        bindings.*,
         if (analyser.display_bindings) |display_bindings|
-            try display_bindings.clone(analyser.arena)
+            display_bindings.*
         else
             .empty,
     ), generated_type);
@@ -13342,6 +13345,30 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
         return analyser.resolveBindingOfNodeUncached(options);
     }
 
+    // A bound identifier already carries the complete specialization value.
+    // Avoid hashing and copying the entire environment to cache that same
+    // lookup again. Resolve its declaration first to preserve lexical shadowing.
+    if (analyser.generic_bindings) |bindings| {
+        const handle = options.node_handle.handle;
+        const tree = &handle.tree;
+        if (tree.nodeTag(options.node_handle.node) == .identifier) {
+            const name_token = ast.identifierTokenFromIdentifierNode(tree, options.node_handle.node) orelse return null;
+            const name = try analyser.identifierTokenName(tree, name_token) orelse return null;
+            const is_escaped = tree.source[tree.tokenStart(name_token)] == '@';
+            if (!is_escaped) {
+                if (std.mem.eql(u8, name, "_")) return null;
+                if (try analyser.resolvePrimitive(name)) |primitive| return .{
+                    .type = Type.fromIP(analyser, analyser.ip.typeOf(primitive), primitive),
+                    .is_const = true,
+                };
+            }
+            if (try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(name_token))) |declaration| {
+                if (bindings.get(.{ .handle = declaration.handle, .token = declaration.nameToken() })) |bound|
+                    return .{ .type = bound, .is_const = true };
+            }
+        }
+    }
+
     // Specializations must not populate caches keyed only by the source node.
     if (analyser.generic_bindings) |bindings| {
         const node_with_uri: NodeWithUri = .{
@@ -13354,13 +13381,8 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
             bindings.*,
             if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
         );
-        const cached = try analyser.resolved_specialized_nodes.getOrPut(analyser.gpa, key);
+        const cached = try analyser.resolved_specialized_nodes.getOrPut(analyser.gpa, analyser.arena, key);
         if (cached.found_existing) return cached.value_ptr.*;
-        cached.key_ptr.bindings = try bindings.clone(analyser.arena);
-        cached.key_ptr.display_bindings = if (analyser.display_bindings) |display_bindings|
-            try display_bindings.clone(analyser.arena)
-        else
-            .empty;
         cached.value_ptr.* = null;
         errdefer _ = analyser.resolved_specialized_nodes.remove(key);
 
@@ -18334,6 +18356,28 @@ pub fn resolveLangrefType(analyser: *Analyser, type_str: []const u8) Error!?Type
 /// Look up `type_name` in 'zig_lib_dir/std/builtin.zig' and return it as an instance
 /// Useful for functionality related to builtin fns
 pub fn instanceStdBuiltinType(analyser: *Analyser, type_name: []const u8) Error!?Type {
+    if (analyser.std_builtin_types.get(type_name)) |cached| return cached;
+    const resolved = try analyser.instanceStdBuiltinTypeUncached(type_name) orelse return null;
+    const name = try analyser.arena.dupe(u8, type_name);
+    try analyser.std_builtin_types.put(analyser.gpa, name, resolved);
+    return resolved;
+}
+
+fn instanceStdBuiltinTypeUncached(analyser: *Analyser, type_name: []const u8) Error!?Type {
+    // Reflection metadata belongs to std.builtin, so outer generic arguments
+    // and interpreter cells cannot change it. Resolve it without those caller
+    // contexts, allowing the normal node cache to share namespace declarations.
+    const old_bindings = analyser.generic_bindings;
+    const old_display_bindings = analyser.display_bindings;
+    const old_interpreter = analyser.comptime_interpreter;
+    analyser.generic_bindings = null;
+    analyser.display_bindings = null;
+    analyser.comptime_interpreter = null;
+    defer {
+        analyser.generic_bindings = old_bindings;
+        analyser.display_bindings = old_display_bindings;
+        analyser.comptime_interpreter = old_interpreter;
+    }
     const zig_lib_dir = analyser.store.config.zig_lib_dir orelse return null;
     const builtin_path = try zig_lib_dir.join(analyser.arena, &.{ "std", "builtin.zig" });
     const builtin_uri: Uri = try .fromPath(analyser.arena, builtin_path);

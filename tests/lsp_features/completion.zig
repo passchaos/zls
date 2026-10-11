@@ -25927,6 +25927,73 @@ test "anytype resolution follows cross-file callsites" {
     try std.testing.expectEqualStrings("u32", completion.detail.?);
 }
 
+test "builtin reflection types are independent of generic bindings" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+    const uri = try ctx.addDocument(.{ .source =
+        \\fn generic(comptime T: type) void { _ = T; }
+    });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    var bindings: zls.Analyser.TokenToTypeMap = .empty;
+    try bindings.put(ctx.arena.allocator(), .{ .handle = handle, .token = 4 }, zls.Analyser.Type.unknown_type);
+    var display: zls.Analyser.TokenToNodeMap = .empty;
+    try display.put(ctx.arena.allocator(), .{ .handle = handle, .token = 4 }, .of(.root, handle));
+    analyser.generic_bindings = &bindings;
+    analyser.display_bindings = &display;
+    const first = try analyser.instanceStdBuiltinType("Type.StructField.Attributes") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(analyser.generic_bindings.? == &bindings);
+    try std.testing.expect(analyser.display_bindings.? == &display);
+    try std.testing.expect(first.data == .container);
+    try std.testing.expectEqual(@as(usize, 0), first.data.container.bound_params.count());
+    const cache_count = analyser.resolved_specialized_nodes.count();
+    try std.testing.expectEqual(@as(usize, 0), cache_count);
+    analyser.generic_bindings = null;
+    analyser.display_bindings = null;
+    const second = try analyser.instanceStdBuiltinType("Type.StructField.Attributes") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first.eql(second));
+    try std.testing.expectEqual(cache_count, analyser.resolved_specialized_nodes.count());
+    try std.testing.expect(std.meta.eql(first, second));
+    const attribute = try second.lookupSymbol(&analyser, "align") orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try attribute.resolveType(&analyser)) != null);
+}
+
+test "bound identifiers preserve changes and lexical shadowing" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+    const source =
+        \\fn generic(comptime @"bound value": type) void {
+        \\    _ = @"bound value";
+        \\    _ = u8;
+        \\    { const @"bound value" = u32; _ = @"bound value"; }
+        \\}
+    ;
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    const position = std.mem.find(u8, source, "_ = @\"bound value\"").? + "_ = ".len;
+    const declaration = try analyser.lookupSymbolGlobal(handle, "bound value", position) orelse return error.TestUnexpectedResult;
+    var bindings: zls.Analyser.TokenToTypeMap = .empty;
+    const key: zls.Analyser.TokenWithHandle = .{ .handle = handle, .token = declaration.nameToken() };
+    const u8_type: zls.Analyser.Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u8_type } } };
+    const u16_type: zls.Analyser.Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u16_type } } };
+    try bindings.put(ctx.arena.allocator(), key, u8_type);
+    analyser.generic_bindings = &bindings;
+    const nodes = try zls.ast.nodesOverlappingIndex(ctx.arena.allocator(), &handle.tree, position);
+    const options = zls.Analyser.ResolveOptions.of(nodes[0], handle);
+    try std.testing.expect((try analyser.resolveTypeOfNode(options)).?.eql(u8_type));
+    const cache_count = analyser.resolved_specialized_nodes.count();
+    try bindings.put(ctx.arena.allocator(), key, u16_type);
+    try std.testing.expect((try analyser.resolveTypeOfNode(options)).?.eql(u16_type));
+    try std.testing.expectEqual(cache_count, analyser.resolved_specialized_nodes.count());
+    const shadow_position = std.mem.lastIndexOf(u8, source, "_ = @\"bound value\"").? + "_ = ".len;
+    const shadow_nodes = try zls.ast.nodesOverlappingIndex(ctx.arena.allocator(), &handle.tree, shadow_position);
+    const shadow = try analyser.resolveTypeOfNode(.of(shadow_nodes[0], handle)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(.u32_type, shadow.ipIndex().?);
+}
+
 test "callsite inference caches parameters per source file" {
     var ctx: Context = try .init();
     defer ctx.deinit();

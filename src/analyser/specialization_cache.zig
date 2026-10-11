@@ -185,3 +185,109 @@ pub const Key = struct {
         }
     };
 };
+
+/// Keep only pointers in the hash table: full binding keys are considerably
+/// larger than the pointer and need stable storage only for occupied entries.
+pub fn Map(comptime V: type) type {
+    return struct {
+        table: Table = .empty,
+
+        const Self = @This();
+        const PointerContext = struct {
+            pub fn hash(_: @This(), key: *const Key) u64 {
+                return key.hash;
+            }
+            pub fn eql(_: @This(), a: *const Key, b: *const Key) bool {
+                return a == b or Key.Context.eql(.{}, a.*, b.*);
+            }
+        };
+        const LookupContext = struct {
+            pub fn hash(_: @This(), key: Key) u64 {
+                return key.hash;
+            }
+            pub fn eql(_: @This(), a: Key, b: *const Key) bool {
+                return Key.Context.eql(.{}, a, b.*);
+            }
+        };
+        const Table = std.HashMapUnmanaged(*const Key, V, PointerContext, 80);
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.table.deinit(allocator);
+        }
+
+        pub fn count(self: Self) usize {
+            return self.table.count();
+        }
+
+        pub fn get(self: Self, key: Key) ?V {
+            return self.table.getAdapted(key, LookupContext{});
+        }
+
+        pub fn getPtr(self: Self, key: Key) ?*V {
+            return self.table.getPtrAdapted(key, LookupContext{});
+        }
+
+        pub fn remove(self: *Self, key: Key) bool {
+            return self.table.removeAdapted(key, LookupContext{});
+        }
+
+        pub fn getOrPut(self: *Self, allocator: std.mem.Allocator, arena: std.mem.Allocator, key: Key) error{OutOfMemory}!struct { value_ptr: *V, found_existing: bool } {
+            if (self.getPtr(key)) |value_ptr| return .{ .value_ptr = value_ptr, .found_existing = true };
+            const snapshot = try arena.create(Key);
+            snapshot.* = key;
+            snapshot.bindings = try key.bindings.clone(arena);
+            snapshot.display_bindings = try key.display_bindings.clone(arena);
+            const entry = try self.table.getOrPut(allocator, snapshot);
+            return .{ .value_ptr = entry.value_ptr, .found_existing = entry.found_existing };
+        }
+
+        pub fn put(self: *Self, allocator: std.mem.Allocator, arena: std.mem.Allocator, key: Key, value: V) error{OutOfMemory}!void {
+            const entry = try self.getOrPut(allocator, arena, key);
+            entry.value_ptr.* = value;
+        }
+    };
+}
+
+test "specialization map snapshots bindings and preserves pending entries during growth" {
+    const allocator = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    var handle: DocumentStore.Handle = undefined;
+    handle.uri = .{ .raw = "file:///snapshot.zig" };
+    const token: TokenWithHandle = .{ .handle = &handle, .token = 0 };
+    const u8_type: Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u8_type } } };
+    const u16_type: Type = .{ .is_type_val = true, .data = .{ .ip_index = .{ .type = .type_type, .index = .u16_type } } };
+    var bindings: TokenToTypeMap = .empty;
+    try bindings.put(arena.allocator(), token, u8_type);
+    var display: TokenToNodeMap = .empty;
+    try display.put(arena.allocator(), token, .of(.root, &handle));
+    const original_bindings = try bindings.clone(arena.allocator());
+    const original_display = try display.clone(arena.allocator());
+    const node: NodeWithUri = .{ .uri = handle.uri, .node = .root };
+    const original = Key.init(node, null, original_bindings, original_display);
+    var cache: Map(?u8) = .{};
+    defer cache.deinit(allocator);
+    const pending = try cache.getOrPut(allocator, arena.allocator(), Key.init(node, null, bindings, display));
+    try std.testing.expect(!pending.found_existing);
+    pending.value_ptr.* = null;
+    try bindings.put(arena.allocator(), token, u16_type);
+    try display.put(arena.allocator(), token, .of(@enumFromInt(1), &handle));
+    const changed = Key.init(node, null, bindings, display);
+    try std.testing.expect(cache.getPtr(changed) == null);
+    for (1..100) |index| {
+        try cache.put(allocator, arena.allocator(), Key.init(.{
+            .uri = handle.uri,
+            .node = @enumFromInt(index),
+        }, null, bindings, display), 7);
+    }
+    try std.testing.expectEqual(@as(usize, 100), cache.count());
+    try std.testing.expect(cache.getPtr(original) != null);
+    try std.testing.expect(cache.getPtr(original).?.* == null);
+    cache.getPtr(original).?.* = 42;
+    const found = try cache.getOrPut(allocator, arena.allocator(), original);
+    try std.testing.expect(found.found_existing);
+    try std.testing.expectEqual(@as(?u8, 42), found.value_ptr.*);
+    try std.testing.expectEqual(@as(usize, 100), cache.count());
+    try std.testing.expect(cache.remove(original));
+    try std.testing.expect(cache.getPtr(original) == null);
+}

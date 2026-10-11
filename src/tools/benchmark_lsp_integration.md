@@ -158,3 +158,61 @@ The final candidate passed all 1,261 tests, including the two new cache invarian
 tests, and all 661 exact navigation destinations / 1,626 edits in integration.
 Baseline binary SHA-256: `27086d6ee70cb2a5cc656f3e3ba7e9b04f261d9686c85e1d773c08a60b2f7beb`.
 Candidate binary SHA-256: `bcc2f6454599db93c6e3abc0345cdf28703da95b346dd6aa3a7e5a868f3aba01`.
+
+## Smaller specialization hash tables and reflection reuse
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`d82e84e0` includes the previous generic binding refinement. Sampling dynamic
+initializer completion identified allocation/free memory fills, especially when
+growing the hash table of full specialization keys, as a substantial remaining
+cost. The candidate stores pointers in that table and keeps full key snapshots
+in stable request-arena storage. Only occupied entries need key storage, while
+table growth and release operate on smaller buckets. Lookups still compare the
+complete semantic key and its display bindings; a pending null result remains
+distinct from a missing entry.
+
+The candidate also reads already bound identifiers directly after lexical
+declaration lookup, avoiding another complete environment key. Standard builtin
+reflection types are cached within the request and initially resolved outside
+the caller's generic and interpreter environment. Earlier isolated measurements
+of these two changes showed only small latency changes; the gains below apply
+to the combined implementation, with the pointer table providing the larger
+observed improvement.
+
+As above, two independent runs reverse process startup order, alternate request
+order, exclude five warmups, and combine 48 timing samples per binary per case.
+All builds and tests completed first. Every response hash matches between builds
+and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 4685.42 | 3852.56 | 1.22x |
+| definition | comptime_method | 4510.69 | 3687.60 | 1.22x |
+| completion | generated_binding | 745.40 | 648.00 | 1.15x |
+| definition | generated_binding | 749.02 | 598.21 | 1.25x |
+| completion | generic_return_method | 3695.92 | 3135.44 | 1.18x |
+| definition | generic_return_method | 393.71 | 357.27 | 1.10x |
+| completion | generated_capability | 1352.98 | 1213.52 | 1.11x |
+| definition | generated_capability | 1396.31 | 1211.21 | 1.15x |
+| completion | dynamic_initializer | 5690.85 | 4351.94 | 1.31x |
+| definition | dynamic_initializer | 713.98 | 586.90 | 1.22x |
+| completion | standard_library | 5839.10 | 5577.00 | 1.05x |
+| definition | standard_library | 42.44 | 40.98 | 1.04x |
+| completion | reflection_member | 69.81 | 70.35 | 0.99x |
+| definition | reflection_member | 63.15 | 64.06 | 0.99x |
+| completion | package_import | 273.42 | 278.40 | 0.98x |
+| definition | package_import | 26.67 | 27.38 | 0.97x |
+
+The geometric mean speedup across all 16 requests is 1.116x.
+The consistent improvements are in generated/comptime type requests; the small
+changes in short import and reflection requests are near scheduling variation.
+These results cover complete-document requests, with edit recovery validated
+by the exhaustive integration audit.
+
+All 1,264 tests passed. Added checks cover stable binding snapshots, hash-table
+growth while a null result is pending, updating/removing those entries, bound
+identifier updates and lexical shadowing, escaped identifiers, and restoration
+of caller bindings after builtin reflection lookup. The actual LSP integration
+audit passed all 661 exact destinations and 1,626 completion edits.
+Baseline binary SHA-256: `bcc2f6454599db93c6e3abc0345cdf28703da95b346dd6aa3a7e5a868f3aba01`.
+Candidate binary SHA-256: `926896420a6dbc75bca54985f2e4b59af439501de353a7ffa75bef0f92f39ed6`.
