@@ -16,6 +16,7 @@ const DocumentScope = @import("../DocumentScope.zig");
 const analyser_completions = @import("../analyser/completions.zig");
 const partial_calls = @import("completion_partial_call.zig");
 const recovery = @import("completion_recovery.zig");
+const member_names = @import("../analyser/member_names.zig");
 
 const version_data = @import("version_data");
 const snippets = @import("../snippets.zig");
@@ -1544,6 +1545,22 @@ fn completeFileSystemStringLiteral(builder: *Builder, pos_context: Analyser.Posi
     }
 }
 
+fn completeMemberNameString(builder: *Builder) Analyser.Error!bool {
+    const info = try member_names.context(builder.analyser, builder.orig_handle, builder.source_index) orelse return false;
+    const source = builder.orig_handle.tree.source;
+    const insert = offsets.locToRange(source, .{ .start = info.content.start, .end = builder.source_index }, builder.server.offset_encoding);
+    const replace = offsets.locToRange(source, info.content, builder.server.offset_encoding);
+    for (try member_names.collect(builder.analyser, builder.orig_handle, info)) |member| {
+        const encoded = try std.fmt.allocPrint(builder.arena, "{f}", .{std.zig.fmtString(member.name)});
+        try builder.completions.append(builder.arena, .{
+            .label = member.name,
+            .kind = if (member.is_field) .Field else .Constant,
+            .textEdit = createTextEdit(builder, .{ .newText = encoded, .insert = insert, .replace = replace }),
+        });
+    }
+    return true;
+}
+
 pub fn completionAtIndex(
     server: *Server,
     analyser: *Analyser,
@@ -1634,8 +1651,8 @@ fn completionAtIndexInternal(
         .import_string_literal,
         .cinclude_string_literal,
         .embedfile_string_literal,
-        .string_literal,
         => try completeFileSystemStringLiteral(&builder, pos_context),
+        .string_literal => if (!try completeMemberNameString(&builder)) try completeFileSystemStringLiteral(&builder, pos_context),
         .test_doctest_name => {
             builder.use_snippets = false;
             try completeGlobal(&builder);

@@ -28,6 +28,7 @@ const version_data = @import("version_data");
 
 const Analyser = @This();
 const comptime_eval = @import("analyser/comptime.zig");
+pub const field_sources = @import("analyser/generated_fields.zig");
 
 gpa: std.mem.Allocator,
 arena: std.mem.Allocator,
@@ -67,6 +68,7 @@ max_conditional_combos: usize = 200,
 pub const GeneratedField = struct {
     name: []const u8,
     ty: Type,
+    source: ?TokenWithHandle = null,
     default_value: ?Type = null,
     alignment: u16 = 0,
 };
@@ -3273,7 +3275,9 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
                     if (collection.kind == .field_names) {
                         const name = try analyser.metaFieldNameAt(value.reflected_type.*, descriptor_index) orelse return null;
                         return .{
-                            .type = try analyser.stringValueWithType(
+                            .type = try field_sources.nameValue(
+                                analyser,
+                                value.reflected_type.*,
                                 name,
                                 try element_type.typeOf(analyser),
                             ),
@@ -5472,7 +5476,7 @@ fn resolveTypeInfoDescriptorField(
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "name")) {
-                return try analyser.stringValueWithType(name, try field_value_type.typeOf(analyser));
+                return try field_sources.nameValue(analyser, value.reflected_type.*, name, try field_value_type.typeOf(analyser));
             }
             if (std.mem.eql(u8, field_name, "type")) return field_type;
             if (std.mem.eql(u8, field_name, "is_comptime")) {
@@ -5522,7 +5526,7 @@ fn resolveTypeInfoDescriptorField(
                 else => return field_value_type,
             };
             if (std.mem.eql(u8, field_name, "name")) {
-                return try analyser.stringValueWithType(name, try field_value_type.typeOf(analyser));
+                return try field_sources.nameValue(analyser, value.reflected_type.*, name, try field_value_type.typeOf(analyser));
             }
             if (std.mem.eql(u8, field_name, "type")) return field_type;
             if (std.mem.eql(u8, field_name, "alignment")) {
@@ -8070,7 +8074,9 @@ fn resolveStringListLiteral(
     options: ResolveOptions,
 ) Error!?[]const []const u8 {
     if (try analyser.resolveComptimeValue(options)) |value| {
-        if (comptime_eval.Value.elements(value)) |items| {
+        if (try comptime_eval.Value.sequenceAlloc(analyser, value)) |sequence| {
+            if (!sequence.elements_valid) return null;
+            const items = sequence.backing[sequence.offset..][0..sequence.len];
             const strings = try analyser.arena.alloc([]const u8, items.len);
             for (strings, items, 0..) |*string, item, index| {
                 if (item.data != .string_value) return null;
@@ -8321,7 +8327,15 @@ fn resolveStructTypeConstructor(
     }, names.len) orelse return null;
     const field_types = try analyser.arena.alloc(InternPool.Index, resolved_types.len);
     for (field_types, resolved_types) |*index, ty| index.* = ty.ipIndex() orelse .unknown_type;
-    return analyser.createComptimeStructType(layout, backing_type, names, resolved_types, field_types, alignments, null);
+    const name_sequence = if (try analyser.resolveComptimeValue(.{
+        .node_handle = .of(params[2], handle),
+        .container_type = container_type,
+    })) |value| try comptime_eval.Value.sequenceAlloc(analyser, value) else null;
+    const name_values = if (name_sequence) |sequence|
+        if (sequence.elements_valid) sequence.backing[sequence.offset..][0..sequence.len] else null
+    else
+        null;
+    return analyser.createComptimeStructType(layout, backing_type, names, resolved_types, field_types, alignments, null, name_values);
 }
 
 fn createComptimeStructType(
@@ -8333,9 +8347,14 @@ fn createComptimeStructType(
     field_types: []const InternPool.Index,
     alignments: []const u16,
     defaults: ?[]const ?Type,
+    name_values: ?[]const Type,
 ) Error!?Type {
     if (names.len != resolved_types.len or names.len != field_types.len or names.len != alignments.len) return null;
     if (defaults) |values| if (values.len != names.len) return null;
+    if (name_values) |values| {
+        if (values.len != names.len) return null;
+        for (values) |value| if (value.data != .string_value) return null;
+    }
     var backing_type = initial_backing_type;
     if (layout == .@"packed") {
         var total_bits: u64 = 0;
@@ -8382,6 +8401,7 @@ fn createComptimeStructType(
         .ty = ty,
         .alignment = alignment,
         .default_value = if (defaults) |values| values[index] else null,
+        .source = if (name_values) |values| values[index].data.string_value.source else null,
     };
     try analyser.generated_struct_fields.put(analyser.gpa, struct_type, generated_fields);
     return Type.fromIP(analyser, .type_type, struct_type);
@@ -8494,6 +8514,7 @@ pub fn resolveComptimeStructTypeValue(
         field_types,
         alignments,
         defaults,
+        name_items,
     );
 }
 
@@ -13953,7 +13974,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     {
                         const operand = try analyser.resolveTypeOfNodeInternal(.of(params[1], handle)) orelse return null;
                         if (operand.data == .string_value) {
-                            return try analyser.stringValueWithType(operand.data.string_value.bytes, ty);
+                            var coerced = try analyser.stringValueWithType(operand.data.string_value.bytes, ty);
+                            coerced.data.string_value.source = operand.data.string_value.source;
+                            return coerced;
                         }
                     }
                     num: {
@@ -15385,9 +15408,13 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var ip_fields: std.array_hash_map.Auto(InternPool.String, InternPool.Struct.Field) = .empty;
             errdefer ip_fields.deinit(analyser.gpa);
             const generated_fields = try analyser.arena.alloc(GeneratedField, fields.len);
-            for (fields, generated_fields) |field, *generated| {
+            for (fields, generated_fields, literal.ast.fields) |field, *generated, field_node| {
                 const ty = try field.value.typeOf(analyser);
-                generated.* = .{ .name = field.name, .ty = ty };
+                generated.* = .{
+                    .name = field.name,
+                    .ty = ty,
+                    .source = .{ .handle = handle, .token = tree.firstToken(field_node) - 2 },
+                };
                 const name = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, field.name);
                 try ip_fields.put(analyser.gpa, name, .{ .ty = ty.ipIndex() orelse .unknown_type });
             }
@@ -15739,6 +15766,8 @@ pub const Type = struct {
         string_value: struct {
             string_type: *Type,
             bytes: []const u8,
+            /// Navigation metadata, excluded from semantic value identity.
+            source: ?TokenWithHandle = null,
         },
 
         /// A comptime-known `std.builtin.Type` value.
@@ -16370,6 +16399,7 @@ pub const Type = struct {
                     .string_value = .{
                         .string_type = try analyser.allocType(try analyser.resolveGenericTypeInternal(value.string_type.*, bound_params, visiting)),
                         .bytes = value.bytes,
+                        .source = value.source,
                     },
                 },
                 .container => |info| return .{

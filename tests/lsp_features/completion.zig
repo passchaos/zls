@@ -25678,6 +25678,23 @@ test "FieldEnum method completion shows concrete signature" {
     });
 }
 
+test "reflection member name string completion" {
+    try testCompletion(
+        \\const S = struct { const Value: u8 = 0; field: u32 };
+        \\const present = @hasDecl(S, "<cursor>");
+    , &.{.{ .label = "Value", .kind = .Constant }});
+    try testCompletion(
+        \\const S = struct { const Value: u8 = 0; field: u32 };
+        \\const present = @hasField(S, "fi<cursor>eld");
+    , &.{.{ .label = "field", .kind = .Field }});
+    try testCompletion(
+        \\const S = struct { const ReaderError = error{Failure}; };
+        \\fn inspect(comptime T: type) void {
+        \\    if (@hasDecl(T, "Reader<cursor>Error")) {}
+        \\}
+    , &.{.{ .label = "ReaderError", .kind = .Constant }});
+}
+
 test "function taking a generic struct arg" {
     try testCompletion(
         \\fn Foo(T: type) type {

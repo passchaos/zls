@@ -473,11 +473,33 @@ pub const Value = struct {
             };
         }
         if (sequence(value)) |sequence_value| return sequence_value;
+        if (value.data == .type_info_value) {
+            if (try aggregateElementsAlloc(analyser, value)) |items| return .{
+                .backing = items,
+                .offset = 0,
+                .len = items.len,
+                .elements_valid = true,
+            };
+        }
         return null;
     }
 
     fn aggregateElementsAlloc(analyser: *Analyser, value: Type) error{OutOfMemory}!?[]const Type {
         if (elements(value)) |items| return items;
+        if (value.data == .type_info_value) {
+            const collection = value.data.type_info_value.collection orelse return null;
+            if (collection.kind != .field_names or collection.index != null or collection.is_optional) return null;
+            const len = std.math.cast(usize, collection.len) orelse return null;
+            const items = try analyser.arena.alloc(Type, len);
+            const old_evaluate_values = analyser.evaluate_comptime_values;
+            analyser.evaluate_comptime_values = true;
+            defer analyser.evaluate_comptime_values = old_evaluate_values;
+            for (items, 0..) |*item, index| {
+                const binding = try analyser.resolveBracketAccess(.{ .type = value, .is_const = true }, .{ .single = index }) orelse return null;
+                item.* = binding.type;
+            }
+            return items;
+        }
         const payload = switch (value.data) {
             .ip_index => |payload| payload,
             else => return null,
@@ -3876,7 +3898,11 @@ pub const Interpreter = struct {
             _ = try self.analyser.coerceComptimeIPValue(type_index, source_value) orelse return null;
         }
         return switch (value.data) {
-            .string_value => |string| try self.analyser.stringValueWithType(string.bytes, destination),
+            .string_value => |string| blk: {
+                var coerced = try self.analyser.stringValueWithType(string.bytes, destination);
+                coerced.data.string_value.source = string.source;
+                break :blk coerced;
+            },
             .comptime_value => |comptime_value| switch (comptime_value.data) {
                 .reference => |reference| try Value.create(self.analyser, destination, .{ .reference = reference }),
                 .pointee => |pointee| try Value.create(self.analyser, destination, .{ .pointee = pointee }),

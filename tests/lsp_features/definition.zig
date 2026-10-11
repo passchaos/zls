@@ -319,6 +319,58 @@ test "generated Struct field falls back to its type definition" {
     );
 }
 
+test "generated Struct fields navigate to reflected source names" {
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Methods = struct { <def><decl>read</decl></def>: <tdef>fn</tdef> (u8) void };
+        \\fn Bindings(comptime T: type) type {
+        \\    const fields = @typeInfo(T).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [fields.len]type = undefined;
+        \\    inline for (fields, 0..) |field, index| {
+        \\        names[index] = field.name;
+        \\        types[index] = ?field.type;
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &.{.{} });
+        \\}
+        \\const bindings: Bindings(Methods) = .{ .re<>ad = null };
+    );
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Model = <tdef>struct</tdef> { value: u8 };
+        \\fn setName(comptime name: [:0]const u8, names: anytype) void {
+        \\    names[0] = name;
+        \\}
+        \\fn Generated(comptime capabilities: anytype) type {
+        \\    const fields = @typeInfo(@TypeOf(capabilities)).@"struct".fields;
+        \\    comptime var names: [fields.len][:0]const u8 = undefined;
+        \\    inline for (fields) |field| setName(field.name, &names);
+        \\    return @Struct(.auto, null, &names, &.{Model}, &.{.{} });
+        \\}
+        \\const Models = Generated(.{ .<def><decl>reader</decl></def> = Model });
+        \\const models: Models = undefined;
+        \\const selected = models.rea<>der;
+    );
+    try testDefinition(
+        \\const Source = struct { <def><decl>count</decl></def>: u32 };
+        \\fn Generated() type {
+        \\    const name = @typeInfo(Source).@"struct".fields[0].name;
+        \\    return @Struct(.auto, null, &.{name}, &.{u32}, &.{.{} });
+        \\}
+        \\const value: Generated() = undefined;
+        \\const selected = value.co<>unt;
+    );
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Source = struct { <def><decl>count</decl></def>: u32 };
+        \\fn Generated() type {
+        \\    return @Struct(.auto, null, std.meta.fieldNames(Source), &.{u32}, &.{.{} });
+        \\}
+        \\const value: Generated() = undefined;
+        \\const selected = value.co<>unt;
+    );
+}
+
 test "generic method definition keeps structural parameter type" {
     try testDefinition(
         \\fn Impl(comptime Subject: type) type {
@@ -346,6 +398,28 @@ test "hasDecl guard navigates members of an unresolved type" {
         \\    const Base = switch (@typeInfo(T)) { .pointer => |pointer| pointer.child, else => T };
         \\    if (@hasDecl(Base, "Value")) _ = Base.Val<>ue;
         \\}
+    );
+}
+
+test "reflection member name strings navigate to declarations" {
+    try testDefinition(
+        \\const S = struct { const <def><decl>Value</decl></def>: <tdef>u8</tdef> = 0; };
+        \\const present = @hasDecl(S, "Val<>ue");
+    );
+    try testDefinition(
+        \\const S = struct { <def><decl>value</decl></def>: <tdef>u32</tdef> };
+        \\const value: S = undefined;
+        \\const field = @field(value, "val<>ue");
+    );
+    try testDefinition(
+        \\const S = struct { const <def><decl>ReaderError</decl></def> = error{Failure}; };
+        \\fn inspect(comptime T: type) void {
+        \\    if (@hasDecl(T, "Reader<>Error")) {}
+        \\}
+    );
+    try testDefinition(
+        \\const S = struct { const Value: u8 = 0; };
+        \\const text = "Val<>ue";
     );
 }
 

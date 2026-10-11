@@ -15,6 +15,7 @@ const Uri = @import("../Uri.zig");
 const tracy = @import("tracy");
 
 const Analyser = @import("../analysis.zig");
+const member_names = @import("../analyser/member_names.zig");
 const DocumentStore = @import("../DocumentStore.zig");
 
 fn definitionLinkEql(lhs: types.Definition.Link, rhs: types.Definition.Link) bool {
@@ -199,12 +200,22 @@ fn gotoDefinitionEnumLiteral(
     if (try analyser.getSymbolEnumLiteral(handle, source_index, name)) |decl| {
         return try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), decl, kind, offset_encoding);
     }
+    const container_type = try analyser.resolveStructInitType(handle, source_index) orelse return null;
+    if (kind != .type_definition) {
+        if (try Analyser.field_sources.source(analyser, container_type, name)) |target| {
+            const target_range = offsets.tokenToRange(&target.handle.tree, target.token, offset_encoding);
+            return .{
+                .originSelectionRange = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
+                .targetUri = target.handle.uri.raw,
+                .targetRange = target_range,
+                .targetSelectionRange = target_range,
+            };
+        }
+    }
     if (kind == .declaration) return null;
 
-    // Fields of a type produced by `@Struct` have no declaration node. Fall
-    // back to the source of their concrete field type, matching field-access
-    // navigation on generated aggregates.
-    const container_type = try analyser.resolveStructInitType(handle, source_index) orelse return null;
+    // A computed field name may have no source token. Its concrete type is
+    // still useful for navigation when provenance is unavailable.
     var property_type = try analyser.resolvePropertyType(container_type, name) orelse return null;
     while (true) {
         property_type =
@@ -333,6 +344,22 @@ fn gotoDefinitionFieldAccess(
     for (accesses.items) |access| {
         if (try gotoDefinitionSymbol(analyser, offsets.tokenToRange(&handle.tree, name_token, offset_encoding), access, kind, offset_encoding)) |link|
             try appendUniqueDefinitionLink(arena, &locs, link);
+    }
+
+    if (locs.items.len == 0 and kind != .type_definition) {
+        if (try analyser.getFieldAccessType(handle, source_index, held_loc)) |ty| {
+            const container = try analyser.resolveDerefType(ty) orelse ty;
+            for (try container.getAllTypesWithHandles(analyser)) |possible| {
+                const target = try Analyser.field_sources.source(analyser, possible, name) orelse continue;
+                const target_range = offsets.tokenToRange(&target.handle.tree, target.token, offset_encoding);
+                try appendUniqueDefinitionLink(arena, &locs, .{
+                    .originSelectionRange = offsets.tokenToRange(&handle.tree, name_token, offset_encoding),
+                    .targetUri = target.handle.uri.raw,
+                    .targetRange = target_range,
+                    .targetSelectionRange = target_range,
+                });
+            }
+        }
     }
 
     // Runtime-created aggregate types (for example `@Struct`) have fields in
@@ -512,7 +539,39 @@ pub fn gotoHandler(
             }
         },
 
-        .string_literal,
+        .string_literal => {
+            const info = try member_names.context(&analyser, handle, source_index) orelse return null;
+            const raw = handle.tree.source[info.content.start - 1 .. info.content.end + 1];
+            const name = std.zig.string_literal.parseAlloc(arena, raw) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return null,
+            };
+            var links: std.ArrayList(types.Definition.Link) = .empty;
+            const origin = offsets.locToRange(handle.tree.source, info.content, server.offset_encoding);
+            for (try member_names.collect(&analyser, handle, info)) |member| {
+                if (!std.mem.eql(u8, name, member.name)) continue;
+                if (kind == .type_definition) {
+                    if (member.declaration) |declaration| {
+                        if (try gotoDefinitionSymbol(&analyser, origin, declaration, kind, server.offset_encoding)) |link|
+                            try appendUniqueDefinitionLink(arena, &links, link);
+                    }
+                } else {
+                    const target = member.source orelse continue;
+                    const range = offsets.tokenToRange(&target.handle.tree, target.token, server.offset_encoding);
+                    try appendUniqueDefinitionLink(arena, &links, .{
+                        .originSelectionRange = origin,
+                        .targetUri = target.handle.uri.raw,
+                        .targetRange = range,
+                        .targetSelectionRange = range,
+                    });
+                }
+            }
+            if (links.items.len == 0) return null;
+            if (server.client_capabilities.supports_textDocument_definition_linkSupport)
+                return .{ .definition_links = links.items };
+            if (links.items.len != 1) return null;
+            break :blk links.items[0];
+        },
         .number_literal,
         .char_literal,
         .parens_expr,
