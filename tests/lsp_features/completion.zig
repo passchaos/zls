@@ -5083,6 +5083,37 @@ test "comptime bitCast preserves scalar float bit patterns" {
     , &.{.{ .label = "unknown", .kind = .Field, .detail = "[?]u8" }});
 }
 
+test "comptime bitCast preserves boolean bit patterns" {
+    try testCompletion(
+        \\fn Select() type {
+        \\    const yes: bool = @bitCast(@as(u1, 1));
+        \\    const no: bool = @bitCast(@as(u1, 0));
+        \\    const signed: i1 = @bitCast(true);
+        \\    const roundtrip: bool = @bitCast(signed);
+        \\    const source: @Vector(2, u1) = .{ 1, 0 };
+        \\    const flags: @Vector(2, bool) = @bitCast(source);
+        \\    const vector_roundtrip: @Vector(2, u1) = @bitCast(flags);
+        \\    return if (yes and !no and signed == -1 and roundtrip and
+        \\        @reduce(.And, vector_roundtrip == source))
+        \\        struct { exact_bits: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "exact_bits", .kind = .Field, .detail = "u8" }});
+
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select() type {
+        \\    const bit: u1 = @bitCast(runtime);
+        \\    return struct { unknown: [if (bit == 1) 1 else 2]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "unknown", .kind = .Field, .detail = "[?]u8" }});
+}
+
 test "comptime overflow builtins accept structured vectors" {
     try testCompletion(
         \\fn Select() type {

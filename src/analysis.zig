@@ -4744,6 +4744,17 @@ fn bitCastScalarValue(
     const destination_tag = analyser.ip.zigTypeTag(dest_ty) orelse return null;
     const source_tag = analyser.ip.zigTypeTag(source_ty) orelse return null;
 
+    if (destination_tag == .bool) {
+        if (source_tag == .bool) return value;
+        if (source_tag != .int) return null;
+        const source_info = analyser.ip.intInfo(source_ty, builtin.target);
+        if (source_info.bits != 1) return null;
+        return switch (integerBitPattern(analyser, value, source_info) orelse return null) {
+            0 => .bool_false,
+            1 => .bool_true,
+            else => unreachable,
+        };
+    }
     if (destination_tag == .float and source_tag == .int) {
         const source_info = analyser.ip.intInfo(source_ty, builtin.target);
         const destination_bits = analyser.ip.floatBits(dest_ty, builtin.target);
@@ -4785,8 +4796,14 @@ fn bitCastScalarValue(
                 else => return null,
             };
         },
+        .bool => switch (value) {
+            .bool_false => 0,
+            .bool_true => 1,
+            else => return null,
+        },
         else => return null,
     };
+    if (source_tag == .bool and dest_info.bits != 1) return null;
 
     const result: i256 = switch (dest_info.signedness) {
         .unsigned => @intCast(raw),

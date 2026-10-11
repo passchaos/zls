@@ -362,6 +362,20 @@ test "comptime float bitCast selects definition" {
     );
 }
 
+test "comptime boolean bitCast selects definition" {
+    try testDefinition(
+        \\const Wrong = struct { const selected: u16 = 0; };
+        \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
+        \\fn select() type {
+        \\    const value: bool = @bitCast(@as(i1, -1));
+        \\    if (value) return Right;
+        \\    return Wrong;
+        \\}
+        \\const Choice = select();
+        \\const value = Choice.sel<>ected;
+    );
+}
+
 test "generated Struct fields navigate to reflected source names" {
     try testDefinition(
         \\const std = @import("std");
