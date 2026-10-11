@@ -232,13 +232,16 @@ pub fn Map(comptime V: type) type {
         }
 
         pub fn getOrPut(self: *Self, allocator: std.mem.Allocator, arena: std.mem.Allocator, key: Key) error{OutOfMemory}!struct { value_ptr: *V, found_existing: bool } {
-            if (self.getPtr(key)) |value_ptr| return .{ .value_ptr = value_ptr, .found_existing = true };
+            const entry = try self.table.getOrPutContextAdapted(allocator, key, LookupContext{}, PointerContext{});
+            if (entry.found_existing) return .{ .value_ptr = entry.value_ptr, .found_existing = true };
+            errdefer self.table.removeByPtr(entry.key_ptr);
+
             const snapshot = try arena.create(Key);
             snapshot.* = key;
             snapshot.bindings = try key.bindings.clone(arena);
             snapshot.display_bindings = try key.display_bindings.clone(arena);
-            const entry = try self.table.getOrPut(allocator, snapshot);
-            return .{ .value_ptr = entry.value_ptr, .found_existing = entry.found_existing };
+            entry.key_ptr.* = snapshot;
+            return .{ .value_ptr = entry.value_ptr, .found_existing = false };
         }
 
         pub fn put(self: *Self, allocator: std.mem.Allocator, arena: std.mem.Allocator, key: Key, value: V) error{OutOfMemory}!void {
@@ -290,4 +293,19 @@ test "specialization map snapshots bindings and preserves pending entries during
     try std.testing.expectEqual(@as(usize, 100), cache.count());
     try std.testing.expect(cache.remove(original));
     try std.testing.expect(cache.getPtr(original) == null);
+}
+
+test "specialization map removes an uninitialized entry when snapshot allocation fails" {
+    const allocator = std.testing.allocator;
+    var cache: Map(u8) = .{};
+    defer cache.deinit(allocator);
+    try cache.table.ensureTotalCapacity(allocator, 1);
+
+    var handle: DocumentStore.Handle = undefined;
+    handle.uri = .{ .raw = "file:///snapshot.zig" };
+    const key = Key.init(.{ .uri = handle.uri, .node = .root }, null, .empty, .empty);
+    var empty_buffer: [0]u8 = .{};
+    var failing_arena = std.heap.FixedBufferAllocator.init(&empty_buffer);
+    try std.testing.expectError(error.OutOfMemory, cache.getOrPut(allocator, failing_arena.allocator(), key));
+    try std.testing.expectEqual(@as(usize, 0), cache.count());
 }

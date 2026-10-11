@@ -260,3 +260,48 @@ All 1,265 ZLS tests and all 17 zigraft tests passed. The complete integration
 audit passed all 661 exact definition destinations and 1,626 completion edits.
 Baseline binary SHA-256: `a3b47a2fb42a9b5f200ce030f10889fb0d87c8fdd14e0ebf351bfcbebafc2d1a`.
 Candidate binary SHA-256: `569b538860d7400ee00db844de28141208dbd532fe5828fde4f78cc75e479c03`.
+
+## Single-probe specialization cache insertion
+
+2026-10-11, same machine, Zig version, build options, and source. Baseline
+`439640e9` includes cached normalized URI hashes. On a specialization-cache
+miss, the baseline first probed with the temporary full key, allocated its
+stable snapshot, and then performed a second hash-table lookup to insert it.
+The candidate uses one adapted get-or-put operation and fills the pointer key
+only on a miss. If snapshot allocation fails after reserving the slot, the slot
+is removed by pointer before returning the error.
+
+Two runs reverse process startup and request order. Each process excludes ten
+warmups per request and records 100 measured requests; the table reports the
+median of each binary's 200 combined samples. All response hashes match between
+binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 3533.06 | 3492.50 | 1.012x |
+| definition | comptime_method | 3642.77 | 3593.73 | 1.014x |
+| completion | generated_binding | 606.79 | 598.21 | 1.014x |
+| definition | generated_binding | 576.44 | 574.35 | 1.004x |
+| completion | generic_return_method | 2929.69 | 2896.29 | 1.012x |
+| definition | generic_return_method | 341.56 | 341.56 | 1.000x |
+| completion | generated_capability | 1209.29 | 1198.10 | 1.009x |
+| definition | generated_capability | 1182.88 | 1181.46 | 1.001x |
+| completion | dynamic_initializer | 4240.25 | 4219.90 | 1.005x |
+| definition | dynamic_initializer | 553.69 | 551.79 | 1.003x |
+| completion | standard_library | 5579.96 | 5566.77 | 1.002x |
+| definition | standard_library | 40.50 | 40.31 | 1.005x |
+| completion | reflection_member | 67.83 | 68.52 | 0.990x |
+| definition | reflection_member | 62.48 | 63.23 | 0.988x |
+| completion | package_import | 197.98 | 201.46 | 0.983x |
+| definition | package_import | 28.17 | 27.92 | 1.009x |
+
+The geometric mean speedup across all 16 requests is `1.003x`. The three
+multi-millisecond comptime-heavy completions improve by 0.5-1.2%, while the
+sub-250 us reflection/import variations remain within a few microseconds.
+
+All 1,266 ZLS tests passed, including a new failure-path check that verifies an
+uninitialized entry is removed when the stable-key snapshot cannot be allocated.
+The complete integration audit passed all 661 exact definition destinations and
+1,626 completion edits.
+Baseline binary SHA-256: `569b538860d7400ee00db844de28141208dbd532fe5828fde4f78cc75e479c03`.
+Candidate binary SHA-256: `60d34f6f09cf7fab09ba6c077e136dff580ade9530050392cf5aeb176fbb5f88`.
