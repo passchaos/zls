@@ -18555,7 +18555,17 @@ pub fn resolveCallsiteFieldAccessType(
     if (!std.zig.isValidId(lhs_name) or !std.zig.isValidId(field_name)) return null;
 
     const declaration = try analyser.lookupSymbolGlobal(handle, lhs_name, source_index) orelse return null;
-    if (declaration.decl != .function_parameter) return null;
+    const parameter = switch (declaration.decl) {
+        .function_parameter => |parameter| parameter.get(&declaration.handle.tree) orelse return null,
+        else => return null,
+    };
+    if (parameter.type_expr != null) {
+        const old_collect_callsite_references = analyser.collect_callsite_references;
+        analyser.collect_callsite_references = false;
+        defer analyser.collect_callsite_references = old_collect_callsite_references;
+        const declared_type = try declaration.resolveType(analyser) orelse return null;
+        if (!declared_type.hasUnresolvedGenericType() and !analyser.hasUnknownType(declared_type)) return null;
+    }
     const callsite_types = try analyser.resolveCallsiteReferences(declaration) orelse return null;
     return analyser.resolveFieldAccess(callsite_types, field_name);
 }
