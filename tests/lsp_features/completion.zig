@@ -149,6 +149,19 @@ test "struct init completion through imported dependent generic alias" {
     try std.testing.expectEqual(types.completion.Item.Kind.Field, completion.kind.?);
 }
 
+test "struct init completion through generic function return" {
+    try testCompletion(
+        \\const Contract = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\    fn resolveAssociated(comptime _: type) Associated {
+        \\        return .{ .<cursor> };
+        \\    }
+        \\};
+    , &.{
+        .{ .label = "Error", .kind = .Field },
+    });
+}
+
 test "root scope with self referential decl" {
     try testCompletion(
         \\const foo = foo;

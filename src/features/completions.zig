@@ -1766,7 +1766,7 @@ fn createCompletionPrefixSource(
             else => unreachable,
         }
     }
-    if (!inserted_statement_terminator) try source.append(arena, ';');
+    if (!inserted_statement_terminator or completing_struct_field) try source.append(arena, ';');
     return try source.toOwnedSliceSentinel(arena, 0);
 }
 
