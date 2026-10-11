@@ -17415,6 +17415,11 @@ pub const Type = struct {
         return !info.is_optional and info.pointer.is_const;
     }
 
+    pub fn isConstNonVolatilePointerType(self: Type, analyser: *Analyser) bool {
+        const info = self.pointerCastInfo(analyser) orelse return false;
+        return !info.is_optional and info.pointer.is_const and !info.pointer.is_volatile;
+    }
+
     pub fn sequencePointerElementType(self: Type, analyser: *Analyser) ?Type {
         const info = self.pointerCastInfo(analyser) orelse return null;
         if (info.is_optional) return null;

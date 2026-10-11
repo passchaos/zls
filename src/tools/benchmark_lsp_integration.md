@@ -570,3 +570,23 @@ mean speedup of `1.0049x`; the per-case differences were small and mixed, so
 this is treated as no material performance change. All response hashes matched.
 Baseline binary SHA-256: `2a2161e3083e63b8557a9e9428bad2bc0eda9bac14017f26539a39e868ebcbff`.
 Candidate binary SHA-256: `de051c679b436bf58ae95a0920977058270137bbef4526f43a5cbda01eefc2b6`.
+
+## Read-only pointer reinterpretation
+
+2026-10-11, same machine, Zig version, and build options. A `@ptrCast` between
+read-only sequence pointers now keeps elements readable when every element can
+be bit-cast to the destination element type. This covers equal-width integer
+reinterpretation, including signed values and a cast back to the original type.
+Size-changing casts and mutable reinterpreted views remain unknown because they
+require byte-level addressing or write-through alias semantics.
+
+All 1,272 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. Two runs reversed process and request order, with
+20 warmups and 500 measured rounds per run. The combined 1,000-sample medians
+across the 16 existing cases had a geometric mean speedup of `0.9951x`; the
+multi-millisecond requests remained within 1.1%, while the largest relative
+change was 14.6 us on package-import completion. This is treated as no material
+performance change. All response hashes matched. Baseline binary SHA-256:
+`de051c679b436bf58ae95a0920977058270137bbef4526f43a5cbda01eefc2b6`.
+Candidate binary SHA-256: `429924a9e118b5e5ed24d193faf619d126315f19534a1c727ee7a63de7b96915`.

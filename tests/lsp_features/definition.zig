@@ -333,6 +333,21 @@ test "comptime error integer roundtrip selects definition" {
     );
 }
 
+test "comptime read-only pointer reinterpretation selects definition" {
+    try testDefinition(
+        \\const Wrong = struct { const selected: u16 = 0; };
+        \\const Right = struct { const <def><decl>selected</decl></def>: <tdef>u8</tdef> = 1; };
+        \\fn bytes() [*]const u8 { return &.{ 1, 255 }; }
+        \\fn signed() [*]const i8 { return @ptrCast(bytes()); }
+        \\fn select() type {
+        \\    if (signed()[0] == 1 and signed()[1] == -1) return Right;
+        \\    return Wrong;
+        \\}
+        \\const Choice = select();
+        \\const value = Choice.sel<>ected;
+    );
+}
+
 test "generated Struct fields navigate to reflected source names" {
     try testDefinition(
         \\const std = @import("std");

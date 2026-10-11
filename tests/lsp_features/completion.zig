@@ -22110,7 +22110,7 @@ test "comptime pointer casts preserve address identity" {
 
     try testCompletion(
         \\fn bytes() [*]const u8 {
-        \\    return &.{ 1, 2, 3, 4 };
+        \\    return &.{ 1, 2, 3, 255 };
         \\}
         \\fn signed() [*]const i8 {
         \\    return @ptrCast(bytes());
@@ -22123,15 +22123,49 @@ test "comptime pointer casts preserve address identity" {
         \\    if (roundtrip() == bytes()) same = 1;
         \\    var shifted: usize = 4;
         \\    if (roundtrip() + 1 == bytes() + 1) shifted = 3;
-        \\    return struct { same: [same]u8, shifted: [shifted]u8, reinterpreted: [signed()[0]]u8 };
+        \\    var negative: usize = 6;
+        \\    if (signed()[3] == -1) negative = 5;
+        \\    return struct {
+        \\        same: [same]u8,
+        \\        shifted: [shifted]u8,
+        \\        reinterpreted: [signed()[0]]u8,
+        \\        negative: [negative]u8,
+        \\        roundtrip_value: [roundtrip()[3]]u8,
+        \\    };
         \\}
         \\const selected: Select() = undefined;
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "same", .kind = .Field, .detail = "[1]u8" },
         .{ .label = "shifted", .kind = .Field, .detail = "[3]u8" },
-        .{ .label = "reinterpreted", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "reinterpreted", .kind = .Field, .detail = "[1]u8" },
+        .{ .label = "negative", .kind = .Field, .detail = "[5]u8" },
+        .{ .label = "roundtrip_value", .kind = .Field, .detail = "[255]u8" },
     });
+
+    try testCompletion(
+        \\fn words() [*]const u16 {
+        \\    return &.{0x0102};
+        \\}
+        \\fn bytes() [*]const u8 {
+        \\    return @ptrCast(words());
+        \\}
+        \\fn Select() type {
+        \\    return struct { target_dependent: [bytes()[0]]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "target_dependent", .kind = .Field, .detail = "[?]u8" }});
+
+    try testCompletion(
+        \\fn Select() type {
+        \\    var bytes = [_]u8{ 1, 255 };
+        \\    const signed: [*]i8 = @ptrCast(&bytes);
+        \\    return struct { mutable_reinterpretation: [if (signed[1] == -1) 1 else 2]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{.{ .label = "mutable_reinterpretation", .kind = .Field, .detail = "[?]u8" }});
 
     try testCompletion(
         \\fn Select() type {

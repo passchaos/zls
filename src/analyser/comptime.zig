@@ -3470,10 +3470,18 @@ pub const Interpreter = struct {
         }
         if (destination.isManyPointerType(self.analyser)) {
             if (Value.sequence(operand)) |sequence| {
-                var casted = sequence;
-                casted.elements_valid = casted.elements_valid and destination.hasSamePointerElementType(self.analyser, source_type);
+                const casted = try self.pointerCastSequenceValue(
+                    destination,
+                    source_type,
+                    sequence,
+                    qualifier_cast == null,
+                );
                 return @as(?Type, try Value.create(self.analyser, destination, .{ .sequence = casted }));
             }
+            if (!destination.hasSamePointerElementType(self.analyser, source_type) and
+                operand.data == .comptime_value and
+                (operand.data.comptime_value.data == .reference or
+                    operand.data.comptime_value.data == .pointee)) return null;
         }
         return switch (operand.data) {
             .comptime_value => |comptime_value| switch (comptime_value.data) {
@@ -3481,14 +3489,60 @@ pub const Interpreter = struct {
                 .pointee => |pointee| @as(?Type, try Value.create(self.analyser, destination, .{ .pointee = pointee })),
                 .numeric_pointer => |numeric_address| @as(?Type, try Value.create(self.analyser, destination, .{ .numeric_pointer = numeric_address })),
                 .sequence => |sequence| blk: {
-                    var casted = sequence;
-                    casted.elements_valid = casted.elements_valid and destination.hasSamePointerElementType(self.analyser, source_type);
+                    const casted = try self.pointerCastSequenceValue(
+                        destination,
+                        source_type,
+                        sequence,
+                        qualifier_cast == null,
+                    );
                     break :blk @as(?Type, try Value.create(self.analyser, destination, .{ .sequence = casted }));
                 },
                 else => null,
             },
             else => null,
         };
+    }
+
+    fn pointerCastSequenceValue(
+        self: *Interpreter,
+        destination: Type,
+        source: Type,
+        sequence: Value.Sequence,
+        allow_reinterpretation: bool,
+    ) Error!Value.Sequence {
+        var casted = sequence;
+        if (!casted.elements_valid) return casted;
+        const destination_element = destination.sequencePointerElementType(self.analyser) orelse {
+            casted.elements_valid = false;
+            return casted;
+        };
+        const source_element = source.sequencePointerElementType(self.analyser) orelse {
+            casted.elements_valid = false;
+            return casted;
+        };
+        if (destination_element.eql(source_element)) return casted;
+        if (!allow_reinterpretation or !destination.isConstNonVolatilePointerType(self.analyser)) {
+            casted.elements_valid = false;
+            return casted;
+        }
+
+        const items = try self.analyser.arena.alloc(Type, casted.backing.len);
+        for (casted.backing, items) |item, *result| {
+            if (!(try item.typeOf(self.analyser)).eql(source_element)) {
+                casted.elements_valid = false;
+                return casted;
+            }
+            result.* = try self.analyser.resolveComptimeCastValue(
+                destination_element,
+                item,
+                .bit_cast,
+            ) orelse {
+                casted.elements_valid = false;
+                return casted;
+            };
+        }
+        casted.backing = items;
+        return casted;
     }
 
     fn pointerFromIntValue(self: *Interpreter, destination: Type, operand: Type) Error!?Type {
