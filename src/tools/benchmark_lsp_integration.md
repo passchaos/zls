@@ -511,6 +511,7 @@ was retained:
 | Pre-scan for unresolved parameters before `fullFnProto` | 0.9951x | The extra type scan cost more than the avoided parsing. |
 | Persist parameter `type_expr` nodes in function types | 0.9984x | Larger parameter metadata offset removal of the AST iterator. |
 | Reuse the caller's parsed `FnProto` for initial return resolution | 0.9918x | Reduced parsing but worsened code layout and hot completion paths. |
+| Cache stable `FnProto` values and parameter slices per request | 0.9950x | Hash-map and slice-copy costs exceeded reuse across specializations. |
 | Defer `value_params` construction through a difference overlay | 0.9952x | Final cloning plus overlay replay cost more than paired small-map writes. |
 | Skip the first field-enum method selection before restoring a concrete container | 0.9936x | The supposedly duplicate selection affected later specialization locality. |
 
