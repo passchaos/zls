@@ -370,6 +370,65 @@ test "selected FieldEnum method specializes return type" {
     , "fn call(comptime _: Impl(Source), comptime method: enum(u0) {...}, args: struct { Source }) anyerror!usize", 2);
 }
 
+test "selected FieldEnum method keeps associated returns correlated by callsite" {
+    try testSignatureHelps(
+        \\const std = @import("std");
+        \\const Reader = struct {
+        \\    const Associated = struct { Error: type = anyerror };
+        \\    fn Methods(comptime Self: type, comptime associated: Associated) type {
+        \\        return struct { read: fn (Self) associated.Error!usize };
+        \\    }
+        \\    fn resolveAssociated(comptime Self: type) Associated {
+        \\        if (@hasDecl(Self, "ReaderError")) return .{ .Error = Self.ReaderError };
+        \\        return .{};
+        \\    }
+        \\};
+        \\fn methodType(comptime Contract: type, comptime Subject: type, comptime associated: Contract.Associated, comptime method: std.meta.FieldEnum(Contract.Methods(Subject, associated))) type {
+        \\    return @FieldType(Contract.Methods(Subject, associated), @tagName(method));
+        \\}
+        \\fn returnType(comptime F: type) type {
+        \\    return @typeInfo(F).@"fn".return_type.?;
+        \\}
+        \\fn ImplWith(comptime Contract: type, comptime Subject: type, comptime associated: Contract.Associated) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(
+        \\            comptime _: Self,
+        \\            comptime method: std.meta.FieldEnum(Contract.Methods(Subject, associated)),
+        \\            args: std.meta.ArgsTuple(methodType(Contract, Subject, associated, method)),
+        \\        ) returnType(methodType(Contract, Subject, associated, method)) {
+        \\            return @call(.auto, @field(Subject, @tagName(method)), args);
+        \\        }
+        \\    };
+        \\}
+        \\fn Impl(comptime Contract: type, comptime Subject: type) type {
+        \\    return ImplWith(Contract, Subject, Contract.resolveAssociated(Subject));
+        \\}
+        \\const Source = struct {
+        \\    const ReaderError = error{Specific};
+        \\    fn read(_: Source) ReaderError!usize { return 1; }
+        \\};
+        \\const Foreign = struct {
+        \\    fn read(_: Foreign) anyerror!usize { return 1; }
+        \\};
+        \\fn generic(value: anytype, comptime associated: Reader.Associated, comptime impl: ImplWith(Reader, @TypeOf(value), associated)) !void {
+        \\    _ = try impl.call(.read, <cursor>.{value});
+        \\}
+        \\const model: Impl(Reader, Source) = .{};
+        \\const foreign: Impl(Reader, Foreign) = .{};
+        \\const broad: ImplWith(Reader, Source, .{ .Error = anyerror }) = .{};
+        \\comptime {
+        \\    _ = generic(Source{}, .{ .Error = error{Specific} }, model) catch unreachable;
+        \\    _ = generic(Foreign{}, .{}, foreign) catch unreachable;
+        \\    _ = generic(Source{}, .{ .Error = anyerror }, broad) catch unreachable;
+        \\}
+    , &.{
+        .{ .label = "fn call(comptime _: ImplWith(Reader,Source,.{ .Error = error{Specific} }), comptime method: enum(u0) {...}, args: struct { Source }) error{Specific}!usize", .active_parameter = 2 },
+        .{ .label = "fn call(comptime _: ImplWith(Reader,Foreign,.{}), comptime method: enum(u0) {...}, args: struct { Foreign }) anyerror!usize", .active_parameter = 2 },
+        .{ .label = "fn call(comptime _: ImplWith(Reader,Source,.{ .Error = anyerror }), comptime method: enum(u0) {...}, args: struct { Source }) anyerror!usize", .active_parameter = 2 },
+    });
+}
+
 test "selected FieldEnum method preserves transformed argument tuple" {
     try testSignatureHelp(
         \\const std = @import("std");

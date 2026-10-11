@@ -12651,7 +12651,16 @@ fn specializeFunctionTypeForCallPrefix(
     const function = try analyser.resolveFuncProtoOfCallable(ty) orelse return ty;
     if (function.is_type_val) return ty;
     const had_self = try analyser.hasSelfParam(function);
+    const concrete_container = if (!function.data.function.container_type.hasUnresolvedGenericType() and
+        !analyser.hasUnknownType(function.data.function.container_type.*))
+        function.data.function.container_type.*
+    else
+        null;
     var specialized = try analyser.resolveFunctionTypeFromCallPrefix(handle, call, function, argument_count);
+    if (concrete_container) |container| {
+        specialized.data.function.container_type = try analyser.allocType(container);
+        specialized = try analyser.applySelectedFieldEnumMethod(handle, call, specialized);
+    }
     if (had_self and !try analyser.hasSelfParam(specialized)) {
         const parameters = try analyser.arena.dupe(Type.Data.Parameter, specialized.data.function.parameters);
         parameters[0] = function.data.function.parameters[0];
@@ -12820,6 +12829,50 @@ fn abstractSelectedMethodArguments(
     return Type.createTupleType(analyser, abstract_elements);
 }
 
+fn materializeContainerDisplayBindings(analyser: *Analyser, container: Type) Error!Type {
+    if (container.data != .container or container.data.container.display_params.count() == 0) return container;
+
+    var result = container;
+    var info = container.data.container;
+    var bindings = try info.bound_params.clone(analyser.arena);
+    const old_bindings = analyser.generic_bindings;
+    analyser.generic_bindings = &bindings;
+    defer analyser.generic_bindings = old_bindings;
+
+    for (info.display_params.keys(), info.display_params.values()) |parameter, argument| {
+        const value = try analyser.resolveComptimeDisplayArgument(parameter, argument) orelse continue;
+        try bindings.put(analyser.arena, parameter, value);
+    }
+    info.bound_params = bindings;
+    result.data = .{ .container = info };
+    return result;
+}
+
+fn concreteBindingMatchScore(analyser: *Analyser, target: Type, source: Type) usize {
+    if (target.data != .container or source.data != .container) return 0;
+    var score: usize = 0;
+    for (source.data.container.bound_params.values()) |source_bound| {
+        if (source_bound.hasUnresolvedGenericType() or analyser.hasUnknownType(source_bound)) continue;
+        for (target.data.container.bound_params.values()) |target_bound| {
+            if (source_bound.eql(target_bound)) {
+                score += 2;
+                break;
+            }
+        }
+    }
+    for (source.data.container.display_params.values()) |source_node| {
+        const source_text = std.mem.trim(u8, offsets.nodeToSlice(&source_node.handle.tree, source_node.node), " \t\r\n");
+        for (target.data.container.display_params.values()) |target_node| {
+            const target_text = std.mem.trim(u8, offsets.nodeToSlice(&target_node.handle.tree, target_node.node), " \t\r\n");
+            if (std.mem.eql(u8, source_text, target_text)) {
+                score += 1;
+                break;
+            }
+        }
+    }
+    return score;
+}
+
 fn resolveSelectedFieldEnumMethod(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -12827,7 +12880,12 @@ fn resolveSelectedFieldEnumMethod(
     function: Type,
 ) Error!?SelectedFieldEnumMethod {
     const info = function.data.function;
-    const has_self = try analyser.isInstanceCall(handle, call, function);
+    const has_self = try analyser.isInstanceCall(handle, call, function) or
+        (handle.tree.nodeTag(call.ast.fn_expr) == .field_access and
+            call.ast.params.len + 1 == info.parameters.len and
+            !info.container_type.is_type_val and
+            !info.container_type.hasUnresolvedGenericType() and
+            !analyser.hasUnknownType(info.container_type.*));
     const parameter_offset: usize = @intFromBool(has_self);
     const parameters = info.parameters[parameter_offset..];
     const count = @min(parameters.len, call.ast.params.len);
@@ -12841,13 +12899,15 @@ fn resolveSelectedFieldEnumMethod(
         const enum_index = parameter_type.ipIndex() orelse continue;
         const sources = analyser.sequential_enum_sources.get(enum_index) orelse continue;
         const tag = try analyser.resolveEnumValueTag(parameter_type, .of(argument, handle)) orelse continue;
+        const match_container = try analyser.materializeContainerDisplayBindings(info.container_type.*);
         var returns: std.ArrayList(Type.TypeWithDescriptor) = .empty;
         var arguments_type: ?Type = null;
         var arguments_match = false;
-
+        var best_return_score: ?usize = null;
         for (sources) |source| {
             if (source.kind != .field) continue;
-            const container = try source.source.instanceUnchecked(analyser);
+            const source_type = try analyser.materializeContainerDisplayBindings(source.source);
+            const container = try source_type.instanceUnchecked(analyser);
             const field = try analyser.lookupSymbolContainer(container, tag, .field) orelse continue;
             const field_type = try field.resolveType(analyser) orelse continue;
             const method = try analyser.resolveFuncProtoOfCallable(field_type) orelse continue;
@@ -12872,6 +12932,14 @@ fn resolveSelectedFieldEnumMethod(
                     arguments_match = matches_container;
                 }
             }
+            const match_score = analyser.concreteBindingMatchScore(match_container, source_type);
+            if (best_return_score) |best| {
+                if (match_score < best) continue;
+                if (match_score > best) returns.clearRetainingCapacity();
+            } else {
+                returns.clearRetainingCapacity();
+            }
+            best_return_score = match_score;
             for (returns.items) |existing| {
                 if (existing.type.eql(return_value)) break;
             } else {
@@ -18627,7 +18695,35 @@ pub fn resolveCallsiteFieldAccessType(
         if (!declared_type.hasUnresolvedGenericType() and !analyser.hasUnknownType(declared_type)) return null;
     }
     const callsite_types = try analyser.resolveCallsiteReferences(declaration) orelse return null;
-    return analyser.resolveFieldAccess(callsite_types, field_name);
+    if (callsite_types.data == .either) {
+        var candidates: std.ArrayList(Type.TypeWithDescriptor) = .empty;
+        for (callsite_types.data.either) |entry| {
+            const receiver: Type = .{ .data = entry.type_data, .is_type_val = callsite_types.is_type_val };
+            const member = try analyser.resolveCallsiteFieldAccessCandidate(receiver, field_name) orelse continue;
+            try candidates.append(analyser.arena, .{ .type = member, .descriptor = entry.descriptor });
+        }
+        if (candidates.items.len == 0) return null;
+        if (candidates.items.len == 1) return candidates.items[0].type;
+        const entries = try analyser.arena.alloc(Type.Data.EitherEntry, candidates.items.len);
+        for (candidates.items, entries) |candidate, *entry| {
+            entry.* = .{ .type_data = candidate.type.data, .descriptor = candidate.descriptor };
+        }
+        return .{ .data = .{ .either = entries }, .is_type_val = candidates.items[0].type.is_type_val };
+    }
+    return analyser.resolveCallsiteFieldAccessCandidate(callsite_types, field_name);
+}
+
+fn resolveCallsiteFieldAccessCandidate(
+    analyser: *Analyser,
+    receiver: Type,
+    field_name: []const u8,
+) Error!?Type {
+    var member = try analyser.resolveFieldAccess(receiver, field_name) orelse return null;
+    const receiver_type = receiver.runtimeType(analyser);
+    if (receiver_type.data == .container and member.data == .function) {
+        member.data.function.container_type = try analyser.allocType(receiver_type);
+    }
+    return member;
 }
 
 pub const PositionContext = union(enum) {
