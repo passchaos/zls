@@ -12602,6 +12602,72 @@ pub fn specializeSelectedFieldEnumMethodAtCall(
     return ty;
 }
 
+fn applySelectedMethodSignature(
+    analyser: *Analyser,
+    method_type: Type,
+    selected: SelectedFieldEnumMethod,
+) Error!?Type {
+    var resolved = try analyser.resolveFuncProtoOfCallable(method_type) orelse return null;
+    if (resolved.is_type_val) return null;
+    if (selected.arguments_type) |arguments_type| {
+        const arguments = try analyser.comptimeTupleTypeElements(arguments_type) orelse return null;
+        if (arguments.len != resolved.data.function.parameters.len) return null;
+        const parameters = try analyser.arena.dupe(Type.Data.Parameter, resolved.data.function.parameters);
+        for (parameters, arguments) |*parameter, argument| parameter.type = argument;
+        resolved.data.function.parameters = parameters;
+    }
+    if (!isUnresolvedCallReturn(analyser, selected.return_type)) {
+        resolved.data.function.return_value = try analyser.allocType(selected.return_type);
+    }
+    return resolved;
+}
+
+/// Resolves the concrete method signature represented by a FieldEnum literal
+/// such as `.read` in `impl.call(.read, args)`.
+pub fn specializeFieldEnumLiteralMethodAtCall(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    absolute_index: usize,
+    method_type: Type,
+) Error!?Type {
+    const nodes = try ast.nodesOverlappingIndexIncludingParseErrors(analyser.arena, &handle.tree, absolute_index);
+    for (nodes) |node| {
+        var buffer: [1]Ast.Node.Index = undefined;
+        const call = handle.tree.fullCall(&buffer, node) orelse continue;
+        const is_argument = for (call.ast.params) |argument| {
+            const argument_loc = offsets.nodeToLoc(&handle.tree, argument);
+            if (argument_loc.start <= absolute_index and absolute_index <= argument_loc.end) break true;
+        } else false;
+        if (!is_argument) continue;
+
+        const fn_loc = offsets.nodeToLoc(&handle.tree, call.ast.fn_expr);
+        var callable = try analyser.resolveCallsiteFieldAccessType(handle, absolute_index, fn_loc) orelse
+            try analyser.resolveTypeOfNode(.of(call.ast.fn_expr, handle)) orelse continue;
+        callable = try analyser.specializeFunctionTypeForCall(handle, call, callable);
+
+        const candidate_entries = switch (callable.data) {
+            .either => |entries| entries,
+            else => null,
+        };
+        if (candidate_entries == null) {
+            const selected = try analyser.resolveSelectedFieldEnumMethod(handle, call, callable) orelse continue;
+            return analyser.applySelectedMethodSignature(method_type, selected);
+        }
+
+        var results: std.ArrayList(Type.Data.EitherEntry) = .empty;
+        for (candidate_entries.?) |entry| {
+            const candidate: Type = .{ .data = entry.type_data, .is_type_val = callable.is_type_val };
+            const selected = try analyser.resolveSelectedFieldEnumMethod(handle, call, candidate) orelse continue;
+            const resolved = try analyser.applySelectedMethodSignature(method_type, selected) orelse continue;
+            try results.append(analyser.arena, .{ .type_data = resolved.data, .descriptor = entry.descriptor });
+        }
+        if (results.items.len == 0) continue;
+        if (results.items.len == 1) return .{ .data = results.items[0].type_data, .is_type_val = method_type.is_type_val };
+        return .{ .data = .{ .either = results.items }, .is_type_val = method_type.is_type_val };
+    }
+    return null;
+}
+
 /// Like `specializeFunctionTypeAtCall`, but identifies the call by the end of
 /// its callee expression. This is useful while scanning an incomplete field
 /// access where the parser may have discarded the outer expression boundaries.

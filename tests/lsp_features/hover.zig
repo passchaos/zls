@@ -1659,6 +1659,38 @@ test "call hover specializes comptime-selected parameter and return types" {
     , .{ .markup_kind = .plaintext });
 }
 
+test "FieldEnum literal hover preserves associated return type" {
+    try testHoverWithOptions(
+        \\const std = @import("std");
+        \\const Associated = struct { Error: type = anyerror };
+        \\fn Methods(comptime Self: type, comptime associated: Associated) type {
+        \\    return struct { read: fn (Self) associated.Error!usize };
+        \\}
+        \\fn methodType(comptime Self: type, comptime associated: Associated, comptime method: std.meta.FieldEnum(Methods(Self, associated))) type {
+        \\    return @FieldType(Methods(Self, associated), @tagName(method));
+        \\}
+        \\fn returnType(comptime F: type) type {
+        \\    return @typeInfo(F).@"fn".return_type.?;
+        \\}
+        \\fn Impl(comptime Subject: type, comptime associated: Associated) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn call(comptime _: Self, comptime method: std.meta.FieldEnum(Methods(Subject, associated)), args: std.meta.ArgsTuple(methodType(Subject, associated, method))) returnType(methodType(Subject, associated, method)) {
+        \\            return @call(.auto, @field(Subject, @tagName(method)), args);
+        \\        }
+        \\    };
+        \\}
+        \\fn generic(value: anytype, comptime impl: Impl(@TypeOf(value), .{ .Error = error{Specific} })) !void {
+        \\    _ = try impl.call(.re<cursor>ad, .{value});
+        \\}
+        \\const model: Impl(u8, .{ .Error = error{Specific} }) = .{};
+        \\comptime { _ = generic(1, model) catch unreachable; }
+    ,
+        \\read: fn (Self) associated.Error!usize
+        \\(fn (u8) error{Specific}!usize)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "doctest" {
     try testHover(
         \\fn foo() void {}

@@ -402,7 +402,8 @@ fn hoverDefinitionEnumLiteral(
     const name = offsets.locToSlice(handle.tree.source, name_loc);
     if (try analyser.getSymbolEnumLiteral(handle, source_index, name)) |decl| {
         const resolved_type = if (try decl.resolveType(analyser)) |ty|
-            try analyser.specializeFunctionTypeAtCall(handle, source_index, null, ty)
+            try analyser.specializeFieldEnumLiteralMethodAtCall(handle, source_index, ty) orelse
+                try analyser.specializeFunctionTypeAtCall(handle, source_index, null, ty)
         else
             null;
         return .{
