@@ -29,6 +29,8 @@ const version_data = @import("version_data");
 const Analyser = @This();
 const comptime_eval = @import("analyser/comptime.zig");
 pub const field_sources = @import("analyser/generated_fields.zig");
+const specialization_cache = @import("analyser/specialization_cache.zig");
+const GeneratedContainerTypeKey = specialization_cache.Key;
 
 gpa: std.mem.Allocator,
 arena: std.mem.Allocator,
@@ -13247,15 +13249,15 @@ fn resolveTypeOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Error
 
 fn cachedGeneratedContainerType(analyser: *Analyser, options: ResolveOptions) ?Type {
     const bindings = analyser.generic_bindings orelse return null;
-    return analyser.generated_container_types.get(.{
-        .node = .{
+    return analyser.generated_container_types.get(GeneratedContainerTypeKey.init(
+        .{
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
         },
-        .container_type = options.container_type,
-        .bindings = bindings.*,
-        .display_bindings = if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
-    });
+        options.container_type,
+        bindings.*,
+        if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
+    ));
 }
 
 fn cacheGeneratedContainerType(
@@ -13264,18 +13266,18 @@ fn cacheGeneratedContainerType(
     generated_type: Type,
 ) error{OutOfMemory}!void {
     const bindings = analyser.generic_bindings orelse return;
-    try analyser.generated_container_types.put(analyser.gpa, .{
-        .node = .{
+    try analyser.generated_container_types.put(analyser.gpa, GeneratedContainerTypeKey.init(
+        .{
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
         },
-        .container_type = options.container_type,
-        .bindings = try bindings.clone(analyser.arena),
-        .display_bindings = if (analyser.display_bindings) |display_bindings|
+        options.container_type,
+        try bindings.clone(analyser.arena),
+        if (analyser.display_bindings) |display_bindings|
             try display_bindings.clone(analyser.arena)
         else
             .empty,
-    }, generated_type);
+    ), generated_type);
 }
 
 pub fn resolveBindingOfNode(analyser: *Analyser, options: ResolveOptions) Error!?Binding {
@@ -13302,11 +13304,13 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
                 const is_concrete_type = binding.is_type_val and !binding.hasUnresolvedGenericType();
                 if (!is_concrete_type and !binding.hasKnownValue(analyser)) continue;
                 if (old_bindings) |outer_bindings| {
-                    merged_bindings = try outer_bindings.clone(analyser.arena);
-                    for (bindings.keys(), bindings.values()) |key, bound| {
-                        try merged_bindings.put(analyser.arena, key, bound);
+                    if (specialization_cache.bindingOverlayChanges(outer_bindings.*, bindings.*)) {
+                        merged_bindings = try outer_bindings.clone(analyser.arena);
+                        for (bindings.keys(), bindings.values()) |key, bound| {
+                            try merged_bindings.put(analyser.arena, key, bound);
+                        }
+                        analyser.generic_bindings = &merged_bindings;
                     }
-                    analyser.generic_bindings = &merged_bindings;
                 } else {
                     analyser.generic_bindings = bindings;
                 }
@@ -13315,11 +13319,13 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
             const display_bindings = &container_type.data.container.display_params;
             if (display_bindings.count() != 0) {
                 if (old_display_bindings) |outer_bindings| {
-                    merged_display_bindings = try outer_bindings.clone(analyser.arena);
-                    for (display_bindings.keys(), display_bindings.values()) |key, bound| {
-                        try merged_display_bindings.put(analyser.arena, key, bound);
+                    if (specialization_cache.bindingOverlayChanges(outer_bindings.*, display_bindings.*)) {
+                        merged_display_bindings = try outer_bindings.clone(analyser.arena);
+                        for (display_bindings.keys(), display_bindings.values()) |key, bound| {
+                            try merged_display_bindings.put(analyser.arena, key, bound);
+                        }
+                        analyser.display_bindings = &merged_display_bindings;
                     }
-                    analyser.display_bindings = &merged_display_bindings;
                 } else {
                     analyser.display_bindings = display_bindings;
                 }
@@ -13342,12 +13348,12 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
             .node = options.node_handle.node,
             .uri = options.node_handle.handle.uri,
         };
-        const key: GeneratedContainerTypeKey = .{
-            .node = node_with_uri,
-            .container_type = options.container_type,
-            .bindings = bindings.*,
-            .display_bindings = if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
-        };
+        const key = GeneratedContainerTypeKey.init(
+            node_with_uri,
+            options.container_type,
+            bindings.*,
+            if (analyser.display_bindings) |display_bindings| display_bindings.* else .empty,
+        );
         const cached = try analyser.resolved_specialized_nodes.getOrPut(analyser.gpa, key);
         if (cached.found_existing) return cached.value_ptr.*;
         cached.key_ptr.bindings = try bindings.clone(analyser.arena);
@@ -16040,10 +16046,7 @@ pub const Type = struct {
                 },
                 .container => |info| {
                     info.scope_handle.hashWithHasher(hasher);
-                    for (info.bound_params.keys(), info.bound_params.values()) |token_handle, ty| {
-                        token_handle.hashWithHasher(hasher);
-                        ty.hashWithHasher(hasher);
-                    }
+                    specialization_cache.hashTypeBindings(hasher, info.bound_params);
                 },
                 .function => |info| {
                     if (info.name != null) {
@@ -18374,82 +18377,6 @@ pub const NodeWithUri = struct {
     };
 };
 
-fn hashTypeBindings(hasher: anytype, bindings: TokenToTypeMap) void {
-    var bindings_hash: u64 = 0;
-    for (bindings.keys(), bindings.values()) |token_handle, ty| {
-        var binding_hasher: std.hash.Wyhash = .init(0);
-        token_handle.hashWithHasher(&binding_hasher);
-        ty.hashWithHasher(&binding_hasher);
-        bindings_hash ^= binding_hasher.final();
-    }
-    std.hash.autoHash(hasher, bindings.count());
-    std.hash.autoHash(hasher, bindings_hash);
-}
-
-fn eqlTypeBindings(a: TokenToTypeMap, b: TokenToTypeMap) bool {
-    if (a.count() != b.count()) return false;
-    for (a.keys(), a.values()) |token_handle, ty| {
-        const other = b.get(token_handle) orelse return false;
-        if (!ty.eql(other)) return false;
-    }
-    return true;
-}
-
-fn hashDisplayBindings(hasher: anytype, bindings: TokenToNodeMap) void {
-    var bindings_hash: u64 = 0;
-    for (bindings.keys(), bindings.values()) |token_handle, node_handle| {
-        var binding_hasher: std.hash.Wyhash = .init(0);
-        token_handle.hashWithHasher(&binding_hasher);
-        std.hash.autoHash(&binding_hasher, node_handle.node);
-        binding_hasher.update(node_handle.handle.uri.raw);
-        bindings_hash ^= binding_hasher.final();
-    }
-    std.hash.autoHash(hasher, bindings.count());
-    std.hash.autoHash(hasher, bindings_hash);
-}
-
-fn eqlDisplayBindings(a: TokenToNodeMap, b: TokenToNodeMap) bool {
-    if (a.count() != b.count()) return false;
-    for (a.keys(), a.values()) |token_handle, node_handle| {
-        const other = b.get(token_handle) orelse return false;
-        if (!node_handle.eql(other)) return false;
-    }
-    return true;
-}
-
-const GeneratedContainerTypeKey = struct {
-    node: NodeWithUri,
-    container_type: ?Type,
-    bindings: TokenToTypeMap,
-    display_bindings: TokenToNodeMap,
-
-    const Context = struct {
-        pub fn hash(_: Context, key: GeneratedContainerTypeKey) u64 {
-            var hasher: std.hash.Wyhash = .init(0);
-            std.hash.autoHash(&hasher, key.node.node);
-            hasher.update(key.node.uri.raw);
-            if (key.container_type) |container_type| {
-                hasher.update(&.{1});
-                container_type.hashWithHasher(&hasher);
-            } else {
-                hasher.update(&.{0});
-            }
-            hashTypeBindings(&hasher, key.bindings);
-            hashDisplayBindings(&hasher, key.display_bindings);
-            return hasher.final();
-        }
-
-        pub fn eql(_: Context, a: GeneratedContainerTypeKey, b: GeneratedContainerTypeKey) bool {
-            if (a.node.node != b.node.node or !a.node.uri.eql(b.node.uri)) return false;
-            if ((a.container_type == null) != (b.container_type == null)) return false;
-            if (a.container_type) |container_type| {
-                if (!container_type.eql(b.container_type.?)) return false;
-            }
-            return eqlTypeBindings(a.bindings, b.bindings) and eqlDisplayBindings(a.display_bindings, b.display_bindings);
-        }
-    };
-};
-
 const EnumLiteralCacheKey = struct {
     uri: Uri,
     source_index: usize,
@@ -18463,14 +18390,14 @@ const EnumLiteralCacheKey = struct {
             hasher.update(key.uri.raw);
             std.hash.autoHash(&hasher, key.source_index);
             hasher.update(key.name);
-            hashTypeBindings(&hasher, key.bindings);
-            hashDisplayBindings(&hasher, key.display_bindings);
+            specialization_cache.hashTypeBindings(&hasher, key.bindings);
+            specialization_cache.hashDisplayBindings(&hasher, key.display_bindings);
             return hasher.final();
         }
 
         pub fn eql(_: Context, a: EnumLiteralCacheKey, b: EnumLiteralCacheKey) bool {
             if (!a.uri.eql(b.uri) or a.source_index != b.source_index or !std.mem.eql(u8, a.name, b.name)) return false;
-            return eqlTypeBindings(a.bindings, b.bindings) and eqlDisplayBindings(a.display_bindings, b.display_bindings);
+            return specialization_cache.eqlTypeBindings(a.bindings, b.bindings) and specialization_cache.eqlDisplayBindings(a.display_bindings, b.display_bindings);
         }
     };
 };

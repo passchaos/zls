@@ -105,3 +105,56 @@ the median of nine batches after warmup.
 
 This isolates the AST query cost. Production retains full scanning when parsing
 reports errors, because error recovery can detach nodes needed at the cursor.
+
+## Generic binding cache refinement
+
+2026-10-11, same machine, Zig version, build options, and integration source.
+Baseline `71a00af5` already includes callsite name filtering and the valid-AST
+query path. The candidate avoids cloning an overlay when every binding has the
+same exact representation as the existing binding, and computes each generated
+container cache key's hash once for insertion, recursive result updates, and
+hash-map growth. Keys and binding comparisons live in
+`src/analyser/specialization_cache.zig`.
+
+Container type equality already compares binding maps independent of insertion
+order. Its hash now uses the same order-independent rule. A regression test
+requires a cache hit between types built with reversed binding insertion order.
+Additional checks require cache separation when parameter values or display
+bindings change, and require overlays to preserve changed navigation metadata
+even when semantic values compare equal.
+
+Two independent runs reverse startup order and alternate request order, with
+five warmups and 24 measured requests per case per process. The table combines
+48 samples per binary and reports their median. Builds and tests finished
+before the measurements; all 16 response hashes match across binaries and runs.
+
+| Request | Case | Baseline (us) | Candidate (us) | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| completion | comptime_method | 5306.56 | 4479.94 | 1.18x |
+| definition | comptime_method | 5313.83 | 4602.25 | 1.15x |
+| completion | generated_binding | 851.23 | 784.73 | 1.08x |
+| definition | generated_binding | 871.35 | 750.06 | 1.16x |
+| completion | generic_return_method | 4362.48 | 3678.62 | 1.19x |
+| definition | generic_return_method | 419.81 | 389.40 | 1.08x |
+| completion | generated_capability | 1370.79 | 1330.88 | 1.03x |
+| definition | generated_capability | 1409.17 | 1361.56 | 1.03x |
+| completion | dynamic_initializer | 6656.08 | 5665.13 | 1.17x |
+| definition | dynamic_initializer | 723.94 | 669.69 | 1.08x |
+| completion | standard_library | 5884.67 | 5759.88 | 1.02x |
+| definition | standard_library | 40.25 | 40.15 | 1.00x |
+| completion | reflection_member | 71.04 | 70.85 | 1.00x |
+| definition | reflection_member | 61.52 | 60.73 | 1.01x |
+| completion | package_import | 265.17 | 251.90 | 1.05x |
+| definition | package_import | 26.90 | 27.75 | 0.97x |
+
+The repeated reductions are concentrated in comptime method selection, generic
+return method completion, generated binding lookup, and dynamic initialization.
+Small differences in the remaining requests do not establish separate gains or
+regressions. The geometric mean speedup across all 16 requests is
+1.075x. This measures complete-document requests, with
+typing-state correctness covered separately by the full edit audit.
+
+The final candidate passed all 1,261 tests, including the two new cache invariant
+tests, and all 661 exact navigation destinations / 1,626 edits in integration.
+Baseline binary SHA-256: `27086d6ee70cb2a5cc656f3e3ba7e9b04f261d9686c85e1d773c08a60b2f7beb`.
+Candidate binary SHA-256: `bcc2f6454599db93c6e3abc0345cdf28703da95b346dd6aa3a7e5a868f3aba01`.

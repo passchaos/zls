@@ -11,4 +11,5 @@ comptime {
     std.testing.refAllDecls(string_pool);
     std.testing.refAllDecls(degibberish);
     std.testing.refAllDecls(@import("comptime.zig"));
+    std.testing.refAllDecls(@import("specialization_cache.zig"));
 }
