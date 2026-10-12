@@ -842,3 +842,41 @@ material performance change. All response hashes matched. Baseline binary
 SHA-256: `4264f61863233ace5e4f01131333a622d608df3b6789179618e3963cccf0228c`.
 Candidate binary SHA-256:
 `d1f0457e30f8e94203aa0ea6e6ba0045a4f9c806ce3984c3d18271fc86ce67ec`.
+
+## Dependent comptime parameter return types
+
+2026-10-12, same machine, Zig version, and build options. Function-call
+specialization now re-resolves a later comptime parameter when its source type
+expression references an earlier parameter but the cached prototype appears
+fully resolved. The concrete argument's generated-container type supplies that
+refinement without re-evaluating the aggregate, and the refined type is retained
+in the displayed signature. A single-expression method that returns a captured
+comptime parameter reads the value directly from its container bindings, so
+ordinary field access can resolve the dependent error-union return type.
+
+This covers functions such as `Reader.readAll`, where binding `reader` changes
+`Impl(@TypeOf(reader))`, whose associated value in turn determines
+`impl.associated().Error!usize`. The real call hover at `integration.zig:100`
+changed from `ImplWith(Reader,*Buffer,.{})` and `(unknown type)!usize` to
+`ImplWith(Reader,*Buffer,.{ .Error = error{OutOfBounds} })` and
+`error{OutOfBounds}!usize`.
+
+The dependency check scans only the later parameter's type expression and
+requires a reference to an earlier parameter. It also skips types that are
+already unresolved, because the existing final specialization pass handles
+those. This removed an initial 4-8% regression on comptime method, generic
+return, and dynamic initializer requests.
+
+All 1,293 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. Two reversed runs with 20 warmups and 500 measured
+rounds per order produced a `0.9991x` geometric mean across the 16 integration
+request cases. Multi-millisecond requests remained within 0.9%; the largest
+absolute difference was 25.4 us, so this is treated as no material performance
+change. All response hashes matched. A separate reversed measurement of the
+changed `readAll` hover combined 1,000 samples per binary: the baseline response
+remained stable at 641.65 us, while the more precise candidate response remained
+stable at 608.58 us (`1.054x`). Baseline binary SHA-256:
+`072a5b303596275a5adb47f20bfb34c03f757b5d42a05960b40092f071233ad9`.
+Candidate binary SHA-256:
+`e15100a8098ac9a1282a7b7dda15ca11a94015d1a4351f2d568a799b83cdc0df`.

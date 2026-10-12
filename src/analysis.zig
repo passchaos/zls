@@ -1493,6 +1493,32 @@ pub fn resolveReturnType(analyser: *Analyser, func_type_param: Type) error{OutOf
     return info.return_value.*;
 }
 
+fn resolveCapturedComptimeReturn(analyser: *Analyser, function: Type) Error!?Type {
+    if (function.data != .function) return null;
+    const info = function.data.function;
+    const tree = &info.handle.tree;
+    if (tree.nodeTag(info.fn_node) != .fn_decl) return null;
+    const body = tree.nodeData(info.fn_node).node_and_node[1];
+    var buffer: [2]Ast.Node.Index = undefined;
+    const statements = tree.blockStatements(&buffer, body) orelse return null;
+    if (statements.len != 1 or tree.nodeTag(statements[0]) != .@"return") return null;
+    const expression = tree.nodeData(statements[0]).opt_node.unwrap() orelse return null;
+    if (tree.nodeTag(expression) != .identifier) return null;
+
+    const name_token = ast.identifierTokenFromIdentifierNode(tree, expression) orelse return null;
+    const name = try analyser.identifierTokenName(tree, name_token) orelse return null;
+    const declaration = try analyser.lookupSymbolGlobal(info.handle, name, tree.tokenStart(name_token)) orelse return null;
+    const token_handle: TokenWithHandle = .{ .handle = declaration.handle, .token = declaration.nameToken() };
+    const value = if (info.container_type.data == .container)
+        info.container_type.data.container.bound_params.get(token_handle)
+    else if (analyser.generic_bindings) |bindings|
+        bindings.get(token_handle)
+    else
+        null;
+    const captured = value orelse return null;
+    return if (captured.hasKnownValue(analyser)) captured else null;
+}
+
 pub fn resolveReturnValueOfFuncNode(
     analyser: *Analyser,
     handle: *DocumentStore.Handle,
@@ -12637,6 +12663,26 @@ pub fn resolveFunctionTypeFromCall(
     return analyser.resolveFunctionTypeFromCallPrefix(handle, call, func_ty, call.ast.params.len);
 }
 
+fn expressionReferencesParameter(
+    tree: *const Ast,
+    node: Ast.Node.Index,
+    parameter_tokens: []const Ast.TokenIndex,
+    depth: u8,
+) bool {
+    if (depth == 64) return false;
+    if (tree.nodeTag(node) == .identifier) {
+        const name = offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(node));
+        for (parameter_tokens) |parameter_token| {
+            if (std.mem.eql(u8, name, offsets.identifierTokenToNameSlice(tree, parameter_token))) return true;
+        }
+    }
+    var iterator: ast.Iterator = .init(tree, node);
+    while (iterator.next(tree)) |child| {
+        if (expressionReferencesParameter(tree, child, parameter_tokens, depth + 1)) return true;
+    }
+    return false;
+}
+
 /// Specializes a function using only arguments before `argument_count`.
 /// This is used while deriving the expected type of an aggregate argument:
 /// evaluating that same aggregate to specialize its own parameter would form
@@ -12672,7 +12718,8 @@ fn resolveFunctionTypeFromCallPrefix(
     const has_self_param = call.ast.params.len + 1 == func_info.parameters.len and
         try analyser.isInstanceCall(handle, call, func_ty);
 
-    const parameters = func_info.parameters[@intFromBool(has_self_param)..];
+    const parameter_offset = @intFromBool(has_self_param);
+    const parameters = func_info.parameters[parameter_offset..];
     const arguments = call.ast.params[0..@min(argument_count, call.ast.params.len)];
     const min_len = @min(parameters.len, arguments.len);
     var source_parameter_buffer: [1]Ast.Node.Index = undefined;
@@ -12680,13 +12727,23 @@ fn resolveFunctionTypeFromCallPrefix(
     var source_parameter_iterator: ast.FnParamIterator = .init(&source_function, func_tree);
     if (has_self_param) _ = source_parameter_iterator.next();
     var has_callsite_bindings = false;
-    for (parameters[0..min_len], arguments[0..min_len]) |param, arg| {
+    var refined_parameter_types: ?[]?Type = null;
+    var previous_parameter_tokens: std.ArrayList(Ast.TokenIndex) = .empty;
+    try previous_parameter_tokens.ensureTotalCapacity(analyser.arena, parameters.len);
+    for (parameters[0..min_len], arguments[0..min_len], 0..) |param, arg, argument_index| {
         const source_parameter = source_parameter_iterator.next();
         const param_name_token = param.name_token orelse continue;
+        defer previous_parameter_tokens.appendAssumeCapacity(param_name_token);
+        const parameter_token_handle: TokenWithHandle = .{
+            .token = param_name_token,
+            .handle = func_info.handle,
+        };
         var param_type = if (param.type.isGenericType())
             try analyser.resolveGenericType(param.type, meta_params)
         else
             param.type;
+        var parameter_was_refined = false;
+        var prefetched_argument: ?Type = null;
         // Later parameter types may depend on earlier arguments. The original
         // prototype can only represent those as unknown, so resolve the source
         // type again with the bindings accumulated for this call.
@@ -12694,32 +12751,67 @@ fn resolveFunctionTypeFromCallPrefix(
             .call, .call_comma, .call_one, .call_one_comma => true,
             else => false,
         };
-        if (param.modifier == .comptime_param and
-            analyser.comptime_interpreter != null and
-            argument_is_call and
-            isUnresolvedCallReturn(analyser, param_type))
-        resolve_parameter: {
-            const type_node = (source_parameter orelse break :resolve_parameter).type_expr orelse
-                break :resolve_parameter;
-            const old_bindings = analyser.generic_bindings;
-            const old_display_bindings = analyser.display_bindings;
-            const old_bindings_mutable = analyser.specialization_bindings_mutable;
-            analyser.generic_bindings = &value_params;
-            analyser.display_bindings = &display_params;
-            analyser.specialization_bindings_mutable = true;
-            defer {
-                analyser.generic_bindings = old_bindings;
-                analyser.display_bindings = old_display_bindings;
-                analyser.specialization_bindings_mutable = old_bindings_mutable;
+        const source_type_node = if (source_parameter) |parameter| parameter.type_expr else null;
+        const can_resolve_dependent_parameter = if (analyser.comptime_interpreter == null)
+            has_callsite_bindings and
+                !isUnresolvedCallReturn(analyser, param_type) and
+                if (source_type_node) |type_node|
+                    expressionReferencesParameter(func_tree, type_node, previous_parameter_tokens.items, 0)
+                else
+                    false
+        else
+            argument_is_call and isUnresolvedCallReturn(analyser, param_type);
+        if (param.modifier == .comptime_param and can_resolve_dependent_parameter) resolve_parameter: {
+            const type_node = source_type_node orelse break :resolve_parameter;
+            const resolved_param = inferred: {
+                if (analyser.comptime_interpreter == null) {
+                    prefetched_argument = try analyser.resolveComptimeValue(.of(arg, handle)) orelse
+                        try analyser.resolveTypeOfNodeInternal(.of(arg, handle));
+                    if (prefetched_argument) |argument_value| {
+                        if (!argument_value.is_type_val) {
+                            const argument_meta_type = try argument_value.typeOf(analyser);
+                            if (param_type.data == .container and argument_meta_type.data == .container and
+                                param_type.data.container.scope_handle.eql(argument_meta_type.data.container.scope_handle))
+                            {
+                                break :inferred argument_meta_type;
+                            }
+                        }
+                    }
+                }
+
+                const old_bindings = analyser.generic_bindings;
+                const old_display_bindings = analyser.display_bindings;
+                const old_bindings_mutable = analyser.specialization_bindings_mutable;
+                analyser.generic_bindings = &value_params;
+                analyser.display_bindings = &display_params;
+                analyser.specialization_bindings_mutable = true;
+                defer {
+                    analyser.generic_bindings = old_bindings;
+                    analyser.display_bindings = old_display_bindings;
+                    analyser.specialization_bindings_mutable = old_bindings_mutable;
+                }
+                break :inferred try analyser.resolveTypeOfNodeInternal(.of(type_node, func_info.handle)) orelse
+                    break :resolve_parameter;
+            };
+            if (resolved_param.is_type_val) {
+                if (!resolved_param.eql(param_type)) {
+                    parameter_was_refined = true;
+                    if (refined_parameter_types == null) {
+                        refined_parameter_types = try analyser.arena.alloc(?Type, func_info.parameters.len);
+                        @memset(refined_parameter_types.?, null);
+                    }
+                    refined_parameter_types.?[parameter_offset + argument_index] = resolved_param;
+                }
+                param_type = resolved_param;
             }
-            const resolved_param = try analyser.resolveTypeOfNodeInternal(.of(type_node, func_info.handle)) orelse
-                break :resolve_parameter;
-            if (resolved_param.is_type_val) param_type = resolved_param;
         }
-        const parameter_token_handle: TokenWithHandle = .{
-            .token = param_name_token,
-            .handle = func_info.handle,
-        };
+
+        if (parameter_was_refined and prefetched_argument != null and !prefetched_argument.?.is_type_val) {
+            try meta_params.put(analyser.arena, parameter_token_handle, prefetched_argument.?);
+            try value_params.put(analyser.arena, parameter_token_handle, prefetched_argument.?);
+            has_callsite_bindings = true;
+            continue;
+        }
 
         if (param.modifier == .comptime_param and param_type.data != .anytype_parameter) {
             const display_arg = try analyser.displayComptimeArgument(handle, arg) orelse null;
@@ -12826,10 +12918,14 @@ fn resolveFunctionTypeFromCallPrefix(
             }
         }
 
-        const argument_type = (if (param.modifier == .comptime_param)
-            try analyser.resolveComptimeValue(.of(arg, handle)) orelse try analyser.resolveTypeOfNodeInternal(.of(arg, handle))
-        else
-            try analyser.resolveTypeOfNodeInternal(.of(arg, handle))) orelse continue;
+        const argument_value = if (param.modifier == .comptime_param) value: {
+            if (prefetched_argument) |prefetched| {
+                if (prefetched.hasKnownValue(analyser)) break :value prefetched;
+            }
+            break :value try analyser.resolveComptimeValue(.of(arg, handle));
+        } else null;
+        const argument_type = prefetched_argument orelse argument_value orelse
+            try analyser.resolveTypeOfNodeInternal(.of(arg, handle)) orelse continue;
         switch (param_type.data) {
             .ip_index => |info| {
                 if (info.index == .type_type and argument_type.is_type_val) {
@@ -12844,8 +12940,8 @@ fn resolveFunctionTypeFromCallPrefix(
                 try meta_params.put(analyser.arena, info.token_handle, argument_meta_type);
                 has_callsite_bindings = true;
                 if (param.modifier == .comptime_param) {
-                    if (try analyser.resolveComptimeValue(.of(arg, handle))) |argument_value| {
-                        try value_params.put(analyser.arena, parameter_token_handle, argument_value);
+                    if (argument_value) |value| {
+                        try value_params.put(analyser.arena, parameter_token_handle, value);
                     } else {
                         try value_params.put(analyser.arena, parameter_token_handle, argument_type);
                     }
@@ -12854,6 +12950,17 @@ fn resolveFunctionTypeFromCallPrefix(
                 }
             },
             else => {},
+        }
+
+        if (param.modifier == .comptime_param and
+            parameter_was_refined and
+            !argument_type.is_type_val and
+            (param_type.isStructType(analyser) or param_type.isUnionType()))
+        {
+            try meta_params.put(analyser.arena, parameter_token_handle, argument_type);
+            try value_params.put(analyser.arena, parameter_token_handle, argument_type);
+            has_callsite_bindings = true;
+            continue;
         }
 
         if (param.modifier == .comptime_param) {
@@ -12912,7 +13019,13 @@ fn resolveFunctionTypeFromCallPrefix(
         var parameter_buffer: [1]Ast.Node.Index = undefined;
         const function_node = func_tree.fullFnProto(&parameter_buffer, func_info.fn_node).?;
         var parameter_iterator: ast.FnParamIterator = .init(&function_node, func_tree);
-        var specialized_parameters: ?[]Type.Data.Parameter = null;
+        var specialized_parameters: ?[]Type.Data.Parameter = if (refined_parameter_types) |refined| blk: {
+            const updated = try analyser.arena.dupe(Type.Data.Parameter, resolved.data.function.parameters);
+            for (refined, updated) |maybe_type, *parameter| {
+                if (maybe_type) |parameter_type| parameter.type = parameter_type;
+            }
+            break :blk updated;
+        } else null;
         var parameter_index: usize = 0;
         while (parameter_iterator.next()) |parameter| : (parameter_index += 1) {
             if (parameter_index >= resolved.data.function.parameters.len) break;
@@ -13895,7 +14008,8 @@ fn resolveDeclaredTypeExpression(
         .container_type = container_type,
     }) orelse return null;
     const is_direct_unknown = resolved.is_type_val and switch (resolved.data) {
-        .ip_index => |payload| payload.type == .type_type and payload.index == null,
+        .ip_index => |payload| payload.type == .unknown_type or
+            (payload.type == .type_type and payload.index == null),
         else => false,
     };
     const needs_fallback = switch (fallback) {
@@ -13995,6 +14109,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             if (func_ty.is_type_val) return null;
 
             func_ty = try analyser.resolveFunctionTypeFromCall(handle, call, func_ty);
+            if (analyser.evaluate_comptime_values or analyser.generic_bindings != null) {
+                if (try analyser.resolveCapturedComptimeReturn(func_ty)) |value| return value;
+            }
             const func_info = func_ty.data.function;
             const func_uri = func_info.handle.uri.raw;
 

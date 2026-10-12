@@ -918,6 +918,32 @@ test "explicit variable type from comptime method result" {
     , .{ .markup_kind = .plaintext });
 }
 
+test "generic return type from dependent comptime model" {
+    try testHoverWithOptions(
+        \\const Associated = struct { Error: type = anyerror };
+        \\const Subject = struct { pub const ReaderError = error{Specific}; };
+        \\fn resolveAssociated(comptime T: type) Associated {
+        \\    if (@hasDecl(T, "ReaderError")) return .{ .Error = T.ReaderError };
+        \\    return .{};
+        \\}
+        \\fn ImplWith(comptime T: type, comptime associated_value: Associated) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn associated(comptime _: Self) Associated { return associated_value; }
+        \\    };
+        \\}
+        \\fn Impl(comptime T: type) type { return ImplWith(T, resolveAssociated(T)); }
+        \\fn readAll(reader: anytype, comptime impl: Impl(@TypeOf(reader))) impl.associated().Error!usize {
+        \\    return 0;
+        \\}
+        \\const model: Impl(Subject) = .{};
+        \\const result = readA<cursor>ll(Subject{}, model);
+    ,
+        \\fn readAll(reader: anytype, comptime impl: Impl(@TypeOf(reader))) impl.associated().Error!usize
+        \\(fn (Subject, comptime ImplWith(Subject,.{ .Error = error{Specific} })) error{Specific}!usize)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "function parameter" {
     try testHover(
         \\fn foo(
