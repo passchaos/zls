@@ -1402,7 +1402,7 @@ pub const Interpreter = struct {
                 break :blk pointer_value;
             } else if (stableAggregateCaptureTarget(targeted_base)) |target| switch (target) {
                 .reference => try self.borrowReference(target.reference) orelse return null,
-                .pointee => |pointee| try self.readValuePath(pointee.value, pointee.path) orelse return null,
+                .pointee => |pointee| pointee.value,
             } else targeted_base.value;
             const value = try self.analyser.resolveComptimeFieldValue(current, field_name) orelse return null;
             // Type namespaces are declarations, not assignable aggregate fields.
@@ -1414,7 +1414,7 @@ pub const Interpreter = struct {
             const target = aggregate_target orelse return .{ .value = value, .target = null };
             const aggregate = switch (target) {
                 .reference => try self.borrowReference(target.reference) orelse current,
-                .pointee => |pointee| try self.readValuePath(pointee.value, pointee.path) orelse current,
+                .pointee => |pointee| pointee.value,
             };
             const extended = try self.extendCaptureTarget(
                 target,
@@ -2596,6 +2596,12 @@ pub const Interpreter = struct {
             },
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
                 const name = handle.tree.tokenSlice(handle.tree.nodeMainToken(node));
+                if (std.mem.eql(u8, name, "@inComptime")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = handle.tree.builtinCallParams(&buffer, node).?;
+                    if (params.len != 0) return null;
+                    return Type.fromIP(self.analyser, .bool_type, .bool_true);
+                }
                 const qualifier_cast: ?Type.PointerQualifierCast = if (std.mem.eql(u8, name, "@constCast"))
                     .discard_const
                 else if (std.mem.eql(u8, name, "@volatileCast"))
@@ -4575,6 +4581,16 @@ pub const Interpreter = struct {
                     allow_invalid,
                 ) orelse return null;
                 return @as(?Type, try Value.create(analyser, destination, .{ .optional = payload }));
+            }
+        }
+        if (destination.isEnumType(analyser)) {
+            const source_type = try value.typeOf(analyser);
+            if (try analyser.resolveUnionTag(source_type)) |tag_instance| {
+                const tag_type = try tag_instance.typeOf(analyser);
+                if (tag_type.eql(destination)) {
+                    const tag = try analyser.resolveKnownUnionFieldName(value) orelse return null;
+                    return @as(?Type, try analyser.enumValue(destination, tag));
+                }
             }
         }
         var buffer: [2]Ast.Node.Index = undefined;
@@ -6697,6 +6713,14 @@ pub const Interpreter = struct {
         const function = try analyser.resolveFuncProtoOfCallable(callable) orelse return .unknown;
         const info = function.data.function;
         if (info.parameters.len != arguments.len() or info.handle.tree.nodeTag(info.fn_node) != .fn_decl) return .unknown;
+        const is_mem_eql = info.parameters.len == 3 and
+            if (info.name) |name| std.mem.eql(u8, name, "eql") and
+                std.mem.endsWith(u8, info.handle.uri.raw, "/std/mem.zig") else false;
+        const is_meta_eql = info.parameters.len == 2 and
+            if (info.name) |name| std.mem.eql(u8, name, "eql") and
+                std.mem.endsWith(u8, info.handle.uri.raw, "/std/meta.zig") else false;
+        var mem_eql_arguments: [3]Type = undefined;
+        var meta_eql_arguments: [2]Type = undefined;
         var fn_buffer: [1]Ast.Node.Index = undefined;
         const fn_proto = info.handle.tree.fullFnProto(&fn_buffer, info.fn_node).?;
         var child: Interpreter = .{
@@ -6719,8 +6743,39 @@ pub const Interpreter = struct {
                 try child.bindings.put(analyser.arena, token_handle, value);
             }
         }
+        var parameter_iterator: ast.FnParamIterator = .init(&fn_proto, &info.handle.tree);
         for (info.parameters, 0..) |parameter, index| {
-            const parameter_type = try analyser.resolveGenericType(parameter.type, child.bindings);
+            const source_parameter = parameter_iterator.next();
+            var parameter_type = try analyser.resolveGenericType(parameter.type, child.bindings);
+            if (analyser.hasUnresolvedType(parameter_type)) resolve_parameter: {
+                const type_node = (source_parameter orelse break :resolve_parameter).type_expr orelse
+                    break :resolve_parameter;
+                const old_interpreter = analyser.comptime_interpreter;
+                const old_bindings = analyser.generic_bindings;
+                const old_bindings_mutable = analyser.specialization_bindings_mutable;
+                analyser.comptime_interpreter = &child;
+                analyser.generic_bindings = &child.bindings;
+                analyser.specialization_bindings_mutable = true;
+                defer {
+                    analyser.comptime_interpreter = old_interpreter;
+                    analyser.generic_bindings = old_bindings;
+                    analyser.specialization_bindings_mutable = old_bindings_mutable;
+                }
+                if (ast.isBuiltinCall(&info.handle.tree, type_node) and
+                    std.mem.eql(u8, info.handle.tree.tokenSlice(info.handle.tree.nodeMainToken(type_node)), "@TypeOf"))
+                {
+                    var type_of_buffer: [2]Ast.Node.Index = undefined;
+                    const type_of_params = info.handle.tree.builtinCallParams(&type_of_buffer, type_node).?;
+                    if (type_of_params.len == 1) {
+                        const operand = try child.eval(info.handle, type_of_params[0]) orelse break :resolve_parameter;
+                        parameter_type = try operand.typeOf(analyser);
+                        break :resolve_parameter;
+                    }
+                }
+                const resolved = try analyser.resolveTypeOfNode(.of(type_node, info.handle)) orelse
+                    break :resolve_parameter;
+                if (resolved.is_type_val) parameter_type = resolved;
+            }
             const value = switch (arguments) {
                 .nodes => |nodes| value: {
                     const is_receiver = nodes.receiver != null and index == 0;
@@ -6760,9 +6815,57 @@ pub const Interpreter = struct {
                         self.optionalPayloadType(parameter_type) != null,
                     ) orelse return .unknown,
             };
+            if (is_mem_eql) mem_eql_arguments[index] = value;
+            if (is_meta_eql) meta_eql_arguments[index] = value;
             try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {
                 try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
+            }
+        }
+        if (is_mem_eql and
+            mem_eql_arguments[0].ipIndex() == .u8_type and
+            mem_eql_arguments[1].data == .string_value and
+            mem_eql_arguments[2].data == .string_value)
+        {
+            const equal = std.mem.eql(
+                u8,
+                mem_eql_arguments[1].data.string_value.bytes,
+                mem_eql_arguments[2].data.string_value.bytes,
+            );
+            return .{ .returned = .{
+                .value = Type.fromIP(analyser, .bool_type, if (equal) .bool_true else .bool_false),
+                .source_node = null,
+            } };
+        }
+        if (is_meta_eql and meta_eql_arguments[0].data == .enum_value) {
+            const lhs = meta_eql_arguments[0].data.enum_value;
+            const lhs_payload = try analyser.resolveFieldAccess(meta_eql_arguments[0], lhs.tag) orelse
+                Type.unknown_type;
+            if (lhs_payload.ipIndex() == .void_value) {
+                const rhs_tag = if (meta_eql_arguments[1].data == .enum_value)
+                    meta_eql_arguments[1].data.enum_value.tag
+                else rhs_tag: {
+                    const nodes = switch (arguments) {
+                        .nodes => |nodes| nodes,
+                        .values => break :rhs_tag null,
+                    };
+                    const rhs_node = nodes.explicit[1 - @intFromBool(nodes.receiver != null)];
+                    if (handle.tree.nodeTag(rhs_node) != .enum_literal) break :rhs_tag null;
+                    break :rhs_tag try analyser.identifierTokenName(&handle.tree, handle.tree.nodeMainToken(rhs_node));
+                };
+                if (rhs_tag) |tag| {
+                    const rhs_field = try analyser.lookupSymbolContainer(lhs.enum_type.*, tag, .field);
+                    if (rhs_field) |field| {
+                        const rhs_type = try field.resolveType(analyser) orelse Type.unknown_type;
+                        if ((try rhs_type.typeOf(analyser)).ipIndex() == .void_type) {
+                            const equal = std.mem.eql(u8, lhs.tag, tag);
+                            return .{ .returned = .{
+                                .value = Type.fromIP(analyser, .bool_type, if (equal) .bool_true else .bool_false),
+                                .source_node = null,
+                            } };
+                        }
+                    }
+                }
             }
         }
         const is_type_function = Analyser.isTypeFunction(&info.handle.tree, fn_proto);

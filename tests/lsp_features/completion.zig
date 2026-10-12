@@ -11524,6 +11524,68 @@ test "comptime interpreter evaluates local value-returning instance methods" {
     });
 }
 
+test "comptime interpreter selects struct results from instance methods" {
+    try testCompletion(
+        \\const std = @import("std");
+        \\const builtin = std.builtin;
+        \\const Kind = enum { ok, missing_method };
+        \\const Check = struct {
+        \\    kind: Kind = .ok,
+        \\    fn isOk(self: @This()) bool { return self.kind == .ok; }
+        \\};
+        \\const Contract = struct {
+        \\    const Associated = struct {};
+        \\    fn Methods(comptime Self: type, comptime _: Associated) type {
+        \\        return struct { read: fn (Self) void };
+        \\    }
+        \\};
+        \\const Subject = struct {};
+        \\fn Bindings(comptime Methods: type) type {
+        \\    const method_fields = @typeInfo(Methods).@"struct".fields;
+        \\    comptime var names: [method_fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [method_fields.len]type = undefined;
+        \\    comptime var attrs: [method_fields.len]builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (method_fields, 0..) |method, index| {
+        \\        const Default = struct { const value: ?method.type = null; };
+        \\        names[index] = method.name;
+        \\        types[index] = ?method.type;
+        \\        attrs[index] = .{ .default_value_ptr = @ptrCast(&Default.value) };
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\fn Model(comptime C: type, comptime S: type) type {
+        \\    const Methods = C.Methods(S, .{});
+        \\    return struct {
+        \\        bindings: Bindings(Methods) = .{},
+        \\        const Self = @This();
+        \\        fn check(comptime self: Self) Check {
+        \\            inline for (@typeInfo(Methods).@"struct".fields) |method| {
+        \\                if (@field(self.bindings, method.name) != null) continue;
+        \\                if (!@hasDecl(S, method.name)) return .{ .kind = .missing_method };
+        \\            }
+        \\            return .{};
+        \\        }
+        \\        fn satisfies(comptime self: Self) bool { return self.check().isOk(); }
+        \\    };
+        \\}
+        \\const model: Model(Contract, Subject) = .{};
+        \\fn Select() type {
+        \\    return if (model.check().kind == .missing_method and !model.satisfies() and
+        \\        std.meta.eql(
+        \\            @typeInfo(fn () void).@"fn".calling_convention,
+        \\            @typeInfo(fn () void).@"fn".calling_convention,
+        \\        ) and std.mem.eql(u8, "read", "read") and !std.mem.eql(u8, "read", "write"))
+        \\        struct { matched: u8 }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "comptime interpreter evaluates temporary value-returning methods" {
     try testCompletion(
         \\const Check = struct {

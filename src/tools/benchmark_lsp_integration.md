@@ -761,3 +761,30 @@ All response hashes matched. Baseline binary
 SHA-256: `956c7a4f66a7559ffc32eb1d78836df300d5204d38b648c4d1338daa7baad2b3`.
 Candidate binary SHA-256:
 `901593dd6eba5b9a0d453b6caa20f56a2f4b70896804641e078f7093e86dc05f`.
+
+## Generated defaults and structured comptime checks
+
+2026-10-12, same machine, Zig version, and build options. Generated `@Struct`
+field metadata now retains `default_value_ptr` values in the analysis fallback,
+including `null` coerced to non-interned optional function types. Nested dynamic
+`@field` reads use the pointee's already-selected value instead of applying its
+path twice. Interpreter calls also resolve parameter types in declaration order,
+so later parameters such as `b: @TypeOf(a)` see the earlier argument value.
+`@inComptime`, common `std.mem.eql` string calls, and payloadless tagged-union
+comparison through `std.meta.eql` remain concrete during these checks.
+
+All 1,288 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. A real-document overlay selected only the expected
+branches for `zigraft.auto(Reader, *struct {}).check().kind`,
+`BufferReader.satisfies()`, mutable `isObjectSafe`, and the rejected read-only
+case; the independent narrowing rejection remains a later comptime target.
+
+Two reversed runs with 20 warmups and 500 measured rounds per order produced a
+`0.9996x` geometric mean across the 16 existing integration request cases. The
+multi-millisecond requests remained within 0.9%; the largest relative change
+was 6.6 us on package-import completion, so this is treated as no material
+performance change. All response hashes matched. Baseline binary SHA-256:
+`844f8ea631ea0d787d414b5fd93e97ec0104b38fcdd7ab99df058fb9bae06d4d`.
+Candidate binary SHA-256:
+`45c78103451b5d3e8aaefc247fc9de6fcef6f13a315a692fa7639599997a115b`.

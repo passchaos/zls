@@ -362,6 +362,35 @@ test "definition through nested aggregate comptime value" {
     );
 }
 
+test "definition through generated Struct default method result" {
+    try testDefinition(
+        \\const std = @import("std");
+        \\fn Bindings() type {
+        \\    const Default = struct { const value: ?fn () void = null; };
+        \\    return @Struct(.auto, null, &.{"read"}, &.{?fn () void}, &.{.{
+        \\        .default_value_ptr = @ptrCast(&Default.value),
+        \\    }});
+        \\}
+        \\fn Model() type {
+        \\    return struct {
+        \\        bindings: Bindings() = .{},
+        \\        fn missing(comptime self: @This()) bool {
+        \\            return @field(self.bindings, "read") == null;
+        \\        }
+        \\    };
+        \\}
+        \\const model: Model() = .{};
+        \\fn Select() type {
+        \\    return if (model.missing())
+        \\        struct { <def><decl>matched</decl></def>: <tdef>u8</tdef> }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.mat<>ched;
+    );
+}
+
 test "generated Struct field falls back to its type definition" {
     try testDefinition(
         \\const Model = struct {

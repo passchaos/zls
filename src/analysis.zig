@@ -912,6 +912,21 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
         }
     }
     if (comptime_eval.Value.field(lhs, field_name)) |value| return .{ .type = value, .is_const = true };
+    if (lhs.data == .enum_value and std.mem.eql(u8, lhs.data.enum_value.tag, field_name)) {
+        const union_type = lhs.data.enum_value.enum_type.*;
+        const is_union = union_type.isUnionType() or
+            if (union_type.ipIndex()) |index| analyser.ip.zigTypeTag(index) == .@"union" else false;
+        if (is_union) {
+            const field = try analyser.lookupSymbolContainer(union_type, field_name, .field) orelse return null;
+            const field_type = try field.resolveType(analyser) orelse return null;
+            const field_type_value = try field_type.typeOf(analyser);
+            if (field_type_value.ipIndex() == .void_type) return .{
+                .type = Type.fromIP(analyser, .void_type, .void_value),
+                .is_const = true,
+            };
+            return .{ .type = field_type, .is_const = true };
+        }
+    }
     const dereferenced_lhs = comptime_eval.Value.deref(lhs);
     if (dereferenced_lhs.data == .comptime_value and dereferenced_lhs.data.comptime_value.data == .fields) {
         const ty = dereferenced_lhs.data.comptime_value.ty;
@@ -1230,6 +1245,16 @@ fn bodyAlwaysBreaksCurrentLoop(
 }
 
 pub fn resolveKnownUnionFieldName(analyser: *Analyser, value: Type) Error!?[]const u8 {
+    if (value.data == .enum_value) {
+        const union_type = value.data.enum_value.enum_type.*;
+        const is_union = union_type.isUnionType() or
+            if (union_type.ipIndex()) |index| analyser.ip.zigTypeTag(index) == .@"union" else false;
+        if (is_union and
+            try analyser.lookupSymbolContainer(union_type, value.data.enum_value.tag, .field) != null)
+        {
+            return value.data.enum_value.tag;
+        }
+    }
     if (value.data == .comptime_value and value.data.comptime_value.data == .fields) {
         const fields = value.data.comptime_value.data.fields;
         const ty = value.data.comptime_value.ty;
@@ -1673,7 +1698,7 @@ pub fn resolveCatchType(analyser: *Analyser, lhs: Type, rhs: Type) error{OutOfMe
     return try analyser.resolvePeerTypes(payload, rhs) orelse payload;
 }
 
-fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
+pub fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
     if (!ty.is_type_val) return null;
 
     if (ty.data == .ip_index) {
@@ -5210,8 +5235,14 @@ fn resolveTypeInfoFieldAccess(
                 .error_union => |info| .{ (info.error_set orelse return field_value_type).*, info.payload.* },
                 .ip_index => |type_payload| switch (analyser.ip.indexToKey(type_payload.index orelse return field_value_type)) {
                     .error_union_type => |info| .{
-                        Type.fromIP(analyser, .type_type, info.error_set_type),
-                        Type.fromIP(analyser, .type_type, info.payload_type),
+                        if (info.error_set_type == .none)
+                            Type.unknown_type
+                        else
+                            Type.fromIP(analyser, .type_type, info.error_set_type),
+                        if (info.payload_type == .none)
+                            Type.unknown_type
+                        else
+                            Type.fromIP(analyser, .type_type, info.payload_type),
                     },
                     else => return field_value_type,
                 },
@@ -8366,42 +8397,82 @@ fn isEmptyStructAttributeList(
     return true;
 }
 
-fn resolveStructFieldAlignments(
+const ResolvedStructFieldAttributes = struct {
+    alignments: []const u16,
+    defaults: []const ?Type,
+};
+
+fn coerceStructFieldDefault(analyser: *Analyser, field_type: Type, default_value: Type) Error!?Type {
+    if ((try default_value.typeOf(analyser)).eql(field_type)) return default_value;
+    if (field_type.isOptionalType(analyser)) {
+        const value_index = default_value.ipIndex() orelse return null;
+        if (analyser.ip.isNull(value_index)) {
+            return @as(?Type, try comptime_eval.Value.create(analyser, field_type, .{ .optional = null }));
+        }
+    }
+    const type_index = field_type.ipIndex() orelse return null;
+    const value_index = try analyser.coerceComptimeIPValue(type_index, default_value) orelse return null;
+    return Type.fromIP(analyser, type_index, value_index);
+}
+
+fn resolveStructFieldAttributesValue(
+    analyser: *Analyser,
+    value: Type,
+    resolved_types: []const Type,
+) Error!?ResolvedStructFieldAttributes {
+    const items = try comptime_eval.Value.sequenceAlloc(analyser, value) orelse return null;
+    if (!items.elements_valid or items.len != resolved_types.len) return null;
+    const attribute_items = items.backing[items.offset..][0..items.len];
+    const alignments = try analyser.arena.alloc(u16, attribute_items.len);
+    @memset(alignments, 0);
+    const defaults = try analyser.arena.alloc(?Type, attribute_items.len);
+    @memset(defaults, null);
+    for (attribute_items, alignments, defaults, resolved_types) |attributes, *alignment, *default, field_type| {
+        if (comptime_eval.Value.field(attributes, "comptime")) |field_value| {
+            if (comptimeBoolValue(field_value) orelse return null) return null;
+        }
+        if (comptime_eval.Value.field(attributes, "default_value_ptr")) |field_value| {
+            switch (optionalComptimeValue(analyser, field_value) orelse return null) {
+                .absent => {},
+                .payload => |pointer| {
+                    const default_value = try analyser.resolveDerefType(pointer) orelse return null;
+                    default.* = try analyser.coerceStructFieldDefault(field_type, default_value) orelse return null;
+                },
+            }
+        }
+        if (comptime_eval.Value.field(attributes, "align")) |field_value| {
+            switch (optionalComptimeValue(analyser, field_value) orelse return null) {
+                .absent => {},
+                .payload => |payload| {
+                    alignment.* = analyser.ip.toInt(payload.ipIndex() orelse return null, u16) orelse return null;
+                    if (!std.math.isPowerOfTwo(alignment.*)) return null;
+                },
+            }
+        }
+    }
+    return .{ .alignments = alignments, .defaults = defaults };
+}
+
+fn resolveStructFieldAttributes(
     analyser: *Analyser,
     options: ResolveOptions,
-    expected_len: usize,
-) Error!?[]const u16 {
+    resolved_types: []const Type,
+) Error!?ResolvedStructFieldAttributes {
     if (try analyser.resolveComptimeValue(options)) |value| {
-        if (comptime_eval.Value.elements(value)) |items| {
-            if (items.len != expected_len) return null;
-            const alignments = try analyser.arena.alloc(u16, items.len);
-            @memset(alignments, 0);
-            for (items, alignments) |item, *alignment| {
-                if (item.data != .comptime_value or item.data.comptime_value.data != .fields) return null;
-                for (item.data.comptime_value.data.fields) |field| {
-                    if (std.mem.eql(u8, field.name, "align")) {
-                        const index = field.value.ipIndex() orelse return null;
-                        if (analyser.ip.isNull(index)) continue;
-                        alignment.* = analyser.ip.toInt(index, u16) orelse return null;
-                        if (!std.math.isPowerOfTwo(alignment.*)) return null;
-                    } else if (std.mem.eql(u8, field.name, "comptime")) {
-                        if (field.value.ipIndex() != .bool_false) return null;
-                    } else if (!std.mem.eql(u8, field.name, "default_value_ptr")) return null;
-                }
-            }
-            return alignments;
-        }
+        if (try analyser.resolveStructFieldAttributesValue(value, resolved_types)) |attributes| return attributes;
     }
     const literal_options = try analyser.resolveConstInitializer(options) orelse return null;
     const handle = literal_options.node_handle.handle;
     const tree = &handle.tree;
     var literal_buffer: [2]Ast.Node.Index = undefined;
     const elements = anonymousSequenceLiteralElements(literal_options.node_handle, &literal_buffer) orelse return null;
-    if (elements.len != expected_len) return null;
+    if (elements.len != resolved_types.len) return null;
 
-    const alignments = try analyser.arena.alloc(u16, expected_len);
+    const alignments = try analyser.arena.alloc(u16, resolved_types.len);
     @memset(alignments, 0);
-    for (elements, alignments) |element, *alignment| {
+    const defaults = try analyser.arena.alloc(?Type, resolved_types.len);
+    @memset(defaults, null);
+    for (elements, alignments, defaults, resolved_types) |element, *alignment, *default, field_type| {
         var struct_buffer: [2]Ast.Node.Index = undefined;
         const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
         if (attributes.ast.type_expr.unwrap() != null) return null;
@@ -8429,13 +8500,20 @@ fn resolveStructFieldAlignments(
             } else if (std.mem.eql(u8, field_name, "default_value_ptr")) {
                 if (seen_default) return null;
                 seen_default = true;
-                if (!try analyser.isNullComptimeValue(field_options)) return null;
+                const field_value = try analyser.resolveComptimeValue(field_options) orelse return null;
+                switch (optionalComptimeValue(analyser, field_value) orelse return null) {
+                    .absent => {},
+                    .payload => |pointer| {
+                        const default_value = try analyser.resolveDerefType(pointer) orelse return null;
+                        default.* = try analyser.coerceStructFieldDefault(field_type, default_value) orelse return null;
+                    },
+                }
             } else {
                 return null;
             }
         }
     }
-    return alignments;
+    return .{ .alignments = alignments, .defaults = defaults };
 }
 
 fn resolveStructTypeConstructor(
@@ -8483,10 +8561,10 @@ fn resolveStructTypeConstructor(
         else => return null,
     };
     if (names.len != resolved_types.len) return null;
-    const alignments = try analyser.resolveStructFieldAlignments(.{
+    const attributes = try analyser.resolveStructFieldAttributes(.{
         .node_handle = .of(params[4], handle),
         .container_type = container_type,
-    }, names.len) orelse return null;
+    }, resolved_types) orelse return null;
     const field_types = try analyser.arena.alloc(InternPool.Index, resolved_types.len);
     for (field_types, resolved_types) |*index, ty| index.* = ty.ipIndex() orelse .unknown_type;
     const name_sequence = if (try analyser.resolveComptimeValue(.{
@@ -8497,7 +8575,16 @@ fn resolveStructTypeConstructor(
         if (sequence.elements_valid) sequence.backing[sequence.offset..][0..sequence.len] else null
     else
         null;
-    return analyser.createComptimeStructType(layout, backing_type, names, resolved_types, field_types, alignments, null, name_values);
+    return analyser.createComptimeStructType(
+        layout,
+        backing_type,
+        names,
+        resolved_types,
+        field_types,
+        attributes.alignments,
+        attributes.defaults,
+        name_values,
+    );
 }
 
 fn createComptimeStructType(
@@ -8633,40 +8720,7 @@ pub fn resolveComptimeStructTypeValue(
         index.* = ty.ipIndex() orelse .unknown_type;
     }
 
-    const attributes_sequence = try comptime_eval.Value.sequenceAlloc(analyser, attributes_value) orelse return null;
-    if (!attributes_sequence.elements_valid or attributes_sequence.len != names.len) return null;
-    const attribute_items = attributes_sequence.backing[attributes_sequence.offset..][0..attributes_sequence.len];
-    const alignments = try analyser.arena.alloc(u16, attribute_items.len);
-    @memset(alignments, 0);
-    const defaults = try analyser.arena.alloc(?Type, attribute_items.len);
-    @memset(defaults, null);
-    for (attribute_items, alignments, defaults, resolved_types) |attributes, *alignment, *default, field_type| {
-        if (comptime_eval.Value.field(attributes, "comptime")) |value| {
-            if (comptimeBoolValue(value) orelse return null) return null;
-        }
-        if (comptime_eval.Value.field(attributes, "default_value_ptr")) |value| {
-            switch (optionalComptimeValue(analyser, value) orelse return null) {
-                .absent => {},
-                .payload => |pointer| {
-                    const default_value = try analyser.resolveDerefType(pointer) orelse return null;
-                    default.* = if ((try default_value.typeOf(analyser)).eql(field_type)) default_value else coerce: {
-                        const type_index = field_type.ipIndex() orelse return null;
-                        const value_index = try analyser.coerceComptimeIPValue(type_index, default_value) orelse return null;
-                        break :coerce Type.fromIP(analyser, type_index, value_index);
-                    };
-                },
-            }
-        }
-        if (comptime_eval.Value.field(attributes, "align")) |value| {
-            switch (optionalComptimeValue(analyser, value) orelse return null) {
-                .absent => {},
-                .payload => |payload| {
-                    alignment.* = analyser.ip.toInt(payload.ipIndex() orelse return null, u16) orelse return null;
-                    if (!std.math.isPowerOfTwo(alignment.*)) return null;
-                },
-            }
-        }
-    }
+    const attributes = try analyser.resolveStructFieldAttributesValue(attributes_value, resolved_types) orelse return null;
 
     return analyser.createComptimeStructType(
         layout,
@@ -8674,8 +8728,8 @@ pub fn resolveComptimeStructTypeValue(
         names,
         resolved_types,
         field_types,
-        alignments,
-        defaults,
+        attributes.alignments,
+        attributes.defaults,
         name_items,
     );
 }
