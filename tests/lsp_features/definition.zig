@@ -391,6 +391,66 @@ test "definition through generated Struct default method result" {
     );
 }
 
+test "definition through generated adapter binding assignment" {
+    try testDefinition(
+        \\const std = @import("std");
+        \\const Contract = struct {
+        \\    const Associated = struct {};
+        \\    fn Methods(comptime Self: type, comptime _: Associated) type {
+        \\        return struct { run: fn (Self) void };
+        \\    }
+        \\};
+        \\const Subject = struct {};
+        \\const Check = struct {
+        \\    ok: bool,
+        \\    fn require(comptime self: @This()) void {
+        \\        if (!self.ok) @compileError("invalid binding");
+        \\    }
+        \\};
+        \\fn Bindings(comptime Methods: type) type {
+        \\    const method_fields = @typeInfo(Methods).@"struct".fields;
+        \\    comptime var names: [method_fields.len][:0]const u8 = undefined;
+        \\    comptime var types: [method_fields.len]type = undefined;
+        \\    comptime var attrs: [method_fields.len]std.builtin.Type.StructField.Attributes = undefined;
+        \\    inline for (method_fields, 0..) |method, index| {
+        \\        const Default = struct { const value: ?method.type = null; };
+        \\        names[index] = method.name;
+        \\        types[index] = ?method.type;
+        \\        attrs[index] = .{ .default_value_ptr = @ptrCast(&Default.value) };
+        \\    }
+        \\    return @Struct(.auto, null, &names, &types, &attrs);
+        \\}
+        \\fn Model(comptime C: type, comptime S: type) type {
+        \\    const Methods = C.Methods(S, .{});
+        \\    return struct {
+        \\        bindings: Bindings(Methods) = .{},
+        \\        fn hasBinding(comptime self: @This()) bool {
+        \\            return @field(self.bindings, "run") != null;
+        \\        }
+        \\    };
+        \\}
+        \\const Provider = struct { fn run(_: *Subject) void {} };
+        \\fn adapt(comptime C: type, comptime S: type, comptime P: type) Model(C, S) {
+        \\    var result: Model(C, S) = .{};
+        \\    inline for (@typeInfo(@TypeOf(result.bindings)).@"struct".fields) |field| {
+        \\        const check = Check{ .ok = @hasDecl(P, field.name) };
+        \\        check.require();
+        \\        @field(result.bindings, field.name) = @field(P, field.name);
+        \\    }
+        \\    return result;
+        \\}
+        \\const adapted = adapt(Contract, *Subject, Provider);
+        \\fn Select() type {
+        \\    return if (adapted.hasBinding())
+        \\        struct { <def><decl>matched</decl></def>: <tdef>u8</tdef> }
+        \\    else
+        \\        struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.mat<>ched;
+    );
+}
+
 test "generated Struct field falls back to its type definition" {
     try testDefinition(
         \\const Model = struct {

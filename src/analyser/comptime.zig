@@ -6657,11 +6657,21 @@ pub const Interpreter = struct {
                 self.pending_call_receiver = previous_receiver;
             }
             const callable = try self.eval(handle, call_node.ast.fn_expr) orelse return .unknown;
+            const has_local_comptime_receiver = (if (self.return_type) |return_type| !return_type.isMetaType() else false) and
+                callable.isFunc() and
+                callable.data.function.parameters.len != 0 and
+                callable.data.function.parameters[0].modifier == .comptime_param and
+                if (self.pending_call_receiver) |value|
+                    handle.tree.nodeTag(unwrapGroupedSource(&handle.tree, value.node)) == .identifier
+                else
+                    false;
             var receiver = if (callable.isFunc() and
                 // Validation and other void-returning methods do not provide
-                // a value for comptime propagation. Keep those on the normal
-                // type-inference path, where incomplete calls remain usable.
-                (try callable.data.function.return_value.typeOf(self.analyser)).ipIndex() != .void_type and
+                // a value for ordinary type propagation. A known local
+                // comptime receiver may gate later mutations and is safe to
+                // execute; broader receiver expressions stay on inference.
+                ((try callable.data.function.return_value.typeOf(self.analyser)).ipIndex() != .void_type or
+                    has_local_comptime_receiver) and
                 try self.analyser.isInstanceCall(handle, call_node, callable))
                 self.pending_call_receiver
             else

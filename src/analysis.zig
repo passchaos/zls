@@ -5620,12 +5620,16 @@ fn resolveTypeInfoDescriptorField(
                             info.fields.keys()[index],
                         );
                         const field_info = info.fields.values()[index];
+                        const generated = if (analyser.generated_struct_fields.get(payload.index.?)) |fields|
+                            if (index < fields.len) fields[index] else null
+                        else
+                            null;
                         break :blk .{
                             name,
-                            Type.fromIP(analyser, .type_type, field_info.ty),
+                            if (generated) |generated_field| generated_field.ty else Type.fromIP(analyser, .type_type, field_info.ty),
                             field_info.is_comptime,
-                            field_info.alignment,
-                            field_info.default_value != .none,
+                            if (generated) |generated_field| generated_field.alignment else field_info.alignment,
+                            if (generated) |generated_field| generated_field.default_value != null else field_info.default_value != .none,
                         };
                     },
                     .tuple_type => |tuple| blk: {

@@ -788,3 +788,30 @@ performance change. All response hashes matched. Baseline binary SHA-256:
 `844f8ea631ea0d787d414b5fd93e97ec0104b38fcdd7ab99df058fb9bae06d4d`.
 Candidate binary SHA-256:
 `45c78103451b5d3e8aaefc247fc9de6fcef6f13a315a692fa7639599997a115b`.
+
+## Generated adapter binding propagation
+
+2026-10-12, same machine, Zig version, and build options. `@typeInfo` field
+descriptors for generated structs now prefer the full type stored in
+`generated_struct_fields` when the InternPool entry cannot represent it. This
+preserves optional function types used by zigraft's generated binding table.
+Comptime void instance methods are executed only for known local comptime
+receivers in non-type functions, allowing `adaptWith` validation to gate its
+binding assignments without evaluating validation calls inside type
+construction or broad receiver expressions.
+
+All 1,290 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. A real-document overlay selected only the expected
+branches for associated errors, missing methods, satisfaction, mutable and
+read-only object safety, and rejection of an invalid associated-parameter
+narrowing through `ForeignReader`.
+
+Two reversed runs with 20 warmups and 500 measured rounds per order produced a
+`0.9988x` geometric mean across the 16 existing integration request cases. The
+multi-millisecond requests remained within 0.5%; the largest relative change
+was 2.9 us on package-import completion, so this is treated as no material
+performance change. All response hashes matched. Baseline binary SHA-256:
+`6446a81fe63b0fadf61aec8938900efd76ed38beb133cb7feda08460b7654e13`.
+Candidate binary SHA-256:
+`a8a0a847102e49f773d13f4737f9575bef872f9bc2ace1fde5719abb69fc37db`.
