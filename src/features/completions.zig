@@ -198,8 +198,8 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
         },
         .tuple => |elem_ty_slice| {
             if (ty.is_type_val) return;
-            try builder.completions.ensureUnusedCapacity(builder.arena, elem_ty_slice.len);
-            for (elem_ty_slice, 0..) |elem_ty, i| {
+            try builder.completions.ensureUnusedCapacity(builder.arena, elem_ty_slice.types.len);
+            for (elem_ty_slice.types, 0..) |elem_ty, i| {
                 builder.completions.appendAssumeCapacity(.{
                     .label = try std.fmt.allocPrint(builder.arena, "@\"{}\"", .{i}),
                     .kind = .Field,
@@ -230,7 +230,7 @@ fn typeToCompletion(builder: *Builder, ty: Analyser.Type) Analyser.Error!void {
                 builder.analyser.ip,
                 payload.index orelse try builder.analyser.ip.getUnknown(payload.type),
             );
-            if (builder.analyser.generated_struct_fields.get(payload.type)) |fields| {
+            if (builder.analyser.generatedFields(payload.type)) |fields| {
                 for (fields) |field| {
                     if (builder.completions.map.getPtr(field.name)) |item| {
                         item.detail = if (field.alignment != 0)
@@ -2179,7 +2179,7 @@ fn collectContainerFields(
         .ip_index => |payload| {
             if (likely != .struct_field) return;
             const type_index = if (container.is_type_val) payload.index orelse return else payload.type;
-            const fields = builder.analyser.generated_struct_fields.get(type_index) orelse return;
+            const fields = builder.analyser.generatedFields(type_index) orelse return;
             for (fields) |field| {
                 if (omit_members.contains(field.name)) continue;
                 const detail = if (field.alignment != 0)

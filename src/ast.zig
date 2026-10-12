@@ -52,6 +52,10 @@ fn fullPtrTypeComponents(tree: *const Ast, info: full.PtrType.Components) full.P
                     i = lastToken(tree, align_node) + 1;
                 }
             },
+            .keyword_addrspace => {
+                if (info.addrspace_node.unwrap()) |address_space|
+                    i = lastToken(tree, address_space) + 1;
+            },
             else => {},
         }
     }

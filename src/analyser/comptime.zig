@@ -8,6 +8,7 @@ const Type = Analyser.Type;
 const Handle = @import("../DocumentStore.zig").Handle;
 const Error = Analyser.Error;
 const InternPool = @import("InternPool.zig");
+const SpecializationKey = @import("specialization_cache.zig").Key;
 const FieldIndex = @import("field_index.zig");
 
 pub const Value = struct {
@@ -224,7 +225,7 @@ pub const Value = struct {
         return true;
     }
 
-    fn isKnown(value: Type, analyser: *Analyser, depth: u8) bool {
+    pub fn isKnown(value: Type, analyser: *Analyser, depth: u8) bool {
         if (depth == 128) return false;
         return switch (value.data) {
             .ip_index => |payload| if (payload.index) |index|
@@ -255,7 +256,21 @@ pub const Value = struct {
     }
 
     pub fn pointerIdentityEql(analyser: *Analyser, lhs: Type, rhs: Type) ?bool {
-        return pointerIdentityEqlDepth(analyser, lhs, rhs, 0);
+        if (lhs.data == .type_info_value and lhs.data.type_info_value.reflected_pointer != null) {
+            if (rhs.ipIndex()) |index| if (analyser.ip.isNull(index)) return false;
+        }
+        if (rhs.data == .type_info_value and rhs.data.type_info_value.reflected_pointer != null) {
+            if (lhs.ipIndex()) |index| if (analyser.ip.isNull(index)) return false;
+        }
+        const left = if (lhs.data == .type_info_value and lhs.data.type_info_value.reflected_pointer != null)
+            analyser.materializeReflectedPointer(lhs) catch return null
+        else
+            lhs;
+        const right = if (rhs.data == .type_info_value and rhs.data.type_info_value.reflected_pointer != null)
+            analyser.materializeReflectedPointer(rhs) catch return null
+        else
+            rhs;
+        return pointerIdentityEqlDepth(analyser, left orelse return null, right orelse return null, 0);
     }
 
     pub fn numericPointerOrder(analyser: *Analyser, lhs: Type, rhs: Type) ?std.math.Order {
@@ -751,9 +766,11 @@ pub const Interpreter = struct {
     analyser: *Analyser,
     bindings: Analyser.TokenToTypeMap,
     container_type: ?Type = null,
+    runtime_safety: ?bool = null,
     cells: std.array_hash_map.Custom(Analyser.TokenWithHandle, *Value.Cell, Analyser.TokenWithHandle.Context, true) = .empty,
     budget: *Budget,
     return_type: ?Type = null,
+    interpreting_function: bool = false,
     pending_flow: ?Flow = null,
     break_context: ?*const BreakContext = null,
     /// Populated only while evaluating a call's callee so an implicit method
@@ -815,9 +832,13 @@ pub const Interpreter = struct {
         quota: usize = default_step_quota,
         depth: usize = 0,
         expression_depth: usize = 0,
+        quota_effects: usize = 0,
         result_pointer_needed: std.AutoHashMapUnmanaged(Analyser.NodeWithHandle, ?bool) = .empty,
 
         fn raiseQuota(self: *Budget, requested: u32) void {
+            // Changing the caller's evaluation quota is an observable effect,
+            // including requests already covered by the current quota.
+            self.quota_effects +%= 1;
             const new_quota = @min(@as(usize, requested), max_step_quota);
             if (new_quota <= self.quota) return;
             self.steps += new_quota - self.quota;
@@ -852,23 +873,46 @@ pub const Interpreter = struct {
     };
 
     pub fn needed(handle: *Handle, body: Ast.Node.Index) bool {
-        return nodeNeedsEvaluation(&handle.tree, body, 0);
+        return nodeNeedsEvaluation(&handle.tree, body, body, 0);
     }
 
-    fn nodeNeedsEvaluation(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    fn nodeNeedsEvaluation(tree: *const Ast, node: Ast.Node.Index, body: Ast.Node.Index, depth: u8) bool {
         if (depth == 128) return true;
-        if (node != .root and ast.isContainer(tree, node)) return false;
+        if (node != .root and ast.isContainer(tree, node)) {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const container = tree.fullContainerDecl(&buffer, node) orelse return false;
+            for (container.ast.members) |member| {
+                const field = tree.fullContainerField(member) orelse continue;
+                if (field.comptime_token != null) return true;
+            }
+            return false;
+        }
         switch (tree.nodeTag(node)) {
             .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
+            .address_of => {
+                const operand = unwrapGroupedSource(tree, tree.nodeData(node).node);
+                if (ast.isBuiltinCall(tree, operand) and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(operand)), "@as")) return true;
+            },
             .@"comptime", .@"try", .@"catch", .@"orelse", .@"errdefer" => return true,
             .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
                 const name = tree.tokenSlice(tree.nodeMainToken(node));
+                if (std.mem.eql(u8, name, "@Union")) {
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const params = tree.builtinCallParams(&buffer, node).?;
+                    // A tagged generated union needs its original enum and
+                    // initialized values for tag reflection and conversion.
+                    if (params.len == 5 and
+                        !(tree.nodeTag(params[1]) == .identifier and
+                            std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(params[1])), "null"))) return true;
+                }
                 if ((name.len == "@addrSpaceCast".len and std.mem.eql(u8, name, "@addrSpaceCast")) or
                     std.mem.eql(u8, name, "@alignCast") or
                     std.mem.eql(u8, name, "@atomicLoad") or
                     std.mem.eql(u8, name, "@errorFromInt") or
                     std.mem.eql(u8, name, "@intFromError") or
                     std.mem.eql(u8, name, "@intFromPtr") or
+                    std.mem.eql(u8, name, "@ptrCast") or
+                    std.mem.eql(u8, name, "@setRuntimeSafety") or
                     std.mem.eql(u8, name, "@ptrFromInt")) return true;
             },
             .@"if" => {
@@ -902,10 +946,63 @@ pub const Interpreter = struct {
         }
         if (tree.fullVarDecl(node)) |decl| {
             if (tree.tokenTag(decl.ast.mut_token) == .keyword_var) return true;
+            if (decl.ast.init_node.unwrap()) |initializer| {
+                // Field reads and method calls need the aggregate's values.
+                switch (tree.nodeTag(unwrapGroupedSource(tree, initializer))) {
+                    .struct_init,
+                    .struct_init_comma,
+                    .struct_init_one,
+                    .struct_init_one_comma,
+                    .struct_init_dot,
+                    .struct_init_dot_comma,
+                    .struct_init_dot_two,
+                    .struct_init_dot_two_comma,
+                    => if (hasUseOnReceiver(tree, body, offsets.identifierTokenToNameSlice(tree, decl.ast.mut_token + 1), 0)) return true,
+                    else => {},
+                }
+            }
         }
         var iterator: ast.Iterator = .init(tree, node);
         while (iterator.next(tree)) |child| {
-            if (nodeNeedsEvaluation(tree, child, depth + 1)) return true;
+            if (nodeNeedsEvaluation(tree, child, body, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    fn hasUseOnReceiver(tree: *const Ast, node: Ast.Node.Index, name: []const u8, depth: u8) bool {
+        if (depth == 128) return false;
+        if (node != .root and ast.isContainer(tree, node)) return false;
+        switch (tree.nodeTag(node)) {
+            .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return false,
+            .field_access => {
+                const receiver = unwrapGroupedSource(tree, tree.nodeData(node).node_and_token[0]);
+                if (tree.nodeTag(receiver) == .identifier and
+                    std.mem.eql(u8, name, offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(receiver)))) return true;
+            },
+            .call, .call_comma, .call_one, .call_one_comma => {
+                var buffer: [1]Ast.Node.Index = undefined;
+                const call_node = tree.fullCall(&buffer, node).?;
+                const callee = unwrapGroupedSource(tree, call_node.ast.fn_expr);
+                if (tree.nodeTag(callee) == .field_access) {
+                    var receiver = unwrapGroupedSource(tree, tree.nodeData(callee).node_and_token[0]);
+                    var remaining: usize = 128;
+                    while (remaining != 0) : (remaining -= 1) {
+                        receiver = switch (tree.nodeTag(receiver)) {
+                            .field_access, .unwrap_optional => unwrapGroupedSource(tree, tree.nodeData(receiver).node_and_token[0]),
+                            .array_access => unwrapGroupedSource(tree, tree.nodeData(receiver).node_and_node[0]),
+                            .deref => unwrapGroupedSource(tree, tree.nodeData(receiver).node),
+                            else => break,
+                        };
+                    }
+                    if (tree.nodeTag(receiver) == .identifier and
+                        std.mem.eql(u8, name, offsets.identifierTokenToNameSlice(tree, tree.nodeMainToken(receiver)))) return true;
+                }
+            },
+            else => {},
+        }
+        var iterator: ast.Iterator = .init(tree, node);
+        while (iterator.next(tree)) |child| {
+            if (hasUseOnReceiver(tree, child, name, depth + 1)) return true;
         }
         return false;
     }
@@ -996,6 +1093,16 @@ pub const Interpreter = struct {
             analyser.evaluate_comptime_control_flow = old_flow;
         }
         return interpreter.evaluateTypedExpression(handle, node, destination);
+    }
+
+    pub fn evaluateTypeWithContainer(analyser: *Analyser, handle: *Handle, node: Ast.Node.Index, container_type: Type) Error!?Type {
+        var budget: Budget = .{};
+        var interpreter: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = if (analyser.comptime_interpreter) |parent| parent.budget else &budget,
+        };
+        return interpreter.evaluateTypedWithContainer(handle, node, Type.fromIP(analyser, .type_type, .type_type), container_type);
     }
 
     fn evaluateTypedWithContainer(
@@ -1263,6 +1370,16 @@ pub const Interpreter = struct {
             }
             const base_type = try base_operand.value.typeOf(self.analyser);
             const pointer_size = (try base_type.instanceUnchecked(self.analyser)).pointerSize(self.analyser);
+            if (pointer_size == .one and base_operand.value.data == .comptime_value and
+                base_operand.value.data.comptime_value.data == .reference)
+            {
+                const reference = base_operand.value.data.comptime_value.data.reference;
+                const aggregate = try self.borrowReference(reference) orelse return null;
+                return .{
+                    .value = value,
+                    .target = .{ .reference = try self.extendReference(reference, try self.aggregateIndexAccess(aggregate, index)) },
+                };
+            }
             if (pointer_size == null) {
                 return .{
                     .value = value,
@@ -1282,7 +1399,14 @@ pub const Interpreter = struct {
             const base, const field_token = tree.nodeData(unwrapped).node_and_token;
             const base_operand = try self.captureOperand(handle, base, depth + 1) orelse return null;
             const field_name = try self.analyser.identifierTokenName(tree, field_token) orelse return null;
-            const value = try self.analyser.resolveFieldAccess(base_operand.value, field_name) orelse return null;
+            const value = try self.analyser.resolveComptimeFieldValue(base_operand.value, field_name) orelse return null;
+            if (base_operand.value.is_type_val) {
+                if (value.is_type_val) return .{ .value = value, .target = null };
+                const declaration = try base_operand.value.lookupSymbol(self.analyser, field_name) orelse
+                    return .{ .value = value, .target = null };
+                const pointee = try self.pointeeForTarget(.{ .declaration = declaration, .path = &.{} }, value);
+                return .{ .value = value, .target = if (pointee) |origin| .{ .pointee = origin } else null };
+            }
             var targeted_base = base_operand;
             targeted_base.target = self.captureTargetOrTemporary(handle, base, base_operand);
             const target = try self.aggregateCaptureTarget(targeted_base);
@@ -1526,6 +1650,27 @@ pub const Interpreter = struct {
             };
         }
         if (try self.staticPointeeTarget(handle, node, depth)) |target| {
+            // Type namespaces have no runtime storage to capture. Retain the
+            // declaration's specialization instead of materializing its type
+            // initializer with the calling function's local bindings.
+            const variable = if (target.path.len == 0 and target.declaration.decl == .ast_node)
+                target.declaration.handle.tree.fullVarDecl(target.declaration.decl.ast_node)
+            else
+                null;
+            if (variable != null and variable.?.ast.init_node != .none and
+                ast.isContainer(&target.declaration.handle.tree, variable.?.ast.init_node.unwrap().?))
+            {
+                const token_handle: Analyser.TokenWithHandle = .{
+                    .handle = target.declaration.handle,
+                    .token = target.declaration.nameToken(),
+                };
+                if (self.bindings.get(token_handle)) |bound| {
+                    if (bound.is_type_val) return .{ .value = bound, .target = null };
+                }
+                if (try target.declaration.resolveType(self.analyser)) |declared| {
+                    if (declared.is_type_val) return .{ .value = declared, .target = null };
+                }
+            }
             const value = try self.staticCaptureValue(handle, node) orelse
                 try self.eval(handle, node) orelse return null;
             if (try self.pointeeForTarget(target, value)) |pointee| {
@@ -1702,6 +1847,7 @@ pub const Interpreter = struct {
                 try self.staticCaptureValue(handle, pointer_node) orelse return null;
             if (pointer.data != .comptime_value or pointer.data.comptime_value.data != .pointee) return null;
             const pointee = pointer.data.comptime_value.data.pointee;
+            if (pointee.temporary_value != null) return null;
             return .{
                 .declaration = .{
                     .decl = .{ .ast_node = pointee.source.node },
@@ -1958,6 +2104,38 @@ pub const Interpreter = struct {
         return self.eval(handle, node);
     }
 
+    pub fn evaluateSourceValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        var buffer: [2]Ast.Node.Index = undefined;
+        if (handle.tree.fullStructInit(&buffer, node)) |literal| {
+            if (literal.ast.type_expr.unwrap()) |type_node| {
+                const ty = try self.eval(handle, type_node) orelse return null;
+                if (ty.isStructType(self.analyser) or self.isUnionType(ty)) return self.evaluateStructInit(handle, ty, literal.ast.fields);
+            }
+        }
+        const source = try self.evalSource(handle, node) orelse return null;
+        return source.value;
+    }
+
+    pub fn evaluateTupleElement(analyser: *Analyser, handle: *Handle, node: Ast.Node.Index) Error!?Type {
+        if (analyser.comptime_interpreter) |interpreter| return interpreter.evaluateSourceValue(handle, node);
+        var budget: Budget = .{};
+        var interpreter: Interpreter = .{
+            .analyser = analyser,
+            .bindings = if (analyser.generic_bindings) |bindings| try bindings.clone(analyser.arena) else .empty,
+            .budget = &budget,
+        };
+        if (!interpreter.enterExpression()) return null;
+        defer interpreter.leaveExpression();
+        const old_bindings = analyser.generic_bindings;
+        analyser.generic_bindings = &interpreter.bindings;
+        analyser.comptime_interpreter = &interpreter;
+        defer {
+            analyser.generic_bindings = old_bindings;
+            analyser.comptime_interpreter = null;
+        }
+        return interpreter.evaluateSourceValue(handle, node);
+    }
+
     pub fn evaluateTypedExpression(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?Type {
         const evaluated = try self.evalTypedSource(handle, node, destination) orelse return null;
         return self.coerceAssignmentFromSource(handle, destination, evaluated.value, evaluated.source_node, null);
@@ -2076,6 +2254,12 @@ pub const Interpreter = struct {
             if (entry.found_existing) return destination.instanceTypeVal(analyser);
             const field_type = try self.assignmentChildType(destination, .{ .field = name }) orelse
                 return destination.instanceTypeVal(analyser);
+            if (try self.comptimeFieldDefault(destination, name)) |default| {
+                const value = try self.evaluateTypedExpression(handle, field_node, field_type) orelse return destination.instanceTypeVal(analyser);
+                if (!value.eql(default)) return destination.instanceTypeVal(analyser);
+                field.* = .{ .name = name, .value = default };
+                continue;
+            }
             if (target) |reference| {
                 _ = try self.evalSourceWithResultLocation(handle, field_node, .{ .reference = .{
                     .target = try self.extendReference(reference, .{ .field = name }),
@@ -2120,6 +2304,25 @@ pub const Interpreter = struct {
         return @as(?Type, try Value.create(analyser, destination, .{ .fields = fields }));
     }
 
+    fn comptimeFieldDefault(self: *Interpreter, destination: Type, name: []const u8) Error!?Type {
+        if (destination.ipIndex()) |index| {
+            const fields = self.analyser.generated_struct_fields.get(index) orelse return null;
+            for (fields) |field| {
+                if (field.is_comptime and std.mem.eql(u8, field.name, name)) return field.default_value;
+            }
+            return null;
+        }
+        const instance = try destination.instanceTypeVal(self.analyser) orelse return null;
+        const declaration = try self.analyser.lookupSymbolContainer(instance, name, .field) orelse return null;
+        const node = switch (declaration.decl) {
+            .ast_node => |node| node,
+            else => return null,
+        };
+        const field = declaration.handle.tree.fullContainerField(node) orelse return null;
+        if (field.comptime_token == null) return null;
+        return evaluateFieldDefault(self.analyser, declaration);
+    }
+
     pub fn evaluateAs(self: *Interpreter, handle: *Handle, params: []const Ast.Node.Index) Error!?Type {
         if (params.len != 2) return null;
         const destination = try self.eval(handle, params[0]) orelse return null;
@@ -2160,6 +2363,9 @@ pub const Interpreter = struct {
         if (self.budget.depth >= 32 or !self.tick()) return .unknown;
         self.budget.depth += 1;
         defer self.budget.depth -= 1;
+        const old_interpreting_function = self.interpreting_function;
+        self.interpreting_function = true;
+        defer self.interpreting_function = old_interpreting_function;
         const analyser = self.analyser;
         const old_interpreter = analyser.comptime_interpreter;
         const old_bindings = analyser.generic_bindings;
@@ -2199,6 +2405,9 @@ pub const Interpreter = struct {
     fn eval(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {
         if (self.pending_flow != null) return null;
         if (!self.tick()) return null;
+        if (self.analyser.typeof_comptime_values) |values| {
+            if (values.get(.of(node, handle))) |cached| return cached;
+        }
         var block_buffer: [2]Ast.Node.Index = undefined;
         if (handle.tree.blockStatements(&block_buffer, node) != null) {
             const result = self.expressionResult(try self.block(handle, node, .none, false)) orelse return null;
@@ -2206,7 +2415,11 @@ pub const Interpreter = struct {
         }
         if (ast.isContainer(&handle.tree, node)) {
             const value = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
-            return try self.captureBindings(value);
+            const result = try self.captureBindings(value);
+            if (result.isUnionType()) {
+                try self.analyser.captureSourceUnionSafety(.of(node, handle), result);
+            }
+            return result;
         }
         switch (handle.tree.nodeTag(node)) {
             .address_of => {
@@ -2253,6 +2466,15 @@ pub const Interpreter = struct {
                     }
                 }
                 if (try self.address(handle, operand)) |value| return value;
+                const temporary_operand = unwrapGroupedSource(&handle.tree, operand);
+                if (ast.isBuiltinCall(&handle.tree, temporary_operand) and
+                    std.mem.eql(u8, handle.tree.tokenSlice(handle.tree.nodeMainToken(temporary_operand)), "@as"))
+                {
+                    const value = try self.eval(handle, operand) orelse return null;
+                    const pointer = try self.analyser.resolveAddressOf(true, value);
+                    const target = self.temporaryCaptureTarget(handle, operand, value);
+                    return @as(?Type, try Value.create(self.analyser, try pointer.typeOf(self.analyser), .{ .pointee = target.pointee }));
+                }
                 const pointer = try self.analyser.resolveTypeOfNode(.of(node, handle)) orelse return null;
                 const destination = try pointer.typeOf(self.analyser);
                 return try self.coerceFromSource(handle, destination, pointer, node, null, false) orelse pointer;
@@ -2484,16 +2706,19 @@ pub const Interpreter = struct {
             .field_access => {
                 const base, const field_token = handle.tree.nodeData(node).node_and_token;
                 const field_name = try self.analyser.identifierTokenName(&handle.tree, field_token) orelse return null;
+                if (self.capture_call_receiver) {
+                    const receiver = try self.captureOperand(handle, base, 0) orelse return null;
+                    const result = try self.analyser.resolveComptimeFieldValue(receiver.value, field_name) orelse return null;
+                    if (!receiver.value.is_type_val) {
+                        self.pending_call_receiver = .{ .node = base, .value = receiver.value, .target = receiver.target };
+                    }
+                    return result;
+                }
                 if (!std.mem.eql(u8, field_name, "ptr") and !std.mem.eql(u8, field_name, "len") and
                     try self.isLocalReferenceExpression(handle, node, 0))
                 {
                     const reference = try self.referenceForNode(handle, node) orelse return null;
                     const result = try self.readReference(reference) orelse return null;
-                    // `invoke` consumes this immediately after the complete
-                    // field access has resolved to a callable declaration.
-                    if (self.capture_call_receiver) if (try self.captureOperand(handle, base, 0)) |receiver| {
-                        self.pending_call_receiver = .{ .node = base, .value = receiver.value };
-                    };
                     return result;
                 }
                 const value = if (std.mem.eql(u8, field_name, "ptr") or std.mem.eql(u8, field_name, "len"))
@@ -2501,12 +2726,6 @@ pub const Interpreter = struct {
                 else
                     try self.eval(handle, base) orelse return null;
                 const result = try self.analyser.resolveComptimeFieldValue(value, field_name) orelse return null;
-                if (self.capture_call_receiver and !value.is_type_val) {
-                    self.pending_call_receiver = .{
-                        .node = base,
-                        .value = value,
-                    };
-                }
                 return result;
             },
             .array_access => {
@@ -2806,7 +3025,7 @@ pub const Interpreter = struct {
                         std.builtin.Signedness,
                         signedness_value.data.enum_value.tag,
                     ) orelse return null;
-                    const bits_value = try self.eval(handle, params[1]) orelse return null;
+                    const bits_value = try self.evaluateTypedExpression(handle, params[1], Type.fromIP(self.analyser, .type_type, .u16_type)) orelse return null;
                     const bits = self.analyser.ip.toInt(bits_value.ipIndex() orelse return null, u16) orelse return null;
                     return Type.fromIP(self.analyser, .type_type, try self.analyser.ip.get(.{ .int_type = .{
                         .signedness = signedness,
@@ -2824,7 +3043,9 @@ pub const Interpreter = struct {
                     const attributes_type = try attributes_instance.typeOf(self.analyser);
                     const attributes = try self.evaluateTypedExpression(handle, params[1], attributes_type) orelse return null;
                     const child = try self.eval(handle, params[2]) orelse return null;
-                    const sentinel = try self.eval(handle, params[3]) orelse return null;
+                    if (!child.is_type_val) return null;
+                    const sentinel_type = try self.analyser.resolveComptimeOptionalType(child) orelse return null;
+                    const sentinel = try self.evaluateTypedExpression(handle, params[3], sentinel_type) orelse return null;
                     return self.analyser.resolveComptimePointerTypeValue(size, attributes, child, sentinel);
                 }
                 if (std.mem.eql(u8, name, "@Fn")) {
@@ -2852,7 +3073,7 @@ pub const Interpreter = struct {
                         return_type,
                         attributes,
                     )) |function_type| return function_type;
-                    for (params) |param| if (nodeNeedsEvaluation(&handle.tree, param, 0)) return null;
+                    for (params) |param| if (nodeNeedsEvaluation(&handle.tree, param, param, 0)) return null;
                     return self.analyser.resolveTypeOfNode(.of(node, handle));
                 }
                 if (std.mem.eql(u8, name, "@Enum")) {
@@ -2867,7 +3088,7 @@ pub const Interpreter = struct {
                     const names_sequence = try Value.sequenceAlloc(self.analyser, names) orelse return null;
                     const values_type = try self.analyser.comptimeEnumFieldValuesType(tag_type, names_sequence.len) orelse return null;
                     const values = try self.evaluateTypedExpression(handle, params[3], values_type) orelse return null;
-                    return self.analyser.resolveComptimeEnumTypeValue(tag_type, mode, names, values);
+                    return self.analyser.resolveComptimeEnumTypeValue(.of(node, handle), tag_type, mode, names, values);
                 }
                 if (std.mem.eql(u8, name, "@Struct")) {
                     var buffer: [2]Ast.Node.Index = undefined;
@@ -2891,13 +3112,14 @@ pub const Interpreter = struct {
                         field_array_types.attributes,
                     ) orelse return null;
                     if (try self.analyser.resolveComptimeStructTypeValue(
+                        .of(node, handle),
                         layout,
                         backing_type,
                         names,
                         field_types,
                         attributes,
                     )) |struct_type| return struct_type;
-                    for (params) |param| if (nodeNeedsEvaluation(&handle.tree, param, 0)) return null;
+                    for (params) |param| if (nodeNeedsEvaluation(&handle.tree, param, param, 0)) return null;
                     return self.analyser.resolveTypeOfNode(.of(node, handle));
                 }
                 if (std.mem.eql(u8, name, "@Union")) {
@@ -2922,6 +3144,7 @@ pub const Interpreter = struct {
                         field_array_types.attributes,
                     ) orelse return null;
                     return self.analyser.resolveComptimeUnionTypeValue(
+                        .of(node, handle),
                         layout,
                         argument_type,
                         names,
@@ -2969,7 +3192,7 @@ pub const Interpreter = struct {
                     const params = handle.tree.builtinCallParams(&buffer, node).?;
                     if (params.len != 1) return null;
                     const enabled = try self.eval(handle, params[0]) orelse return null;
-                    _ = try self.boolValue(enabled) orelse return null;
+                    self.runtime_safety = try self.boolValue(enabled) orelse return null;
                     return Type.fromIP(self.analyser, .void_type, .void_value);
                 }
                 if (std.mem.eql(u8, name, "@branchHint")) {
@@ -3458,6 +3681,10 @@ pub const Interpreter = struct {
         operand: Type,
         qualifier_cast: ?Type.PointerQualifierCast,
     ) Error!?Type {
+        if (operand.data == .type_info_value and operand.data.type_info_value.reflected_pointer != null) {
+            const pointer = try self.analyser.materializeReflectedPointer(operand) orelse return null;
+            return self.pointerCastValue(destination, pointer, qualifier_cast);
+        }
         const source_type = try operand.typeOf(self.analyser);
         const preserves_identity = if (qualifier_cast) |kind|
             destination.preservesIdentityThroughQualifierCast(self.analyser, source_type, kind)
@@ -3524,6 +3751,21 @@ pub const Interpreter = struct {
             },
             else => null,
         };
+    }
+
+    fn evalPointerCastOperand(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, destination: Type) Error!?Type {
+        const tree = &handle.tree;
+        const unwrapped = unwrapGroupedSource(tree, node);
+        if (!ast.isBuiltinCall(tree, unwrapped) or !std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(unwrapped)), "@alignCast")) {
+            return self.eval(handle, node);
+        }
+        var buffer: [2]Ast.Node.Index = undefined;
+        const params = tree.builtinCallParams(&buffer, unwrapped).?;
+        if (params.len != 1 or !self.tick()) return null;
+        const operand = try self.eval(handle, params[0]) orelse return null;
+        const source_type = try operand.typeOf(self.analyser);
+        const aligned_type = try source_type.withAlignmentForPtrCast(self.analyser, destination) orelse return null;
+        return self.pointerCastValue(aligned_type, operand, .increase_alignment);
     }
 
     fn pointerCastSequenceValue(
@@ -3775,9 +4017,40 @@ pub const Interpreter = struct {
     }
 
     fn evalSourceWithResultLocationInner(self: *Interpreter, handle: *Handle, node: Ast.Node.Index, location: ResultLocation) Error!?EvaluatedSource {
+        if (self.analyser.typeof_comptime_values) |values| {
+            if (values.get(.of(node, handle))) |cached| {
+                return .{ .value = cached orelse return null, .source_node = null };
+            }
+        }
         const destination = location.resultType();
         if (self.pending_flow != null) return null;
         const tree = &handle.tree;
+        if (destination) |ty| {
+            if (tree.nodeTag(node) == .address_of) {
+                if (ty.constMaterializedPointerChild(self.analyser)) |pointee_type| {
+                    const operand = unwrapGroupedSource(tree, tree.nodeData(node).node);
+                    var buffer: [2]Ast.Node.Index = undefined;
+                    const is_anonymous = if (tree.fullArrayInit(&buffer, operand)) |literal|
+                        literal.ast.type_expr == .none
+                    else if (tree.fullStructInit(&buffer, operand)) |literal|
+                        literal.ast.type_expr == .none
+                    else
+                        false;
+                    if (is_anonymous) {
+                        if (!self.tick()) return null;
+                        // The pointer supplies the literal's result type.
+                        // Evaluate its pointee once before materializing the
+                        // temporary, so coercion does not repeat its effects.
+                        const pointee = try self.evaluateTypedExpression(handle, operand, pointee_type) orelse return null;
+                        const target = self.temporaryCaptureTarget(handle, operand, pointee);
+                        return .{
+                            .value = try Value.create(self.analyser, ty, .{ .pointee = target.pointee }),
+                            .source_node = null,
+                        };
+                    }
+                }
+            }
+        }
         if (location == .destructure) {
             var buffer: [2]Ast.Node.Index = undefined;
             if (tree.fullArrayInit(&buffer, node)) |literal| {
@@ -3865,7 +4138,10 @@ pub const Interpreter = struct {
                 var buffer: [2]Ast.Node.Index = undefined;
                 const params = tree.builtinCallParams(&buffer, node).?;
                 if (params.len != 1) return null;
-                const operand = try self.eval(handle, params[0]) orelse return null;
+                const operand = if (is_pointer)
+                    try self.evalPointerCastOperand(handle, params[0], ty) orelse return null
+                else
+                    try self.eval(handle, params[0]) orelse return null;
                 const result_type = if (kind != null or is_splat or is_enum)
                     self.payloadResultLocationType(ty)
                 else if (is_error)
@@ -4039,10 +4315,14 @@ pub const Interpreter = struct {
         const type_index = destination.ipIndex() orelse {
             if (value.ipIndex()) |index| {
                 if (self.analyser.ip.isUndefined(index)) return try destination.instanceUnchecked(self.analyser);
+                if (destination.data == .optional and self.analyser.ip.isNull(index))
+                    return @as(?Type, try Value.create(self.analyser, destination, .{ .optional = null }));
             }
+            if (self.hasConflictingNamedType(destination, try value.typeOf(self.analyser), 0)) return null;
             return value;
         };
         if (type_index == .type_type) return if (value.is_type_val) value else null;
+        if (self.hasConflictingNamedType(destination, try value.typeOf(self.analyser), 0)) return null;
         if (value.data == .ip_index) {
             const coerced = try self.analyser.coerceComptimeIPValue(type_index, value) orelse return null;
             return Type.fromIP(self.analyser, type_index, coerced);
@@ -4068,11 +4348,103 @@ pub const Interpreter = struct {
         };
     }
 
+    fn hasConflictingNamedType(self: *Interpreter, destination: Type, source: Type, depth: u8) bool {
+        if (depth == 64) return true;
+        if (destination.eql(source)) return false;
+        return switch (destination.data) {
+            .container => switch (source.data) {
+                .container => true,
+                // Literal syntax acquires its result type before this path.
+                // A stored anonymous value has its own type, as named values do.
+                .ip_index => |payload| switch (self.analyser.ip.zigTypeTag(payload.index orelse return false) orelse return false) {
+                    .undefined => false,
+                    else => true,
+                },
+                else => false,
+            },
+            .union_tag => source.data == .union_tag or source.data == .container,
+            .optional => |child| optional: {
+                if (source.ipIndex()) |index| if (self.analyser.ip.zigTypeTag(index) == .null) break :optional false;
+                break :optional if (self.optionalPayloadType(source)) |source_child|
+                    self.hasConflictingNamedType(child.*, source_child, depth + 1)
+                else
+                    self.hasConflictingNamedType(child.*, source, depth + 1);
+            },
+            .error_union => |info| if (self.errorUnionTypes(source)) |source_info|
+                self.hasConflictingNamedType(info.payload.*, source_info.payload, depth + 1)
+            else
+                false,
+            .array => |info| switch (source.data) {
+                .array => |source_info| self.hasConflictingNamedType(info.elem_ty.*, source_info.elem_ty.*, depth + 1),
+                else => false,
+            },
+            .tuple => |fields| tuple: {
+                if (source.data != .tuple or fields.types.len != source.data.tuple.types.len) break :tuple false;
+                for (fields.types, source.data.tuple.types) |field, source_field| {
+                    if (self.hasConflictingNamedType(field, source_field, depth + 1)) break :tuple true;
+                }
+                break :tuple false;
+            },
+            .pointer => |info| switch (source.data) {
+                .pointer => |source_info| self.hasConflictingNamedType(info.elem_ty.*, source_info.elem_ty.*, depth + 1),
+                else => false,
+            },
+            .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return false)) {
+                .enum_type => source.isEnumType(self.analyser),
+                .struct_type, .union_type => switch (source.data) {
+                    .container => true,
+                    .ip_index => |source_payload| switch (self.analyser.ip.zigTypeTag(source_payload.index orelse return false) orelse return false) {
+                        .@"struct", .@"union" => true,
+                        else => false,
+                    },
+                    else => false,
+                },
+                .optional_type => |info| optional: {
+                    const child = Type.fromIP(self.analyser, .type_type, info.payload_type);
+                    if (source.ipIndex()) |index| if (self.analyser.ip.zigTypeTag(index) == .null) break :optional false;
+                    break :optional if (self.optionalPayloadType(source)) |source_child|
+                        self.hasConflictingNamedType(child, source_child, depth + 1)
+                    else
+                        self.hasConflictingNamedType(child, source, depth + 1);
+                },
+                .error_union_type => |info| if (self.errorUnionTypes(source)) |source_info|
+                    self.hasConflictingNamedType(Type.fromIP(self.analyser, .type_type, info.payload_type), source_info.payload, depth + 1)
+                else
+                    false,
+                .array_type => |info| array: {
+                    const child = Type.fromIP(self.analyser, .type_type, info.child);
+                    break :array switch (source.data) {
+                        .array => |source_info| self.hasConflictingNamedType(child, source_info.elem_ty.*, depth + 1),
+                        .ip_index => |source_payload| switch (self.analyser.ip.indexToKey(source_payload.index orelse return false)) {
+                            .array_type => |source_info| self.hasConflictingNamedType(child, Type.fromIP(self.analyser, .type_type, source_info.child), depth + 1),
+                            else => false,
+                        },
+                        else => false,
+                    };
+                },
+                .pointer_type => |info| pointer: {
+                    const child = Type.fromIP(self.analyser, .type_type, info.elem_type);
+                    break :pointer switch (source.data) {
+                        .pointer => |source_info| self.hasConflictingNamedType(child, source_info.elem_ty.*, depth + 1),
+                        .ip_index => |source_payload| switch (self.analyser.ip.indexToKey(source_payload.index orelse return false)) {
+                            .pointer_type => |source_info| self.hasConflictingNamedType(child, Type.fromIP(self.analyser, .type_type, source_info.elem_type), depth + 1),
+                            else => false,
+                        },
+                        else => false,
+                    };
+                },
+                else => false,
+            },
+            else => false,
+        };
+    }
+
     fn bind(self: *Interpreter, handle: *Handle, token: Ast.TokenIndex, value: Type) Error!void {
         try self.bindings.put(self.analyser.arena, .{ .handle = handle, .token = token }, value);
     }
 
     pub fn cell(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?*Value.Cell {
+        if (self.cells.count() == 0) return null;
         const tree = &handle.tree;
         if (tree.nodeTag(node) != .identifier) return null;
         const token = tree.nodeMainToken(node);
@@ -4243,7 +4615,7 @@ pub const Interpreter = struct {
             try destination.instanceTypeVal(self.analyser);
     }
 
-    fn assignmentChildType(
+    pub fn assignmentChildType(
         self: *Interpreter,
         aggregate_type: Type,
         access: Value.Reference.Access,
@@ -4260,7 +4632,7 @@ pub const Interpreter = struct {
                 }
                 break :child try self.analyser.resolveBracketAccessType(aggregate, .{ .single = index }) orelse return null;
             },
-            .field => |name| try self.analyser.resolveFieldAccess(aggregate, name) orelse return null,
+            .field => |name| try self.analyser.resolveComptimeFieldTypeValue(aggregate_type, name) orelse return null,
             .optional_payload => try self.analyser.resolveOptionalUnwrap(aggregate) orelse return null,
             .error_union_payload => try self.analyser.resolveUnwrapErrorUnionType(aggregate, .payload) orelse return null,
         };
@@ -4292,7 +4664,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn payloadResultLocationType(self: *Interpreter, destination: Type) Type {
+    pub fn payloadResultLocationType(self: *Interpreter, destination: Type) Type {
         var result = destination;
         while (true) {
             if (self.optionalPayloadType(result)) |payload| {
@@ -4472,6 +4844,10 @@ pub const Interpreter = struct {
                     allow_invalid,
                 ) orelse return null,
             };
+            if (try self.comptimeFieldDefault(destination, field.name)) |default| {
+                if (!result.value.eql(default)) return null;
+                result.value = default;
+            }
         }
         return @as(?Type, try Value.create(self.analyser, destination, .{ .fields = coerced }));
     }
@@ -4481,7 +4857,7 @@ pub const Interpreter = struct {
         const len: u64 = switch (destination.data) {
             .array => |array| array.elem_count orelse return null,
             .vector => |vector| vector.len,
-            .tuple => |items| items.len,
+            .tuple => |items| items.types.len,
             .ip_index => |payload| switch (self.analyser.ip.indexToKey(payload.index orelse return null)) {
                 .array_type => |array| array.len,
                 .vector_type => |vector| vector.len,
@@ -4584,14 +4960,7 @@ pub const Interpreter = struct {
             }
         }
         if (destination.isEnumType(analyser)) {
-            const source_type = try value.typeOf(analyser);
-            if (try analyser.resolveUnionTag(source_type)) |tag_instance| {
-                const tag_type = try tag_instance.typeOf(analyser);
-                if (tag_type.eql(destination)) {
-                    const tag = try analyser.resolveKnownUnionFieldName(value) orelse return null;
-                    return @as(?Type, try analyser.enumValue(destination, tag));
-                }
-            }
+            if (try analyser.resolveComptimeUnionTagValue(destination, value)) |tag| return tag;
         }
         var buffer: [2]Ast.Node.Index = undefined;
         if (source_node) |node| {
@@ -4714,10 +5083,13 @@ pub const Interpreter = struct {
                     const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse return null;
                     return @as(?Type, try analyser.enumValue(destination, tag));
                 }
-                if (destination.isTaggedUnion()) union_tag: {
+                if (self.isUnionType(destination) and try analyser.resolveUnionTag(destination) != null) union_tag: {
                     // A literal can also select a container constant such as
                     // CallingConvention.c. Leave those to ordinary coercion.
-                    const tag = try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse break :union_tag;
+                    const tag = if (destination.isTaggedUnion())
+                        try analyser.resolveEnumValueTag(destination, .of(literal_node, handle)) orelse break :union_tag
+                    else
+                        try analyser.identifierTokenName(tree, tree.nodeMainToken(literal_node)) orelse break :union_tag;
                     const payload_type = try self.assignmentChildType(destination, .{ .field = tag }) orelse return null;
                     if (payload_type.ipIndex() != .void_type) return null;
                     const fields = try analyser.arena.dupe(Value.Field, &.{.{
@@ -4792,8 +5164,26 @@ pub const Interpreter = struct {
     ) Error!bool {
         const destination = try target.storage.value.typeOf(self.analyser);
         var leaf_type = destination;
-        for (target.path) |access| leaf_type = try self.assignmentChildType(leaf_type, access) orelse return false;
+        var comptime_field: ?struct { default: Type, ty: Type, path: []const Value.Reference.Access } = null;
+        for (target.path, 0..) |access, index| {
+            if (access == .field) {
+                if (comptime_field == null) {
+                    if (try self.comptimeFieldDefault(leaf_type, access.field)) |default| {
+                        comptime_field = .{
+                            .default = default,
+                            .ty = try self.assignmentChildType(leaf_type, access) orelse return false,
+                            .path = target.path[index + 1 ..],
+                        };
+                    }
+                }
+            }
+            leaf_type = try self.assignmentChildType(leaf_type, access) orelse return false;
+        }
         const coerced = try self.coerceAssignmentFromSource(handle, leaf_type, value, source_node, null) orelse return false;
+        if (comptime_field) |field| {
+            const updated = try self.replaceReferenceValue(field.default, field.ty, field.path, coerced) orelse return false;
+            return updated.eql(field.default);
+        }
         if (target.path.len != 0 and try target.storage.writePath(self.analyser, target.path, coerced)) return true;
         const updated = try self.replaceReferenceValue(target.storage.value, destination, target.path, coerced) orelse return false;
         target.storage.replace(updated);
@@ -4859,6 +5249,13 @@ pub const Interpreter = struct {
                 return try Value.create(analyser, destination, .{ .error_union = .{ .payload = new_value } });
             },
         }
+    }
+
+    /// TypeOf saves the condition before executing explicit comptime operands
+    /// in its selected branch. Read that snapshot and bind its payload here.
+    pub fn evaluateTypeOfIfCondition(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?bool {
+        const branch = ast.fullIf(&handle.tree, node).?;
+        return self.conditionValue(handle, branch.ast.cond_expr, branch.payload_token, branch.error_token);
     }
 
     fn conditionValue(
@@ -5642,9 +6039,31 @@ pub const Interpreter = struct {
 
     fn captureBindings(self: *Interpreter, value: Type) Error!Type {
         var result = value;
-        if (result.data != .container or (self.bindings.count() == 0 and self.cells.count() == 0)) return result;
+        if (result.data != .container) return result;
 
         var info = result.data.container;
+        if (info.bound_params.count() == 0 and info.display_params.count() == 0 and
+            self.bindings.count() == 0 and self.cells.count() == 0) return result;
+        if (result.isUnionType() or (result.isStructType(self.analyser) and info.scope_handle.scope != .root)) if (try self.analyser.sourceContainerCaptureTokens(.of(info.scope_handle.toNode(), info.scope_handle.handle))) |tokens| normalize: {
+            var bindings: Analyser.TokenToTypeMap = .empty;
+            var display_bindings: Analyser.TokenToNodeMap = .empty;
+            const loc = offsets.nodeToLoc(&info.scope_handle.handle.tree, info.scope_handle.toNode());
+            for (tokens) |key| {
+                if (info.display_params.get(key)) |display| try display_bindings.put(self.analyser.arena, key, display);
+                const bound = if (self.cells.get(key)) |storage| storage.snapshot() else self.bindings.get(key) orelse info.bound_params.get(key) orelse missing: {
+                    // An outer declaration may depend on bindings indirectly.
+                    const start = key.handle.tree.tokenStart(key.token);
+                    if (key.handle == info.scope_handle.handle and (start < loc.start or start >= loc.end)) break :normalize;
+                    break :missing null;
+                } orelse continue;
+                try bindings.put(self.analyser.arena, key, bound);
+            }
+            info.bound_params = bindings;
+            info.display_params = display_bindings;
+            result.data = .{ .container = info };
+            return result;
+        };
+        if (self.bindings.count() == 0 and self.cells.count() == 0) return result;
         var bindings = try info.bound_params.clone(self.analyser.arena);
         for (self.bindings.keys(), self.bindings.values()) |token_handle, bound| {
             try bindings.put(self.analyser.arena, token_handle, bound);
@@ -5719,6 +6138,8 @@ pub const Interpreter = struct {
         preserve_capture_target: bool,
     ) Error!Flow {
         const tree = &handle.tree;
+        const old_runtime_safety = self.runtime_safety;
+        defer self.runtime_safety = old_runtime_safety;
         const context: BreakContext = .{
             .parent = self.break_context,
             .label = ast.blockLabel(tree, node),
@@ -6106,19 +6527,23 @@ pub const Interpreter = struct {
                 if (value.ipIndex() != .void_value) return .unknown;
                 return .next;
             },
-            .@"return" => return .{ .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression| blk: {
-                const result = (if (self.return_type) |destination|
-                    try self.evalTypedSource(handle, expression, destination)
-                else
-                    try self.evalSource(handle, expression)) orelse return .unknown;
-                break :blk .{
-                    .value = try self.captureBindings(result.value),
-                    .source_node = result.source_node,
-                };
-            } else .{
-                .value = Type.fromIP(analyser, .void_type, .void_value),
-                .source_node = null,
-            } },
+            .@"return" => return .{
+                .returned = if (tree.nodeData(node).opt_node.unwrap()) |expression| blk: {
+                    const result = (if (self.return_type) |destination|
+                        try self.evalTypedSource(handle, expression, destination)
+                    else
+                        try self.evalSource(handle, expression)) orelse return .unknown;
+                    break :blk .{
+                        // Existing type values keep their nominal identity;
+                        // source instances still retain the function's bindings.
+                        .value = if (result.value.is_type_val) result.value else try self.captureBindings(result.value),
+                        .source_node = result.source_node,
+                    };
+                } else .{
+                    .value = Type.fromIP(analyser, .void_type, .void_value),
+                    .source_node = null,
+                },
+            },
             .@"continue" => {
                 const label, const operand = tree.nodeData(node).opt_token_and_opt_node;
                 const target_label = label.unwrap();
@@ -6168,7 +6593,7 @@ pub const Interpreter = struct {
                         if (target.preserve_capture_target) {
                             const captured = try self.captureOperand(handle, expression, 0) orelse return .unknown;
                             break :blk .{
-                                .value = try self.captureBindings(captured.value),
+                                .value = if (captured.value.is_type_val) captured.value else try self.captureBindings(captured.value),
                                 .source_node = expression,
                                 .capture_target = captured.target,
                             };
@@ -6176,7 +6601,7 @@ pub const Interpreter = struct {
                     }
                     const evaluated = try self.evalSourceWithResultLocation(handle, expression, destination) orelse return .unknown;
                     break :blk .{
-                        .value = try self.captureBindings(evaluated.value),
+                        .value = if (evaluated.value.is_type_val) evaluated.value else try self.captureBindings(evaluated.value),
                         .source_node = evaluated.source_node,
                         .result_stored = evaluated.result_stored,
                     };
@@ -6430,6 +6855,7 @@ pub const Interpreter = struct {
     const NodeReceiver = struct {
         node: Ast.Node.Index,
         value: Type,
+        target: ?CaptureTarget = null,
     };
 
     const CallArguments = union(enum) {
@@ -6657,22 +7083,16 @@ pub const Interpreter = struct {
                 self.pending_call_receiver = previous_receiver;
             }
             const callable = try self.eval(handle, call_node.ast.fn_expr) orelse return .unknown;
-            const has_local_comptime_receiver = (if (self.return_type) |return_type| !return_type.isMetaType() else false) and
-                callable.isFunc() and
-                callable.data.function.parameters.len != 0 and
-                callable.data.function.parameters[0].modifier == .comptime_param and
-                if (self.pending_call_receiver) |value|
-                    handle.tree.nodeTag(unwrapGroupedSource(&handle.tree, value.node)) == .identifier
-                else
-                    false;
             var receiver = if (callable.isFunc() and
-                // Validation and other void-returning methods do not provide
-                // a value for ordinary type propagation. A known local
-                // comptime receiver may gate later mutations and is safe to
-                // execute; broader receiver expressions stay on inference.
+                // Within an interpreted function, void methods may update
+                // storage used by later expressions. At an analysis entry
+                // point, only value-returning methods need evaluation.
                 ((try callable.data.function.return_value.typeOf(self.analyser)).ipIndex() != .void_type or
-                    has_local_comptime_receiver) and
-                try self.analyser.isInstanceCall(handle, call_node, callable))
+                    self.interpreting_function) and
+                if (self.pending_call_receiver) |captured|
+                    try self.isCapturedInstanceCall(handle, call_node, callable, captured.value)
+                else
+                    false)
                 self.pending_call_receiver
             else
                 null;
@@ -6696,14 +7116,17 @@ pub const Interpreter = struct {
             }
             const parameters = callable.data.function.parameters;
             if (parameters.len != call_node.ast.params.len + 1) return .unknown;
-            // Avoid executing ordinary runtime methods merely because their
-            // return type is needed by analysis. Comptime parameters and pure
-            // literals are safe to interpret here.
-            for (parameters[1..], call_node.ast.params) |parameter, argument| {
-                if (parameter.modifier != .comptime_param and
-                    !isLiteralInitializer(&handle.tree, argument, 0))
-                {
-                    return .unknown;
+            // A known receiver supports comptime expressions even when a
+            // type function's return is analyzed without running its body.
+            // Evaluate arguments once and in order in invokeFunction. Keep
+            // unknown runtime receivers on the existing inference path.
+            if (!self.interpreting_function and !Value.isKnown(value.value, self.analyser, 0)) {
+                for (parameters[1..], call_node.ast.params) |parameter, argument| {
+                    if (parameter.modifier != .comptime_param and
+                        !isLiteralInitializer(&handle.tree, argument, 0))
+                    {
+                        return .unknown;
+                    }
                 }
             }
         }
@@ -6711,6 +7134,19 @@ pub const Interpreter = struct {
             .explicit = call_node.ast.params,
             .receiver = receiver,
         } });
+    }
+
+    fn isCapturedInstanceCall(self: *Interpreter, handle: *Handle, call_node: Ast.full.Call, callable: Type, receiver: Type) Error!bool {
+        if (receiver.is_type_val or handle.tree.nodeTag(call_node.ast.fn_expr) != .field_access) return false;
+        const analyser = self.analyser;
+        const runtime_receiver = try (try receiver.typeOf(analyser)).instanceUnchecked(analyser);
+        const member_container = try analyser.resolveDerefType(runtime_receiver) orelse runtime_receiver;
+        const field_token = handle.tree.nodeData(call_node.ast.fn_expr).node_and_token[1];
+        const field_name = try analyser.identifierTokenName(&handle.tree, field_token) orelse return false;
+        if (try analyser.lookupSymbolContainer(member_container, field_name, .field)) |member| {
+            return analyser.isInstanceMemberAccess(runtime_receiver, member, callable);
+        }
+        return analyser.firstParamIs(callable, try runtime_receiver.typeOf(analyser));
     }
 
     fn invokeFunction(
@@ -6729,6 +7165,13 @@ pub const Interpreter = struct {
         const is_meta_eql = info.parameters.len == 2 and
             if (info.name) |name| std.mem.eql(u8, name, "eql") and
                 std.mem.endsWith(u8, info.handle.uri.raw, "/std/meta.zig") else false;
+        const is_field_enum = info.parameters.len == 1 and
+            if (info.name) |name| std.mem.eql(u8, name, "FieldEnum") and
+                std.mem.endsWith(u8, info.handle.uri.raw, "/std/meta.zig") else false;
+        const is_args_tuple = info.parameters.len == 1 and
+            if (info.name) |name| std.mem.eql(u8, name, "ArgsTuple") and
+                std.mem.endsWith(u8, info.handle.uri.raw, "/std/meta.zig") else false;
+        var reflected_type_argument: ?Type = null;
         var mem_eql_arguments: [3]Type = undefined;
         var meta_eql_arguments: [2]Type = undefined;
         var fn_buffer: [1]Ast.Node.Index = undefined;
@@ -6757,7 +7200,9 @@ pub const Interpreter = struct {
         for (info.parameters, 0..) |parameter, index| {
             const source_parameter = parameter_iterator.next();
             var parameter_type = try analyser.resolveGenericType(parameter.type, child.bindings);
-            if (analyser.hasUnresolvedType(parameter_type)) resolve_parameter: {
+            if (analyser.hasUnresolvedType(parameter_type) or
+                try analyser.functionParameterTypeNeedsEvaluation(info, index))
+            resolve_parameter: {
                 const type_node = (source_parameter orelse break :resolve_parameter).type_expr orelse
                     break :resolve_parameter;
                 const old_interpreter = analyser.comptime_interpreter;
@@ -6771,18 +7216,7 @@ pub const Interpreter = struct {
                     analyser.generic_bindings = old_bindings;
                     analyser.specialization_bindings_mutable = old_bindings_mutable;
                 }
-                if (ast.isBuiltinCall(&info.handle.tree, type_node) and
-                    std.mem.eql(u8, info.handle.tree.tokenSlice(info.handle.tree.nodeMainToken(type_node)), "@TypeOf"))
-                {
-                    var type_of_buffer: [2]Ast.Node.Index = undefined;
-                    const type_of_params = info.handle.tree.builtinCallParams(&type_of_buffer, type_node).?;
-                    if (type_of_params.len == 1) {
-                        const operand = try child.eval(info.handle, type_of_params[0]) orelse break :resolve_parameter;
-                        parameter_type = try operand.typeOf(analyser);
-                        break :resolve_parameter;
-                    }
-                }
-                const resolved = try analyser.resolveTypeOfNode(.of(type_node, info.handle)) orelse
+                const resolved = try child.eval(info.handle, type_node) orelse
                     break :resolve_parameter;
                 if (resolved.is_type_val) parameter_type = resolved;
             }
@@ -6800,8 +7234,11 @@ pub const Interpreter = struct {
                     if (parameter.type.data == .anytype_parameter or !parameter_type.is_type_val) {
                         break :value captured orelse try self.eval(handle, argument_node) orelse return .unknown;
                     }
-                    const evaluated = if (captured) |value|
-                        EvaluatedSource{ .value = value, .source_node = argument_node }
+                    const evaluated = if (captured) |_|
+                        EvaluatedSource{
+                            .value = try self.methodReceiverValue(handle, nodes.receiver.?, parameter_type) orelse return .unknown,
+                            .source_node = null,
+                        }
                     else
                         try self.evalTypedSource(handle, argument_node, parameter_type) orelse return .unknown;
                     break :value try self.coerceFromSource(
@@ -6827,9 +7264,19 @@ pub const Interpreter = struct {
             };
             if (is_mem_eql) mem_eql_arguments[index] = value;
             if (is_meta_eql) meta_eql_arguments[index] = value;
+            if (is_field_enum or is_args_tuple) reflected_type_argument = value;
             try child.bind(info.handle, parameter.name_token orelse return .unknown, value);
             if (parameter.type.data == .anytype_parameter) {
                 try child.bindings.put(analyser.arena, parameter.type.data.anytype_parameter.token_handle, try value.typeOf(analyser));
+            }
+        }
+        if (reflected_type_argument) |container_type| {
+            const reflected_type = if (is_args_tuple)
+                try analyser.resolveArgsTupleType(container_type)
+            else
+                try analyser.resolveFieldEnumType(container_type);
+            if (reflected_type) |ty| {
+                return .{ .returned = .{ .value = ty, .source_node = null } };
             }
         }
         if (is_mem_eql and
@@ -6879,6 +7326,20 @@ pub const Interpreter = struct {
             }
         }
         const is_type_function = Analyser.isTypeFunction(&info.handle.tree, fn_proto);
+        // Argument expressions and parameter type expressions have already
+        // run. Reuse only completed type results whose inputs cannot observe
+        // mutable storage; effectful pointer arguments must execute each call.
+        const type_call_key: ?SpecializationKey = if (is_type_function and
+            for (child.bindings.values()) |value| {
+                if (!isCacheableTypeCallValue(analyser, value, 0)) break false;
+            } else true)
+            .init(.{ .node = info.fn_node, .uri = info.handle.uri }, info.container_type.*, try child.bindings.clone(analyser.arena), if (analyser.display_bindings) |bindings| try bindings.clone(analyser.arena) else .empty)
+        else
+            null;
+        if (type_call_key) |key| {
+            if (analyser.comptime_type_call_results.get(key)) |cached|
+                return .{ .returned = .{ .value = cached, .source_node = null } };
+        }
         const return_type = if (is_type_function)
             Type.fromIP(analyser, .type_type, .type_type)
         else return_type: {
@@ -6892,7 +7353,12 @@ pub const Interpreter = struct {
                     .call, .call_comma, .call_one, .call_one_comma => true,
                     else => false,
                 } else false;
-            if (has_nested_container_return or analyser.hasUnresolvedType(return_value)) {
+            // A source return expression may depend on bound values even
+            // when its current representation appears concrete, or hides an
+            // unresolved array length beneath a pointer/optional/aggregate.
+            if (has_nested_container_return or analyser.hasUnresolvedType(return_value) or
+                try analyser.functionReturnTypeDependsOnParameters(info))
+            {
                 const old_interpreter = analyser.comptime_interpreter;
                 const old_bindings = analyser.generic_bindings;
                 analyser.comptime_interpreter = &child;
@@ -6901,14 +7367,21 @@ pub const Interpreter = struct {
                     analyser.comptime_interpreter = old_interpreter;
                     analyser.generic_bindings = old_bindings;
                 }
-                if (try analyser.resolveReturnValueOfFuncNode(info.handle, info.fn_node)) |specialized_return| {
-                    return_value = specialized_return;
+                if (return_type_node) |return_node| {
+                    const specialized_type = try child.eval(info.handle, return_node) orelse return .unknown;
+                    if (!specialized_type.is_type_val) return .unknown;
+                    return_value = if (ast.hasInferredError(&info.handle.tree, fn_proto))
+                        try (try Type.createErrorUnionType(analyser, null, specialized_type)).instanceUnchecked(analyser)
+                    else
+                        try specialized_type.instanceUnchecked(analyser);
                 }
             }
             break :return_type try return_value.typeOf(analyser);
         };
         child.return_type = return_type;
+        const quota_effects_before_body = self.budget.quota_effects;
         var flow = try child.run(info.handle, info.handle.tree.nodeData(info.fn_node).node_and_node[1]);
+        const body_completed = flow == .returned or flow == .next;
         if (flow == .unknown and is_type_function) {
             const fallback = resolve: {
                 const old_interpreter = analyser.comptime_interpreter;
@@ -6965,7 +7438,87 @@ pub const Interpreter = struct {
             },
             else => flow,
         };
+        if (type_call_key) |key| {
+            if (body_completed and self.budget.quota_effects == quota_effects_before_body and
+                result == .returned and result.returned.value.is_type_val and
+                isCacheableTypeCallValue(analyser, result.returned.value, 0))
+            {
+                try analyser.comptime_type_call_results.put(analyser.gpa, analyser.arena, key, result.returned.value);
+            }
+        }
         return result;
+    }
+
+    fn isCacheableTypeCallValue(analyser: *Analyser, value: Type, depth: u8) bool {
+        if (depth == 64) return false;
+        return switch (value.data) {
+            // Semantic equality intentionally ignores display bindings and
+            // reflected string provenance. Such values must retain their
+            // own navigation metadata instead of sharing a call result.
+            .container => |info| value.is_type_val and info.display_params.count() == 0 and for (info.bound_params.values()) |bound| {
+                if (!isCacheableTypeCallValue(analyser, bound, depth + 1)) break false;
+            } else true,
+            .pointer => |info| value.is_type_val and isCacheableTypeCallValue(analyser, info.elem_ty.*, depth + 1),
+            .array => |info| value.is_type_val and info.elem_count != null and isCacheableTypeCallValue(analyser, info.elem_ty.*, depth + 1),
+            .vector => |info| value.is_type_val and isCacheableTypeCallValue(analyser, info.elem_ty.*, depth + 1),
+            .optional, .union_tag => |child| value.is_type_val and isCacheableTypeCallValue(analyser, child.*, depth + 1),
+            .tuple => |fields| value.is_type_val and for (fields.types) |field| {
+                if (!isCacheableTypeCallValue(analyser, field, depth + 1)) break false;
+            } else for (fields.values) |default| {
+                if (default) |known| if (!isCacheableTypeCallValue(analyser, known, depth + 1)) break false;
+            } else true,
+            .error_union => |info| value.is_type_val and isCacheableTypeCallValue(analyser, info.payload.*, depth + 1) and
+                if (info.error_set) |error_set| isCacheableTypeCallValue(analyser, error_set.*, depth + 1) else false,
+            .function => |info| value.is_type_val and info.name != null and isCacheableTypeCallValue(analyser, info.container_type.*, depth + 1) and
+                isCacheableTypeCallValue(analyser, info.return_value.*, depth + 1) and for (info.parameters) |parameter|
+            {
+                if (!isCacheableTypeCallValue(analyser, parameter.type, depth + 1)) break false;
+            } else true,
+            .ip_index => |payload| if (value.is_type_val)
+                payload.index != null and payload.index != .unknown_type
+            else if (Value.isKnown(value, analyser, depth)) switch (analyser.ip.zigTypeTag(payload.type) orelse return false) {
+                .int, .comptime_int, .float, .comptime_float, .bool, .@"enum", .enum_literal, .null, .void, .error_set => true,
+                else => false,
+            } else false,
+            .string_value => |info| info.source == null,
+            .enum_value => |info| isCacheableTypeCallValue(analyser, info.enum_type.*, depth + 1),
+            .comptime_value => |info| switch (info.data) {
+                .array => |items| for (items) |item| {
+                    if (!isCacheableTypeCallValue(analyser, item, depth + 1)) break false;
+                } else true,
+                .fields => |fields| for (fields) |field| {
+                    if (!isCacheableTypeCallValue(analyser, field.value, depth + 1)) break false;
+                } else true,
+                .optional => |payload| if (payload) |item| isCacheableTypeCallValue(analyser, item, depth + 1) else true,
+                .error_union => |result| switch (result) {
+                    .payload, .failure => |item| isCacheableTypeCallValue(analyser, item, depth + 1),
+                },
+                .error_code => |item| isCacheableTypeCallValue(analyser, item, depth + 1),
+                .reference, .pointee, .sequence, .numeric_pointer, .expression => false,
+            },
+            .type_info_value, .compile_error, .type_parameter, .anytype_parameter, .either => false,
+        };
+    }
+
+    fn methodReceiverValue(self: *Interpreter, handle: *Handle, receiver: NodeReceiver, destination: Type) Error!?Type {
+        const analyser = self.analyser;
+        const source_type = try receiver.value.typeOf(analyser);
+        const source = try source_type.instanceUnchecked(analyser);
+        const expected = try destination.instanceUnchecked(analyser);
+        if (expected.pointerSize(analyser) == .one and source.pointerSize(analyser) == null) {
+            const target = receiver.target orelse if (destination.isConstPointerType(analyser) and
+                Value.isKnown(receiver.value, analyser, 0))
+                self.temporaryCaptureTarget(handle, receiver.node, receiver.value)
+            else
+                return null;
+            const pointer = try self.captureTargetPointer(target, receiver.value, null) orelse return null;
+            if (!destination.isConstPointerType(analyser) and (try pointer.typeOf(analyser)).isConstPointerType(analyser)) return null;
+            return pointer;
+        }
+        if (expected.pointerSize(analyser) == null and source.pointerSize(analyser) == .one) {
+            return analyser.resolveDerefType(receiver.value);
+        }
+        return receiver.value;
     }
 
     fn callValue(self: *Interpreter, handle: *Handle, node: Ast.Node.Index) Error!?Type {

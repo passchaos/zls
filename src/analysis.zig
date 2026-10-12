@@ -42,8 +42,14 @@ resolved_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context
 resolved_control_flow_values: std.HashMapUnmanaged(NodeWithUri, ?Binding, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
 resolved_specialized_nodes: specialization_cache.Map(?Binding) = .{},
 generated_container_types: specialization_cache.Map(Type) = .{},
+/// Nominal identity depends on constructor position and concrete operands.
+generated_container_identities: std.HashMapUnmanaged(GeneratedContainerIdentity, Type, GeneratedContainerIdentity.Context, 80) = .empty,
+/// Completed interpreter type calls with immutable, fully known arguments.
+comptime_type_call_results: specialization_cache.Map(Type) = .{},
 resolved_enum_literals: std.HashMapUnmanaged(EnumLiteralCacheKey, ?DeclWithHandle, EnumLiteralCacheKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 comptime_interpreter_needed: std.HashMapUnmanaged(NodeWithUri, bool, NodeWithUri.Context, std.hash_map.default_max_load_percentage) = .empty,
+/// Source-level signature dependencies survive callsite specialization.
+function_type_dependencies: std.AutoHashMapUnmanaged(NodeWithHandle, FunctionTypeDependencies) = .empty,
 sequential_enum_types: std.HashMapUnmanaged(SequentialEnumKey, Type, SequentialEnumKey.Context, std.hash_map.default_max_load_percentage) = .empty,
 sequential_enum_sources: std.AutoHashMapUnmanaged(InternPool.Index, []const SequentialEnumSource) = .empty,
 /// Active specialized resolutions form a strict call stack. A short linear
@@ -63,7 +69,15 @@ generic_bindings: ?*const TokenToTypeMap,
 /// presentation but must not participate in semantic substitution.
 display_bindings: ?*const TokenToNodeMap,
 comptime_interpreter: ?*comptime_eval.Interpreter = null,
+/// Explicit operands and control-flow inputs retain their snapshots within
+/// one unevaluated TypeOf query; actual comptime execution reads live storage.
+typeof_comptime_values: ?*std.AutoHashMapUnmanaged(NodeWithHandle, ?Type) = null,
+typeof_branch_targets: ?*std.AutoHashMapUnmanaged(NodeWithHandle, TypeOfBranchTarget) = null,
+typeof_call_receivers: ?*std.AutoHashMapUnmanaged(NodeWithHandle, Type) = null,
 generated_struct_fields: std.AutoHashMapUnmanaged(InternPool.Index, []const GeneratedField) = .empty,
+generated_union_fields: std.AutoHashMapUnmanaged(InternPool.Index, []const GeneratedField) = .empty,
+/// Interned generated unions retain the identity of a source enum tag.
+generated_union_tags: std.AutoHashMapUnmanaged(InternPool.Index, Type) = .empty,
 /// Standard-library reflection types are independent of caller specialization.
 std_builtin_types: std.StringHashMapUnmanaged(Type) = .empty,
 /// Active generic/display maps are immutable throughout ordinary recursive
@@ -73,6 +87,13 @@ specialization_binding_hashes: specialization_cache.BindingHashCache = .{},
 specialization_bindings_mutable: bool = false,
 /// Invalid source may contain structs that recursively embed themselves by value.
 runtime_struct_layout_depth: u8 = 0,
+/// Completed layouts are shared only within one synchronous layout traversal.
+runtime_layout_cache: ?*std.HashMapUnmanaged(RuntimeLayoutCacheKey, RuntimeTypeLayout, RuntimeLayoutCacheKey.Context, 80) = null,
+runtime_layout_effects: u64 = 0,
+/// Union safety tags depend on the declaration's compilation context.
+generated_union_safety: std.AutoHashMapUnmanaged(InternPool.Index, ?bool) = .empty,
+source_union_safety: Type.ArrayMap(bool) = .empty,
+source_container_capture_tokens: std.AutoHashMapUnmanaged(NodeWithHandle, ?[]const TokenWithHandle) = .empty,
 
 /// handle of the doc where the request originated
 root_handle: ?*DocumentStore.Handle,
@@ -84,7 +105,86 @@ pub const GeneratedField = struct {
     source: ?TokenWithHandle = null,
     default_value: ?Type = null,
     alignment: u16 = 0,
+    is_comptime: bool = false,
 };
+
+const GeneratedContainerIdentity = struct {
+    source: NodeWithHandle,
+    layout: std.builtin.Type.ContainerLayout = .auto,
+    backing: InternPool.Index = .none,
+    tag: ?Type = null,
+    names: []const []const u8,
+    types: []const Type = &.{},
+    alignments: []const u16 = &.{},
+    defaults: []const ?Type = &.{},
+    comptime_fields: []const bool = &.{},
+    enum_values: []const InternPool.Index = &.{},
+    is_exhaustive: bool = true,
+    field_sources: []const ?TokenWithHandle = &.{},
+
+    const Context = struct {
+        pub fn hash(_: Context, key: GeneratedContainerIdentity) u64 {
+            var hasher: std.hash.Wyhash = .init(0);
+            std.hash.autoHash(&hasher, key.source.node);
+            std.hash.autoHash(&hasher, key.source.handle.uri.hash());
+            std.hash.autoHash(&hasher, key.layout);
+            std.hash.autoHash(&hasher, key.backing);
+            std.hash.autoHash(&hasher, key.tag != null);
+            if (key.tag) |tag| tag.hashWithHasher(&hasher);
+            for (key.names) |name| {
+                std.hash.autoHash(&hasher, name.len);
+                hasher.update(name);
+            }
+            for (key.types) |ty| ty.hashWithHasher(&hasher);
+            for (key.alignments) |alignment| std.hash.autoHash(&hasher, alignment);
+            for (key.defaults) |value| {
+                std.hash.autoHash(&hasher, value != null);
+                if (value) |ty| ty.hashWithHasher(&hasher);
+            }
+            for (key.comptime_fields) |value| std.hash.autoHash(&hasher, value);
+            for (key.enum_values) |value| std.hash.autoHash(&hasher, value);
+            std.hash.autoHash(&hasher, key.is_exhaustive);
+            for (key.field_sources) |source| {
+                std.hash.autoHash(&hasher, source != null);
+                if (source) |token| token.hashWithHasher(&hasher);
+            }
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: GeneratedContainerIdentity, b: GeneratedContainerIdentity) bool {
+            if (!a.source.eql(b.source) or a.layout != b.layout or a.backing != b.backing or
+                a.is_exhaustive != b.is_exhaustive or (a.tag == null) != (b.tag == null) or
+                a.names.len != b.names.len or a.types.len != b.types.len or
+                a.defaults.len != b.defaults.len or a.field_sources.len != b.field_sources.len) return false;
+            if (a.tag) |tag| if (!tag.eql(b.tag.?)) return false;
+            for (a.names, b.names) |left, right| if (!std.mem.eql(u8, left, right)) return false;
+            for (a.types, b.types) |left, right| if (!left.eql(right)) return false;
+            if (!std.mem.eql(u16, a.alignments, b.alignments) or
+                !std.mem.eql(bool, a.comptime_fields, b.comptime_fields) or
+                !std.mem.eql(InternPool.Index, a.enum_values, b.enum_values)) return false;
+            for (a.defaults, b.defaults) |left, right| {
+                if ((left == null) != (right == null)) return false;
+                if (left) |value| if (!value.eql(right.?)) return false;
+            }
+            for (a.field_sources, b.field_sources) |left, right| {
+                if ((left == null) != (right == null)) return false;
+                if (left) |token| if (!token.eql(right.?)) return false;
+            }
+            return true;
+        }
+    };
+};
+
+fn generatedFieldSources(analyser: *Analyser, name_values: ?[]const Type) error{OutOfMemory}![]const ?TokenWithHandle {
+    const values = name_values orelse return &.{};
+    const has_source = for (values) |value| {
+        if (value.data == .string_value and value.data.string_value.source != null) break true;
+    } else false;
+    if (!has_source) return &.{};
+    const sources = try analyser.arena.alloc(?TokenWithHandle, values.len);
+    for (values, sources) |value, *source| source.* = if (value.data == .string_value) value.data.string_value.source else null;
+    return sources;
+}
 
 const NodeSet = std.HashMapUnmanaged(NodeWithUri, void, NodeWithUri.Context, std.hash_map.default_max_load_percentage);
 
@@ -138,12 +238,20 @@ pub fn deinit(self: *Analyser) void {
     self.resolved_control_flow_values.deinit(self.gpa);
     self.resolved_specialized_nodes.deinit(self.gpa);
     self.generated_container_types.deinit(self.gpa);
+    self.generated_container_identities.deinit(self.gpa);
+    self.comptime_type_call_results.deinit(self.gpa);
     self.resolved_enum_literals.deinit(self.gpa);
     self.comptime_interpreter_needed.deinit(self.gpa);
+    self.function_type_dependencies.deinit(self.gpa);
     self.sequential_enum_types.deinit(self.gpa);
     self.sequential_enum_sources.deinit(self.gpa);
     self.resolving_specialized_nodes.deinit(self.gpa);
     self.generated_struct_fields.deinit(self.gpa);
+    self.generated_union_fields.deinit(self.gpa);
+    self.generated_union_tags.deinit(self.gpa);
+    self.generated_union_safety.deinit(self.gpa);
+    self.source_union_safety.deinit(self.gpa);
+    self.source_container_capture_tokens.deinit(self.gpa);
     self.std_builtin_types.deinit(self.gpa);
 }
 
@@ -928,17 +1036,16 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
         }
     }
     const dereferenced_lhs = comptime_eval.Value.deref(lhs);
-    if (dereferenced_lhs.data == .comptime_value and dereferenced_lhs.data.comptime_value.data == .fields) {
-        const ty = dereferenced_lhs.data.comptime_value.ty;
-        const container_ty = if (ty.data == .container)
-            ty
-        else
-            ty.constAggregatePointerChild(analyser) orelse ty;
+    if (!dereferenced_lhs.is_type_val) {
+        const ty = try dereferenced_lhs.typeOf(analyser);
+        const container_ty = if (ty.data == .container) ty else ty.constAggregatePointerChild(analyser) orelse ty;
         if (container_ty.data == .container) {
-            if (try analyser.lookupSymbolContainer(try container_ty.instanceUnchecked(analyser), field_name, .field)) |decl| {
+            if (try analyser.lookupSymbolContainer(container_ty, field_name, .field)) |decl| {
                 if (decl.decl == .ast_node) {
                     const field = decl.handle.tree.fullContainerField(decl.decl.ast_node) orelse return null;
-                    if (field.ast.value_expr != .none) {
+                    const has_fields = dereferenced_lhs.data == .comptime_value and dereferenced_lhs.data.comptime_value.data == .fields;
+                    // Comptime fields keep their default even in an undefined instance.
+                    if (field.ast.value_expr != .none and (field.comptime_token != null or has_fields)) {
                         return .{
                             .type = try comptime_eval.Interpreter.evaluateFieldDefault(analyser, decl) orelse return null,
                             .is_const = true,
@@ -1101,6 +1208,18 @@ pub fn resolveFieldAccessBinding(analyser: *Analyser, lhs_binding: Binding, fiel
             .is_const = lhs_binding.is_const,
         };
 
+    if (!left_type.is_type_val) {
+        if (try analyser.lookupSymbolContainer(left_type, field_name, .other)) |method| {
+            // Runtime member lookup already resolves the prototype to verify
+            // its receiver. Reuse that type when producing the field binding.
+            if (try method.resolveType(analyser)) |ty| {
+                if (try analyser.resolveFuncProtoOfCallable(ty)) |function| {
+                    if (analyser.firstParamIs(function, try left_type.typeOf(analyser)))
+                        return .{ .type = ty, .is_const = lhs_binding.is_const };
+                }
+            }
+        }
+    }
     if (try left_type.lookupSymbol(analyser, field_name)) |child|
         return .{
             .type = try child.resolveType(analyser) orelse return null,
@@ -1289,6 +1408,12 @@ pub fn resolveKnownSwitchTarget(
     analyser: *Analyser,
     options: ResolveOptions,
 ) Error!?Ast.Node.Index {
+    if (analyser.typeof_branch_targets) |targets| {
+        if (targets.get(options.node_handle)) |cached| return switch (cached) {
+            .node => |node| node,
+            .none, .unknown => null,
+        };
+    }
     const handle = options.node_handle.handle;
     const tree = &handle.tree;
     const switch_node = tree.switchFull(options.node_handle.node);
@@ -1606,6 +1731,11 @@ pub fn resolveOptionalUnwrap(analyser: *Analyser, optional: Type) error{OutOfMem
             else => return null,
         },
         .type_info_value => |value| {
+            if (value.reflected_pointer != null) {
+                var result = value;
+                result.value_type = try analyser.allocType(try analyser.resolveOptionalUnwrap(value.value_type.*) orelse return null);
+                return .{ .data = .{ .type_info_value = result }, .is_type_val = false };
+            }
             if (value.optional_type_payload) |payload| return payload.*;
             if (value.collection == null or
                 value.collection.?.kind != .error_set_errors or
@@ -1729,6 +1859,8 @@ pub fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
 
     if (ty.data == .ip_index) {
         const type_index = ty.data.ip_index.index orelse return null;
+        if (analyser.generated_union_tags.get(type_index)) |tag_type|
+            return try tag_type.instanceUnchecked(analyser);
         const union_info = switch (analyser.ip.indexToKey(type_index)) {
             .union_type => |union_index| analyser.ip.getUnion(union_index),
             else => return null,
@@ -1761,6 +1893,64 @@ pub fn resolveUnionTag(analyser: *Analyser, ty: Type) Error!?Type {
     return null;
 }
 
+pub fn generatedFields(analyser: *Analyser, type_index: InternPool.Index) ?[]const GeneratedField {
+    return analyser.generated_struct_fields.get(type_index) orelse analyser.generated_union_fields.get(type_index);
+}
+
+fn generatedUnionNeedsValueEvaluation(analyser: *Analyser, ty: Type) bool {
+    if (!ty.is_type_val) return false;
+    const fields = analyser.generated_union_fields.get(ty.ipIndex() orelse return false) orelse return false;
+    return for (fields) |field| {
+        if (field.ty.ipIndex() == null) break true;
+    } else false;
+}
+
+pub fn resolveComptimeUnionTagValue(analyser: *Analyser, destination: Type, value: Type) Error!?Type {
+    if (!destination.isEnumType(analyser)) return null;
+    const source_type = try value.typeOf(analyser);
+    const tag_instance = try analyser.resolveUnionTag(source_type) orelse return null;
+    const tag_type = try tag_instance.typeOf(analyser);
+    if (!tag_type.eql(destination)) return null;
+    const name = try analyser.resolveKnownUnionFieldName(value) orelse return null;
+    return try analyser.enumValue(destination, name);
+}
+
+fn resolveComptimeUnionComparisonOperand(
+    analyser: *Analyser,
+    value: Type,
+    peer: Type,
+    peer_is_literal: bool,
+    value_options: ?ResolveOptions,
+) Error!?Type {
+    if (value.is_type_val or peer.is_type_val) return null;
+    const peer_type = try peer.typeOf(analyser);
+    const destination = if (peer_is_literal or peer_type.isEnumLiteral()) tag_type: {
+        const tag_instance = try analyser.resolveUnionTag(try value.typeOf(analyser)) orelse return null;
+        break :tag_type try tag_instance.typeOf(analyser);
+    } else if (peer_type.isEnumType(analyser)) peer_type else return null;
+    if (try analyser.resolveComptimeUnionTagValue(destination, value)) |union_tag| return union_tag;
+    if (analyser.comptime_interpreter != null) return null;
+    const source_type = try value.typeOf(analyser);
+    const tag_instance = try analyser.resolveUnionTag(source_type) orelse return null;
+    if (!(try tag_instance.typeOf(analyser)).eql(destination)) return null;
+    const initializer = try analyser.resolveConstInitializer(value_options orelse return null) orelse return null;
+    const tree = &initializer.node_handle.handle.tree;
+    var buffer: [2]Ast.Node.Index = undefined;
+    const literal = tree.fullStructInit(&buffer, initializer.node_handle.node) orelse return null;
+    if (literal.ast.fields.len != 1) return null;
+    if (literal.ast.type_expr.unwrap()) |type_node| {
+        const literal_type = try analyser.resolveTypeOfNodeInternal(.{
+            .node_handle = .of(type_node, initializer.node_handle.handle),
+            .container_type = initializer.container_type,
+        }) orelse return null;
+        if (!literal_type.eql(source_type)) return null;
+    }
+    // A const's single union initializer fixes its tag without evaluating the payload.
+    const name = try analyser.identifierTokenName(tree, tree.firstToken(literal.ast.fields[0]) - 2) orelse return null;
+    if (try analyser.resolveEnumTagIntValue(destination, name) == null) return null;
+    return try analyser.enumValue(destination, name);
+}
+
 fn resolveEnumTagType(analyser: *Analyser, enum_type: Type) Error!?Type {
     if (!enum_type.isEnumType(analyser)) return null;
 
@@ -1790,7 +1980,7 @@ fn resolveEnumTagType(analyser: *Analyser, enum_type: Type) Error!?Type {
     };
 }
 
-fn resolveArgsTupleType(analyser: *Analyser, function_type: Type) Error!?Type {
+pub fn resolveArgsTupleType(analyser: *Analyser, function_type: Type) Error!?Type {
     if (!function_type.is_type_val) return null;
 
     const parameter_types = switch (function_type.data) {
@@ -1825,7 +2015,7 @@ pub fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const 
     if (!container_type.is_type_val) return null;
     return switch (container_type.data) {
         .tuple => |fields| blk: {
-            const names = try analyser.arena.alloc([]const u8, fields.len);
+            const names = try analyser.arena.alloc([]const u8, fields.types.len);
             for (names, 0..) |*name, index| {
                 name.* = try std.fmt.allocPrint(analyser.arena, "{d}", .{index});
             }
@@ -1845,7 +2035,10 @@ pub fn metaFieldNames(analyser: *Analyser, container_type: Type) Error!?[]const 
             var index: usize = 0;
             for (info.declaration.ast.members) |member| {
                 const field = info.handle.tree.fullContainerField(member) orelse continue;
-                const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
+                const name = if (kind == .keyword_struct and field.ast.tuple_like)
+                    try std.fmt.allocPrint(analyser.arena, "{d}", .{index})
+                else
+                    try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
                 if (skip_discard and std.mem.eql(u8, name, "_")) continue;
                 names[index] = name;
                 index += 1;
@@ -1909,7 +2102,7 @@ fn metaFieldNameAt(
 ) error{OutOfMemory}!?[]const u8 {
     if (!container_type.is_type_val) return null;
     return switch (container_type.data) {
-        .tuple => |fields| if (wanted_index < fields.len)
+        .tuple => |fields| if (wanted_index < fields.types.len)
             try std.fmt.allocPrint(analyser.arena, "{d}", .{wanted_index})
         else
             null,
@@ -1922,7 +2115,10 @@ fn metaFieldNameAt(
             var index: u32 = 0;
             for (info.declaration.ast.members) |member| {
                 const field = info.handle.tree.fullContainerField(member) orelse continue;
-                const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
+                const name = if (kind == .keyword_struct and field.ast.tuple_like)
+                    try std.fmt.allocPrint(analyser.arena, "{d}", .{index})
+                else
+                    try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
                 if (skip_discard and std.mem.eql(u8, name, "_")) continue;
                 if (index == wanted_index) break :blk name;
                 index += 1;
@@ -1976,7 +2172,7 @@ fn metaFieldNameAt(
     };
 }
 
-fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
+pub fn resolveFieldEnumType(analyser: *Analyser, container_type: Type) Error!?Type {
     const names = try analyser.metaFieldNames(container_type) orelse return null;
     if (try analyser.resolveUnionTag(container_type)) |tag_value| reuse_tag: {
         const tag_type = try tag_value.typeOf(analyser);
@@ -2434,6 +2630,13 @@ pub fn resolveDerefType(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?
 }
 
 pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory}!?Binding {
+    if (pointer.data == .type_info_value and pointer.data.type_info_value.reflected_pointer != null) {
+        const materialized = analyser.materializeReflectedPointer(pointer) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Canceled => return null,
+        } orelse return null;
+        return analyser.resolveDerefBinding(materialized);
+    }
     if (pointer.data == .comptime_value) {
         const comptime_value = pointer.data.comptime_value;
         switch (comptime_value.data) {
@@ -2482,7 +2685,16 @@ pub fn resolveDerefBinding(analyser: *Analyser, pointer: Type) error{OutOfMemory
                     .is_const = true,
                 };
             },
-            .pointee => |pointee| return .{ .type = pointee.value, .is_const = true },
+            .pointee => |pointee| {
+                const pointer_instance = try comptime_value.ty.instanceUnchecked(analyser);
+                const child = try analyser.resolveDerefType(pointer_instance) orelse return null;
+                const child_type = try child.typeOf(analyser);
+                if ((try pointee.value.typeOf(analyser)).eql(child_type)) return .{ .type = pointee.value, .is_const = true };
+                const destination_size = analyser.resolveTypeByteSize(child_type) orelse return .{ .type = child, .is_const = true };
+                const source_size = analyser.resolveTypeByteSize(try pointee.value.typeOf(analyser)) orelse return .{ .type = child, .is_const = true };
+                if (destination_size != source_size) return .{ .type = child, .is_const = true };
+                return .{ .type = try analyser.resolveComptimeCastValue(child_type, pointee.value, .bit_cast) orelse child, .is_const = true };
+            },
             else => {},
         }
     }
@@ -2937,6 +3149,8 @@ fn resolveStructLiteralValue(
             .node_handle = .of(field_node, options.node_handle.handle),
             .container_type = options.container_type,
         }) orelse try analyser.ip.getUnknown(field_type);
+        const field = struct_info.fields.values()[field_index];
+        if (field.is_comptime and values[field_index] != field.default_value) return null;
     }
     if (initialized.count() != values.len) {
         for (struct_info.fields.values(), 0..) |field, field_index| {
@@ -3192,19 +3406,7 @@ fn sequenceSentinel(analyser: *Analyser, value: Type) ?InternPool.Index {
 fn bracketAccessTypeFromIPIndex(analyser: *Analyser, ip_index: InternPool.Index) error{OutOfMemory}!Type {
     std.debug.assert(analyser.ip.typeOf(ip_index) == .type_type);
     return switch (analyser.ip.indexToKey(ip_index)) {
-        .tuple_type => |info| {
-            const types = try info.types.dupe(analyser.gpa, analyser.ip);
-            defer analyser.gpa.free(types);
-
-            const elem_ty_slice = try analyser.arena.alloc(Type, types.len);
-            for (elem_ty_slice, types) |*elem_ty, ty|
-                elem_ty.* = try analyser.bracketAccessTypeFromIPIndex(ty);
-
-            return .{
-                .data = .{ .tuple = elem_ty_slice },
-                .is_type_val = true,
-            };
-        },
+        .tuple_type => Type.fromIP(analyser, .type_type, ip_index),
         .vector_type => |info| .{
             .data = .{
                 .array = .{
@@ -3465,8 +3667,9 @@ pub fn resolveBracketAccess(analyser: *Analyser, lhs_binding: Binding, rhs: Brac
         .tuple => |fields| switch (rhs) {
             .single => |index_maybe| {
                 const index = index_maybe orelse return null;
-                if (index >= fields.len) return null;
-                const instance = try fields[@intCast(index)].instanceUnchecked(analyser);
+                if (index >= fields.types.len) return null;
+                if (fields.values.len != 0) if (fields.values[@intCast(index)]) |value| return .{ .type = value, .is_const = true };
+                const instance = try fields.types[@intCast(index)].instanceUnchecked(analyser);
                 return .{ .type = instance, .is_const = is_const };
             },
             .open, .range => return null,
@@ -3670,7 +3873,7 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
         .tuple => |info| {
             if (std.mem.eql(u8, "len", name)) {
                 const index = try analyser.ip.get(
-                    .{ .int_u64_value = .{ .ty = .usize_type, .int = info.len } },
+                    .{ .int_u64_value = .{ .ty = .usize_type, .int = info.types.len } },
                 );
                 return Type.fromIP(analyser, .usize_type, index);
             }
@@ -3741,6 +3944,9 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
                 const field_type = struct_info.fields.values()[field_index].ty;
                 if (analyser.generated_struct_fields.get(payload.type)) |fields| {
                     const field = fields[field_index];
+                    if (struct_info.fields.values()[field_index].is_comptime) {
+                        if (field.default_value) |value| return value;
+                    }
                     if (field.ty.ipIndex() == null) return try field.ty.instanceUnchecked(analyser);
                 }
                 const value_index = payload.index orelse return Type.fromIP(analyser, field_type, null);
@@ -3761,6 +3967,10 @@ pub fn resolvePropertyType(analyser: *Analyser, ty: Type, name: []const u8) erro
                 const name_index = analyser.ip.string_pool.getString(analyser.store.io, name) orelse return null;
                 const field_index = union_info.fields.getIndex(name_index) orelse return null;
                 const field_type = union_info.fields.values()[field_index].ty;
+                if (analyser.generated_union_fields.get(payload.type)) |fields| {
+                    const field = fields[field_index];
+                    if (field.ty.ipIndex() == null) return try field.ty.instanceUnchecked(analyser);
+                }
                 const value_index = payload.index orelse return Type.fromIP(analyser, field_type, null);
                 const union_value = switch (analyser.ip.indexToKey(value_index)) {
                     .union_value => |union_value| union_value,
@@ -5112,6 +5322,484 @@ pub fn resolveComptimeTypeInfoValue(analyser: *Analyser, operand: Type) Error!?T
     } }, .is_type_val = false };
 }
 
+const FunctionTypeDependencies = struct {
+    return_type: bool = false,
+    parameters: []const bool = &.{},
+};
+
+fn signatureExpressionMayHaveEffects(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    if (depth == 128) return true;
+    switch (tree.nodeTag(node)) {
+        .call,
+        .call_comma,
+        .call_one,
+        .call_one_comma,
+        .block,
+        .block_semicolon,
+        .block_two,
+        .block_two_semicolon,
+        => return true,
+        .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
+            const name = tree.tokenSlice(tree.nodeMainToken(node));
+            if (std.mem.eql(u8, name, "@TypeOf")) return hasExplicitComptimeOperand(tree, node, depth + 1);
+            if (std.mem.eql(u8, name, "@call")) return true;
+        },
+        else => {},
+    }
+    // A returned container's member initializers are evaluated as needed,
+    // independently of evaluating the container type itself.
+    if (ast.isContainer(tree, node)) return false;
+    var iterator: ast.Iterator = .init(tree, node);
+    while (iterator.next(tree)) |child| {
+        if (signatureExpressionMayHaveEffects(tree, child, depth + 1)) return true;
+    }
+    return false;
+}
+
+fn hasExplicitComptimeOperand(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    if (depth == 128) return true;
+    if (tree.nodeTag(node) == .@"comptime") return true;
+    if (ast.isContainer(tree, node)) return false;
+    var iterator: ast.Iterator = .init(tree, node);
+    while (iterator.next(tree)) |child| {
+        if (hasExplicitComptimeOperand(tree, child, depth + 1)) return true;
+    }
+    return false;
+}
+
+fn resolveExplicitTypeOfOperand(analyser: *Analyser, options: ResolveOptions, destination: ?Type) Error!?Type {
+    const tree = &options.node_handle.handle.tree;
+    return analyser.resolveTypeOfComptimeExpression(options, tree.nodeData(options.node_handle.node).node, destination);
+}
+
+fn resolveTypeOfComptimeExpression(analyser: *Analyser, options: ResolveOptions, expression: Ast.Node.Index, destination: ?Type) Error!?Type {
+    const values = analyser.typeof_comptime_values orelse return null;
+    const interpreter = analyser.comptime_interpreter orelse return null;
+    if (values.get(options.node_handle)) |cached| return cached;
+    const previous_values = analyser.typeof_comptime_values;
+    const previous_targets = analyser.typeof_branch_targets;
+    const previous_receivers = analyser.typeof_call_receivers;
+    analyser.typeof_comptime_values = null;
+    analyser.typeof_branch_targets = null;
+    analyser.typeof_call_receivers = null;
+    defer {
+        analyser.typeof_comptime_values = previous_values;
+        analyser.typeof_branch_targets = previous_targets;
+        analyser.typeof_call_receivers = previous_receivers;
+    }
+    const value = if (destination) |ty|
+        try interpreter.evaluateTypedExpression(options.node_handle.handle, expression, ty)
+    else
+        try interpreter.evaluateExpression(options.node_handle.handle, expression);
+    try values.put(analyser.arena, options.node_handle, value);
+    return value;
+}
+
+const TypeOfBranchTarget = union(enum) { node: Ast.Node.Index, none, unknown };
+
+fn captureTypeOfOperand(analyser: *Analyser, options: ResolveOptions) Error!?Type {
+    // Type and field-name operands must keep their values before later
+    // explicit comptime initializers change the storage they read.
+    const value = try analyser.resolveTypeOfNodeInternal(options) orelse return null;
+    if (analyser.typeof_comptime_values) |values|
+        try values.put(analyser.arena, options.node_handle, value);
+    return value;
+}
+
+fn evaluateExplicitTypeOfOperands(analyser: *Analyser, options: ResolveOptions, destination: ?Type, depth: u8) Error!void {
+    if (depth == 128) return;
+    const tree = &options.node_handle.handle.tree;
+    const node = options.node_handle.node;
+    if (tree.nodeTag(node) == .@"comptime") {
+        _ = try analyser.resolveExplicitTypeOfOperand(options, destination);
+        return;
+    }
+    // Declarations in a type value have their own lazy evaluation context.
+    if (ast.isContainer(tree, node)) return;
+    switch (tree.nodeTag(node)) {
+        .fn_decl, .fn_proto, .fn_proto_one, .fn_proto_simple, .fn_proto_multi => return,
+        .call, .call_comma, .call_one, .call_one_comma => {
+            var buffer: [1]Ast.Node.Index = undefined;
+            const call = tree.fullCall(&buffer, node).?;
+            try analyser.evaluateExplicitTypeOfOperands(.of(call.ast.fn_expr, options.node_handle.handle), null, depth + 1);
+            if (tree.nodeTag(call.ast.fn_expr) == .field_access) {
+                const receiver = tree.nodeData(call.ast.fn_expr).node_and_token[0];
+                if (try analyser.resolveTypeOfNodeInternal(.of(receiver, options.node_handle.handle))) |value| {
+                    if (analyser.typeof_comptime_values) |values|
+                        try values.put(analyser.arena, .of(receiver, options.node_handle.handle), value);
+                }
+            }
+            const callee = try analyser.resolveTypeOfNodeInternal(.of(call.ast.fn_expr, options.node_handle.handle));
+            if (callee) |value| {
+                if (analyser.typeof_comptime_values) |values|
+                    try values.put(analyser.arena, .of(call.ast.fn_expr, options.node_handle.handle), value);
+                if (try analyser.resolveFuncProtoOfCallable(value)) |function| {
+                    if (function.data.function.parameters.len != 0 and
+                        function.data.function.parameters[0].modifier == .comptime_param and
+                        try analyser.isInstanceCall(options.node_handle.handle, call, function))
+                    {
+                        const receiver_node = tree.nodeData(call.ast.fn_expr).node_and_token[0];
+                        if (try analyser.resolveTypeOfNodeInternal(.of(receiver_node, options.node_handle.handle))) |receiver| {
+                            const expected = try function.data.function.parameters[0].type.instanceUnchecked(analyser);
+                            const source = try (try receiver.typeOf(analyser)).instanceUnchecked(analyser);
+                            const snapshot = if (expected.pointerSize(analyser) == null and source.pointerSize(analyser) == .one)
+                                try analyser.resolveDerefType(receiver) orelse receiver
+                            else
+                                receiver;
+                            if (analyser.typeof_call_receivers) |receivers|
+                                try receivers.put(analyser.arena, .of(call.ast.fn_expr, options.node_handle.handle), snapshot);
+                        }
+                    }
+                }
+            }
+            // Later explicit arguments may change values used by earlier
+            // arguments or by the receiver. Keep each value at its position
+            // in the call, before analyzing the following argument.
+            for (call.ast.params, 0..) |argument, argument_index| {
+                const expected_type: ?Type = expected: {
+                    if (!hasExplicitComptimeOperand(tree, argument, 0)) break :expected null;
+                    const function = try analyser.resolveFuncProtoOfCallable(callee orelse break :expected null) orelse break :expected null;
+                    const specialized = try analyser.resolveFunctionTypeFromCallPrefix(options.node_handle.handle, call, function, argument_index);
+                    const offset = @intFromBool(call.ast.params.len + 1 == specialized.data.function.parameters.len and
+                        try analyser.isInstanceCall(options.node_handle.handle, call, specialized));
+                    const parameter_index = argument_index + offset;
+                    if (parameter_index >= specialized.data.function.parameters.len) break :expected null;
+                    const ty = specialized.data.function.parameters[parameter_index].type;
+                    break :expected if (ty.is_type_val and !analyser.hasUnresolvedType(ty)) ty else null;
+                };
+                try analyser.evaluateExplicitTypeOfOperands(.of(argument, options.node_handle.handle), expected_type, depth + 1);
+                if (try analyser.resolveTypeOfNodeInternal(.of(argument, options.node_handle.handle))) |value| {
+                    if (analyser.typeof_comptime_values) |values|
+                        try values.put(analyser.arena, .of(argument, options.node_handle.handle), value);
+                }
+            }
+            return;
+        },
+        .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {
+            const builtin_name = tree.tokenSlice(tree.nodeMainToken(node));
+            if (std.mem.eql(u8, builtin_name, "@Int") or std.mem.eql(u8, builtin_name, "@Pointer") or
+                std.mem.eql(u8, builtin_name, "@Fn") or std.mem.eql(u8, builtin_name, "@Struct") or
+                std.mem.eql(u8, builtin_name, "@Union") or std.mem.eql(u8, builtin_name, "@Enum"))
+            {
+                // These constructors evaluate every argument at comptime.
+                // Execute them once in order, retaining value snapshots and
+                // live pointer aliases through the interpreter.
+                _ = try analyser.resolveTypeOfComptimeExpression(options, node, null);
+                return;
+            }
+            if (std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@as")) {
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 2) return;
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[0], options.node_handle.handle), null, depth + 1);
+                const ty = try analyser.captureTypeOfOperand(.of(params[0], options.node_handle.handle)) orelse return;
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[1], options.node_handle.handle), ty, depth + 1);
+                return;
+            }
+            if (std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@unionInit")) {
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 3) return;
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[0], options.node_handle.handle), null, depth + 1);
+                const ty = try analyser.captureTypeOfOperand(.of(params[0], options.node_handle.handle)) orelse return;
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[1], options.node_handle.handle), null, depth + 1);
+                const name = try analyser.captureTypeOfOperand(.of(params[1], options.node_handle.handle)) orelse return;
+                const field_type = if (name.data == .string_value)
+                    try analyser.comptime_interpreter.?.assignmentChildType(ty, .{ .field = name.data.string_value.bytes })
+                else
+                    null;
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[2], options.node_handle.handle), field_type, depth + 1);
+                return;
+            }
+            if (std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(node)), "@Vector")) {
+                var buffer: [2]Ast.Node.Index = undefined;
+                const params = tree.builtinCallParams(&buffer, node).?;
+                if (params.len != 2) return;
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[0], options.node_handle.handle), Type.fromIP(analyser, .type_type, .u32_type), depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(params[0], options.node_handle.handle));
+                try analyser.evaluateExplicitTypeOfOperands(.of(params[1], options.node_handle.handle), null, depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(params[1], options.node_handle.handle));
+                return;
+            }
+        },
+        .struct_init,
+        .struct_init_comma,
+        .struct_init_one,
+        .struct_init_one_comma,
+        .struct_init_dot,
+        .struct_init_dot_comma,
+        .struct_init_dot_two,
+        .struct_init_dot_two_comma,
+        => {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const literal = tree.fullStructInit(&buffer, node).?;
+            const interpreter = analyser.comptime_interpreter.?;
+            const aggregate_type: ?Type = if (literal.ast.type_expr.unwrap()) |type_expr| aggregate: {
+                try analyser.evaluateExplicitTypeOfOperands(.of(type_expr, options.node_handle.handle), null, depth + 1);
+                break :aggregate try analyser.captureTypeOfOperand(.of(type_expr, options.node_handle.handle));
+            } else if (destination) |ty| interpreter.payloadResultLocationType(ty) else null;
+            for (literal.ast.fields) |field| {
+                const field_type: ?Type = if (aggregate_type) |ty| field_type: {
+                    const name = try analyser.identifierTokenName(tree, tree.firstToken(field) - 2) orelse break :field_type null;
+                    break :field_type try interpreter.assignmentChildType(ty, .{ .field = name });
+                } else null;
+                try analyser.evaluateExplicitTypeOfOperands(.of(field, options.node_handle.handle), field_type, depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(field, options.node_handle.handle));
+            }
+            return;
+        },
+        .array_init,
+        .array_init_comma,
+        .array_init_one,
+        .array_init_one_comma,
+        .array_init_dot,
+        .array_init_dot_comma,
+        .array_init_dot_two,
+        .array_init_dot_two_comma,
+        => {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const literal = tree.fullArrayInit(&buffer, node).?;
+            const interpreter = analyser.comptime_interpreter.?;
+            var aggregate_type: ?Type = if (literal.ast.type_expr.unwrap()) |type_expr| aggregate: {
+                try analyser.evaluateExplicitTypeOfOperands(.of(type_expr, options.node_handle.handle), null, depth + 1);
+                break :aggregate try analyser.captureTypeOfOperand(.of(type_expr, options.node_handle.handle));
+            } else if (destination) |ty| interpreter.payloadResultLocationType(ty) else null;
+            if (aggregate_type) |*ty| {
+                if (ty.data == .array and ty.data.array.elem_count == null) {
+                    const info = ty.data.array;
+                    ty.* = try Type.createArrayType(analyser, literal.ast.elements.len, info.sentinel, info.elem_ty.*);
+                }
+            }
+            for (literal.ast.elements, 0..) |element, index| {
+                const element_type = if (aggregate_type) |ty|
+                    try interpreter.assignmentChildType(ty, .{ .index = index })
+                else
+                    null;
+                try analyser.evaluateExplicitTypeOfOperands(.of(element, options.node_handle.handle), element_type, depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(element, options.node_handle.handle));
+            }
+            return;
+        },
+        .array_type, .array_type_sentinel => {
+            const array = tree.fullArrayType(node).?;
+            try analyser.evaluateExplicitTypeOfOperands(.of(array.ast.elem_count, options.node_handle.handle), Type.fromIP(analyser, .type_type, .usize_type), depth + 1);
+            _ = try analyser.captureTypeOfOperand(.of(array.ast.elem_count, options.node_handle.handle));
+            try analyser.evaluateExplicitTypeOfOperands(.of(array.ast.elem_type, options.node_handle.handle), null, depth + 1);
+            const element_type = try analyser.captureTypeOfOperand(.of(array.ast.elem_type, options.node_handle.handle));
+            if (array.ast.sentinel.unwrap()) |sentinel| {
+                try analyser.evaluateExplicitTypeOfOperands(.of(sentinel, options.node_handle.handle), element_type, depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(sentinel, options.node_handle.handle));
+            }
+            return;
+        },
+        .ptr_type_aligned, .ptr_type_sentinel, .ptr_type, .ptr_type_bit_range => {
+            const pointer = ast.fullPtrType(tree, node).?;
+            const handle = options.node_handle.handle;
+            // Pointer syntax evaluates its child first, then sentinel,
+            // address space, alignment, and bit range, as the interpreter does.
+            try analyser.evaluateExplicitTypeOfOperands(.of(pointer.ast.child_type, handle), null, depth + 1);
+            const child_type = try analyser.captureTypeOfOperand(.of(pointer.ast.child_type, handle));
+            if (pointer.ast.sentinel.unwrap()) |sentinel| {
+                try analyser.evaluateExplicitTypeOfOperands(.of(sentinel, handle), child_type, depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(sentinel, handle));
+            }
+            if (pointer.ast.addrspace_node.unwrap()) |address_space| {
+                const instance = try analyser.instanceStdBuiltinType("AddressSpace");
+                const expected = if (instance) |ty| try ty.typeOf(analyser) else null;
+                try analyser.evaluateExplicitTypeOfOperands(.of(address_space, handle), expected, depth + 1);
+                if (expected) |ty| {
+                    // A block returning an enum literal needs its attribute
+                    // type before its value is saved for the query.
+                    const value = try analyser.comptime_interpreter.?.evaluateTypedExpression(handle, address_space, ty);
+                    if (analyser.typeof_comptime_values) |values|
+                        try values.put(analyser.arena, .of(address_space, handle), value);
+                } else {
+                    _ = try analyser.captureTypeOfOperand(.of(address_space, handle));
+                }
+            }
+            if (pointer.ast.align_node.unwrap()) |alignment| {
+                try analyser.evaluateExplicitTypeOfOperands(.of(alignment, handle), Type.fromIP(analyser, .type_type, .usize_type), depth + 1);
+                _ = try analyser.captureTypeOfOperand(.of(alignment, handle));
+            }
+            for ([_]Ast.Node.OptionalIndex{ pointer.ast.bit_range_start, pointer.ast.bit_range_end }) |bit_attribute| {
+                if (bit_attribute.unwrap()) |attribute| {
+                    try analyser.evaluateExplicitTypeOfOperands(.of(attribute, handle), Type.fromIP(analyser, .type_type, .u16_type), depth + 1);
+                    _ = try analyser.captureTypeOfOperand(.of(attribute, handle));
+                }
+            }
+            return;
+        },
+        .grouped_expression => {
+            try analyser.evaluateExplicitTypeOfOperands(.of(tree.nodeData(node).node_and_token[0], options.node_handle.handle), destination, depth + 1);
+            return;
+        },
+        .@"nosuspend" => {
+            try analyser.evaluateExplicitTypeOfOperands(.of(tree.nodeData(node).node, options.node_handle.handle), destination, depth + 1);
+            return;
+        },
+        .@"if", .if_simple => {
+            const branch = ast.fullIf(tree, node).?;
+            try analyser.evaluateExplicitTypeOfOperands(.of(branch.ast.cond_expr, options.node_handle.handle), null, depth + 1);
+            const condition_node = NodeWithHandle.of(branch.ast.cond_expr, options.node_handle.handle);
+            if (try analyser.resolveTypeOfNodeInternal(.of(branch.ast.cond_expr, options.node_handle.handle))) |value| {
+                if (analyser.typeof_comptime_values) |values| try values.put(analyser.arena, condition_node, value);
+            }
+            if (try analyser.comptime_interpreter.?.evaluateTypeOfIfCondition(options.node_handle.handle, node)) |condition| {
+                const target = if (condition) branch.ast.then_expr else branch.ast.else_expr.unwrap() orelse {
+                    if (analyser.typeof_branch_targets) |targets| try targets.put(analyser.arena, options.node_handle, .none);
+                    return;
+                };
+                if (analyser.typeof_branch_targets) |targets| try targets.put(analyser.arena, options.node_handle, .{ .node = target });
+                try analyser.evaluateExplicitTypeOfOperands(.of(target, options.node_handle.handle), destination, depth + 1);
+                return;
+            }
+            if (analyser.typeof_branch_targets) |targets| try targets.put(analyser.arena, options.node_handle, .unknown);
+            return;
+        },
+        .@"switch", .switch_comma => {
+            const expression = tree.switchFull(node);
+            try analyser.evaluateExplicitTypeOfOperands(.of(expression.ast.condition, options.node_handle.handle), null, depth + 1);
+            if (try analyser.resolveKnownSwitchTarget(options)) |target| {
+                if (analyser.typeof_branch_targets) |targets| try targets.put(analyser.arena, options.node_handle, .{ .node = target });
+                try analyser.evaluateExplicitTypeOfOperands(.of(target, options.node_handle.handle), destination, depth + 1);
+                return;
+            }
+            if (analyser.typeof_branch_targets) |targets| try targets.put(analyser.arena, options.node_handle, .unknown);
+            return;
+        },
+        .bool_and, .bool_or => |tag| {
+            const lhs, const rhs = tree.nodeData(node).node_and_node;
+            try analyser.evaluateExplicitTypeOfOperands(.of(lhs, options.node_handle.handle), null, depth + 1);
+            const value = try analyser.resolveTypeOfNodeInternal(.of(lhs, options.node_handle.handle)) orelse return;
+            if (analyser.typeof_comptime_values) |values| try values.put(analyser.arena, .of(lhs, options.node_handle.handle), value);
+            const condition = comptimeBoolValue(value) orelse return;
+            if ((tag == .bool_and and condition) or (tag == .bool_or and !condition))
+                try analyser.evaluateExplicitTypeOfOperands(.of(rhs, options.node_handle.handle), null, depth + 1);
+            return;
+        },
+        .@"orelse", .@"catch" => |tag| {
+            const lhs, const rhs = tree.nodeData(node).node_and_node;
+            try analyser.evaluateExplicitTypeOfOperands(.of(lhs, options.node_handle.handle), null, depth + 1);
+            const value = try analyser.resolveTypeOfNodeInternal(.of(lhs, options.node_handle.handle)) orelse return;
+            if (analyser.typeof_comptime_values) |values| try values.put(analyser.arena, .of(lhs, options.node_handle.handle), value);
+            const use_rhs: ?bool = if (tag == .@"orelse") blk: {
+                if (value.data == .comptime_value and value.data.comptime_value.data == .optional)
+                    break :blk value.data.comptime_value.data.optional == null;
+                if (value.ipIndex()) |index| {
+                    if (analyser.ip.isNull(index)) break :blk true;
+                    if (analyser.ip.indexToKey(index) == .optional_value) break :blk false;
+                }
+                break :blk null;
+            } else blk: {
+                if (value.data == .comptime_value and value.data.comptime_value.data == .error_union)
+                    break :blk value.data.comptime_value.data.error_union == .failure;
+                break :blk null;
+            };
+            if (use_rhs orelse return)
+                try analyser.evaluateExplicitTypeOfOperands(.of(rhs, options.node_handle.handle), destination, depth + 1);
+            return;
+        },
+        else => {},
+    }
+    var iterator: ast.Iterator = .init(tree, node);
+    while (iterator.next(tree)) |child| {
+        try analyser.evaluateExplicitTypeOfOperands(.of(child, options.node_handle.handle), null, depth + 1);
+    }
+}
+
+pub fn functionReturnTypeDependsOnParameters(analyser: *Analyser, info: Type.Data.Function) error{OutOfMemory}!bool {
+    return (try analyser.functionTypeDependencies(info)).return_type;
+}
+
+pub fn functionParameterTypeDependsOnParameters(analyser: *Analyser, info: Type.Data.Function, index: usize) error{OutOfMemory}!bool {
+    const dependencies = try analyser.functionTypeDependencies(info);
+    return index < dependencies.parameters.len and dependencies.parameters[index];
+}
+
+pub fn functionParameterTypeNeedsEvaluation(analyser: *Analyser, info: Type.Data.Function, index: usize) error{OutOfMemory}!bool {
+    if (!try analyser.functionParameterTypeDependsOnParameters(info, index)) return false;
+    const tree = &info.handle.tree;
+    var buffer: [1]Ast.Node.Index = undefined;
+    const prototype = tree.fullFnProto(&buffer, info.fn_node) orelse return false;
+    var iterator: ast.FnParamIterator = .init(&prototype, tree);
+    var current: usize = 0;
+    while (iterator.next()) |parameter| : (current += 1) {
+        if (current != index) continue;
+        const expression = parameter.type_expr orelse return false;
+        return signatureExpressionMayHaveEffects(tree, expression, 0);
+    }
+    return false;
+}
+
+fn functionTypeDependencies(analyser: *Analyser, info: Type.Data.Function) error{OutOfMemory}!FunctionTypeDependencies {
+    return analyser.functionTypeDependenciesForNode(.of(info.fn_node, info.handle));
+}
+
+fn functionTypeDependenciesForNode(analyser: *Analyser, key: NodeWithHandle) error{OutOfMemory}!FunctionTypeDependencies {
+    if (analyser.function_type_dependencies.get(key)) |cached| return cached;
+    const tree = &key.handle.tree;
+    var buffer: [1]Ast.Node.Index = undefined;
+    const prototype = tree.fullFnProto(&buffer, key.node) orelse return .{};
+    var names: std.ArrayList(Ast.TokenIndex) = .empty;
+    var iterator: ast.FnParamIterator = .init(&prototype, tree);
+    var parameter_count: usize = 0;
+    while (iterator.next()) |parameter| {
+        if (parameter.anytype_ellipsis3) |token| {
+            if (tree.tokenTag(token) == .ellipsis3) continue;
+        }
+        parameter_count += 1;
+        if (parameter.name_token) |token| try names.append(analyser.arena, token);
+    }
+    const dependencies = try analyser.arena.alloc(bool, parameter_count);
+    @memset(dependencies, false);
+    iterator = .init(&prototype, tree);
+    var index: usize = 0;
+    while (iterator.next()) |parameter| : (index += 1) {
+        if (index >= dependencies.len) break;
+        if (parameter.type_expr) |expression| {
+            dependencies[index] = try analyser.expressionDependsOnFunctionParameter(key.handle, expression, names.items, 0);
+        }
+    }
+    const result: FunctionTypeDependencies = .{
+        .return_type = if (prototype.ast.return_type.unwrap()) |expression|
+            try analyser.expressionDependsOnFunctionParameter(key.handle, expression, names.items, 0)
+        else
+            false,
+        .parameters = dependencies,
+    };
+    try analyser.function_type_dependencies.put(analyser.gpa, key, result);
+    return result;
+}
+
+fn expressionDependsOnFunctionParameter(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+    parameter_tokens: []const Ast.TokenIndex,
+    depth: u8,
+) error{OutOfMemory}!bool {
+    if (parameter_tokens.len == 0) return false;
+    if (depth == 128) return true;
+    const tree = &handle.tree;
+    if (tree.nodeTag(node) == .identifier) {
+        const token = tree.nodeMainToken(node);
+        const name = try analyser.identifierTokenName(tree, token) orelse return false;
+        const declaration = try analyser.lookupSymbolGlobal(handle, name, tree.tokenStart(token));
+        if (declaration) |decl| {
+            if (decl.decl == .function_parameter and decl.handle == handle) {
+                for (parameter_tokens) |parameter_token| {
+                    if (decl.nameToken() == parameter_token) return true;
+                }
+            }
+        }
+    }
+    var iterator: ast.Iterator = .init(tree, node);
+    while (iterator.next(tree)) |child| {
+        if (try analyser.expressionDependsOnFunctionParameter(handle, child, parameter_tokens, depth + 1)) return true;
+    }
+    return false;
+}
+
 fn resolveTypeInfoFieldAccess(
     analyser: *Analyser,
     value: Type.TypeInfoValue,
@@ -5202,7 +5890,7 @@ fn resolveTypeInfoFieldAccess(
             }
             if (std.mem.eql(u8, field_name, "child")) return pointer.elem_ty.*;
             if (std.mem.eql(u8, field_name, "sentinel_ptr")) {
-                return try analyser.optionalPresenceValue(field_value_type, pointer.sentinel != .none);
+                return try analyser.reflectedSentinelPointer(value, field_value_type, pointer.sentinel, field.handle);
             }
             if (std.mem.eql(u8, field_name, "is_volatile")) {
                 return Type.fromIP(analyser, .bool_type, if (pointer.is_volatile) .bool_true else .bool_false);
@@ -5241,7 +5929,7 @@ fn resolveTypeInfoFieldAccess(
                 return child;
             }
             if (value.tag == .array and std.mem.eql(u8, field_name, "sentinel_ptr")) {
-                return try analyser.optionalPresenceValue(field_value_type, sentinel != .none);
+                return try analyser.reflectedSentinelPointer(value, field_value_type, sentinel, field.handle);
             }
         },
         .optional => {
@@ -5279,7 +5967,7 @@ fn resolveTypeInfoFieldAccess(
         },
         .@"struct" => {
             const layout, const backing_integer, const is_tuple, const field_count, const declaration_count = switch (value.reflected_type.data) {
-                .tuple => |tuple| .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true, tuple.len, 0 },
+                .tuple => |tuple| .{ std.builtin.Type.ContainerLayout.auto, InternPool.Index.none, true, tuple.types.len, 0 },
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
                     .struct_type => |struct_index| blk: {
                         const info = analyser.ip.getStruct(struct_index);
@@ -5303,7 +5991,7 @@ fn resolveTypeInfoFieldAccess(
                     break :blk .{
                         info.layout,
                         backing_integer,
-                        false,
+                        astIsTupleDeclaration(info.declaration, &info.handle.tree),
                         astContainerFieldCount(info.declaration, info.handle),
                         astContainerDeclarationCount(info.declaration, info.handle),
                     };
@@ -5334,7 +6022,8 @@ fn resolveTypeInfoFieldAccess(
                         const info = analyser.ip.getUnion(union_index);
                         break :blk .{
                             info.layout,
-                            if (info.tag_type == .none) null else Type.fromIP(analyser, .type_type, info.tag_type),
+                            analyser.generated_union_tags.get(payload.index.?) orelse
+                                if (info.tag_type == .none) null else Type.fromIP(analyser, .type_type, info.tag_type),
                             info.fields.count(),
                             0,
                         };
@@ -5463,12 +6152,18 @@ fn resolveTypeInfoFieldAccess(
                     },
                     else => return field_value_type,
                 },
-                .function => |info| .{
-                    info.calling_convention,
-                    value.reflected_type.isGenericFunc(),
-                    info.has_varargs,
-                    try info.return_value.typeOf(analyser),
-                    info.parameters.len,
+                .function => |info| blk: {
+                    const dependencies = try analyser.functionTypeDependencies(info);
+                    break :blk .{
+                        info.calling_convention,
+                        value.reflected_type.isGenericFunc() or dependencies.return_type or
+                            for (dependencies.parameters) |dependent| {
+                                if (dependent) break true;
+                            } else false,
+                        info.has_varargs,
+                        if (dependencies.return_type) null else try info.return_value.typeOf(analyser),
+                        info.parameters.len,
+                    };
                 },
                 else => return field_value_type,
             };
@@ -5484,7 +6179,8 @@ fn resolveTypeInfoFieldAccess(
                 return Type.fromIP(analyser, .bool_type, if (is_var_args) .bool_true else .bool_false);
             }
             if (std.mem.eql(u8, field_name, "return_type")) {
-                return try analyser.typeInfoOptionalTypeValue(value, field_value_type, return_type);
+                if (return_type) |payload| return try analyser.typeInfoOptionalTypeValue(value, field_value_type, payload);
+                return try analyser.optionalTypeValue(field_value_type, .none);
             }
             if (std.mem.eql(u8, field_name, "params")) {
                 return try analyser.typeInfoCollectionValue(value, field_value_type, .fn_params, param_count);
@@ -5613,6 +6309,89 @@ fn typeInfoOptionalTypeValue(
     } }, .is_type_val = false };
 }
 
+fn structFieldDefaultValue(analyser: *Analyser, container_type: Type, index: u32) Error!?Type {
+    return switch (container_type.data) {
+        .tuple => |tuple| if (index < tuple.values.len) tuple.values[index] else null,
+        .container => blk: {
+            const field = try analyser.astContainerFieldAt(container_type, index, false) orelse break :blk null;
+            break :blk try comptime_eval.Interpreter.evaluateFieldDefault(analyser, .{
+                .decl = .{ .ast_node = field.node },
+                .handle = field.handle,
+                .container_type = container_type,
+            });
+        },
+        .ip_index => |payload| blk: {
+            const type_index = payload.index orelse break :blk null;
+            if (analyser.generated_struct_fields.get(type_index)) |fields| {
+                if (index >= fields.len) break :blk null;
+                break :blk fields[index].default_value;
+            }
+            break :blk switch (analyser.ip.indexToKey(type_index)) {
+                .struct_type => |struct_index| fields: {
+                    const fields = analyser.ip.getStruct(struct_index).fields.values();
+                    if (index >= fields.len or fields[index].default_value == .none) break :fields null;
+                    break :fields Type.fromIP(analyser, fields[index].ty, fields[index].default_value);
+                },
+                .tuple_type => |tuple| fields: {
+                    if (index >= tuple.values.len) break :fields null;
+                    const default_value = tuple.values.at(index, analyser.ip);
+                    if (default_value == .none) break :fields null;
+                    break :fields Type.fromIP(analyser, tuple.types.at(index, analyser.ip), default_value);
+                },
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+pub fn materializeReflectedPointer(analyser: *Analyser, pointer: Type) Error!?Type {
+    const info = switch (pointer.data) {
+        .type_info_value => |info| info,
+        else => return null,
+    };
+    const descriptor = info.reflected_pointer orelse return null;
+    const pointee = switch (descriptor.value) {
+        .field_default => |index| try analyser.structFieldDefaultValue(info.reflected_type.*, index) orelse return null,
+        .sentinel => |index| Type.fromIP(analyser, analyser.ip.typeOf(index), index),
+    };
+    const source = descriptor.source;
+    const optional_payload = if (pointer.pointerSize(analyser) == null) try analyser.resolveOptionalUnwrap(pointer) else null;
+    const pointer_type = try (optional_payload orelse pointer).typeOf(analyser);
+    const materialized = try comptime_eval.Value.create(analyser, pointer_type, .{ .pointee = .{
+        .value = pointee,
+        .source = source,
+        .container_type = null,
+        .path = &.{},
+        .is_static = true,
+        .temporary_value = pointee,
+    } });
+    return @as(?Type, if (optional_payload != null)
+        try comptime_eval.Value.create(analyser, try pointer.typeOf(analyser), .{ .optional = materialized })
+    else
+        materialized);
+}
+
+fn reflectedSentinelPointer(
+    analyser: *Analyser,
+    info: Type.TypeInfoValue,
+    optional_instance: Type,
+    sentinel: InternPool.Index,
+    handle: *DocumentStore.Handle,
+) Error!Type {
+    if (sentinel == .none) return analyser.optionalPresenceValue(optional_instance, false);
+    const pointer = try analyser.arena.create(Type.TypeInfoValue.ReflectedPointer);
+    pointer.* = .{ .value = .{ .sentinel = sentinel }, .source = .of(.root, handle) };
+    return .{ .data = .{ .type_info_value = .{
+        .value_type = try analyser.allocType(optional_instance),
+        .reflected_type = info.reflected_type,
+        .tag = info.tag,
+        .is_payload = true,
+        .collection = null,
+        .reflected_pointer = pointer,
+    } }, .is_type_val = false };
+}
+
 fn resolveTypeInfoDescriptorField(
     analyser: *Analyser,
     value: Type.TypeInfoValue,
@@ -5627,13 +6406,13 @@ fn resolveTypeInfoDescriptorField(
         .struct_fields => {
             const name, const field_type, const is_comptime, const alignment, const has_default = switch (value.reflected_type.data) {
                 .tuple => |tuple| blk: {
-                    if (index >= tuple.len) return field_value_type;
+                    if (index >= tuple.types.len) return field_value_type;
                     break :blk .{
                         try std.fmt.allocPrint(analyser.arena, "{d}", .{index}),
-                        tuple[index],
-                        false,
+                        tuple.types[index],
+                        tuple.values.len != 0 and tuple.values[index] != null,
                         0,
-                        false,
+                        tuple.values.len != 0 and tuple.values[index] != null,
                     };
                 },
                 .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return field_value_type)) {
@@ -5660,12 +6439,13 @@ fn resolveTypeInfoDescriptorField(
                     },
                     .tuple_type => |tuple| blk: {
                         if (index >= tuple.types.len) return field_value_type;
+                        const default_value = tuple.values.at(index, analyser.ip);
                         break :blk .{
                             try std.fmt.allocPrint(analyser.arena, "{d}", .{index}),
                             Type.fromIP(analyser, .type_type, tuple.types.at(index, analyser.ip)),
-                            false,
+                            default_value != .none,
                             0,
-                            false,
+                            default_value != .none,
                         };
                     },
                     else => return field_value_type,
@@ -5687,7 +6467,7 @@ fn resolveTypeInfoDescriptorField(
                     else
                         0;
                     break :blk .{
-                        ast_field.name,
+                        if (full_field.ast.tuple_like) try std.fmt.allocPrint(analyser.arena, "{d}", .{index}) else ast_field.name,
                         try field_type.typeOf(analyser),
                         ast_field.is_comptime,
                         alignment,
@@ -5707,6 +6487,18 @@ fn resolveTypeInfoDescriptorField(
                 return try analyser.optionalIntegerValue(field_value_type, alignment);
             }
             if (std.mem.eql(u8, field_name, "default_value_ptr")) {
+                if (has_default) {
+                    const pointer = try analyser.arena.create(Type.TypeInfoValue.ReflectedPointer);
+                    pointer.* = .{ .value = .{ .field_default = index }, .source = .of(.root, field.handle) };
+                    return .{ .data = .{ .type_info_value = .{
+                        .value_type = try analyser.allocType(field_value_type),
+                        .reflected_type = value.reflected_type,
+                        .tag = .@"struct",
+                        .is_payload = true,
+                        .collection = null,
+                        .reflected_pointer = pointer,
+                    } }, .is_type_val = false };
+                }
                 return try analyser.optionalPresenceValue(field_value_type, has_default);
             }
         },
@@ -5722,7 +6514,11 @@ fn resolveTypeInfoDescriptorField(
                             info.fields.keys()[index],
                         );
                         const field_info = info.fields.values()[index];
-                        break :blk .{ name, Type.fromIP(analyser, .type_type, field_info.ty), field_info.alignment };
+                        const field_type = if (analyser.generated_union_fields.get(payload.index.?)) |fields|
+                            fields[index].ty
+                        else
+                            Type.fromIP(analyser, .type_type, field_info.ty);
+                        break :blk .{ name, field_type, field_info.alignment };
                     },
                     else => return field_value_type,
                 },
@@ -5811,8 +6607,10 @@ fn resolveTypeInfoDescriptorField(
                 .function => |info| blk: {
                     if (index >= info.parameters.len) return field_value_type;
                     const parameter = info.parameters[index];
+                    const dependencies = try analyser.functionTypeDependencies(info);
                     const is_generic = parameter.type.data == .anytype_parameter or
-                        (parameter.type.hasUnresolvedGenericType() and !parameter.type.isMetaType());
+                        (parameter.type.hasUnresolvedGenericType() and !parameter.type.isMetaType()) or
+                        (index < dependencies.parameters.len and dependencies.parameters[index]);
                     const parameter_type: ?Type = if (is_generic)
                         null
                     else
@@ -5878,7 +6676,10 @@ fn astContainerFieldAt(
     var index: u32 = 0;
     for (info.declaration.ast.members) |member| {
         const field = info.handle.tree.fullContainerField(member) orelse continue;
-        const name = try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
+        const name = if (field.ast.tuple_like and container_type.isStructType(analyser))
+            try std.fmt.allocPrint(analyser.arena, "{d}", .{index})
+        else
+            try analyser.identifierTokenName(&info.handle.tree, field.ast.main_token) orelse continue;
         if (skip_discard and std.mem.eql(u8, name, "_")) continue;
         if (index == wanted_index) return .{
             .node = member,
@@ -5991,6 +6792,9 @@ fn astPackedStructBackingType(
     handle: *DocumentStore.Handle,
 ) Error!?Type {
     std.debug.assert(struct_type.isStructType(analyser));
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
     const explicit_backing_type: ?Type = if (declaration.ast.arg.unwrap()) |arg| blk: {
         const backing_type = try analyser.resolveTypeOfNodeInternal(.{
             .node_handle = .of(arg, handle),
@@ -6319,7 +7123,7 @@ fn resolveEnumTagFromIntValue(
 pub fn tupleFieldCount(analyser: *Analyser, ty: Type) ?usize {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
-        .tuple => |fields| fields.len,
+        .tuple => |fields| fields.types.len,
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
             .tuple_type => |info| info.types.len,
             else => null,
@@ -6422,7 +7226,7 @@ fn resolveTypeNamespaceDeclValue(analyser: *Analyser, decl: DeclWithHandle) Erro
 fn internPoolFieldType(analyser: *Analyser, container_type: Type, name: []const u8) ?Type {
     if (!container_type.is_type_val) return null;
     const type_index = container_type.ipIndex() orelse return null;
-    if (analyser.generated_struct_fields.get(type_index)) |fields| {
+    if (analyser.generatedFields(type_index)) |fields| {
         for (fields) |field| if (std.mem.eql(u8, field.name, name)) return field.ty;
     }
     return switch (analyser.ip.indexToKey(type_index)) {
@@ -8232,14 +9036,23 @@ pub fn resolveComptimeTupleTypeValue(analyser: *Analyser, fields: Type) error{Ou
         for (items) |item| if (!item.is_type_val) return null;
         return try Type.createTupleType(analyser, try analyser.arena.dupe(Type, items));
     }
-    if (fields.data != .ip_index) return null;
-    const pointer = switch (analyser.ip.indexToKey(fields.data.ip_index.type)) {
-        .pointer_type => |pointer| pointer,
-        else => return null,
-    };
-    if (pointer.flags.size != .one) return null;
-    const values = switch (analyser.ip.indexToKey(pointer.elem_type)) {
-        .tuple_type => |tuple| tuple.values,
+    const resolved = comptime_eval.Value.deref(fields);
+    if (resolved.data != .ip_index) return null;
+    const values = switch (analyser.ip.indexToKey(resolved.data.ip_index.type)) {
+        .array_type, .tuple_type => aggregate: {
+            const index = resolved.ipIndex() orelse return null;
+            break :aggregate switch (analyser.ip.indexToKey(index)) {
+                .aggregate => |aggregate| aggregate.values,
+                else => return null,
+            };
+        },
+        .pointer_type => |pointer| pointer: {
+            if (pointer.flags.size != .one) return null;
+            break :pointer switch (analyser.ip.indexToKey(pointer.elem_type)) {
+                .tuple_type => |tuple| tuple.values,
+                else => return null,
+            };
+        },
         else => return null,
     };
     const element_types = try analyser.arena.alloc(Type, values.len);
@@ -8430,6 +9243,7 @@ fn isEmptyStructAttributeList(
 const ResolvedStructFieldAttributes = struct {
     alignments: []const u16,
     defaults: []const ?Type,
+    comptime_fields: []const bool,
 };
 
 fn coerceStructFieldDefault(analyser: *Analyser, field_type: Type, default_value: Type) Error!?Type {
@@ -8445,6 +9259,26 @@ fn coerceStructFieldDefault(analyser: *Analyser, field_type: Type, default_value
     return Type.fromIP(analyser, type_index, value_index);
 }
 
+fn structFieldDefaultFromPointer(analyser: *Analyser, field_type: Type, pointer: Type) Error!?Type {
+    if (pointer.data == .type_info_value and pointer.data.type_info_value.reflected_pointer != null) {
+        if (try analyser.resolveOptionalUnwrap(pointer)) |payload| {
+            return analyser.structFieldDefaultFromPointer(field_type, try analyser.materializeReflectedPointer(payload) orelse return null);
+        }
+        return analyser.structFieldDefaultFromPointer(field_type, try analyser.materializeReflectedPointer(pointer) orelse return null);
+    }
+    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .optional) {
+        return analyser.structFieldDefaultFromPointer(field_type, pointer.data.comptime_value.data.optional orelse return null);
+    }
+    if (pointer.data == .comptime_value and pointer.data.comptime_value.data == .pointee) {
+        const stored = pointer.data.comptime_value.data.pointee.value;
+        if ((try stored.typeOf(analyser)).eql(field_type)) return stored;
+        const typed_pointer = try Type.createPointerType(analyser, .one, .none, true, field_type);
+        const restored = try comptime_eval.Value.create(analyser, typed_pointer, .{ .pointee = pointer.data.comptime_value.data.pointee });
+        return analyser.resolveDerefType(restored);
+    }
+    return analyser.resolveDerefType(pointer);
+}
+
 fn resolveStructFieldAttributesValue(
     analyser: *Analyser,
     value: Type,
@@ -8457,15 +9291,19 @@ fn resolveStructFieldAttributesValue(
     @memset(alignments, 0);
     const defaults = try analyser.arena.alloc(?Type, attribute_items.len);
     @memset(defaults, null);
-    for (attribute_items, alignments, defaults, resolved_types) |attributes, *alignment, *default, field_type| {
+    const comptime_fields = try analyser.arena.alloc(bool, attribute_items.len);
+    @memset(comptime_fields, false);
+    for (attribute_items, alignments, defaults, comptime_fields, resolved_types) |attributes, *alignment, *default, *is_comptime, field_type| {
+        // A type-only attribute is unknown; missing members cannot mean defaults.
+        if (comptime_eval.Value.fieldEntries(attributes) == null) return null;
         if (comptime_eval.Value.field(attributes, "comptime")) |field_value| {
-            if (comptimeBoolValue(field_value) orelse return null) return null;
+            is_comptime.* = comptimeBoolValue(field_value) orelse return null;
         }
         if (comptime_eval.Value.field(attributes, "default_value_ptr")) |field_value| {
             switch (optionalComptimeValue(analyser, field_value) orelse return null) {
                 .absent => {},
                 .payload => |pointer| {
-                    const default_value = try analyser.resolveDerefType(pointer) orelse return null;
+                    const default_value = try analyser.structFieldDefaultFromPointer(field_type, pointer) orelse return null;
                     default.* = try analyser.coerceStructFieldDefault(field_type, default_value) orelse return null;
                 },
             }
@@ -8480,7 +9318,7 @@ fn resolveStructFieldAttributesValue(
             }
         }
     }
-    return .{ .alignments = alignments, .defaults = defaults };
+    return .{ .alignments = alignments, .defaults = defaults, .comptime_fields = comptime_fields };
 }
 
 fn resolveStructFieldAttributes(
@@ -8502,7 +9340,9 @@ fn resolveStructFieldAttributes(
     @memset(alignments, 0);
     const defaults = try analyser.arena.alloc(?Type, resolved_types.len);
     @memset(defaults, null);
-    for (elements, alignments, defaults, resolved_types) |element, *alignment, *default, field_type| {
+    const comptime_fields = try analyser.arena.alloc(bool, resolved_types.len);
+    @memset(comptime_fields, false);
+    for (elements, alignments, defaults, comptime_fields, resolved_types) |element, *alignment, *default, *is_comptime, field_type| {
         var struct_buffer: [2]Ast.Node.Index = undefined;
         const attributes = tree.fullStructInit(&struct_buffer, element) orelse return null;
         if (attributes.ast.type_expr.unwrap() != null) return null;
@@ -8520,7 +9360,7 @@ fn resolveStructFieldAttributes(
             if (std.mem.eql(u8, field_name, "comptime")) {
                 if (seen_comptime) return null;
                 seen_comptime = true;
-                if (try analyser.resolveBoolValue(field_options) orelse return null) return null;
+                is_comptime.* = try analyser.resolveBoolValue(field_options) orelse return null;
             } else if (std.mem.eql(u8, field_name, "align")) {
                 if (seen_align) return null;
                 seen_align = true;
@@ -8534,7 +9374,7 @@ fn resolveStructFieldAttributes(
                 switch (optionalComptimeValue(analyser, field_value) orelse return null) {
                     .absent => {},
                     .payload => |pointer| {
-                        const default_value = try analyser.resolveDerefType(pointer) orelse return null;
+                        const default_value = try analyser.structFieldDefaultFromPointer(field_type, pointer) orelse return null;
                         default.* = try analyser.coerceStructFieldDefault(field_type, default_value) orelse return null;
                     },
                 }
@@ -8543,11 +9383,12 @@ fn resolveStructFieldAttributes(
             }
         }
     }
-    return .{ .alignments = alignments, .defaults = defaults };
+    return .{ .alignments = alignments, .defaults = defaults, .comptime_fields = comptime_fields };
 }
 
 fn resolveStructTypeConstructor(
     analyser: *Analyser,
+    source: NodeWithHandle,
     params: []const Ast.Node.Index,
     handle: *DocumentStore.Handle,
     container_type: ?Type,
@@ -8578,7 +9419,7 @@ fn resolveStructTypeConstructor(
         .container_type = container_type,
     }) orelse return null;
     const resolved_types: []const Type = switch (field_tuple.data) {
-        .tuple => |types| types,
+        .tuple => |types| types.types,
         .ip_index => |payload| blk: {
             const tuple = switch (analyser.ip.indexToKey(payload.index orelse return null)) {
                 .tuple_type => |tuple| tuple,
@@ -8606,6 +9447,7 @@ fn resolveStructTypeConstructor(
     else
         null;
     return analyser.createComptimeStructType(
+        source,
         layout,
         backing_type,
         names,
@@ -8613,12 +9455,14 @@ fn resolveStructTypeConstructor(
         field_types,
         attributes.alignments,
         attributes.defaults,
+        attributes.comptime_fields,
         name_values,
     );
 }
 
 fn createComptimeStructType(
     analyser: *Analyser,
+    source: NodeWithHandle,
     layout: std.builtin.Type.ContainerLayout,
     initial_backing_type: InternPool.Index,
     names: []const []const u8,
@@ -8626,14 +9470,35 @@ fn createComptimeStructType(
     field_types: []const InternPool.Index,
     alignments: []const u16,
     defaults: ?[]const ?Type,
+    comptime_fields: []const bool,
     name_values: ?[]const Type,
 ) Error!?Type {
     if (names.len != resolved_types.len or names.len != field_types.len or names.len != alignments.len) return null;
+    if (comptime_fields.len != names.len) return null;
     if (defaults) |values| if (values.len != names.len) return null;
+    for (comptime_fields, 0..) |is_comptime, index| {
+        if (!is_comptime) continue;
+        if (layout != .auto) return null;
+        const default = if (defaults) |values| values[index] orelse return null else return null;
+        const is_undefined = if (default.ipIndex()) |value| analyser.ip.isUndefined(value) else false;
+        if (!default.is_type_val and !default.hasKnownValue(analyser) and !is_undefined) return null;
+    }
     if (name_values) |values| {
         if (values.len != names.len) return null;
         for (values) |value| if (value.data != .string_value) return null;
     }
+    const identity: GeneratedContainerIdentity = .{
+        .source = source,
+        .layout = layout,
+        .backing = initial_backing_type,
+        .names = names,
+        .types = resolved_types,
+        .alignments = alignments,
+        .defaults = if (defaults) |values| values else &.{},
+        .comptime_fields = comptime_fields,
+        .field_sources = try analyser.generatedFieldSources(name_values),
+    };
+    if (analyser.generated_container_identities.get(identity)) |ty| return ty;
     var backing_type = initial_backing_type;
     if (layout == .@"packed") {
         var total_bits: u64 = 0;
@@ -8662,6 +9527,7 @@ fn createComptimeStructType(
             .ty = field_type,
             .alignment = alignment,
             .default_value = if (defaults) |values| if (values[index]) |value| value.ipIndex() orelse .none else .none else .none,
+            .is_comptime = comptime_fields[index],
         });
     }
     const struct_index = try analyser.ip.createStruct(.{
@@ -8680,10 +9546,13 @@ fn createComptimeStructType(
         .ty = ty,
         .alignment = alignment,
         .default_value = if (defaults) |values| values[index] else null,
+        .is_comptime = comptime_fields[index],
         .source = if (name_values) |values| values[index].data.string_value.source else null,
     };
     try analyser.generated_struct_fields.put(analyser.gpa, struct_type, generated_fields);
-    return Type.fromIP(analyser, .type_type, struct_type);
+    const result = Type.fromIP(analyser, .type_type, struct_type);
+    try analyser.generated_container_identities.put(analyser.gpa, identity, result);
+    return result;
 }
 
 pub const ComptimeStructFieldArrayTypes = struct {
@@ -8712,6 +9581,7 @@ pub fn comptimeStructFieldArrayTypes(
 
 pub fn resolveComptimeStructTypeValue(
     analyser: *Analyser,
+    source: NodeWithHandle,
     layout_value: Type,
     backing_type_value: Type,
     names_value: Type,
@@ -8753,6 +9623,7 @@ pub fn resolveComptimeStructTypeValue(
     const attributes = try analyser.resolveStructFieldAttributesValue(attributes_value, resolved_types) orelse return null;
 
     return analyser.createComptimeStructType(
+        source,
         layout,
         backing_type,
         names,
@@ -8760,6 +9631,7 @@ pub fn resolveComptimeStructTypeValue(
         field_types,
         attributes.alignments,
         attributes.defaults,
+        attributes.comptime_fields,
         name_items,
     );
 }
@@ -8803,6 +9675,7 @@ fn resolveUnionFieldAlignments(
 
 fn resolveUnionTypeConstructor(
     analyser: *Analyser,
+    source: NodeWithHandle,
     params: []const Ast.Node.Index,
     handle: *DocumentStore.Handle,
     container_type: ?Type,
@@ -8834,37 +9707,62 @@ fn resolveUnionTypeConstructor(
         .node_handle = .of(params[3], handle),
         .container_type = container_type,
     }) orelse return null;
-    const field_tuple_index = field_tuple.ipIndex() orelse return null;
-    const field_type_slice = switch (analyser.ip.indexToKey(field_tuple_index)) {
-        .tuple_type => |tuple| tuple.types,
-        else => return null,
-    };
-    if (names.len != field_type_slice.len) return null;
+    const field_types = try analyser.comptimeTupleTypeElements(field_tuple) orelse return null;
+    if (names.len != field_types.len) return null;
     const alignments = try analyser.resolveUnionFieldAlignments(.{
         .node_handle = .of(params[4], handle),
         .container_type = container_type,
     }, names.len) orelse return null;
-    const field_types = try field_type_slice.dupe(analyser.gpa, analyser.ip);
-    defer analyser.gpa.free(field_types);
-    return analyser.createComptimeUnionType(layout, tag_type, backing_int_ty, names, field_types, alignments);
+    const name_sequence = if (try analyser.resolveComptimeValue(.{
+        .node_handle = .of(params[2], handle),
+        .container_type = container_type,
+    })) |value| try comptime_eval.Value.sequenceAlloc(analyser, value) else null;
+    const name_values = if (name_sequence) |sequence|
+        if (sequence.elements_valid) sequence.backing[sequence.offset..][0..sequence.len] else null
+    else
+        null;
+    return analyser.createComptimeUnionType(source, layout, tag_type, null, backing_int_ty, names, field_types, alignments, name_values);
 }
 
 fn createComptimeUnionType(
     analyser: *Analyser,
+    source: NodeWithHandle,
     layout: std.builtin.Type.ContainerLayout,
     tag_type: InternPool.Index,
+    original_tag: ?Type,
     initial_backing_int_ty: InternPool.Index,
     names: []const []const u8,
-    field_types: []const InternPool.Index,
+    field_types: []const Type,
     alignments: []const u16,
+    name_values: ?[]const Type,
 ) Error!?Type {
     if (names.len != field_types.len or names.len != alignments.len) return null;
+    const identity: GeneratedContainerIdentity = .{
+        .source = source,
+        .layout = layout,
+        .backing = initial_backing_int_ty,
+        .tag = original_tag orelse if (tag_type != .none) Type.fromIP(analyser, .type_type, tag_type) else null,
+        .names = names,
+        .types = field_types,
+        .alignments = alignments,
+        .field_sources = try analyser.generatedFieldSources(name_values),
+    };
+    if (analyser.generated_container_identities.get(identity)) |ty| {
+        if (layout == .auto and tag_type == .none and original_tag == null and
+            (analyser.generated_union_safety.get(ty.ipIndex().?) orelse null) == null)
+        {
+            if (try analyser.runtimeSafetyAtUnionCreation(source)) |safety| {
+                try analyser.generated_union_safety.put(analyser.gpa, ty.ipIndex().?, safety);
+            }
+        }
+        return ty;
+    }
     var backing_int_ty = initial_backing_int_ty;
     if (layout == .@"packed") {
         if (field_types.len == 0) return null;
-        const field_bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, field_types[0])) orelse return null;
+        const field_bits = analyser.resolveTypeBitSize(field_types[0]) orelse return null;
         for (field_types, alignments) |field_type, alignment| {
-            if (alignment != 0 or analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, field_type)) != field_bits) {
+            if (alignment != 0 or analyser.resolveTypeBitSize(field_type) != field_bits) {
                 return null;
             }
         }
@@ -8892,7 +9790,8 @@ fn createComptimeUnionType(
     try fields.ensureTotalCapacity(analyser.gpa, names.len);
     for (names, field_types, alignments) |name, field_type, alignment| {
         const name_index = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, name);
-        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type, .alignment = alignment });
+        if (!field_type.is_type_val) return null;
+        fields.putAssumeCapacityNoClobber(name_index, .{ .ty = field_type.ipIndex() orelse .unknown_type, .alignment = alignment });
     }
 
     const union_index = try analyser.ip.createUnion(.{
@@ -8905,7 +9804,22 @@ fn createComptimeUnionType(
     });
     fields = .empty;
     const union_type = try analyser.ip.get(.{ .union_type = union_index });
-    return Type.fromIP(analyser, .type_type, union_type);
+    const generated_fields = try analyser.arena.alloc(GeneratedField, names.len);
+    for (generated_fields, names, field_types, alignments, 0..) |*field, name, ty, alignment, index| field.* = .{
+        .name = name,
+        .ty = ty,
+        .alignment = alignment,
+        .source = if (name_values) |values| values[index].data.string_value.source else null,
+    };
+    try analyser.generated_union_fields.put(analyser.gpa, union_type, generated_fields);
+    const safety = if (layout == .auto and tag_type == .none and original_tag == null)
+        try analyser.runtimeSafetyAtUnionCreation(source)
+    else
+        null;
+    try analyser.generated_union_safety.put(analyser.gpa, union_type, safety);
+    const result = Type.fromIP(analyser, .type_type, union_type);
+    try analyser.generated_container_identities.put(analyser.gpa, identity, result);
+    return result;
 }
 
 pub const ComptimeUnionFieldArrayTypes = struct {
@@ -8934,6 +9848,7 @@ pub fn comptimeUnionFieldArrayTypes(
 
 pub fn resolveComptimeUnionTypeValue(
     analyser: *Analyser,
+    source: NodeWithHandle,
     layout_value: Type,
     argument_type_value: Type,
     names_value: Type,
@@ -8941,22 +9856,38 @@ pub fn resolveComptimeUnionTypeValue(
     attributes_value: Type,
 ) Error!?Type {
     const layout = comptimeEnumValue(std.builtin.Type.ContainerLayout, layout_value) orelse return null;
-    const argument_type = switch (optionalComptimeValue(analyser, argument_type_value) orelse return null) {
-        .absent => InternPool.Index.none,
+    const argument_type: ?Type = switch (optionalComptimeValue(analyser, argument_type_value) orelse return null) {
+        .absent => null,
         .payload => |payload| argument: {
             if (!payload.is_type_val) return null;
-            break :argument payload.ipIndex() orelse return null;
+            break :argument payload;
         },
     };
-    const tag_type: InternPool.Index = if (layout == .auto and argument_type != .none) blk: {
-        if (analyser.ip.zigTypeTag(argument_type) != .@"enum") return null;
-        break :blk argument_type;
+    const tag_type: InternPool.Index = if (layout == .auto and argument_type != null) blk: {
+        const tag = argument_type.?;
+        if (!tag.isEnumType(analyser)) return null;
+        if (tag.ipIndex()) |index| break :blk index;
+        const names = try analyser.metaFieldNames(tag) orelse return null;
+        const tag_integer = (try analyser.resolveEnumTagType(tag) orelse return null).ipIndex() orelse return null;
+        const values = try analyser.arena.alloc(InternPool.Index, names.len);
+        for (names, values) |name, *value|
+            value.* = try analyser.resolveEnumTagIntValue(tag, name) orelse return null;
+        var buffer: [2]Ast.Node.Index = undefined;
+        const tag_source = if (tag.data == .union_tag) tag.data.union_tag.* else tag;
+        const info = astContainerTypeInfo(tag_source, &buffer) orelse return null;
+        const mode: std.builtin.Type.Enum.Mode = if (tag.data == .union_tag) .exhaustive else for (info.declaration.ast.members) |member| {
+            const field = info.handle.tree.fullContainerField(member) orelse continue;
+            if (std.mem.eql(u8, offsets.tokenToSlice(&info.handle.tree, field.ast.main_token), "_"))
+                break .nonexhaustive;
+        } else .exhaustive;
+        break :blk (try analyser.createComptimeEnumType(null, tag_integer, mode, names, values) orelse return null).ipIndex().?;
     } else .none;
-    const backing_int_ty: InternPool.Index = if (layout == .@"packed" and argument_type != .none) blk: {
-        if (analyser.ip.zigTypeTag(argument_type) != .int) return null;
-        break :blk argument_type;
+    const backing_int_ty: InternPool.Index = if (layout == .@"packed" and argument_type != null) blk: {
+        const index = argument_type.?.ipIndex() orelse return null;
+        if (analyser.ip.zigTypeTag(index) != .int) return null;
+        break :blk index;
     } else .none;
-    if (layout == .@"extern" and argument_type != .none) return null;
+    if (layout == .@"extern" and argument_type != null) return null;
 
     const names_sequence = try comptime_eval.Value.sequenceAlloc(analyser, names_value) orelse return null;
     if (!names_sequence.elements_valid) return null;
@@ -8971,11 +9902,8 @@ pub fn resolveComptimeUnionTypeValue(
     const field_types_sequence = try comptime_eval.Value.sequenceAlloc(analyser, field_types_value) orelse return null;
     if (!field_types_sequence.elements_valid or field_types_sequence.len != names.len) return null;
     const field_type_items = field_types_sequence.backing[field_types_sequence.offset..][0..field_types_sequence.len];
-    const field_types = try analyser.arena.alloc(InternPool.Index, field_type_items.len);
-    for (field_types, field_type_items) |*index, ty| {
-        if (!ty.is_type_val) return null;
-        index.* = ty.ipIndex() orelse return null;
-    }
+    const field_types = try analyser.arena.dupe(Type, field_type_items);
+    for (field_types) |ty| if (!ty.is_type_val) return null;
 
     const attributes_sequence = try comptime_eval.Value.sequenceAlloc(analyser, attributes_value) orelse return null;
     if (!attributes_sequence.elements_valid or attributes_sequence.len != names.len) return null;
@@ -8994,14 +9922,20 @@ pub fn resolveComptimeUnionTypeValue(
         }
     }
 
-    return analyser.createComptimeUnionType(
+    const union_type = try analyser.createComptimeUnionType(
+        source,
         layout,
         tag_type,
+        if (layout == .auto) argument_type else null,
         backing_int_ty,
         names,
         field_types,
         alignments,
-    );
+        name_items,
+    ) orelse return null;
+    if (layout == .auto and argument_type != null and argument_type.?.ipIndex() == null)
+        try analyser.generated_union_tags.put(analyser.gpa, union_type.ipIndex().?, argument_type.?);
+    return union_type;
 }
 
 fn resolveIntegerValueList(
@@ -9025,6 +9959,7 @@ fn resolveIntegerValueList(
 
 fn resolveEnumTypeConstructor(
     analyser: *Analyser,
+    source: NodeWithHandle,
     params: []const Ast.Node.Index,
     handle: *DocumentStore.Handle,
     container_type: ?Type,
@@ -9048,17 +9983,26 @@ fn resolveEnumTypeConstructor(
         .container_type = container_type,
     }) orelse return null;
     if (names.len != raw_values.len) return null;
-    return analyser.createComptimeEnumType(tag_type_index, mode, names, raw_values);
+    return analyser.createComptimeEnumType(source, tag_type_index, mode, names, raw_values);
 }
 
 fn createComptimeEnumType(
     analyser: *Analyser,
+    source: ?NodeWithHandle,
     tag_type: InternPool.Index,
     mode: std.builtin.Type.Enum.Mode,
     names: []const []const u8,
     raw_values: []const InternPool.Index,
 ) Error!?Type {
     if (names.len != raw_values.len) return null;
+    const identity: ?GeneratedContainerIdentity = if (source) |node_handle| .{
+        .source = node_handle,
+        .backing = tag_type,
+        .names = names,
+        .enum_values = raw_values,
+        .is_exhaustive = mode == .exhaustive,
+    } else null;
+    if (identity) |key| if (analyser.generated_container_identities.get(key)) |ty| return ty;
     var fields: std.array_hash_map.Auto(InternPool.String, void) = .empty;
     errdefer fields.deinit(analyser.gpa);
     var values: std.array_hash_map.Auto(InternPool.Index, void) = .empty;
@@ -9081,7 +10025,9 @@ fn createComptimeEnumType(
     });
     fields = .empty;
     values = .empty;
-    return Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
+    const result = Type.fromIP(analyser, .type_type, try analyser.ip.get(.{ .enum_type = enum_index }));
+    if (identity) |key| try analyser.generated_container_identities.put(analyser.gpa, key, result);
+    return result;
 }
 
 pub fn comptimeEnumFieldValuesType(
@@ -9098,6 +10044,7 @@ pub fn comptimeEnumFieldValuesType(
 
 pub fn resolveComptimeEnumTypeValue(
     analyser: *Analyser,
+    source: NodeWithHandle,
     tag_type: Type,
     mode_value: Type,
     names_value: Type,
@@ -9126,7 +10073,7 @@ pub fn resolveComptimeEnumTypeValue(
         value.* = try analyser.coerceComptimeIPValue(tag_type_index, item) orelse return null;
     }
 
-    return analyser.createComptimeEnumType(tag_type_index, mode, names, raw_values);
+    return analyser.createComptimeEnumType(source, tag_type_index, mode, names, raw_values);
 }
 
 fn resolveFnParameterAttributes(
@@ -9266,7 +10213,7 @@ fn callingConventionTagFromValue(
 
 fn comptimeTupleTypeElements(analyser: *Analyser, tuple_type: Type) Error!?[]const Type {
     return switch (tuple_type.data) {
-        .tuple => |types| types,
+        .tuple => |types| types.types,
         .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
             .tuple_type => |tuple| types: {
                 const types = try analyser.arena.alloc(Type, tuple.types.len);
@@ -9986,6 +10933,7 @@ pub fn knownOptionalNull(analyser: *Analyser, value: Type) ?bool {
     }
     if (value.data == .type_info_value) {
         const type_info = value.data.type_info_value;
+        if (type_info.reflected_pointer != null) return false;
         if (type_info.optional_type_payload != null) return false;
         if (type_info.tag == .error_set and type_info.is_payload) {
             const collection = type_info.collection orelse return true;
@@ -10170,13 +11118,36 @@ fn resolveComparisonValue(
     return Type.fromIP(analyser, .bool_type, if (result) .bool_true else .bool_false);
 }
 
+fn resolveComptimeUnionComparisonValue(
+    analyser: *Analyser,
+    tag: Ast.Node.Tag,
+    lhs: Type,
+    rhs: Type,
+) Error!?Type {
+    if (tag == .equal_equal or tag == .bang_equal) {
+        for ([_][2]Type{ .{ lhs, rhs }, .{ rhs, lhs } }) |operands| {
+            const union_tag = try analyser.resolveComptimeUnionComparisonOperand(operands[0], operands[1], false, null) orelse continue;
+            var peer = operands[1];
+            if (peer.data == .enum_value and peer.data.enum_value.enum_type.isEnumLiteral()) {
+                const tag_type = try union_tag.typeOf(analyser);
+                const name = peer.data.enum_value.tag;
+                if (try analyser.resolveEnumTagIntValue(tag_type, name) == null) return null;
+                peer = try analyser.enumValue(tag_type, name);
+            }
+            return analyser.resolveComparisonValue(tag, union_tag, peer);
+        }
+    }
+    return null;
+}
+
 pub fn resolveComptimeComparisonValue(
     analyser: *Analyser,
     tag: Ast.Node.Tag,
     lhs: Type,
     rhs: Type,
-) error{OutOfMemory}!?Type {
-    return try analyser.resolveVectorComparisonValue(tag, lhs, rhs) orelse
+) Error!?Type {
+    return try analyser.resolveComptimeUnionComparisonValue(tag, lhs, rhs) orelse
+        try analyser.resolveVectorComparisonValue(tag, lhs, rhs) orelse
         analyser.resolveComparisonValue(tag, lhs, rhs);
 }
 
@@ -10817,40 +11788,300 @@ pub fn resolveComptimeUnaryValue(
 const RuntimeStructLayout = struct {
     byte_size: u64,
     alignment: u64,
+    field_offset: ?u64 = null,
+    is_comptime: bool = false,
+    uninstantiable: bool = false,
+    has_runtime_payload: bool = true,
 };
 
 const max_runtime_struct_layout_depth = 64;
+
+const RuntimeTypeLayout = struct {
+    byte_size: u64,
+    alignment: u64,
+    bit_size: ?u64,
+    is_comptime: bool = false,
+    uninstantiable: bool = false,
+    has_runtime_payload: bool = true,
+
+    fn fromStruct(layout: RuntimeStructLayout) ?RuntimeTypeLayout {
+        return .{ .byte_size = if (layout.uninstantiable) 0 else layout.byte_size, .alignment = layout.alignment, .bit_size = if (layout.uninstantiable) 0 else std.math.mul(u64, layout.byte_size, 8) catch null, .is_comptime = layout.is_comptime, .uninstantiable = layout.uninstantiable, .has_runtime_payload = layout.has_runtime_payload };
+    }
+
+    fn fromUnion(layout: RuntimeUnionLayout) ?RuntimeTypeLayout {
+        return .{ .byte_size = layout.internal_size orelse layout.byte_size orelse return null, .alignment = layout.internal_alignment orelse layout.alignment orelse return null, .bit_size = layout.bit_size, .is_comptime = layout.byte_size == null and !layout.uninstantiable, .uninstantiable = layout.uninstantiable, .has_runtime_payload = layout.has_runtime_payload };
+    }
+};
+
+const RuntimeLayoutCacheKey = struct {
+    ty: Type,
+    depth: u8,
+
+    const Context = struct {
+        pub fn hash(_: Context, key: RuntimeLayoutCacheKey) u64 {
+            var hasher: std.hash.Wyhash = .init(key.depth);
+            key.ty.hashWithHasher(&hasher);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: RuntimeLayoutCacheKey, b: RuntimeLayoutCacheKey) bool {
+            return a.depth == b.depth and a.ty.eql(b.ty);
+        }
+    };
+};
+
+fn runtimeLayoutMayHaveEffects(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    if (depth >= 128) return true;
+    switch (tree.nodeTag(node)) {
+        .call,
+        .call_comma,
+        .call_one,
+        .call_one_comma,
+        .block,
+        .block_semicolon,
+        .block_two,
+        .block_two_semicolon,
+        => return true,
+        else => {},
+    }
+    var iterator: ast.Iterator = .init(tree, node);
+    while (iterator.next(tree)) |child| {
+        if (runtimeLayoutMayHaveEffects(tree, child, depth + 1)) return true;
+    }
+    return false;
+}
+
+fn canCacheRuntimeLayout(analyser: *Analyser, ty: Type, depth: u8) Error!bool {
+    if (!ty.is_type_val or depth >= max_runtime_struct_layout_depth) return false;
+    switch (ty.data) {
+        .container => |info| {
+            if (info.display_params.count() != 0) return false;
+            const source: NodeWithHandle = .of(info.scope_handle.toNode(), info.scope_handle.handle);
+            if (runtimeLayoutMayHaveEffects(&source.handle.tree, source.node, 0)) return false;
+            const tokens = try analyser.sourceContainerCaptureTokens(source) orelse return false;
+            const loc = offsets.nodeToLoc(&source.handle.tree, source.node);
+            for (tokens) |key| {
+                const start = key.handle.tree.tokenStart(key.token);
+                if (key.handle == source.handle and (start < loc.start or start >= loc.end) and
+                    !info.bound_params.contains(key)) return false;
+            }
+            var buffer: [2]Ast.Node.Index = undefined;
+            const declaration = source.handle.tree.fullContainerDecl(&buffer, source.node) orelse return false;
+            if (declaration.ast.arg.unwrap()) |node| if (signatureExpressionMayHaveEffects(&source.handle.tree, node, 0)) return false;
+            for (declaration.ast.members) |member| {
+                const field = source.handle.tree.fullContainerField(member) orelse continue;
+                if (field.ast.type_expr.unwrap()) |node| if (signatureExpressionMayHaveEffects(&source.handle.tree, node, 0)) return false;
+                if (field.ast.align_expr.unwrap()) |node| if (signatureExpressionMayHaveEffects(&source.handle.tree, node, 0)) return false;
+            }
+            for (info.bound_params.values()) |bound| {
+                if (bound.is_type_val) {
+                    if (!try analyser.canCacheRuntimeLayout(bound, depth + 1)) return false;
+                } else {
+                    if (bound.data != .ip_index or bound.ipIndex() == null) return false;
+                    switch (analyser.ip.zigTypeTag(bound.data.ip_index.type) orelse return false) {
+                        .int, .comptime_int, .float, .comptime_float, .bool, .enum_literal, .null, .void, .error_set => {},
+                        else => return false,
+                    }
+                }
+            }
+            return true;
+        },
+        .array => |info| return info.elem_count != null and try analyser.canCacheRuntimeLayout(info.elem_ty.*, depth + 1),
+        .tuple => |tuple| {
+            if (tuple.values.len != 0) return false;
+            for (tuple.types) |field| if (!try analyser.canCacheRuntimeLayout(field, depth + 1)) return false;
+            return true;
+        },
+        .pointer => return true,
+        .optional, .union_tag => |child| return analyser.canCacheRuntimeLayout(child.*, depth + 1),
+        .error_union => |info| return info.error_set != null and try analyser.canCacheRuntimeLayout(info.payload.*, depth + 1),
+        .ip_index => |payload| {
+            const index = payload.index orelse return false;
+            if (analyser.generatedFields(index)) |fields| for (fields) |field| {
+                if (!try analyser.canCacheRuntimeLayout(field.ty, depth + 1)) return false;
+            };
+            return switch (analyser.ip.indexToKey(index)) {
+                .array_type => |info| try analyser.canCacheRuntimeLayout(Type.fromIP(analyser, .type_type, info.child), depth + 1),
+                .tuple_type => |tuple| tuple: {
+                    for (0..tuple.types.len) |field_index| if (!try analyser.canCacheRuntimeLayout(Type.fromIP(analyser, .type_type, tuple.types.at(@intCast(field_index), analyser.ip)), depth + 1)) break :tuple false;
+                    break :tuple true;
+                },
+                .optional_type => |info| try analyser.canCacheRuntimeLayout(Type.fromIP(analyser, .type_type, info.payload_type), depth + 1),
+                .error_union_type => |info| info.error_set_type != .none and try analyser.canCacheRuntimeLayout(Type.fromIP(analyser, .type_type, info.payload_type), depth + 1),
+                else => index != .unknown_type,
+            };
+        },
+        .vector => |info| return analyser.canCacheRuntimeLayout(info.elem_ty.*, depth + 1),
+        else => return false,
+    }
+}
+
+fn resolveRuntimeTypeLayout(analyser: *Analyser, ty: Type) Error!?RuntimeTypeLayout {
+    if (!ty.is_type_val or analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    if (!try analyser.canCacheRuntimeLayout(ty, 0)) {
+        // Field expressions may reenter size queries after mutating comptime storage.
+        const old_cache = analyser.runtime_layout_cache;
+        analyser.runtime_layout_effects +%= 1;
+        analyser.runtime_layout_cache = null;
+        defer analyser.runtime_layout_cache = old_cache;
+        return analyser.resolveRuntimeTypeLayoutUncached(ty);
+    }
+    var local_cache: std.HashMapUnmanaged(RuntimeLayoutCacheKey, RuntimeTypeLayout, RuntimeLayoutCacheKey.Context, 80) = .empty;
+    const owns_cache = analyser.runtime_layout_cache == null;
+    if (owns_cache) analyser.runtime_layout_cache = &local_cache;
+    defer if (owns_cache) {
+        analyser.runtime_layout_cache = null;
+        local_cache.deinit(analyser.gpa);
+    };
+    const cache = analyser.runtime_layout_cache.?;
+    const key: RuntimeLayoutCacheKey = .{ .ty = ty, .depth = analyser.runtime_struct_layout_depth };
+    if (cache.get(key)) |layout| return layout;
+    const effects_before = analyser.runtime_layout_effects;
+    const result = try analyser.resolveRuntimeTypeLayoutUncached(ty) orelse return null;
+    if (effects_before == analyser.runtime_layout_effects) try cache.put(analyser.gpa, key, result);
+    return result;
+}
+
+fn resolveRuntimeTypeLayoutUncached(analyser: *Analyser, ty: Type) Error!?RuntimeTypeLayout {
+    if (isPrimitiveComptimeType(ty)) return .{ .byte_size = 0, .alignment = 1, .bit_size = null, .is_comptime = true, .has_runtime_payload = false };
+    if (ty.ipIndex() == .noreturn_type) return .{ .byte_size = 0, .alignment = 1, .bit_size = 0, .uninstantiable = true, .has_runtime_payload = false };
+    switch (ty.data) {
+        .tuple => return RuntimeTypeLayout.fromStruct(try analyser.resolveTupleLayout(ty, null) orelse return null),
+        .container => {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(ty, &buffer) orelse return null;
+            if (ty.isUnionType()) return RuntimeTypeLayout.fromUnion(try analyser.resolveAstUnionLayout(ty) orelse return null);
+            if (ty.isStructType(analyser)) {
+                if (info.layout == .@"packed") {
+                    const backing = try analyser.astPackedStructBackingType(ty, info.declaration, info.handle) orelse return null;
+                    return analyser.resolveRuntimeTypeLayout(backing);
+                }
+                return RuntimeTypeLayout.fromStruct(try analyser.resolveAstStructLayout(ty, info.declaration, info.handle, info.layout) orelse return null);
+            }
+        },
+        .optional => |child| return RuntimeTypeLayout.fromUnion(try analyser.resolveOptionalLayout(child.*) orelse return null),
+        .error_union => |info| return RuntimeTypeLayout.fromUnion(try analyser.resolveErrorUnionLayout(info.error_set, info.payload.*) orelse return null),
+        .array => |info| return analyser.resolveRuntimeArrayLayout(info.elem_ty.*, info.elem_count orelse return null, info.sentinel != .none),
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .tuple_type => return RuntimeTypeLayout.fromStruct(try analyser.resolveTupleLayout(ty, null) orelse return null),
+            .struct_type => |index| {
+                const info = analyser.ip.getStruct(index);
+                if (info.layout == .@"packed") {
+                    if (info.backing_int_ty == .none) return null;
+                    return analyser.resolveRuntimeTypeLayout(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                }
+                return RuntimeTypeLayout.fromStruct(try analyser.resolveInternPoolStructLayout(payload.index.?, info) orelse return null);
+            },
+            .union_type => |index| return RuntimeTypeLayout.fromUnion(try analyser.resolveInternPoolUnionLayout(payload.index.?, analyser.ip.getUnion(index)) orelse return null),
+            .optional_type => |info| return RuntimeTypeLayout.fromUnion(try analyser.resolveOptionalLayout(Type.fromIP(analyser, .type_type, info.payload_type)) orelse return null),
+            .error_union_type => |info| {
+                const errors = if (info.error_set_type == .none) null else Type.fromIP(analyser, .type_type, info.error_set_type);
+                return RuntimeTypeLayout.fromUnion(try analyser.resolveErrorUnionLayout(if (errors) |e| &e else null, Type.fromIP(analyser, .type_type, info.payload_type)) orelse return null);
+            },
+            .array_type => |info| return analyser.resolveRuntimeArrayLayout(Type.fromIP(analyser, .type_type, info.child), info.len, info.sentinel != .none),
+            else => {},
+        },
+        else => {},
+    }
+    const byte_size = analyser.resolveTypeByteSize(ty) orelse return null;
+    return .{
+        .byte_size = byte_size,
+        .alignment = try analyser.resolveTypeAlignment(ty) orelse return null,
+        .bit_size = analyser.resolveTypeBitSize(ty),
+        .has_runtime_payload = byte_size != 0,
+    };
+}
+
+fn resolveRuntimeArrayLayout(analyser: *Analyser, child: Type, len: u64, sentinel: bool) Error!?RuntimeTypeLayout {
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const element = try analyser.resolveRuntimeTypeLayout(child) orelse return null;
+    if (element.uninstantiable) return null;
+    const count = std.math.add(u64, len, @intFromBool(sentinel)) catch return null;
+    const stride_bits = std.math.mul(u64, element.byte_size, 8) catch null;
+    return .{
+        .byte_size = std.math.mul(u64, count, element.byte_size) catch return null,
+        .alignment = element.alignment,
+        .is_comptime = count != 0 and element.is_comptime,
+        .has_runtime_payload = count != 0 and element.has_runtime_payload,
+        .bit_size = bits: {
+            if (count == 0) break :bits 0;
+            const preceding = std.math.mul(u64, count - 1, stride_bits orelse break :bits null) catch break :bits null;
+            break :bits std.math.add(u64, preceding, element.bit_size orelse break :bits null) catch null;
+        },
+    };
+}
 
 const StructLayoutAccumulator = struct {
     layout: std.builtin.Type.ContainerLayout,
     byte_size: u64 = 0,
     alignment: u64 = 1,
-    first_field_size: ?u64 = null,
-    first_field_alignment: ?u64 = null,
+    auto_groups: [64]u64 = undefined,
+    populated_groups: u64 = 0,
+    requested_field: ?struct { alignment: u64, prefix: u64 } = null,
 
     fn addField(self: *StructLayoutAccumulator, field_size: u64, field_alignment: u64) bool {
         if (field_alignment == 0 or !std.math.isPowerOfTwo(field_alignment)) return false;
+        self.alignment = @max(self.alignment, field_alignment);
         if (self.layout == .auto) {
-            if (self.first_field_size) |first_size| {
-                if (first_size != field_size or self.first_field_alignment.? != field_alignment) return false;
-            } else {
-                self.first_field_size = field_size;
-                self.first_field_alignment = field_alignment;
-            }
+            const group: u6 = @intCast(std.math.log2_int(u64, field_alignment));
+            const bit = @as(u64, 1) << group;
+            const previous = if (self.populated_groups & bit != 0) self.auto_groups[group] else 0;
+            self.auto_groups[group] = std.math.add(u64, alignForwardFieldOffset(previous, field_alignment) orelse return false, field_size) catch return false;
+            self.populated_groups |= bit;
+            return true;
         }
         self.byte_size = alignForwardFieldOffset(self.byte_size, field_alignment) orelse return false;
         self.byte_size = std.math.add(u64, self.byte_size, field_size) catch return false;
-        self.alignment = @max(self.alignment, field_alignment);
+        return true;
+    }
+
+    fn requestField(self: *StructLayoutAccumulator, field_size: u64, field_alignment: u64) bool {
+        if (field_alignment == 0 or !std.math.isPowerOfTwo(field_alignment)) return false;
+        _ = field_size;
+        const group: u6 = @intCast(std.math.log2_int(u64, field_alignment));
+        const bit = @as(u64, 1) << group;
+        const previous = if (self.populated_groups & bit != 0) self.auto_groups[group] else 0;
+        self.requested_field = .{ .alignment = field_alignment, .prefix = alignForwardFieldOffset(previous, field_alignment) orelse return false };
         return true;
     }
 
     fn finish(self: StructLayoutAccumulator) ?RuntimeStructLayout {
+        var size = self.byte_size;
+        var field_offset: ?u64 = null;
+        if (self.layout == .auto) {
+            size = 0;
+            var groups = self.populated_groups;
+            while (groups != 0) {
+                const group: u6 = @intCast(63 - @clz(groups));
+                const alignment = @as(u64, 1) << group;
+                size = alignForwardFieldOffset(size, alignment) orelse return null;
+                if (self.requested_field) |requested| {
+                    if (requested.alignment == alignment) field_offset = std.math.add(u64, size, requested.prefix) catch return null;
+                }
+                size = std.math.add(u64, size, self.auto_groups[group]) catch return null;
+                groups &= ~(@as(u64, 1) << group);
+            }
+        }
         return .{
-            .byte_size = alignForwardFieldOffset(self.byte_size, self.alignment) orelse return null,
+            .byte_size = alignForwardFieldOffset(size, self.alignment) orelse return null,
             .alignment = self.alignment,
+            .field_offset = field_offset,
         };
     }
 };
+
+fn resolveRuntimeFieldType(analyser: *Analyser, source: NodeWithHandle, container_type: Type) Error!?Type {
+    if (signatureExpressionMayHaveEffects(&source.handle.tree, source.node, 0)) {
+        const old_cache = analyser.runtime_layout_cache;
+        analyser.runtime_layout_effects +%= 1;
+        analyser.runtime_layout_cache = null;
+        defer analyser.runtime_layout_cache = old_cache;
+        return comptime_eval.Interpreter.evaluateTypeWithContainer(analyser, source.handle, source.node, container_type);
+    }
+    return analyser.resolveTypeOfNodeInternal(.{ .node_handle = source, .container_type = container_type });
+}
 
 fn resolveAstStructLayout(
     analyser: *Analyser,
@@ -10859,37 +12090,169 @@ fn resolveAstStructLayout(
     handle: *DocumentStore.Handle,
     layout: std.builtin.Type.ContainerLayout,
 ) Error!?RuntimeStructLayout {
+    return analyser.resolveAstStructLayoutWithField(container_type, declaration, handle, layout, null);
+}
+
+fn resolveAstStructLayoutWithField(
+    analyser: *Analyser,
+    container_type: Type,
+    declaration: Ast.full.ContainerDecl,
+    handle: *DocumentStore.Handle,
+    layout: std.builtin.Type.ContainerLayout,
+    field_name: ?[]const u8,
+) Error!?RuntimeStructLayout {
     if (layout == .@"packed") return null;
+    if (astIsTupleDeclaration(declaration, &handle.tree)) return analyser.resolveAstTupleLayout(container_type, declaration, handle, field_name);
     if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
     analyser.runtime_struct_layout_depth += 1;
     defer analyser.runtime_struct_layout_depth -= 1;
 
     var result: StructLayoutAccumulator = .{ .layout = layout };
+    var is_comptime = false;
+    var uninstantiable = false;
+    var has_runtime_payload = false;
     for (declaration.ast.members) |member| {
         const field = handle.tree.fullContainerField(member) orelse continue;
         if (field.comptime_token != null) continue;
         const field_type_node = field.ast.type_expr.unwrap() orelse return null;
-        const field_type = try analyser.resolveTypeOfNodeInternal(.{
-            .node_handle = .of(field_type_node, handle),
-            .container_type = container_type,
-        }) orelse return null;
+        const field_type = try analyser.resolveRuntimeFieldType(.of(field_type_node, handle), container_type) orelse return null;
+        const field_layout = try analyser.resolveRuntimeTypeLayout(field_type) orelse return null;
+        is_comptime = is_comptime or field_layout.is_comptime;
+        uninstantiable = uninstantiable or field_layout.uninstantiable;
+        has_runtime_payload = has_runtime_payload or field_layout.has_runtime_payload;
         const field_alignment = if (field.ast.align_expr.unwrap()) |align_expr|
             try analyser.resolveIntegerLiteral(u64, .{
                 .node_handle = .of(align_expr, handle),
                 .container_type = container_type,
             }) orelse return null
         else
-            try analyser.resolveTypeAlignment(field_type) orelse return null;
-        const field_size = analyser.resolveTypeByteSize(field_type) orelse return null;
-        if (!result.addField(field_size, field_alignment)) return null;
+            field_layout.alignment;
+        if (field_name) |name| {
+            const member_name = try analyser.identifierTokenName(&handle.tree, field.ast.main_token) orelse return null;
+            if (std.mem.eql(u8, name, member_name) and !result.requestField(field_layout.byte_size, field_alignment)) return null;
+        }
+        if (!result.addField(field_layout.byte_size, field_alignment)) return null;
     }
-    return result.finish();
+    var complete = result.finish() orelse return null;
+    complete.is_comptime = is_comptime;
+    complete.uninstantiable = uninstantiable;
+    complete.has_runtime_payload = !uninstantiable and has_runtime_payload;
+    return complete;
+}
+
+fn astIsTupleDeclaration(declaration: Ast.full.ContainerDecl, tree: *const Ast) bool {
+    var fields: usize = 0;
+    for (declaration.ast.members) |member| {
+        const field = tree.fullContainerField(member) orelse continue;
+        if (!field.ast.tuple_like) return false;
+        fields += 1;
+    }
+    return fields != 0;
+}
+
+fn resolveAstTupleLayout(analyser: *Analyser, ty: Type, declaration: Ast.full.ContainerDecl, handle: *DocumentStore.Handle, field_name: ?[]const u8) Error!?RuntimeStructLayout {
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const requested: ?usize = if (field_name) |name| requested: {
+        if (name.len == 0 or !allDigits(name)) return null;
+        break :requested std.fmt.parseUnsigned(usize, name, 10) catch return null;
+    } else null;
+    var result: RuntimeStructLayout = .{ .byte_size = 0, .alignment = 1, .has_runtime_payload = false };
+    var index: usize = 0;
+    for (declaration.ast.members) |member| {
+        const field = handle.tree.fullContainerField(member) orelse continue;
+        defer index += 1;
+        if (field.ast.align_expr != .none) return null;
+        if (field.comptime_token != null) {
+            if (requested == index) return null;
+            continue;
+        }
+        const node = field.ast.type_expr.unwrap() orelse return null;
+        const field_type = try analyser.resolveRuntimeFieldType(.of(node, handle), ty) orelse return null;
+        if (field_type.ipIndex() == .noreturn_type) return null;
+        const layout = try analyser.resolveRuntimeTypeLayout(field_type) orelse return null;
+        if (layout.uninstantiable) return null;
+        result.alignment = @max(result.alignment, layout.alignment);
+        result.is_comptime = result.is_comptime or layout.is_comptime;
+        result.has_runtime_payload = result.has_runtime_payload or layout.has_runtime_payload;
+        if (layout.byte_size == 0) {
+            if (requested == index) result.field_offset = 0;
+            continue;
+        }
+        result.byte_size = alignForwardFieldOffset(result.byte_size, layout.alignment) orelse return null;
+        if (requested == index) result.field_offset = result.byte_size;
+        result.byte_size = std.math.add(u64, result.byte_size, layout.byte_size) catch return null;
+    }
+    if (requested) |i| if (i >= index) return null;
+    result.byte_size = alignForwardFieldOffset(result.byte_size, result.alignment) orelse return null;
+    return result;
+}
+
+fn resolveTupleLayout(analyser: *Analyser, ty: Type, field_name: ?[]const u8) Error!?RuntimeStructLayout {
+    if (!ty.is_type_val or analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const requested: ?usize = if (field_name) |name| requested: {
+        if (name.len == 0 or !allDigits(name)) return null;
+        break :requested std.fmt.parseUnsigned(usize, name, 10) catch return null;
+    } else null;
+    const count: usize = switch (ty.data) {
+        .tuple => |fields| fields.types.len,
+        .ip_index => |info| switch (analyser.ip.indexToKey(info.index orelse return null)) {
+            .tuple_type => |tuple| tuple.types.len,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (requested) |index| if (index >= count) return null;
+    if (ty.data == .tuple and ty.data.tuple.values.len != 0 and ty.data.tuple.values.len != count) return null;
+    var layout: RuntimeStructLayout = .{ .byte_size = 0, .alignment = 1, .has_runtime_payload = false };
+    for (0..count) |index| {
+        const field_type: Type, const is_comptime: bool = switch (ty.data) {
+            .tuple => |fields| .{ fields.types[index], fields.values.len != 0 and fields.values[index] != null },
+            .ip_index => |info| field: {
+                const tuple = analyser.ip.indexToKey(info.index.?).tuple_type;
+                if (tuple.values.len != tuple.types.len) return null;
+                break :field .{ Type.fromIP(analyser, .type_type, tuple.types.at(@intCast(index), analyser.ip)), tuple.values.at(@intCast(index), analyser.ip) != .none };
+            },
+            else => unreachable,
+        };
+        if (is_comptime) {
+            if (requested == index) return null;
+            continue;
+        }
+        if (field_type.ipIndex() == .noreturn_type) return null;
+        const field = try analyser.resolveRuntimeTypeLayout(field_type) orelse return null;
+        if (field.uninstantiable) return null;
+        layout.alignment = @max(layout.alignment, field.alignment);
+        layout.is_comptime = layout.is_comptime or field.is_comptime;
+        layout.has_runtime_payload = layout.has_runtime_payload or field.has_runtime_payload;
+        if (field.byte_size == 0) {
+            if (requested == index) layout.field_offset = 0;
+            continue;
+        }
+        layout.byte_size = alignForwardFieldOffset(layout.byte_size, field.alignment) orelse return null;
+        if (requested == index) layout.field_offset = layout.byte_size;
+        layout.byte_size = std.math.add(u64, layout.byte_size, field.byte_size) catch return null;
+    }
+    layout.byte_size = alignForwardFieldOffset(layout.byte_size, layout.alignment) orelse return null;
+    return layout;
 }
 
 fn resolveInternPoolStructLayout(
     analyser: *Analyser,
     type_index: InternPool.Index,
     struct_info: *const InternPool.Struct,
+) Error!?RuntimeStructLayout {
+    return analyser.resolveInternPoolStructLayoutWithField(type_index, struct_info, null);
+}
+
+fn resolveInternPoolStructLayoutWithField(
+    analyser: *Analyser,
+    type_index: InternPool.Index,
+    struct_info: *const InternPool.Struct,
+    field_name: ?[]const u8,
 ) Error!?RuntimeStructLayout {
     if (struct_info.layout == .@"packed") return null;
     if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
@@ -10900,28 +12263,480 @@ fn resolveInternPoolStructLayout(
     if (generated_fields) |fields| if (fields.len != struct_info.fields.count()) return null;
 
     var result: StructLayoutAccumulator = .{ .layout = struct_info.layout };
+    var is_comptime = false;
+    var uninstantiable = false;
+    var has_runtime_payload = false;
     for (struct_info.fields.values(), 0..) |field, index| {
         if (field.is_comptime) continue;
         const field_type = if (generated_fields) |fields|
             fields[index].ty
         else
             Type.fromIP(analyser, .type_type, field.ty);
+        const field_layout = try analyser.resolveRuntimeTypeLayout(field_type) orelse return null;
+        is_comptime = is_comptime or field_layout.is_comptime;
+        uninstantiable = uninstantiable or field_layout.uninstantiable;
+        has_runtime_payload = has_runtime_payload or field_layout.has_runtime_payload;
         const field_alignment = if (field.alignment != 0)
             field.alignment
         else
-            try analyser.resolveTypeAlignment(field_type) orelse return null;
-        const field_size = analyser.resolveTypeByteSize(field_type) orelse return null;
-        if (!result.addField(field_size, field_alignment)) return null;
+            field_layout.alignment;
+        if (field_name) |name| {
+            const requested_name = analyser.ip.string_pool.getString(analyser.store.io, name) orelse return null;
+            if (requested_name == struct_info.fields.keys()[index] and !result.requestField(field_layout.byte_size, field_alignment)) return null;
+        }
+        if (!result.addField(field_layout.byte_size, field_alignment)) return null;
     }
-    return result.finish();
+    var complete = result.finish() orelse return null;
+    complete.is_comptime = is_comptime;
+    complete.uninstantiable = uninstantiable;
+    complete.has_runtime_payload = !uninstantiable and has_runtime_payload;
+    return complete;
+}
+
+const RuntimeUnionLayout = struct {
+    byte_size: ?u64,
+    alignment: ?u64,
+    bit_size: u64,
+    internal_size: ?u64 = null,
+    internal_alignment: ?u64 = null,
+    uninstantiable: bool = false,
+    has_runtime_payload: bool = true,
+};
+
+fn unionOptionalPointerPayload(analyser: *Analyser, ty: Type) ?Type {
+    const child = switch (ty.data) {
+        .optional => |child| child.*,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .optional_type => |info| Type.fromIP(analyser, .type_type, info.payload_type),
+            else => return null,
+        },
+        else => return null,
+    };
+    const info = child.pointerCastInfo(analyser) orelse return null;
+    if (info.is_optional or info.pointer.is_allowzero or info.pointer.size == .slice) return null;
+    return child;
+}
+
+fn unionFieldHasLayout(analyser: *Analyser, ty: Type, layout: std.builtin.Type.ContainerLayout, depth: u8) Error!bool {
+    if (!ty.is_type_val or depth == max_runtime_struct_layout_depth) return false;
+    switch (ty.data) {
+        .container => {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(ty, &buffer) orelse return false;
+            if (ty.isEnumType(analyser)) {
+                const arg = info.declaration.ast.arg.unwrap() orelse return false;
+                const tag = try analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(arg, info.handle), .container_type = ty }) orelse return false;
+                return try analyser.unionFieldHasLayout(tag, layout, depth + 1);
+            }
+            if (ty.isUnionType()) return info.layout == layout;
+            if (ty.isStructType(analyser)) {
+                if (layout == .@"packed") return info.layout == .@"packed";
+                return info.layout == .@"extern" or
+                    (info.layout == .@"packed" and info.declaration.ast.arg != .none);
+            }
+            return false;
+        },
+        .union_tag => |union_type| {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(union_type.*, &buffer) orelse return false;
+            const arg = info.declaration.ast.arg.unwrap() orelse return false;
+            const tag = try analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(arg, info.handle), .container_type = union_type.* }) orelse return false;
+            return try analyser.unionFieldHasLayout(tag, layout, depth + 1);
+        },
+        .pointer => |info| return layout == .@"extern" and info.size != .slice,
+        .optional => return layout == .@"extern" and analyser.unionOptionalPointerPayload(ty) != null,
+        .vector => return layout == .@"extern",
+        .array => |info| return layout == .@"extern" and
+            try analyser.unionFieldHasLayout(info.elem_ty.*, layout, depth + 1),
+        .ip_index => |payload| {
+            const index = payload.index orelse return false;
+            return switch (analyser.ip.indexToKey(index)) {
+                .int_type => |info| layout == .@"packed" or switch (info.bits) {
+                    0, 8, 16, 32, 64, 128 => true,
+                    else => false,
+                },
+                .enum_type => |enum_index| try analyser.unionFieldHasLayout(Type.fromIP(analyser, .type_type, analyser.ip.getEnum(enum_index).tag_type), layout, depth + 1),
+                .simple_type => switch (analyser.ip.zigTypeTag(index) orelse return false) {
+                    .int, .float, .bool, .void => true,
+                    else => false,
+                },
+                .pointer_type => |info| layout == .@"extern" and info.flags.size != .slice,
+                .optional_type => layout == .@"extern" and analyser.unionOptionalPointerPayload(ty) != null,
+                .vector_type => layout == .@"extern",
+                .array_type => |info| layout == .@"extern" and
+                    try analyser.unionFieldHasLayout(Type.fromIP(analyser, .type_type, info.child), layout, depth + 1),
+                .struct_type => |struct_index| analyser.ip.getStruct(struct_index).layout == layout,
+                .union_type => |union_index| analyser.ip.getUnion(union_index).layout == layout,
+                else => false,
+            };
+        },
+        else => return false,
+    }
+}
+
+const UnionLayoutAccumulator = struct {
+    payload_size: u64 = 0,
+    alignment: u64 = 1,
+    field_count: u32 = 0,
+    inhabited_count: u32 = 0,
+    packed_bits: ?u64 = null,
+    has_comptime_field: bool = false,
+
+    fn addField(self: *UnionLayoutAccumulator, analyser: *Analyser, ty: Type, explicit_alignment: u64, layout: std.builtin.Type.ContainerLayout) Error!bool {
+        if (layout != .auto and !try analyser.unionFieldHasLayout(ty, layout, 0)) return false;
+        self.field_count = std.math.add(u32, self.field_count, 1) catch return false;
+        if (!ty.isNoreturnType()) self.inhabited_count = std.math.add(u32, self.inhabited_count, 1) catch return false;
+        if (layout == .@"packed") {
+            if (explicit_alignment != 0) return false;
+            const bits = analyser.resolveTypeBitSize(ty) orelse return false;
+            if (self.packed_bits) |previous| if (bits != previous) return false;
+            self.packed_bits = bits;
+            return true;
+        }
+        const is_comptime = switch (ty.ipIndex() orelse .none) {
+            .type_type, .comptime_int_type, .comptime_float_type => true,
+            else => false,
+        };
+        self.has_comptime_field = self.has_comptime_field or is_comptime;
+        const field_layout = if (is_comptime) null else try analyser.resolveRuntimeTypeLayout(ty) orelse return false;
+        if (field_layout) |field| {
+            if (field.is_comptime or (field.uninstantiable and ty.ipIndex() != .noreturn_type)) return false;
+        }
+        const alignment = if (explicit_alignment != 0) explicit_alignment else if (is_comptime) 1 else field_layout.?.alignment;
+        if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) return false;
+        const size = if (is_comptime) 0 else field_layout.?.byte_size;
+        self.payload_size = @max(self.payload_size, size);
+        self.alignment = @max(self.alignment, alignment);
+        return true;
+    }
+
+    fn finish(self: UnionLayoutAccumulator, analyser: *Analyser, layout: std.builtin.Type.ContainerLayout, tag_type: ?Type, safety: ?bool) Error!?RuntimeUnionLayout {
+        if (self.field_count == 0 or self.inhabited_count == 0) {
+            if (layout != .auto) return null;
+            return .{ .byte_size = null, .alignment = null, .bit_size = 0, .internal_size = 0, .internal_alignment = self.alignment, .uninstantiable = true, .has_runtime_payload = false };
+        }
+        if (layout == .@"packed") {
+            const bits = std.math.cast(u16, self.packed_bits orelse return null) orelse return null;
+            const backing = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+            const ty = Type.fromIP(analyser, .type_type, backing);
+            return .{ .byte_size = analyser.resolveTypeByteSize(ty) orelse return null, .alignment = try analyser.resolveTypeAlignment(ty) orelse return null, .bit_size = bits };
+        }
+        var size = self.payload_size;
+        var alignment = self.alignment;
+        if (layout == .auto and !self.has_comptime_field and self.inhabited_count > 1) {
+            const tag: ?Type = if (tag_type) |ty| ty else tag: {
+                if (!(safety orelse return null)) break :tag null;
+                const bits: u16 = @intCast(std.math.log2_int_ceil(u32, self.field_count));
+                const index = try analyser.ip.get(.{ .int_type = .{ .signedness = .unsigned, .bits = bits } });
+                break :tag Type.fromIP(analyser, .type_type, index);
+            };
+            if (tag) |ty| {
+                size = std.math.add(u64, size, analyser.resolveTypeByteSize(ty) orelse return null) catch return null;
+                alignment = @max(alignment, try analyser.resolveTypeAlignment(ty) orelse return null);
+            }
+        }
+        const byte_size = alignForwardFieldOffset(size, alignment) orelse return null;
+        return .{
+            .byte_size = if (self.has_comptime_field) null else byte_size,
+            .alignment = alignment,
+            .bit_size = std.math.mul(u64, byte_size, 8) catch return null,
+            .internal_size = byte_size,
+            .has_runtime_payload = byte_size != 0,
+        };
+    }
+};
+
+fn runtimeSafetyAtDeclaration(analyser: *Analyser, source: NodeWithHandle, container_type: ?Type) Error!?bool {
+    if (container_type) |ty| if (analyser.source_union_safety.get(ty)) |enabled| return enabled;
+    const handle = source.handle;
+    const tree = &handle.tree;
+    const document_scope = try handle.getDocumentScope();
+    const source_index = tree.tokenStart(tree.firstToken(source.node));
+    var scopes = iterateEnclosingScopes(document_scope, source_index);
+    var setting: ?Ast.Node.Index = null;
+    while (scopes.next().unwrap()) |scope| {
+        const scope_node = document_scope.getScopeAstNode(scope) orelse continue;
+        var buffer: [2]Ast.Node.Index = undefined;
+        var fn_buffer: [1]Ast.Node.Index = undefined;
+        // Function and container declarations start their own safety scope.
+        if (scope_node != source.node and (ast.isContainer(tree, scope_node) or
+            tree.fullFnProto(&fn_buffer, scope_node) != null)) setting = null;
+        const statements = tree.blockStatements(&buffer, scope_node) orelse continue;
+        for (statements) |statement| {
+            if (tree.tokenStart(tree.firstToken(statement)) >= source_index) break;
+            if (!ast.isBuiltinCall(tree, statement) or !std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(statement)), "@setRuntimeSafety")) continue;
+            setting = statement;
+        }
+    }
+    if (setting) |statement| {
+        var args: [2]Ast.Node.Index = undefined;
+        const params = tree.builtinCallParams(&args, statement).?;
+        if (params.len != 1) return null;
+        // Effectful settings are recorded during interpretation, not replayed.
+        if (signatureExpressionMayHaveEffects(tree, params[0], 0)) return null;
+        const enabled = try analyser.resolveComptimeValue(.{ .node_handle = .of(params[0], handle), .container_type = container_type }) orelse return null;
+        return comptimeBoolValue(enabled);
+    }
+    const builtin_type = try analyser.resolveImportString(handle, "builtin") orelse return null;
+    const declaration = try builtin_type.lookupSymbol(analyser, "mode") orelse return null;
+    const mode_value = try analyser.resolveTypeNamespaceDeclValue(declaration) orelse return null;
+    const mode = comptimeEnumValue(std.builtin.OptimizeMode, mode_value) orelse return null;
+    return mode == .Debug or mode == .ReleaseSafe;
+}
+
+fn runtimeSafetyAtUnionCreation(analyser: *Analyser, source: NodeWithHandle) Error!?bool {
+    if (analyser.comptime_interpreter) |interpreter| {
+        if (interpreter.runtime_safety) |enabled| return enabled;
+    }
+    return analyser.runtimeSafetyAtDeclaration(source, null);
+}
+
+pub fn captureSourceUnionSafety(analyser: *Analyser, source: NodeWithHandle, ty: Type) Error!void {
+    var buffer: [2]Ast.Node.Index = undefined;
+    const info = astContainerTypeInfo(ty, &buffer) orelse return;
+    if (info.layout != .auto or ty.isTaggedUnion()) return;
+    if (analyser.source_union_safety.contains(ty)) return;
+    const safety = try analyser.runtimeSafetyAtUnionCreation(source) orelse return;
+    try analyser.source_union_safety.put(analyser.gpa, ty, safety);
+}
+
+pub fn sourceContainerCaptureTokens(analyser: *Analyser, source: NodeWithHandle) Error!?[]const TokenWithHandle {
+    if (analyser.source_container_capture_tokens.getEntry(source)) |cached| return cached.value_ptr.*;
+    var tokens: std.ArrayList(TokenWithHandle) = .empty;
+    const complete = try analyser.collectSourceContainerCaptureTokens(source, &tokens, 0);
+    const result: ?[]const TokenWithHandle = if (complete) try tokens.toOwnedSlice(analyser.arena) else null;
+    try analyser.source_container_capture_tokens.put(analyser.gpa, source, result);
+    return result;
+}
+
+fn trimSourceContainerBindings(analyser: *Analyser, value: Type) Error!Type {
+    if (value.data != .container or value.isRoot() or
+        (!value.isUnionType() and !value.isStructType(analyser))) return value;
+    var info = value.data.container;
+    if (info.bound_params.count() == 0 and info.display_params.count() == 0) return value;
+    const source: NodeWithHandle = .of(info.scope_handle.toNode(), info.scope_handle.handle);
+    const tokens = try analyser.sourceContainerCaptureTokens(source) orelse return value;
+    var bindings: TokenToTypeMap = .empty;
+    var display_bindings: TokenToNodeMap = .empty;
+    const loc = offsets.nodeToLoc(&source.handle.tree, source.node);
+    for (tokens) |key| {
+        if (info.bound_params.get(key)) |bound| {
+            try bindings.put(analyser.arena, key, bound);
+        } else if (!info.display_params.contains(key)) {
+            const start = key.handle.tree.tokenStart(key.token);
+            if (key.handle == source.handle and (start < loc.start or start >= loc.end)) return value;
+        }
+        if (info.display_params.get(key)) |display| try display_bindings.put(analyser.arena, key, display);
+    }
+    info.bound_params = bindings;
+    info.display_params = display_bindings;
+    var result = value;
+    result.data = .{ .container = info };
+    return result;
+}
+
+fn collectSourceContainerCaptureTokens(analyser: *Analyser, source: NodeWithHandle, tokens: *std.ArrayList(TokenWithHandle), depth: u8) Error!bool {
+    if (depth == 128) return false;
+    const tree = &source.handle.tree;
+    // Calls can capture bindings indirectly through an outer helper.
+    switch (tree.nodeTag(source.node)) {
+        .call, .call_comma, .call_one, .call_one_comma => return false,
+        else => {},
+    }
+    if (tree.nodeTag(source.node) == .identifier) {
+        const token = tree.nodeMainToken(source.node);
+        const name = try analyser.identifierTokenName(tree, token) orelse return false;
+        if (try analyser.lookupSymbolGlobal(source.handle, name, tree.tokenStart(token))) |decl| {
+            const key: TokenWithHandle = .{ .handle = decl.handle, .token = decl.nameToken() };
+            for (tokens.items) |existing| if (existing.eql(key)) return true;
+            try tokens.append(analyser.arena, key);
+        }
+    }
+    var iterator: ast.Iterator = .init(tree, source.node);
+    while (iterator.next(tree)) |child| {
+        if (!try analyser.collectSourceContainerCaptureTokens(.of(child, source.handle), tokens, depth + 1)) return false;
+    }
+    return true;
+}
+
+fn resolveAstUnionLayout(analyser: *Analyser, ty: Type) Error!?RuntimeUnionLayout {
+    var buffer: [2]Ast.Node.Index = undefined;
+    const info = astContainerTypeInfo(ty, &buffer) orelse return null;
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    var result: UnionLayoutAccumulator = .{};
+    for (info.declaration.ast.members) |member| {
+        var field = info.handle.tree.fullContainerField(member) orelse continue;
+        if (field.comptime_token != null) return null;
+        if (ty.isTaggedUnion()) field.convertToNonTupleLike(&info.handle.tree);
+        const field_type = if (field.ast.type_expr.unwrap()) |node|
+            try analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(node, info.handle), .container_type = ty }) orelse return null
+        else if (ty.isTaggedUnion()) Type.fromIP(analyser, .type_type, .void_type) else return null;
+        const alignment = if (field.ast.align_expr.unwrap()) |node|
+            try analyser.resolveIntegerLiteral(u64, .{ .node_handle = .of(node, info.handle), .container_type = ty }) orelse return null
+        else
+            0;
+        if (!try result.addField(analyser, field_type, alignment, info.layout)) return null;
+    }
+    const tag_instance = try analyser.resolveUnionTag(ty);
+    const tag_type = if (tag_instance) |tag| try tag.typeOf(analyser) else null;
+    const safety = if (info.layout == .auto and !result.has_comptime_field and tag_type == null and result.inhabited_count > 1)
+        try analyser.runtimeSafetyAtDeclaration(.of(ty.data.container.scope_handle.toNode(), info.handle), ty)
+    else
+        null;
+    return result.finish(analyser, info.layout, tag_type, safety);
+}
+
+fn resolveInternPoolUnionLayout(analyser: *Analyser, type_index: InternPool.Index, info: *const InternPool.Union) Error!?RuntimeUnionLayout {
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const generated = analyser.generated_union_fields.get(type_index);
+    if (generated) |fields| if (fields.len != info.fields.count()) return null;
+    var result: UnionLayoutAccumulator = .{};
+    for (info.fields.values(), 0..) |field, index| {
+        const ty = if (generated) |fields| fields[index].ty else Type.fromIP(analyser, .type_type, field.ty);
+        if (!try result.addField(analyser, ty, field.alignment, info.layout)) return null;
+    }
+    const tag = analyser.generated_union_tags.get(type_index) orelse if (info.tag_type != .none) Type.fromIP(analyser, .type_type, info.tag_type) else null;
+    const safety = analyser.generated_union_safety.get(type_index) orelse null;
+    return result.finish(analyser, info.layout, tag, safety);
+}
+
+fn isPrimitiveComptimeType(ty: Type) bool {
+    return ty.is_type_val and switch (ty.ipIndex() orelse .none) {
+        .type_type, .comptime_int_type, .comptime_float_type, .enum_literal_type => true,
+        else => false,
+    };
+}
+
+const WrappedPayloadLayout = struct {
+    size: u64,
+    alignment: u64,
+    is_comptime: bool = false,
+    uninstantiable: bool = false,
+    has_runtime_payload: bool = true,
+
+    fn fromUnionLayout(layout: RuntimeUnionLayout) ?WrappedPayloadLayout {
+        return .{
+            .size = layout.internal_size orelse layout.byte_size orelse return null,
+            .alignment = layout.internal_alignment orelse layout.alignment orelse return null,
+            .is_comptime = layout.byte_size == null and !layout.uninstantiable,
+            .uninstantiable = layout.uninstantiable,
+            .has_runtime_payload = layout.has_runtime_payload,
+        };
+    }
+};
+
+fn resolveWrappedPayloadLayout(analyser: *Analyser, ty: Type) Error!?WrappedPayloadLayout {
+    if (!ty.is_type_val or analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    if (ty.ipIndex() == .noreturn_type) return .{ .size = 0, .alignment = 1, .uninstantiable = true, .has_runtime_payload = false };
+    if (isPrimitiveComptimeType(ty)) return .{ .size = 0, .alignment = 1, .is_comptime = true, .has_runtime_payload = false };
+    switch (ty.data) {
+        .compile_error => return null,
+        .tuple => {
+            const layout = try analyser.resolveRuntimeTypeLayout(ty) orelse return null;
+            return .{ .size = layout.byte_size, .alignment = layout.alignment, .is_comptime = layout.is_comptime, .uninstantiable = layout.uninstantiable, .has_runtime_payload = layout.has_runtime_payload };
+        },
+        .optional => |child| return WrappedPayloadLayout.fromUnionLayout(try analyser.resolveOptionalLayout(child.*) orelse return null),
+        .error_union => |info| return WrappedPayloadLayout.fromUnionLayout(try analyser.resolveErrorUnionLayout(info.error_set, info.payload.*) orelse return null),
+        .container => {
+            if (ty.isUnionType()) return WrappedPayloadLayout.fromUnionLayout(try analyser.resolveAstUnionLayout(ty) orelse return null);
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(ty, &buffer) orelse return null;
+            if (ty.isStructType(analyser) and info.layout != .@"packed") {
+                const layout = try analyser.resolveRuntimeTypeLayout(ty) orelse return null;
+                return .{ .size = layout.byte_size, .alignment = layout.alignment, .is_comptime = layout.is_comptime, .uninstantiable = layout.uninstantiable, .has_runtime_payload = layout.has_runtime_payload };
+            }
+        },
+        .array => |info| return analyser.resolveWrappedArrayPayload(info.elem_ty.*, info.elem_count orelse return null, info.sentinel != .none),
+        .pointer => |info| if (info.elem_ty.ipIndex() == .noreturn_type) return null,
+        .ip_index => |info| switch (analyser.ip.indexToKey(info.index orelse return null)) {
+            .tuple_type => {
+                const layout = try analyser.resolveRuntimeTypeLayout(ty) orelse return null;
+                return .{ .size = layout.byte_size, .alignment = layout.alignment, .is_comptime = layout.is_comptime, .uninstantiable = layout.uninstantiable, .has_runtime_payload = layout.has_runtime_payload };
+            },
+            .optional_type => |payload| return WrappedPayloadLayout.fromUnionLayout(try analyser.resolveOptionalLayout(Type.fromIP(analyser, .type_type, payload.payload_type)) orelse return null),
+            .error_union_type => |payload| {
+                const errors = if (payload.error_set_type == .none) null else Type.fromIP(analyser, .type_type, payload.error_set_type);
+                return WrappedPayloadLayout.fromUnionLayout(try analyser.resolveErrorUnionLayout(if (errors) |e| &e else null, Type.fromIP(analyser, .type_type, payload.payload_type)) orelse return null);
+            },
+            .union_type => |index| return WrappedPayloadLayout.fromUnionLayout(try analyser.resolveInternPoolUnionLayout(info.index.?, analyser.ip.getUnion(index)) orelse return null),
+            .struct_type => |index| {
+                const declaration = analyser.ip.getStruct(index);
+                if (declaration.layout != .@"packed") {
+                    const layout = try analyser.resolveRuntimeTypeLayout(ty) orelse return null;
+                    return .{ .size = layout.byte_size, .alignment = layout.alignment, .is_comptime = layout.is_comptime, .uninstantiable = layout.uninstantiable, .has_runtime_payload = layout.has_runtime_payload };
+                }
+            },
+            .array_type => |payload| return analyser.resolveWrappedArrayPayload(Type.fromIP(analyser, .type_type, payload.child), payload.len, payload.sentinel != .none),
+            .pointer_type => |payload| if (payload.elem_type == .noreturn_type) return null,
+            else => {},
+        },
+        else => {},
+    }
+    const size = analyser.resolveTypeByteSize(ty) orelse return null;
+    return .{ .size = size, .alignment = try analyser.resolveTypeAlignment(ty) orelse return null, .has_runtime_payload = size != 0 };
+}
+
+fn resolveWrappedArrayPayload(analyser: *Analyser, child: Type, len: u64, sentinel: bool) Error!?WrappedPayloadLayout {
+    if (analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const payload = try analyser.resolveWrappedPayloadLayout(child) orelse return null;
+    if (payload.uninstantiable) return null;
+    const count = std.math.add(u64, len, @intFromBool(sentinel)) catch return null;
+    return .{ .size = std.math.mul(u64, payload.size, count) catch return null, .alignment = payload.alignment, .is_comptime = count != 0 and payload.is_comptime, .has_runtime_payload = count != 0 and payload.has_runtime_payload };
+}
+
+fn resolveOptionalLayout(analyser: *Analyser, child: Type) Error!?RuntimeUnionLayout {
+    if (!child.is_type_val or analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const payload = try analyser.resolveWrappedPayloadLayout(child) orelse return null;
+    const alignment = payload.alignment;
+    if (payload.uninstantiable) return .{ .byte_size = 0, .alignment = alignment, .bit_size = 0, .has_runtime_payload = false };
+    const child_size = payload.size;
+    const uses_pointer_null = if (child.pointerCastInfo(analyser)) |info|
+        !info.is_optional and !info.pointer.is_allowzero and info.pointer.size != .c
+    else
+        false;
+    const size = if (uses_pointer_null or child.isErrorSetType(analyser)) child_size else alignForwardFieldOffset(std.math.add(u64, child_size, 1) catch return null, alignment) orelse return null;
+    return .{ .byte_size = if (payload.is_comptime) null else size, .alignment = alignment, .bit_size = std.math.mul(u64, size, 8) catch return null, .internal_size = size, .has_runtime_payload = !payload.is_comptime or payload.has_runtime_payload };
+}
+
+fn resolveErrorUnionLayout(analyser: *Analyser, errors: ?*const Type, payload: Type) Error!?RuntimeUnionLayout {
+    if (errors == null or !errors.?.isErrorSetType(analyser) or !payload.is_type_val or payload.isErrorSetType(analyser) or
+        analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    const error_alignment = std.zig.target.intAlignment(&builtin.target, 16);
+    const child = try analyser.resolveWrappedPayloadLayout(payload) orelse return null;
+    const payload_alignment = child.alignment;
+    const payload_size = child.size;
+    const alignment = @max(payload_alignment, error_alignment);
+    if (child.is_comptime and !child.has_runtime_payload) return .{ .byte_size = null, .alignment = alignment, .bit_size = 0, .internal_size = 0, .has_runtime_payload = false };
+    const size = alignForwardFieldOffset(std.math.add(u64, alignForwardFieldOffset(payload_size, error_alignment) orelse return null, 2) catch return null, alignment) orelse return null;
+    return .{ .byte_size = if (child.is_comptime) null else size, .alignment = alignment, .bit_size = if (child.is_comptime and payload_size == 0) 0 else std.math.mul(u64, size, 8) catch return null, .internal_size = size };
 }
 
 fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
+        .tuple => blk: {
+            const layout = (analyser.resolveTupleLayout(ty, null) catch break :blk null) orelse break :blk null;
+            break :blk std.math.mul(u64, layout.byte_size, 8) catch null;
+        },
+        .optional => |child| ((analyser.resolveOptionalLayout(child.*) catch return null) orelse return null).bit_size,
+        .error_union => |info| ((analyser.resolveErrorUnionLayout(info.error_set, info.payload.*) catch return null) orelse return null).bit_size,
         .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
+            if (ty.isUnionType()) {
+                const layout = (analyser.resolveAstUnionLayout(ty) catch break :blk null) orelse break :blk null;
+                break :blk layout.bit_size;
+            }
             if (ty.isEnumType(analyser)) {
                 const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
                     break :blk null;
@@ -10939,11 +12754,17 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                 info.handle,
                 info.layout,
             ) catch break :blk null) orelse break :blk null;
-            break :blk std.math.mul(u64, layout.byte_size, 8) catch null;
+            break :blk if (layout.uninstantiable) 0 else std.math.mul(u64, layout.byte_size, 8) catch null;
         },
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth(),
+        },
+        .union_tag => |union_type| blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(union_type.*, &buffer) orelse break :blk null;
+            const tag = (analyser.astEnumTagType(union_type.*, info.declaration, info.handle) catch break :blk null) orelse break :blk null;
+            break :blk analyser.resolveTypeBitSize(tag);
         },
         .vector => |info| blk: {
             const elem_bits = analyser.resolveTypeBitSize(info.elem_ty.*) orelse break :blk null;
@@ -10966,6 +12787,16 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                 .float => analyser.ip.floatBits(type_index, builtin.target),
                 .bool => 1,
                 .void, .noreturn => 0,
+                .error_set => 16,
+                .optional => {
+                    const info = analyser.ip.indexToKey(type_index).optional_type;
+                    break :blk ((analyser.resolveOptionalLayout(Type.fromIP(analyser, .type_type, info.payload_type)) catch break :blk null) orelse break :blk null).bit_size;
+                },
+                .error_union => {
+                    const info = analyser.ip.indexToKey(type_index).error_union_type;
+                    const errors = if (info.error_set_type == .none) null else Type.fromIP(analyser, .type_type, info.error_set_type);
+                    break :blk ((analyser.resolveErrorUnionLayout(if (errors) |e| &e else null, Type.fromIP(analyser, .type_type, info.payload_type)) catch break :blk null) orelse break :blk null).bit_size;
+                },
                 .pointer => switch (analyser.ip.indexToKey(type_index).pointer_type.flags.size) {
                     .slice => @as(u64, builtin.target.ptrBitWidth()) * 2,
                     .one, .many, .c => builtin.target.ptrBitWidth(),
@@ -10990,6 +12821,10 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                     break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.tag_type));
                 },
                 .@"struct" => {
+                    if (analyser.ip.indexToKey(type_index) == .tuple_type) {
+                        const layout = (analyser.resolveTupleLayout(ty, null) catch break :blk null) orelse break :blk null;
+                        break :blk if (layout.uninstantiable) 0 else std.math.mul(u64, layout.byte_size, 8) catch null;
+                    }
                     const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
                     if (info.layout == .@"packed") {
                         if (info.backing_int_ty == .none) break :blk null;
@@ -10997,12 +12832,12 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
                     }
                     const layout = (analyser.resolveInternPoolStructLayout(type_index, info) catch break :blk null) orelse
                         break :blk null;
-                    break :blk std.math.mul(u64, layout.byte_size, 8) catch null;
+                    break :blk if (layout.uninstantiable) 0 else std.math.mul(u64, layout.byte_size, 8) catch null;
                 },
                 .@"union" => {
                     const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
-                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
-                    break :blk analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    const layout = (analyser.resolveInternPoolUnionLayout(type_index, info) catch break :blk null) orelse break :blk null;
+                    break :blk layout.bit_size;
                 },
                 else => null,
             };
@@ -11014,9 +12849,16 @@ fn resolveTypeBitSize(analyser: *Analyser, ty: Type) ?u64 {
 fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
+        .tuple => blk: {
+            const layout = (analyser.resolveTupleLayout(ty, null) catch break :blk null) orelse break :blk null;
+            break :blk if (layout.is_comptime) null else layout.byte_size;
+        },
+        .optional => |child| ((analyser.resolveOptionalLayout(child.*) catch return null) orelse return null).byte_size,
+        .error_union => |info| ((analyser.resolveErrorUnionLayout(info.error_set, info.payload.*) catch return null) orelse return null).byte_size,
         .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
+            if (ty.isUnionType()) break :blk ((analyser.resolveAstUnionLayout(ty) catch break :blk null) orelse break :blk null).byte_size;
             if (ty.isEnumType(analyser)) {
                 const tag_type = (analyser.astEnumTagType(ty, info.declaration, info.handle) catch break :blk null) orelse
                     break :blk null;
@@ -11028,16 +12870,23 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                     break :blk null;
                 break :blk analyser.resolveTypeByteSize(backing_type);
             }
-            break :blk ((analyser.resolveAstStructLayout(
+            const layout = (analyser.resolveAstStructLayout(
                 ty,
                 info.declaration,
                 info.handle,
                 info.layout,
-            ) catch break :blk null) orelse break :blk null).byte_size;
+            ) catch break :blk null) orelse break :blk null;
+            break :blk if (layout.is_comptime or layout.uninstantiable) null else layout.byte_size;
         },
         .pointer => |info| switch (info.size) {
             .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
             .one, .many, .c => builtin.target.ptrBitWidth() / 8,
+        },
+        .union_tag => |union_type| blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(union_type.*, &buffer) orelse break :blk null;
+            const tag = (analyser.astEnumTagType(union_type.*, info.declaration, info.handle) catch break :blk null) orelse break :blk null;
+            break :blk analyser.resolveTypeByteSize(tag);
         },
         .vector => |info| blk: {
             const elem_bits = analyser.resolveTypeBitSize(info.elem_ty.*) orelse break :blk null;
@@ -11066,6 +12915,16 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                 },
                 .bool => 1,
                 .void, .noreturn => 0,
+                .error_set => 2,
+                .optional => {
+                    const info = analyser.ip.indexToKey(type_index).optional_type;
+                    break :blk ((analyser.resolveOptionalLayout(Type.fromIP(analyser, .type_type, info.payload_type)) catch break :blk null) orelse break :blk null).byte_size;
+                },
+                .error_union => {
+                    const info = analyser.ip.indexToKey(type_index).error_union_type;
+                    const errors = if (info.error_set_type == .none) null else Type.fromIP(analyser, .type_type, info.error_set_type);
+                    break :blk ((analyser.resolveErrorUnionLayout(if (errors) |e| &e else null, Type.fromIP(analyser, .type_type, info.payload_type)) catch break :blk null) orelse break :blk null).byte_size;
+                },
                 .pointer => switch (analyser.ip.indexToKey(type_index).pointer_type.flags.size) {
                     .slice => @as(u64, builtin.target.ptrBitWidth() / 8) * 2,
                     .one, .many, .c => builtin.target.ptrBitWidth() / 8,
@@ -11088,18 +12947,21 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
                     break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.tag_type));
                 },
                 .@"struct" => {
+                    if (analyser.ip.indexToKey(type_index) == .tuple_type) {
+                        const layout = (analyser.resolveTupleLayout(ty, null) catch break :blk null) orelse break :blk null;
+                        break :blk if (layout.is_comptime or layout.uninstantiable) null else layout.byte_size;
+                    }
                     const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
                     if (info.layout == .@"packed") {
                         if (info.backing_int_ty == .none) break :blk null;
                         break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
                     }
-                    break :blk ((analyser.resolveInternPoolStructLayout(type_index, info) catch break :blk null) orelse
-                        break :blk null).byte_size;
+                    const layout = (analyser.resolveInternPoolStructLayout(type_index, info) catch break :blk null) orelse break :blk null;
+                    break :blk if (layout.is_comptime or layout.uninstantiable) null else layout.byte_size;
                 },
                 .@"union" => {
                     const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
-                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :blk null;
-                    break :blk analyser.resolveTypeByteSize(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    break :blk ((analyser.resolveInternPoolUnionLayout(type_index, info) catch break :blk null) orelse break :blk null).byte_size;
                 },
                 else => null,
             };
@@ -11108,10 +12970,35 @@ fn resolveTypeByteSize(analyser: *Analyser, ty: Type) ?u64 {
     };
 }
 
+fn resolveWrappedTypeAlignment(analyser: *Analyser, child: Type, is_error_union: bool) Error!?u64 {
+    if (!child.is_type_val or child.data == .compile_error or (is_error_union and child.isErrorSetType(analyser)) or
+        analyser.runtime_struct_layout_depth >= max_runtime_struct_layout_depth) return null;
+    analyser.runtime_struct_layout_depth += 1;
+    defer analyser.runtime_struct_layout_depth -= 1;
+    if (child.data == .pointer and child.data.pointer.elem_ty.ipIndex() == .noreturn_type) return null;
+    const alignment = if (child.data == .container or child.data == .array or (child.data == .ip_index and switch (analyser.ip.indexToKey(child.ipIndex() orelse return null)) {
+        .struct_type, .union_type, .array_type => true,
+        .pointer_type => |pointer| if (pointer.elem_type == .noreturn_type) return null else false,
+        else => false,
+    }))
+        (try analyser.resolveWrappedPayloadLayout(child) orelse return null).alignment
+    else if (isPrimitiveComptimeType(child)) 1 else try analyser.resolveTypeAlignment(child) orelse return null;
+    return if (is_error_union) @max(alignment, std.zig.target.intAlignment(&builtin.target, 16)) else alignment;
+}
+
 fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
     if (!ty.is_type_val) return null;
     return switch (ty.data) {
+        .tuple => (try analyser.resolveTupleLayout(ty, null) orelse return null).alignment,
+        .optional => |child| try analyser.resolveWrappedTypeAlignment(child.*, false),
+        .error_union => |info| if (info.error_set == null or !info.error_set.?.isErrorSetType(analyser)) null else try analyser.resolveWrappedTypeAlignment(info.payload.*, true),
         .pointer => std.zig.target.intAlignment(&builtin.target, builtin.target.ptrBitWidth()),
+        .union_tag => |union_type| blk: {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const info = astContainerTypeInfo(union_type.*, &buffer) orelse break :blk null;
+            const tag = try analyser.astEnumTagType(union_type.*, info.declaration, info.handle) orelse break :blk null;
+            break :blk try analyser.resolveTypeAlignment(tag);
+        },
         .array => |info| try analyser.resolveTypeAlignment(info.elem_ty.*),
         .vector => |info| blk: {
             if (info.len == 0) break :blk 1;
@@ -11124,6 +13011,7 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
         .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(ty, &buffer) orelse break :blk null;
+            if (ty.isUnionType()) break :blk (try analyser.resolveAstUnionLayout(ty) orelse break :blk null).alignment;
             if (ty.isEnumType(analyser)) {
                 const tag_type = try analyser.astEnumTagType(ty, info.declaration, info.handle) orelse break :blk null;
                 break :blk try analyser.resolveTypeAlignment(tag_type);
@@ -11133,12 +13021,13 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                 const backing_type = try analyser.astPackedStructBackingType(ty, info.declaration, info.handle) orelse break :blk null;
                 break :blk try analyser.resolveTypeAlignment(backing_type);
             }
-            break :blk (try analyser.resolveAstStructLayout(
+            const layout = try analyser.resolveAstStructLayout(
                 ty,
                 info.declaration,
                 info.handle,
                 info.layout,
-            ) orelse break :blk null).alignment;
+            ) orelse break :blk null;
+            break :blk if (layout.uninstantiable) null else layout.alignment;
         },
         .ip_index => |payload| blk: {
             const type_index = payload.index orelse break :blk null;
@@ -11148,6 +13037,17 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                     analyser.ip.intInfo(type_index, builtin.target).bits,
                 ),
                 .bool, .void, .noreturn => 1,
+                .error_set => std.zig.target.intAlignment(&builtin.target, 16),
+                .optional => {
+                    const info = analyser.ip.indexToKey(type_index).optional_type;
+                    break :blk try analyser.resolveWrappedTypeAlignment(Type.fromIP(analyser, .type_type, info.payload_type), false);
+                },
+                .error_union => {
+                    const info = analyser.ip.indexToKey(type_index).error_union_type;
+                    const errors = if (info.error_set_type == .none) null else Type.fromIP(analyser, .type_type, info.error_set_type);
+                    if (errors == null or !errors.?.isErrorSetType(analyser)) break :blk null;
+                    break :blk try analyser.resolveWrappedTypeAlignment(Type.fromIP(analyser, .type_type, info.payload_type), true);
+                },
                 .float => switch (type_index) {
                     .f16_type => 2,
                     .f32_type => builtin.target.cTypeAlignment(.float),
@@ -11172,30 +13072,53 @@ fn resolveTypeAlignment(analyser: *Analyser, ty: Type) Error!?u64 {
                     .type_type,
                     analyser.ip.indexToKey(type_index).array_type.child,
                 )),
+                .vector => vector: {
+                    const info = analyser.ip.indexToKey(type_index).vector_type;
+                    const bits = analyser.resolveTypeBitSize(Type.fromIP(analyser, .type_type, info.child)) orelse break :vector null;
+                    const total_bits = std.math.mul(u64, info.len, bits) catch break :vector null;
+                    const bytes = std.math.divCeil(u64, total_bits, 8) catch break :vector null;
+                    break :vector if (bytes == 0) 1 else std.math.ceilPowerOfTwo(u64, bytes) catch null;
+                },
                 .@"enum" => try analyser.resolveTypeAlignment(Type.fromIP(
                     analyser,
                     .type_type,
                     analyser.ip.getEnum(analyser.ip.indexToKey(type_index).enum_type).tag_type,
                 )),
                 .@"struct" => {
+                    if (analyser.ip.indexToKey(type_index) == .tuple_type) {
+                        const layout = try analyser.resolveTupleLayout(ty, null) orelse break :blk null;
+                        break :blk if (layout.uninstantiable) null else layout.alignment;
+                    }
                     const info = analyser.ip.getStruct(analyser.ip.indexToKey(type_index).struct_type);
                     if (info.layout == .@"packed") {
                         if (info.backing_int_ty == .none) break :blk null;
                         break :blk try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, info.backing_int_ty));
                     }
-                    break :blk (try analyser.resolveInternPoolStructLayout(type_index, info) orelse
-                        break :blk null).alignment;
+                    const layout = try analyser.resolveInternPoolStructLayout(type_index, info) orelse break :blk null;
+                    break :blk if (layout.uninstantiable) null else layout.alignment;
                 },
                 .@"union" => packed_layout: {
                     const info = analyser.ip.getUnion(analyser.ip.indexToKey(type_index).union_type);
-                    if (info.layout != .@"packed" or info.backing_int_ty == .none) break :packed_layout null;
-                    break :packed_layout try analyser.resolveTypeAlignment(Type.fromIP(analyser, .type_type, info.backing_int_ty));
+                    break :packed_layout (try analyser.resolveInternPoolUnionLayout(type_index, info) orelse break :packed_layout null).alignment;
                 },
                 else => null,
             };
         },
         else => null,
     };
+}
+
+fn resolveTypeAlignmentForPointerCast(analyser: *Analyser, ty: Type, depth: u8) Error!?u64 {
+    if (depth == 64) return null;
+    const child = switch (ty.data) {
+        .optional => |child| child.*,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .optional_type => |optional| Type.fromIP(analyser, .type_type, optional.payload_type),
+            else => return analyser.resolveTypeAlignment(ty),
+        },
+        else => return analyser.resolveTypeAlignment(ty),
+    };
+    return analyser.resolveTypeAlignmentForPointerCast(child, depth + 1);
 }
 
 pub const ComptimeTypeSizeKind = enum { bit_size, byte_size, alignment };
@@ -11230,10 +13153,18 @@ pub fn resolveComptimeFieldOffsetValue(
     if (!container_type.is_type_val) return null;
 
     const bit_offset: u64 = switch (container_type.data) {
+        .tuple => blk: {
+            const layout = try analyser.resolveTupleLayout(container_type, field_name) orelse return null;
+            break :blk std.math.mul(u64, layout.field_offset orelse return null, 8) catch return null;
+        },
         .container => blk: {
             var buffer: [2]Ast.Node.Index = undefined;
             const info = astContainerTypeInfo(container_type, &buffer) orelse return null;
-            if (container_type.getContainerKind() != .keyword_struct or info.layout == .auto) return null;
+            if (container_type.getContainerKind() != .keyword_struct) return null;
+            if (info.layout == .auto) {
+                const layout = try analyser.resolveAstStructLayoutWithField(container_type, info.declaration, info.handle, info.layout, field_name) orelse return null;
+                break :blk std.math.mul(u64, layout.field_offset orelse return null, 8) catch return null;
+            }
 
             var offset: u64 = 0;
             for (info.declaration.ast.members) |member| {
@@ -11273,14 +13204,21 @@ pub fn resolveComptimeFieldOffsetValue(
         },
         .ip_index => |payload| blk: {
             const type_index = payload.index orelse return null;
+            if (analyser.ip.indexToKey(type_index) == .tuple_type) {
+                const layout = try analyser.resolveTupleLayout(container_type, field_name) orelse return null;
+                break :blk std.math.mul(u64, layout.field_offset orelse return null, 8) catch return null;
+            }
             const struct_info = switch (analyser.ip.indexToKey(type_index)) {
                 .struct_type => |struct_index| analyser.ip.getStruct(struct_index),
                 else => return null,
             };
-            if (struct_info.layout == .auto) return null;
             const name_index = analyser.ip.string_pool.getString(analyser.store.io, field_name) orelse return null;
             const field_index = struct_info.fields.getIndex(name_index) orelse return null;
             if (struct_info.fields.values()[field_index].is_comptime) return null;
+            if (struct_info.layout == .auto) {
+                const layout = try analyser.resolveInternPoolStructLayoutWithField(type_index, struct_info, field_name) orelse return null;
+                break :blk std.math.mul(u64, layout.field_offset orelse return null, 8) catch return null;
+            }
 
             const generated_fields = analyser.generated_struct_fields.get(type_index);
             var offset: u64 = 0;
@@ -11384,7 +13322,7 @@ fn canResolveTypeName(analyser: *Analyser, ty: Type) error{OutOfMemory}!bool {
             info.sentinel != .unknown_unknown and
             try analyser.canResolveTypeName(info.elem_ty.*),
         .vector => |info| try analyser.canResolveTypeName(info.elem_ty.*),
-        .tuple => |types| for (types) |element_type| {
+        .tuple => |types| for (types.types) |element_type| {
             if (!try analyser.canResolveTypeName(element_type)) break false;
         } else true,
         .function => |info| function: {
@@ -12218,6 +14156,17 @@ fn resolvePeerTypes(analyser: *Analyser, a: Type, b: Type) error{OutOfMemory}!?T
     if (a.is_type_val or b.is_type_val) return null;
     if (a.eql(b)) return a;
 
+    const a_tuple = a.data == .tuple or (a.data == .comptime_value and a.data.comptime_value.ty.data == .tuple);
+    const b_tuple = b.data == .tuple or (b.data == .comptime_value and b.data.comptime_value.ty.data == .tuple);
+    if (a_tuple or b_tuple) {
+        const lhs_type = try a.typeOf(analyser);
+        const rhs_type = try b.typeOf(analyser);
+        if (lhs_type.isTupleType(analyser) and rhs_type.isTupleType(analyser)) {
+            const merged = try analyser.resolvePeerTupleType(lhs_type, rhs_type) orelse return null;
+            return try merged.instanceUnchecked(analyser);
+        }
+    }
+
     if (a.data == .ip_index and b.data == .ip_index) {
         const a_type = a.data.ip_index.type;
         const b_type = b.data.ip_index.type;
@@ -12227,6 +14176,45 @@ fn resolvePeerTypes(analyser: *Analyser, a: Type, b: Type) error{OutOfMemory}!?T
     }
 
     return try analyser.resolvePeerTypesInternal(a, b) orelse try analyser.resolvePeerTypesInternal(b, a);
+}
+
+fn tupleTypeMetadata(analyser: *Analyser, ty: Type) error{OutOfMemory}!?Type.Data.Tuple {
+    return switch (ty.data) {
+        .tuple => |tuple| tuple,
+        .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
+            .tuple_type => |tuple| blk: {
+                const types = try analyser.arena.alloc(Type, tuple.types.len);
+                const values = try analyser.arena.alloc(?Type, tuple.types.len);
+                for (types, values, 0..) |*field, *value, index| {
+                    const i: u32 = @intCast(index);
+                    field.* = Type.fromIP(analyser, .type_type, tuple.types.at(i, analyser.ip));
+                    const default = tuple.values.at(i, analyser.ip);
+                    value.* = if (default == .none) null else Type.fromIP(analyser, tuple.types.at(i, analyser.ip), default);
+                }
+                break :blk .{ .types = types, .values = values };
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn resolvePeerTupleType(analyser: *Analyser, a: Type, b: Type) error{OutOfMemory}!?Type {
+    const left = try analyser.tupleTypeMetadata(a) orelse return null;
+    const right = try analyser.tupleTypeMetadata(b) orelse return null;
+    if (left.types.len != right.types.len) return null;
+    const types = try analyser.arena.alloc(Type, left.types.len);
+    const values = try analyser.arena.alloc(?Type, left.types.len);
+    for (left.types, right.types, types, values, 0..) |lhs, rhs, *ty, *value, index| {
+        ty.* = if (lhs.eql(rhs)) lhs else merged: {
+            const peer = try analyser.resolvePeerTypes(try lhs.instanceUnchecked(analyser), try rhs.instanceUnchecked(analyser)) orelse return null;
+            break :merged try peer.typeOf(analyser);
+        };
+        const lhs_value = if (left.values.len != 0) left.values[index] else null;
+        const rhs_value = if (right.values.len != 0) right.values[index] else null;
+        value.* = if (lhs_value != null and rhs_value != null and lhs_value.?.eql(rhs_value.?)) lhs_value else null;
+    }
+    return .{ .data = .{ .tuple = .{ .types = types, .values = values } }, .is_type_val = true };
 }
 
 fn resolvePeerTypesIP(analyser: *Analyser, a: InternPool.Index, b: InternPool.Index) error{OutOfMemory}!?InternPool.Index {
@@ -12727,6 +14715,23 @@ fn resolveFunctionTypeFromCallPrefix(
     var source_parameter_iterator: ast.FnParamIterator = .init(&source_function, func_tree);
     if (has_self_param) _ = source_parameter_iterator.next();
     var has_callsite_bindings = false;
+    const query_receiver = if (has_self_param) if (analyser.typeof_call_receivers) |receivers|
+        receivers.get(.of(call.ast.fn_expr, handle))
+    else
+        null else null;
+    if (query_receiver) |receiver| {
+        const self_parameter = func_info.parameters[0];
+        if (self_parameter.modifier == .comptime_param) {
+            if (self_parameter.name_token) |token| {
+                // The scan already performed the by-value receiver conversion
+                // before subsequent argument effects changed live storage.
+                const key: TokenWithHandle = .{ .handle = func_info.handle, .token = token };
+                try meta_params.put(analyser.arena, key, receiver);
+                try value_params.put(analyser.arena, key, receiver);
+                has_callsite_bindings = true;
+            }
+        }
+    }
     var refined_parameter_types: ?[]?Type = null;
     var previous_parameter_tokens: std.ArrayList(Ast.TokenIndex) = .empty;
     try previous_parameter_tokens.ensureTotalCapacity(analyser.arena, parameters.len);
@@ -13394,7 +15399,7 @@ pub fn hasUnknownType(analyser: *Analyser, ty: Type) bool {
         .pointer => |info| analyser.hasUnknownType(info.elem_ty.*),
         .array => |info| analyser.hasUnknownType(info.elem_ty.*),
         .vector => |info| analyser.hasUnknownType(info.elem_ty.*),
-        .tuple => |types| for (types) |item| {
+        .tuple => |types| for (types.types) |item| {
             if (analyser.hasUnknownType(item)) break true;
         } else false,
         .optional, .union_tag => |child| analyser.hasUnknownType(child.*),
@@ -13612,7 +15617,7 @@ fn resolveSelectedFieldEnumMethod(
 fn isKnownEmptyIterable(analyser: *Analyser, iterable: Type) bool {
     return switch (iterable.data) {
         .array => |info| info.elem_count == 0,
-        .tuple => |fields| fields.len == 0,
+        .tuple => |fields| fields.types.len == 0,
         .pointer => |info| info.size == .one and isKnownEmptyIterable(analyser, info.elem_ty.*),
         .ip_index => |payload| isKnownEmptyIterableType(analyser, if (iterable.is_type_val)
             payload.index orelse return false
@@ -13836,6 +15841,11 @@ pub fn resolveBindingOfNode(analyser: *Analyser, options: ResolveOptions) Error!
 }
 
 fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Error!?Binding {
+    if (analyser.typeof_comptime_values) |values| {
+        if (values.get(options.node_handle)) |cached| {
+            return if (cached) |value| .{ .type = value, .is_const = true } else null;
+        }
+    }
     const old_bindings = analyser.generic_bindings;
     const old_display_bindings = analyser.display_bindings;
     defer {
@@ -13991,6 +16001,31 @@ fn isFieldAccessExpression(tree: *const Ast, node: Ast.Node.Index, depth: u8) bo
     };
 }
 
+fn isEnumLiteralResultExpression(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    if (depth == 128) return false;
+    return switch (tree.nodeTag(node)) {
+        .enum_literal => true,
+        .grouped_expression => isEnumLiteralResultExpression(tree, tree.nodeData(node).node_and_token[0], depth + 1),
+        .@"comptime", .@"nosuspend" => isEnumLiteralResultExpression(tree, tree.nodeData(node).node, depth + 1),
+        .@"if", .if_simple => conditional: {
+            const branch = ast.fullIf(tree, node).?;
+            const alternative = branch.ast.else_expr.unwrap() orelse break :conditional false;
+            break :conditional isEnumLiteralResultExpression(tree, branch.ast.then_expr, depth + 1) and
+                isEnumLiteralResultExpression(tree, alternative, depth + 1);
+        },
+        .@"switch", .switch_comma => cases: {
+            const expression = tree.switchFull(node);
+            if (expression.ast.cases.len == 0) break :cases false;
+            for (expression.ast.cases) |case_node| {
+                const case = tree.fullSwitchCase(case_node) orelse break :cases false;
+                if (!isEnumLiteralResultExpression(tree, case.ast.target_expr, depth + 1)) break :cases false;
+            }
+            break :cases true;
+        },
+        else => false,
+    };
+}
+
 const DeclaredTypeFallback = enum {
     direct_unknown,
     nested_unknown,
@@ -14061,6 +16096,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 }
                 if (mut_token_tag == .keyword_const) num: {
                     const init_node = var_decl.ast.init_node.unwrap() orelse break :num;
+                    if (analyser.evaluate_comptime_values and analyser.comptime_interpreter == null and
+                        analyser.generatedUnionNeedsValueEvaluation(decl_type))
+                    {
+                        if (try comptime_eval.Interpreter.evaluateTyped(analyser, handle, init_node, decl_type)) |value|
+                            return value;
+                    }
                     if (decl_type.isEnumType(analyser)) {
                         if (try analyser.resolveEnumValueTag(decl_type, .of(init_node, handle))) |tag| {
                             return try analyser.enumValue(decl_type, tag);
@@ -14069,6 +16110,20 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     if (decl_type.ipIndex()) |ip_ty| {
                         if (try analyser.resolveCoercedIPValue(ip_ty, .of(init_node, handle))) |ip_index| {
                             return Type.fromIP(analyser, analyser.ip.typeOf(ip_index), ip_index);
+                        }
+                    }
+                    if (decl_type.isEnumType(analyser) and analyser.evaluate_comptime_values and
+                        !isEnumLiteralResultExpression(tree, init_node, 0))
+                    {
+                        if (try analyser.resolveTypeOfNodeInternal(.of(init_node, handle))) |value| {
+                            if (try analyser.resolveComptimeUnionTagValue(decl_type, value)) |tag| return tag;
+                            const source_type = try value.typeOf(analyser);
+                            if (try analyser.resolveUnionTag(source_type)) |tag_instance| {
+                                if ((try tag_instance.typeOf(analyser)).eql(decl_type)) {
+                                    if (try comptime_eval.Interpreter.evaluateTyped(analyser, handle, init_node, decl_type)) |tag|
+                                        return tag;
+                                }
+                            }
                         }
                     }
                 }
@@ -14091,6 +16146,26 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         => {
             var buffer: [1]Ast.Node.Index = undefined;
             const call = tree.fullCall(&buffer, node).?;
+
+            if (analyser.comptime_interpreter == null and call.ast.params.len == 0 and tree.nodeTag(call.ast.fn_expr) == .field_access) {
+                const receiver_node, const name_token = tree.nodeData(call.ast.fn_expr).node_and_token;
+                if (try analyser.identifierTokenMatches(tree, name_token, "defaultValue")) {
+                    if (try comptime_eval.Interpreter.evaluateValue(analyser, handle, receiver_node)) |receiver| {
+                        if (receiver.data == .type_info_value) {
+                            const info = receiver.data.type_info_value;
+                            if (info.collection) |collection| {
+                                if (collection.kind == .struct_fields and collection.index != null) {
+                                    const field_type = try analyser.resolveTypeInfoDescriptorField(info, .struct_fields, collection.index.?, "type") orelse return null;
+                                    const optional_type = try Type.createOptionalType(analyser, field_type);
+                                    return @as(?Type, try comptime_eval.Value.create(analyser, optional_type, .{
+                                        .optional = try analyser.structFieldDefaultValue(info.reflected_type.*, collection.index.?),
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // The current call supplies the concrete arguments. Avoid resolving
             // `anytype` parameters by recursively scanning every callsite while
@@ -14298,7 +16373,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             ) orelse return null;
             return try base_type.instanceTypeVal(analyser);
         },
-        .@"comptime",
+        .@"comptime" => {
+            if (analyser.typeof_comptime_values) |values| {
+                if (values.get(options.node_handle)) |cached| return cached;
+                // The explicit operand scan intentionally skips unknown
+                // conditional branches. Infer their types without executing
+                // mutually exclusive comptime effects during fallback.
+            }
+            return try analyser.resolveTypeOfNodeInternal(.of(tree.nodeData(node).node, handle));
+        },
         .@"nosuspend",
         => return try analyser.resolveTypeOfNodeInternal(.of(tree.nodeData(node).node, handle)),
         .grouped_expression,
@@ -14480,20 +16563,56 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             const elem_ty_slice = try analyser.arena.alloc(Type, array_init_info.ast.elements.len);
             for (elem_ty_slice, array_init_info.ast.elements) |*elem_ty, element| {
-                elem_ty.* = if (analyser.comptime_interpreter) |interpreter|
-                    try interpreter.evaluateExpression(handle, element) orelse return null
+                const infer_only = analyser.typeof_comptime_values != null and signatureExpressionMayHaveEffects(tree, element, 0);
+                elem_ty.* = if (infer_only)
+                    try analyser.resolveTypeOfNodeInternal(.of(element, handle)) orelse return null
+                else if (analyser.comptime_interpreter) |interpreter|
+                    try interpreter.evaluateSourceValue(handle, element) orelse return null
                 else
                     try analyser.resolveTypeOfNodeInternal(.of(element, handle)) orelse return null;
+                if (!infer_only and analyser.evaluate_comptime_values and analyser.comptime_interpreter == null and
+                    elem_ty.data == .container)
+                {
+                    var literal_buffer: [2]Ast.Node.Index = undefined;
+                    if (tree.fullStructInit(&literal_buffer, element) != null)
+                        elem_ty.* = try comptime_eval.Interpreter.evaluateTupleElement(analyser, handle, element) orelse elem_ty.*;
+                }
+                // Typed undefined is a comptime tuple field even though its
+                // contents are unknown. Preserve its type-level default.
+                if (analyser.evaluate_comptime_values and ast.isBuiltinCall(tree, element) and
+                    std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(element)), "@as"))
+                {
+                    var args_buffer: [2]Ast.Node.Index = undefined;
+                    const args = tree.builtinCallParams(&args_buffer, element).?;
+                    if (args.len == 2 and tree.nodeTag(args[1]) == .identifier and
+                        std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(args[1])), "undefined"))
+                    {
+                        const element_type = try elem_ty.typeOf(analyser);
+                        if (element_type.ipIndex()) |index| elem_ty.* = Type.fromIP(analyser, index, try analyser.ip.getUndefined(index));
+                    }
+                }
             }
             if (analyser.evaluate_comptime_values) {
                 const can_intern = for (elem_ty_slice) |value| {
+                    if ((try value.typeOf(analyser)).ipIndex() == null) break false;
                     if (value.ipIndex() == null and (value.is_type_val or value.hasKnownValue(analyser))) break false;
                 } else true;
                 if (can_intern) if (try Type.createTupleValue(analyser, elem_ty_slice)) |tuple| return tuple;
                 if (!can_intern) {
                     const types = try analyser.arena.alloc(Type, elem_ty_slice.len);
                     for (types, elem_ty_slice) |*ty, value| ty.* = try value.typeOf(analyser);
-                    return try comptime_eval.Value.create(analyser, try Type.createTupleType(analyser, types), .{ .array = elem_ty_slice });
+                    const defaults = try analyser.arena.alloc(?Type, elem_ty_slice.len);
+                    for (defaults, elem_ty_slice, array_init_info.ast.elements) |*default, value, element| {
+                        default.* = if (comptime_eval.Value.isKnown(value, analyser, 0)) value else null;
+                        if (default.* == null and ast.isBuiltinCall(tree, element) and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(element)), "@as")) {
+                            var args_buffer: [2]Ast.Node.Index = undefined;
+                            const args = tree.builtinCallParams(&args_buffer, element).?;
+                            if (args.len == 2 and tree.nodeTag(args[1]) == .identifier and
+                                std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(args[1])), "undefined")) default.* = value;
+                        }
+                    }
+                    const tuple_type: Type = .{ .data = .{ .tuple = .{ .types = types, .values = defaults } }, .is_type_val = true };
+                    return try comptime_eval.Value.create(analyser, tuple_type, .{ .array = elem_ty_slice });
                 }
             }
             for (elem_ty_slice) |*elem_ty| {
@@ -14568,6 +16687,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 for (elem_ty_slice, container_decl.ast.members) |*elem_ty, member_node| {
                     const container_field = tree.fullContainerField(member_node) orelse break :not_a_tuple;
                     if (!container_field.ast.tuple_like) break :not_a_tuple;
+                    if (container_field.comptime_token != null or container_field.ast.align_expr != .none) break :not_a_tuple;
                     const type_expr = container_field.ast.type_expr.unwrap().?;
                     elem_ty.* = try analyser.resolveTypeOfNodeInternal(.of(type_expr, handle)) orelse {
                         has_unresolved_fields = true;
@@ -14579,7 +16699,7 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 return try Type.createTupleType(analyser, elem_ty_slice);
             }
 
-            return try analyser.innermostContainer(handle, tree.tokenStart(tree.firstToken(node)));
+            return try analyser.trimSourceContainerBindings(try analyser.innermostContainer(handle, tree.tokenStart(tree.firstToken(node))));
         },
         .builtin_call,
         .builtin_call_comma,
@@ -14641,6 +16761,8 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         return interpreter.evaluateUnionInit(handle, params);
                     }
                     const union_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
+                    if (analyser.evaluate_comptime_values and analyser.generatedUnionNeedsValueEvaluation(union_type))
+                        return comptime_eval.Interpreter.evaluateValue(analyser, handle, node);
                     const fallback = try union_type.instanceTypeVal(analyser);
                     if (!analyser.evaluate_comptime_values) return fallback;
                     const field_name = try analyser.resolveStringLiteral(.of(params[1], handle)) orelse
@@ -14734,8 +16856,28 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 },
                 .TypeOf => {
                     if (params.len < 1) return null;
+                    var comptime_values: std.AutoHashMapUnmanaged(NodeWithHandle, ?Type) = .empty;
+                    var branch_targets: std.AutoHashMapUnmanaged(NodeWithHandle, TypeOfBranchTarget) = .empty;
+                    var call_receivers: std.AutoHashMapUnmanaged(NodeWithHandle, Type) = .empty;
+                    const previous_values = analyser.typeof_comptime_values;
+                    const previous_targets = analyser.typeof_branch_targets;
+                    const previous_receivers = analyser.typeof_call_receivers;
+                    if (previous_values == null) {
+                        analyser.typeof_comptime_values = &comptime_values;
+                        analyser.typeof_branch_targets = &branch_targets;
+                        analyser.typeof_call_receivers = &call_receivers;
+                    }
+                    defer {
+                        analyser.typeof_comptime_values = previous_values;
+                        analyser.typeof_branch_targets = previous_targets;
+                        analyser.typeof_call_receivers = previous_receivers;
+                    }
+                    if (analyser.comptime_interpreter != null and hasExplicitComptimeOperand(tree, params[0], 0))
+                        try analyser.evaluateExplicitTypeOfOperands(.of(params[0], handle), null, 0);
                     var resolved_type = try analyser.resolveTypeOfNodeInternal(.of(params[0], handle)) orelse return null;
                     for (params[1..]) |param| {
+                        if (analyser.comptime_interpreter != null and hasExplicitComptimeOperand(tree, param, 0))
+                            try analyser.evaluateExplicitTypeOfOperands(.of(param, handle), null, 0);
                         const candidate = try analyser.resolveTypeOfNodeInternal(.of(param, handle)) orelse return .unknown_type;
                         resolved_type = try analyser.resolvePeerTypes(resolved_type, candidate) orelse {
                             if (!resolved_type.isGenericType() and !candidate.isGenericType()) return .unknown_type;
@@ -15190,19 +17332,32 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     ) orelse .unknown_type;
                 },
                 .Struct, .Union, .Enum => |tag| {
+                    if (tag == .Union) {
+                        if (analyser.comptime_interpreter) |interpreter|
+                            return interpreter.evaluateExpression(handle, node);
+                        if (params.len == 5 and
+                            !(tree.nodeTag(params[1]) == .identifier and
+                                std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(params[1])), "null")))
+                        {
+                            return comptime_eval.Interpreter.evaluateValue(analyser, handle, node);
+                        }
+                    }
                     if (analyser.cachedGeneratedContainerType(options)) |generated_type| return generated_type;
                     const generated_type = switch (tag) {
                         .Struct => try analyser.resolveStructTypeConstructor(
+                            node_handle,
                             params,
                             handle,
                             options.container_type,
                         ),
                         .Union => try analyser.resolveUnionTypeConstructor(
+                            node_handle,
                             params,
                             handle,
                             options.container_type,
                         ),
                         .Enum => try analyser.resolveEnumTypeConstructor(
+                            node_handle,
                             params,
                             handle,
                             options.container_type,
@@ -15241,6 +17396,10 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
             var parameters: std.ArrayList(Type.Data.Parameter) = .empty;
             var has_varargs = false;
+            const deferred_dependencies = if (analyser.comptime_interpreter != null)
+                try analyser.functionTypeDependenciesForNode(.of(node, handle))
+            else
+                FunctionTypeDependencies{};
 
             var it: ast.FnParamIterator = .init(&fn_proto, tree);
             while (it.next()) |param| {
@@ -15269,6 +17428,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
 
                 const param_type: Type = param_type: {
                     if (param.type_expr) |type_expr| blk: {
+                        if (parameters.items.len < deferred_dependencies.parameters.len and
+                            deferred_dependencies.parameters[parameters.items.len] and
+                            signatureExpressionMayHaveEffects(tree, type_expr, 0)) break :param_type Type.unknown_type;
                         const ty = try analyser.resolveTypeOfNode(.of(type_expr, handle)) orelse {
                             break :blk;
                         };
@@ -15309,8 +17471,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                 });
             }
 
-            const return_value = try analyser.resolveReturnValueOfFuncNode(handle, node) orelse
-                Type.fromIP(analyser, .unknown_type, null);
+            // The interpreter binds actual arguments before running a type
+            // function. Resolving its prototype must not execute the body
+            // using a caller's bindings and then execute it again at the call.
+            const return_value = if (analyser.comptime_interpreter != null and isTypeFunction(tree, fn_proto))
+                Type.unknown_type
+            else if (deferred_dependencies.return_type and
+                if (fn_proto.ast.return_type.unwrap()) |type_node| signatureExpressionMayHaveEffects(tree, type_node, 0) else false)
+                Type.fromIP(analyser, .unknown_type, null)
+            else
+                try analyser.resolveReturnValueOfFuncNode(handle, node) orelse
+                    Type.fromIP(analyser, .unknown_type, null);
             const calling_convention = if (fn_proto.ast.callconv_expr.unwrap()) |callconv_expr|
                 try analyser.resolveCallingConventionTag(.of(callconv_expr, handle))
             else if (fn_proto.extern_export_inline_token) |token| switch (tree.tokenTag(token)) {
@@ -15344,10 +17515,17 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
         },
         .@"if", .if_simple => {
             const if_node = ast.fullIf(tree, node).?;
+            const previous_target = if (analyser.typeof_branch_targets) |targets| targets.get(options.node_handle) else null;
+            if (previous_target) |target| switch (target) {
+                .node => |selected| return analyser.resolveTypeOfNodeInternal(.{ .node_handle = .of(selected, handle), .container_type = options.container_type }),
+                .none => return Type.fromIP(analyser, .void_type, .void_value),
+                .unknown => {},
+            };
             if (analyser.evaluate_comptime_values or
                 analyser.evaluate_comptime_control_flow or
                 analyser.generic_bindings != null)
-            {
+            select_branch: {
+                if (previous_target != null) break :select_branch;
                 if (try analyser.resolveIfConditionValue(.{
                     .node_handle = .of(if_node.ast.cond_expr, handle),
                     .container_type = options.container_type,
@@ -15607,6 +17785,9 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     }
                 }
                 var rhs_ty = try analyser.resolveTypeOfNodeInternal(.of(rhs, handle)) orelse return null;
+                if (try analyser.resolveComptimeUnionComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| {
+                    return value;
+                }
                 if (try analyser.resolveVectorComparisonValue(tree.nodeTag(node), lhs_ty, rhs_ty)) |value| {
                     return value;
                 }
@@ -15616,12 +17797,21 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                         const equal = std.mem.eql(u8, @tagName(lhs_ty.data.type_info_value.tag), name);
                         return Type.fromIP(analyser, .bool_type, if (equal == (tree.nodeTag(node) == .equal_equal)) .bool_true else .bool_false);
                     }
-                    if (lhs_ty.data == .enum_value and rhs_ty.data != .enum_value) {
+                    // A union tag literal may initially resolve to its payload type.
+                    lhs_ty = try analyser.resolveComptimeUnionComparisonOperand(lhs_ty, rhs_ty, tree.nodeTag(rhs) == .enum_literal, .{
+                        .node_handle = .of(lhs, handle),
+                        .container_type = options.container_type,
+                    }) orelse lhs_ty;
+                    rhs_ty = try analyser.resolveComptimeUnionComparisonOperand(rhs_ty, lhs_ty, tree.nodeTag(lhs) == .enum_literal, .{
+                        .node_handle = .of(rhs, handle),
+                        .container_type = options.container_type,
+                    }) orelse rhs_ty;
+                    if (lhs_ty.data == .enum_value and (rhs_ty.data != .enum_value or tree.nodeTag(rhs) == .enum_literal)) {
                         const enum_type = lhs_ty.data.enum_value.enum_type.*;
                         if (try analyser.resolveEnumValueTag(enum_type, .of(rhs, handle))) |enum_tag| {
                             rhs_ty = try analyser.enumValue(enum_type, enum_tag);
                         }
-                    } else if (rhs_ty.data == .enum_value and lhs_ty.data != .enum_value) {
+                    } else if (rhs_ty.data == .enum_value and (lhs_ty.data != .enum_value or tree.nodeTag(lhs) == .enum_literal)) {
                         const enum_type = rhs_ty.data.enum_value.enum_type.*;
                         if (try analyser.resolveEnumValueTag(enum_type, .of(lhs, handle))) |enum_tag| {
                             lhs_ty = try analyser.enumValue(enum_type, enum_tag);
@@ -16070,9 +18260,14 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
                     .name = field.name,
                     .ty = ty,
                     .source = .{ .handle = handle, .token = tree.firstToken(field_node) - 2 },
+                    .default_value = if (field.value.is_type_val or field.value.hasKnownValue(analyser)) field.value else null,
                 };
                 const name = try analyser.ip.string_pool.getOrPutString(analyser.store.io, analyser.gpa, field.name);
-                try ip_fields.put(analyser.gpa, name, .{ .ty = ty.ipIndex() orelse .unknown_type });
+                try ip_fields.put(analyser.gpa, name, .{
+                    .ty = ty.ipIndex() orelse .unknown_type,
+                    .is_comptime = generated.default_value != null,
+                    .default_value = if (generated.default_value) |value| value.ipIndex() orelse .none else .none,
+                });
             }
             const struct_index = try analyser.ip.createStruct(.{
                 .fields = ip_fields,
@@ -16322,6 +18517,13 @@ pub const Type = struct {
         is_payload: bool,
         collection: ?Collection,
         optional_type_payload: ?*Type = null,
+        /// Presence checks avoid materializing reflected values until a pointer needs them.
+        reflected_pointer: ?*const ReflectedPointer = null,
+
+        const ReflectedPointer = struct {
+            source: NodeWithHandle,
+            value: union(enum) { field_default: u32, sentinel: InternPool.Index },
+        };
 
         const Collection = struct {
             kind: TypeInfoCollectionKind,
@@ -16380,7 +18582,7 @@ pub const Type = struct {
         vector: Vector,
 
         /// `.{a,b}`
-        tuple: []Type,
+        tuple: Tuple,
 
         /// `?T`
         optional: *Type,
@@ -16445,6 +18647,11 @@ pub const Type = struct {
             type: InternPool.Index,
             index: ?InternPool.Index,
         },
+
+        pub const Tuple = struct {
+            types: []Type,
+            values: []const ?Type = &.{},
+        };
 
         pub const Container = struct {
             scope_handle: ScopeWithHandle,
@@ -16603,7 +18810,7 @@ pub const Type = struct {
                 return .{ .ip_index = .{ .type = .type_type, .index = index } };
             }
 
-            return .{ .tuple = elem_tys };
+            return .{ .tuple = .{ .types = elem_tys } };
         }
 
         fn createTupleValue(analyser: *Analyser, elements: []Type) !?Type {
@@ -16615,9 +18822,7 @@ pub const Type = struct {
             for (elements, types, values) |element, *ty, *value| {
                 ty.* = (try element.typeOf(analyser)).ipIndex() orelse return null;
                 value.* = element.ipIndex() orelse .none;
-                if (value.* != .none and
-                    (analyser.ip.isUndefined(value.*) or analyser.ip.isUnknown(value.*)))
-                {
+                if (value.* != .none and !analyser.ip.isUndefined(value.*) and analyser.ip.isUnknown(value.*)) {
                     value.* = .none;
                 }
             }
@@ -16692,8 +18897,14 @@ pub const Type = struct {
                     info.elem_ty.hashWithHasher(hasher);
                 },
                 .tuple => |elem_ty_slice| {
-                    for (elem_ty_slice) |elem_ty| {
+                    std.hash.autoHash(hasher, elem_ty_slice.types.len);
+                    for (elem_ty_slice.types) |elem_ty| {
                         elem_ty.hashWithHasher(hasher);
+                    }
+                    for (0..elem_ty_slice.types.len) |index| {
+                        const value = if (elem_ty_slice.values.len != 0) elem_ty_slice.values[index] else null;
+                        std.hash.autoHash(hasher, value != null);
+                        if (value) |known| known.hashWithHasher(hasher);
                     }
                 },
                 .optional, .union_tag => |t| t.hashWithHasher(hasher),
@@ -16755,6 +18966,7 @@ pub const Type = struct {
                     std.hash.autoHash(hasher, value.tag);
                     std.hash.autoHash(hasher, value.is_payload);
                     std.hash.autoHash(hasher, value.collection);
+                    if (value.reflected_pointer) |pointer| std.hash.autoHash(hasher, pointer.value);
                     if (value.optional_type_payload) |payload| payload.hashWithHasher(hasher);
                 },
                 .ip_index => |payload| {
@@ -16793,9 +19005,15 @@ pub const Type = struct {
                 },
                 .tuple => |a_slice| {
                     const b_slice = b.tuple;
-                    if (a_slice.len != b_slice.len) return false;
-                    for (a_slice, b_slice) |a_type, b_type| {
+                    if (a_slice.types.len != b_slice.types.len) return false;
+                    for (a_slice.types, b_slice.types) |a_type, b_type| {
                         if (!a_type.eql(b_type)) return false;
+                    }
+                    for (0..a_slice.types.len) |index| {
+                        const left = if (a_slice.values.len != 0) a_slice.values[index] else null;
+                        const right = if (b_slice.values.len != 0) b_slice.values[index] else null;
+                        if ((left == null) != (right == null)) return false;
+                        if (left) |value| if (!value.eql(right.?)) return false;
                     }
                 },
                 inline .optional,
@@ -16881,6 +19099,8 @@ pub const Type = struct {
                     if (a_value.tag != b_value.tag) return false;
                     if (a_value.is_payload != b_value.is_payload) return false;
                     if (!std.meta.eql(a_value.collection, b_value.collection)) return false;
+                    if ((a_value.reflected_pointer == null) != (b_value.reflected_pointer == null)) return false;
+                    if (a_value.reflected_pointer) |pointer| if (!std.meta.eql(pointer.value, b_value.reflected_pointer.?.value)) return false;
                     if ((a_value.optional_type_payload == null) != (b_value.optional_type_payload == null)) return false;
                     if (a_value.optional_type_payload) |a_payload| {
                         if (!a_payload.eql(b_value.optional_type_payload.?.*)) return false;
@@ -16905,7 +19125,7 @@ pub const Type = struct {
                 .array => |info| info.elem_ty.data.isGeneric(),
                 .vector => |info| info.elem_ty.data.isGeneric(),
                 .tuple => |types| {
-                    for (types) |t| {
+                    for (types.types) |t| {
                         if (t.data.isGeneric()) {
                             return true;
                         }
@@ -17030,13 +19250,19 @@ pub const Type = struct {
                 },
                 .tuple => |info| {
                     const elem_tys = blk: {
-                        const types = try analyser.arena.alloc(Type, info.len);
-                        for (info, types) |old, *new| {
+                        const types = try analyser.arena.alloc(Type, info.types.len);
+                        for (info.types, types) |old, *new| {
                             new.* = try analyser.resolveGenericTypeInternal(old, bound_params, visiting);
                         }
                         break :blk types;
                     };
-                    return try createTuple(analyser, elem_tys);
+                    if (info.values.len == 0) return try createTuple(analyser, elem_tys);
+                    const defaults = try analyser.arena.alloc(?Type, info.values.len);
+                    for (defaults, info.values) |*target, value| target.* = if (value) |known|
+                        if (!known.hasUnresolvedGenericType()) known else try analyser.resolveGenericTypeInternal(known, bound_params, visiting)
+                    else
+                        null;
+                    return .{ .tuple = .{ .types = elem_tys, .values = defaults } };
                 },
                 .optional => |info| {
                     const child_ty = try analyser.resolveGenericTypeInternal(info.*, bound_params, visiting);
@@ -17192,7 +19418,7 @@ pub const Type = struct {
         };
     }
 
-    fn createErrorUnionType(
+    pub fn createErrorUnionType(
         analyser: *Analyser,
         error_set: ?Type,
         payload: Type,
@@ -17402,7 +19628,7 @@ pub const Type = struct {
             .array => |info| info.elem_ty.isConditional(),
             .vector => |info| info.elem_ty.isConditional(),
             .tuple => |types| {
-                for (types) |t|
+                for (types.types) |t|
                     if (t.isConditional()) return true;
                 return false;
             },
@@ -17495,7 +19721,7 @@ pub const Type = struct {
             },
             .tuple => |types| {
                 var possible_types: ArrayMap([]const Type) = .empty;
-                for (types) |t| {
+                for (types.types) |t| {
                     try possible_types.put(arena, t, try t.getAllTypesWithHandles(analyser));
                 }
                 var iter: ComboIterator = try .init(arena, &possible_types);
@@ -17503,9 +19729,9 @@ pub const Type = struct {
                     if (all_types.count() >= analyser.max_conditional_combos) {
                         return true;
                     }
-                    const new_types = try arena.alloc(Type, types.len);
-                    for (new_types, types) |*new, old| new.* = combo.get(old).?;
-                    try all_types.put(arena, .{ .data = .{ .tuple = new_types }, .is_type_val = ty.is_type_val }, {});
+                    const new_types = try arena.alloc(Type, types.types.len);
+                    for (new_types, types.types) |*new, old| new.* = combo.get(old).?;
+                    try all_types.put(arena, .{ .data = .{ .tuple = .{ .types = new_types, .values = types.values } }, .is_type_val = ty.is_type_val }, {});
                 }
             },
             .container => |info| {
@@ -17715,7 +19941,7 @@ pub const Type = struct {
             .pointer => |info| info.elem_ty.hasUnresolvedGenericType(),
             .array => |info| info.elem_ty.hasUnresolvedGenericType(),
             .vector => |info| info.elem_ty.hasUnresolvedGenericType(),
-            .tuple => |types| for (types) |ty| {
+            .tuple => |types| for (types.types) |ty| {
                 if (ty.hasUnresolvedGenericType()) break true;
             } else false,
             .optional, .union_tag => |ty| ty.hasUnresolvedGenericType(),
@@ -17785,7 +20011,7 @@ pub const Type = struct {
 
     pub fn isNamespace(self: Type) bool {
         const scope_handle = switch (self.data) {
-            .tuple => |fields| return fields.len == 0,
+            .tuple => |fields| return fields.types.len == 0,
             .container => |info| info.scope_handle,
             else => return false,
         };
@@ -17963,6 +20189,21 @@ pub const Type = struct {
             dest.pointer.is_allowzero == src.pointer.is_allowzero and
             dest.pointer.address_space == src.pointer.address_space and
             std.meta.eql(dest.pointer.packed_offset, src.pointer.packed_offset);
+    }
+
+    pub fn withAlignmentForPtrCast(self: Type, analyser: *Analyser, destination: Type) Error!?Type {
+        const info = self.pointerCastInfo(analyser) orelse return null;
+        const dest = destination.pointerCastInfo(analyser) orelse return null;
+        const alignment = if (dest.pointer.alignment != 0) dest.pointer.alignment else if (dest.pointer.elem_ty.ipIndex() == .type_type) 1 else std.math.cast(u16, try analyser.resolveTypeAlignmentForPointerCast(dest.pointer.elem_ty, 0) orelse return null) orelse return null;
+        const pointer = try Type.createPointerTypeWithFlags(analyser, .{
+            .size = info.pointer.size,
+            .is_const = info.pointer.is_const,
+            .is_volatile = info.pointer.is_volatile,
+            .is_allowzero = info.pointer.is_allowzero,
+            .address_space = info.pointer.address_space,
+            .alignment = std.math.cast(u16, alignment) orelse return null,
+        }, info.pointer.packed_offset, info.pointer.sentinel, info.pointer.elem_ty);
+        return @as(?Type, if (info.is_optional) try Type.createOptionalType(analyser, pointer) else pointer);
     }
 
     pub fn hasSamePointerElementType(lhs: Type, analyser: *Analyser, rhs: Type) bool {
@@ -18241,6 +20482,10 @@ pub const Type = struct {
         const info = self.typePointerInfo(analyser) orelse return null;
         if (info.size != .one) return null;
         const child = info.elem_ty;
+        if (child.ipIndex() == .type_type) return child;
+        if (child.typePointerInfo(analyser)) |child_pointer| {
+            if (child_pointer.size == .slice) return child;
+        }
         if (child.isFunc() or child.isEnumType(analyser) or child.isErrorSetType(analyser) or
             child.isOptionalType(analyser) or child.isTupleType(analyser) or
             child.isStructType(analyser) or child.isUnionType() or child.data == .error_union) return child;
@@ -18315,7 +20560,7 @@ pub const Type = struct {
         if (info.size != .one) return null;
         return switch (info.elem_ty.data) {
             .array => |array| std.math.cast(usize, array.elem_count orelse return null),
-            .tuple => |tuple| tuple.len,
+            .tuple => |tuple| tuple.types.len,
             .ip_index => |payload| switch (analyser.ip.indexToKey(payload.index orelse return null)) {
                 .array_type => |array| std.math.cast(usize, array.len),
                 .tuple_type => |tuple| tuple.types.len,
@@ -18631,16 +20876,20 @@ pub const Type = struct {
                 try writer.writeByte(')');
             },
             .tuple => |elem_ty_slice| {
-                if (elem_ty_slice.len == 0) {
+                if (elem_ty_slice.types.len == 0) {
                     try writer.writeAll("struct {}");
                     return;
                 }
                 try writer.writeAll("struct { ");
-                for (elem_ty_slice, 0..) |elem_ty, i| {
+                for (elem_ty_slice.types, 0..) |elem_ty, i| {
                     if (i != 0) {
                         try writer.writeAll(", ");
                     }
                     try elem_ty.rawStringify(writer, analyser, options);
+                    if (elem_ty_slice.values.len != 0) if (elem_ty_slice.values[i]) |value| {
+                        try writer.writeAll(" = ");
+                        try value.rawStringify(writer, analyser, options);
+                    };
                 }
                 try writer.writeAll(" }");
             },

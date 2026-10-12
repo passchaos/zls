@@ -2973,9 +2973,9 @@ test "generic function with comptime runtime struct layout builtins" {
         \\const buffer: Buffer() = undefined;
         \\const field = buffer.<cursor>
     , &.{
-        .{ .label = "bits", .kind = .Field, .detail = "[?]u8" },
-        .{ .label = "bytes", .kind = .Field, .detail = "[?]u8" },
-        .{ .label = "alignment", .kind = .Field, .detail = "[?]u8" },
+        .{ .label = "bits", .kind = .Field, .detail = "[64]u8" },
+        .{ .label = "bytes", .kind = .Field, .detail = "[8]u8" },
+        .{ .label = "alignment", .kind = .Field, .detail = "[4]u8" },
         .{ .label = "recursive", .kind = .Field, .detail = "[?]u8" },
     });
 }
@@ -3567,6 +3567,62 @@ test "generated Struct fields complete in struct initializer" {
     });
 }
 
+test "generated comptime Struct fields complete with declared types" {
+    try testCompletion(
+        \\fn Generated() type {
+        \\    const Default = struct {
+        \\        const Item: type = u16;
+        \\        const fixed: u8 = 3;
+        \\    };
+        \\    return @Struct(.auto, null, &.{ "Item", "fixed" }, &.{ type, u8 }, &.{
+        \\        .{ .@"comptime" = true, .default_value_ptr = @ptrCast(&Default.Item) },
+        \\        .{ .@"comptime" = true, .@"align" = 4, .default_value_ptr = @ptrCast(&Default.fixed) },
+        \\    });
+        \\}
+        \\const value: Generated() = .{};
+        \\const field = value.<cursor>
+    , &.{
+        .{ .label = "Item", .kind = .Field, .detail = "Item: type" },
+        .{ .label = "fixed", .kind = .Field, .detail = "fixed: align(4) u8" },
+    });
+
+    try testCompletion(
+        \\fn Generated() type {
+        \\    const Default = struct {
+        \\        const Item: type = u16;
+        \\        const fixed: u8 = 3;
+        \\    };
+        \\    return @Struct(.auto, null, &.{ "Item", "fixed" }, &.{ type, u8 }, &.{
+        \\        .{ .@"comptime" = true, .default_value_ptr = @ptrCast(&Default.Item) },
+        \\        .{ .@"comptime" = true, .@"align" = 4, .default_value_ptr = @ptrCast(&Default.fixed) },
+        \\    });
+        \\}
+        \\const value: Generated() = .{ .<cursor> };
+    , &.{
+        .{ .label = "Item", .kind = .Field, .detail = "type" },
+        .{ .label = "fixed", .kind = .Field, .detail = "align(4) u8" },
+    });
+
+    try testCompletion(
+        \\const Source = struct {
+        \\    count: u16,
+        \\    pub fn call(_: @This()) void {}
+        \\};
+        \\fn Generated() type {
+        \\    const Default = struct { const value: type = Source; };
+        \\    return @Struct(.auto, null, &.{"Item"}, &.{type}, &.{.{
+        \\        .@"comptime" = true, .default_value_ptr = @ptrCast(&Default.value),
+        \\    }});
+        \\}
+        \\const value: Generated() = .{};
+        \\const item: value.Item = undefined;
+        \\const member = item.<cursor>
+    , &.{
+        .{ .label = "count", .kind = .Field, .detail = "u16" },
+        .{ .label = "call", .kind = .Method, .detail = "fn (_: Source) void" },
+    });
+}
+
 test "named generic Struct result preserves generated fields" {
     try testCompletion(
         \\const std = @import("std");
@@ -3821,6 +3877,26 @@ test "generic function with comptime Union type constructor" {
         \\const field = selected.<cursor>
     , &.{
         .{ .label = "matched", .kind = .Field, .detail = "u5" },
+    });
+}
+
+test "generated Union preserves source payload completions" {
+    try testCompletion(
+        \\const Item = struct { count: u16 };
+        \\const U = @Union(.auto, null, &.{ "item", "empty" }, &.{ Item, void }, &.{ .{}, .{} });
+        \\const value: U = undefined;
+        \\const selected = value.<cursor>
+    , &.{
+        .{ .label = "item", .kind = .Field, .detail = "item: Item" },
+        .{ .label = "empty", .kind = .Field, .detail = "empty: void" },
+    });
+    try testCompletion(
+        \\const Item = struct { count: u16 };
+        \\const U = @Union(.auto, null, &.{ "item", "empty" }, &.{ Item, void }, &.{ .{}, .{} });
+        \\const value: U = undefined;
+        \\const selected = value.item.<cursor>
+    , &.{
+        .{ .label = "count", .kind = .Field, .detail = "u16" },
     });
 }
 
@@ -11713,6 +11789,44 @@ test "comptime interpreter preserves unknown instance method results" {
     });
 }
 
+test "comptime interpreter preserves unknown instance method arguments" {
+    try testCompletion(
+        \\const Check = struct {
+        \\    count: usize,
+        \\    fn matches(self: @This(), expected: usize) bool { return self.count == expected; }
+        \\};
+        \\var runtime: usize = undefined;
+        \\fn Select() type {
+        \\    const check = Check{ .count = 4 };
+        \\    return if (check.matches(runtime)) struct { matched: u8 } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
+test "comptime interpreter preserves unknown pointer receiver values" {
+    try testCompletion(
+        \\const Counter = struct {
+        \\    count: usize,
+        \\    fn increment(self: *@This()) usize { self.count += 1; return self.count; }
+        \\};
+        \\var runtime: Counter = undefined;
+        \\fn Select() type {
+        \\    const pointer = &runtime;
+        \\    return if (pointer.increment() == 5) struct { matched: u8 } else struct { fallback: u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "matched", .kind = .Field, .detail = "u8" },
+        .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+    });
+}
+
 test "generic function with comptime call builtin" {
     try testCompletion(
         \\fn combine(a: usize, b: usize) usize { return a * 10 + b; }
@@ -12139,6 +12253,70 @@ test "comptime interpreter preserves unknown contextual return types" {
     }
 }
 
+test "comptime union tag comparisons preserve invalid and unknown operands" {
+    const cases = [_]struct { declarations: []const u8, equal_operand: []const u8, other_operand: []const u8 }{
+        .{
+            .declarations =
+            \\const U = union(enum) { count: u8, empty };
+            \\var runtime: U = undefined;
+            \\fn produce() U { return runtime; }
+            ,
+            .equal_operand = ".count",
+            .other_operand = ".empty",
+        },
+        .{
+            .declarations =
+            \\const U = union { count: u8, empty: void };
+            \\fn produce() U { return .{ .count = 4 }; }
+            ,
+            .equal_operand = ".count",
+            .other_operand = ".empty",
+        },
+        .{
+            .declarations =
+            \\const Tag = enum { count, empty };
+            \\const Other = enum { count, empty };
+            \\const U = union(Tag) { count: u8, empty };
+            \\const wrong_count: Other = .count;
+            \\const wrong_empty: Other = .empty;
+            \\fn produce() U { return .{ .count = 4 }; }
+            ,
+            .equal_operand = "wrong_count",
+            .other_operand = "wrong_empty",
+        },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\{s}
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const value = produce();
+            \\    const equal = value == {s};
+            \\    const not_equal = value != {s};
+            \\    const reverse_equal = {s} == value;
+            \\    const reverse_not_equal = {s} != value;
+            \\    return struct {{
+            \\        equal: [if (equal) 1 else 2]u8,
+            \\        not_equal: [if (not_equal) 1 else 2]u8,
+            \\        reverse_equal: [if (reverse_equal) 1 else 2]u8,
+            \\        reverse_not_equal: [if (reverse_not_equal) 1 else 2]u8,
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.declarations, case.equal_operand, case.other_operand, case.equal_operand, case.other_operand });
+        defer allocator.free(source);
+        errdefer std.debug.print("union comparison source:\n{s}\n", .{source});
+        try testCompletion(source, &.{
+            .{ .label = "equal", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "not_equal", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "reverse_equal", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "reverse_not_equal", .kind = .Field, .detail = "[?]u8" },
+        });
+    }
+}
+
 test "comptime interpreter validates float coercion precision" {
     try testCompletion(
         \\fn exact() f32 { return @as(f64, 4.5); }
@@ -12224,6 +12402,100 @@ test "comptime interpreter preserves unknown call boundary elements" {
         .{ .label = "known", .kind = .Field, .detail = "[8]u8" },
         .{ .label = "typed", .kind = .Field, .detail = "[1]u8" },
     });
+}
+
+test "generated comptime types reject conflicting source identities" {
+    const cases = [_]struct { destination: []const u8, source: []const u8, payload: []const u8, initializer: []const u8, access: []const u8 }{
+        .{ .destination = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .source = "enum(u8) { first = 3, second = 7 }", .payload = "A", .initializer = "B.first", .access = "@intFromEnum(value)" },
+        .{ .destination = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .source = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .payload = "A", .initializer = "B.first", .access = "@intFromEnum(value)" },
+        .{ .destination = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .source = "enum(u8) { first = 3, second = 7 }", .payload = "?A", .initializer = "@as(?B, B.first)", .access = "@intFromEnum(value.?)" },
+        .{ .destination = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .source = "enum(u8) { first = 3, second = 7 }", .payload = "[1]A", .initializer = "[1]B{.first}", .access = "@intFromEnum(value[0])" },
+        .{ .destination = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .source = "enum(u8) { first = 3, second = 7 }", .payload = "*const A", .initializer = "&B.first", .access = "@intFromEnum(value.*)" },
+        .{ .destination = "@Enum(u8, .exhaustive, &.{ \"first\", \"second\" }, &.{ 3, 7 })", .source = "enum(u8) { first = 3, second = 7 }", .payload = "error{Missing}!A", .initializer = "@as(error{Missing}!B, B.first)", .access = "@intFromEnum(value catch unreachable)" },
+        .{ .destination = "@Struct(.auto, null, &.{\"count\"}, &.{u8}, &.{.{} })", .source = "struct { count: u8 }", .payload = "A", .initializer = "B{ .count = 3 }", .access = "value.count" },
+        .{ .destination = "@Struct(.auto, null, &.{\"count\"}, &.{u8}, &.{.{} })", .source = "@Struct(.auto, null, &.{\"count\"}, &.{u8}, &.{.{} })", .payload = "A", .initializer = "B{ .count = 3 }", .access = "value.count" },
+        .{ .destination = "@Struct(.auto, null, &.{\"count\"}, &.{u8}, &.{.{} })", .source = "struct { count: u8 }", .payload = "?A", .initializer = "@as(?B, B{ .count = 3 })", .access = "value.?.count" },
+        .{ .destination = "@Union(.auto, @Enum(u8, .exhaustive, &.{ \"count\", \"empty\" }, &.{0, 1}), &.{ \"count\", \"empty\" }, &.{ u8, void }, &.{ .{}, .{} })", .source = "union(enum) { count: u8, empty }", .payload = "A", .initializer = "B{ .count = 3 }", .access = "value.count" },
+        .{ .destination = "@Union(.auto, @Enum(u8, .exhaustive, &.{ \"count\", \"empty\" }, &.{0, 1}), &.{ \"count\", \"empty\" }, &.{ u8, void }, &.{ .{}, .{} })", .source = "@Union(.auto, @Enum(u8, .exhaustive, &.{ \"count\", \"empty\" }, &.{0, 1}), &.{ \"count\", \"empty\" }, &.{ u8, void }, &.{ .{}, .{} })", .payload = "A", .initializer = "B{ .count = 3 }", .access = "value.count" },
+    };
+    for (cases) |case| for ([_]bool{ false, true }) |returned| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const A = {s};
+            \\const B = {s};
+            \\fn read(value: {s}) usize {{ return {s}; }}
+            \\fn produce() {s} {{ return {s}; }}
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const other = {s};
+            \\    _ = &other;
+            \\    const count = {s};
+            \\    const known = count;
+            \\    return struct {{ accepted: [known]u8 }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{ case.destination, case.source, case.payload, case.access, case.payload, case.initializer, case.initializer, if (returned) "read(produce())" else "read(other)" });
+        defer allocator.free(source);
+        errdefer std.debug.print("generated identity case: {s}, returned: {}\n", .{ case.payload, returned });
+        try testCompletion(source, &.{
+            .{ .label = "accepted", .kind = .Field, .detail = "[?]u8" },
+        });
+    };
+}
+
+test "generated Union rejects a different named payload type" {
+    const cases = [_]struct { definition: []const u8, payload: []const u8, initializer: []const u8, count: []const u8 }{
+        .{ .definition = "struct { count: u8 }", .payload = "A", .initializer = "B{ .count = 3 }", .count = "item.count" },
+        .{ .definition = "struct { count: u8 }", .payload = "?A", .initializer = "@as(?B, B{ .count = 3 })", .count = "item.?.count" },
+        .{ .definition = "struct { count: u8 }", .payload = "[1]A", .initializer = "[1]B{.{ .count = 3 }}", .count = "item[0].count" },
+        .{ .definition = "struct { count: u8 }", .payload = "*const A", .initializer = "&B{ .count = 3 }", .count = "item.count" },
+        .{ .definition = "enum(u8) { first = 3, second = 7 }", .payload = "A", .initializer = "B.first", .count = "@intFromEnum(item)" },
+        .{ .definition = "enum(u8) { first = 3, second = 7 }", .payload = "?A", .initializer = "@as(?B, B.first)", .count = "@intFromEnum(item.?)" },
+        .{ .definition = "union(enum) { count: u8, empty }", .payload = "A", .initializer = "B{ .count = 3 }", .count = "item.count" },
+        .{ .definition = "struct { count: u8 }", .payload = "error{Missing}!A", .initializer = "@as(error{Missing}!B, B{ .count = 3 })", .count = "(item catch unreachable).count" },
+        .{ .definition = "struct { count: u8 }", .payload = "A", .initializer = "@as(u8, 3)", .count = "item.count" },
+        .{ .definition = "struct { count: u8 }", .payload = "A", .initializer = ".{ .count = @as(u8, 3) }", .count = "item.count" },
+        .{ .definition = "@typeInfo(union(enum) { first, second }).@\"union\".tag_type.?", .payload = "A", .initializer = "@as(B, .first)", .count = "@intFromEnum(item)" },
+        .{ .definition = "struct { struct { count: u8 }, u8 }", .payload = "A", .initializer = "B{ .{ .count = 3 }, 0 }", .count = "item[0].count" },
+    };
+    for (cases) |case| for ([_]bool{ false, true }) |returned| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\const A = {s};
+            \\const B = {s};
+            \\const Tag = enum {{ item, empty }};
+            \\const U = @Union(.auto, Tag, &.{{ "item", "empty" }}, &.{{ {s}, void }}, &.{{ .{{}}, .{{}} }});
+            \\fn identity(value: U) U {{ return value; }}
+            \\fn produce() U {{ const other = {s}; return .{{ .item = other }}; }}
+            \\fn Select() type {{
+            \\    var marker: usize = 0;
+            \\    marker += 1;
+            \\    const other = {s};
+            \\    _ = &other;
+            \\    const value = {s};
+            \\    return switch (value) {{
+            \\        .item => |item| struct {{ accepted: [{s}]u8 }},
+            \\        .empty => struct {{ fallback: u8 }},
+            \\    }};
+            \\}}
+            \\const selected: Select() = undefined;
+            \\const field = selected.<cursor>
+        , .{
+            case.definition,
+            case.definition,
+            case.payload,
+            case.initializer,
+            case.initializer,
+            if (returned) "produce()" else "identity(.{ .item = other })",
+            case.count,
+        });
+        defer allocator.free(source);
+        errdefer std.debug.print("named payload case: {s}, returned: {}\n", .{ case.payload, returned });
+        try testCompletion(source, &.{
+            .{ .label = "accepted", .kind = .Field, .detail = "[?]u8" },
+            .{ .label = "fallback", .kind = .Field, .detail = "u8" },
+        });
+    };
 }
 
 test "comptime interpreter rejects invalid call boundary union payloads" {
@@ -26648,6 +26920,99 @@ test "bound identifiers preserve changes and lexical shadowing" {
     const shadow_nodes = try zls.ast.nodesOverlappingIndex(ctx.arena.allocator(), &handle.tree, shadow_position);
     const shadow = try analyser.resolveTypeOfNode(.of(shadow_nodes[0], handle)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(.u32_type, shadow.ipIndex().?);
+}
+
+test "TypeOf does not execute comptime branches behind runtime conditions" {
+    try testCompletion(
+        \\var runtime: bool = undefined;
+        \\fn Select() type {
+        \\    var executions: usize = 0;
+        \\    const T = @TypeOf(if (runtime) comptime block: {
+        \\        executions += 1;
+        \\        break :block @as(u8, 1);
+        \\    } else comptime block: {
+        \\        executions += 2;
+        \\        break :block @as(u16, 1);
+        \\    });
+        \\    const count = executions;
+        \\    return struct { items: [count]u8 };
+        \\}
+        \\const selected: Select() = undefined;
+        \\const field = selected.<cursor>
+    , &.{
+        .{ .label = "items", .kind = .Field, .detail = "[0]u8" },
+    });
+}
+
+test "comptime type calls reuse completed immutable results" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+    const source =
+        \\fn generated(comptime count: usize) type {
+        \\    const captured = count;
+        \\    return struct { items: [captured]u8 };
+        \\}
+        \\fn wrapper(comptime count: usize) type {
+        \\    var marker: usize = count;
+        \\    marker += 1;
+        \\    return generated(marker);
+        \\}
+        \\const first = wrapper(3);
+        \\const second = wrapper(3);
+        \\const other = wrapper(4);
+    ;
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    analyser.resolve_number_literal_values = true;
+    analyser.evaluate_comptime_values = true;
+    var results: [3]zls.Analyser.Type = undefined;
+    var first_cache_size: usize = 0;
+    inline for (.{ "first", "second", "other" }, 0..) |name, index| {
+        const declaration = try analyser.lookupSymbolGlobal(handle, name, source.len) orelse return error.TestUnexpectedResult;
+        results[index] = try declaration.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+        if (index == 0) {
+            first_cache_size = analyser.comptime_type_call_results.count();
+            try std.testing.expect(first_cache_size != 0);
+        } else if (index == 1) {
+            try std.testing.expectEqual(first_cache_size, analyser.comptime_type_call_results.count());
+        } else {
+            try std.testing.expect(analyser.comptime_type_call_results.count() > first_cache_size);
+        }
+    }
+    try std.testing.expect(results[0].eql(results[1]));
+    try std.testing.expect(!results[0].eql(results[2]));
+}
+
+test "comptime type call cache preserves evaluation quota effects" {
+    var ctx: Context = try .init();
+    defer ctx.deinit();
+    const source =
+        \\fn limited(comptime count: usize) type {
+        \\    @setEvalBranchQuota(10000);
+        \\    return struct { items: [count]u8 };
+        \\}
+        \\fn wrapper(comptime count: usize) type {
+        \\    var marker: usize = count;
+        \\    marker += 1;
+        \\    return limited(marker);
+        \\}
+        \\const first = wrapper(3);
+        \\const second = wrapper(3);
+    ;
+    const uri = try ctx.addDocument(.{ .source = source });
+    const handle = ctx.server.document_store.getHandle(uri).?;
+    var analyser = ctx.server.initAnalyser(ctx.arena.allocator(), handle);
+    defer analyser.deinit();
+    analyser.resolve_number_literal_values = true;
+    analyser.evaluate_comptime_values = true;
+    inline for (.{ "first", "second" }) |name| {
+        const declaration = try analyser.lookupSymbolGlobal(handle, name, source.len) orelse return error.TestUnexpectedResult;
+        const resolved = try declaration.resolveType(&analyser) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(resolved.is_type_val);
+        try std.testing.expectEqual(@as(usize, 0), analyser.comptime_type_call_results.count());
+    }
 }
 
 test "callsite inference caches parameters per source file" {

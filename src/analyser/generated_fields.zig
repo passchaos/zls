@@ -1,4 +1,4 @@
-//! Source provenance for fields copied through comptime reflection and @Struct.
+//! Source provenance for fields copied through comptime reflection and generated containers.
 const std = @import("std");
 const Analyser = @import("../analysis.zig");
 
@@ -9,7 +9,7 @@ pub fn source(
 ) error{OutOfMemory}!?Analyser.TokenWithHandle {
     const ty = if (container.is_type_val) container else try container.typeOf(analyser);
     if (ty.ipIndex()) |index| {
-        if (analyser.generated_struct_fields.get(index)) |fields| {
+        if (analyser.generatedFields(index)) |fields| {
             for (fields) |field| {
                 if (std.mem.eql(u8, field.name, name)) return field.source;
             }

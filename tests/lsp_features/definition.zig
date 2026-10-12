@@ -544,6 +544,90 @@ test "comptime array vector bitCast selects definition" {
     );
 }
 
+test "generated Union fields preserve payload type and reflected source definitions" {
+    try testDefinition(
+        \\const Item = <def><tdef>struct</tdef></def> { count: u16 };
+        \\fn Generated() type {
+        \\    return @Union(.auto, null, &.{ "item", "empty" }, &.{ Item, void }, &.{ .{}, .{} });
+        \\}
+        \\const value: Generated() = undefined;
+        \\const selected = value.it<>em;
+    );
+    try testDefinition(
+        \\const Item = <tdef>struct</tdef> { count: u16 };
+        \\const Source = union { <def><decl>payload</decl></def>: Item, empty: void };
+        \\fn Generated() type {
+        \\    const field = @typeInfo(Source).@"union".fields[0];
+        \\    return @Union(.auto, null, &.{field.name}, &.{field.type}, &.{.{} });
+        \\}
+        \\const value: Generated() = undefined;
+        \\const selected = value.pay<>load;
+    );
+}
+
+test "generated comptime Struct fields preserve type navigation" {
+    try testDefinition(
+        \\const Source = struct { <def><decl>count</decl></def>: <tdef>u16</tdef> };
+        \\fn Generated() type {
+        \\    const Default = struct { const value: type = Source; };
+        \\    return @Struct(.auto, null, &.{"Item"}, &.{type}, &.{.{
+        \\        .@"comptime" = true, .default_value_ptr = @ptrCast(&Default.value),
+        \\    }});
+        \\}
+        \\const value: Generated() = .{};
+        \\const item: value.Item = undefined;
+        \\const member = item.co<>unt;
+    );
+
+    try testDefinition(
+        \\const Source = struct {
+        \\    pub <tdef>fn</tdef> <def><decl>call</decl></def>(_: @This()) void {}
+        \\};
+        \\fn Generated() type {
+        \\    const Default = struct { const value: type = Source; };
+        \\    return @Struct(.auto, null, &.{"Item"}, &.{type}, &.{.{
+        \\        .@"comptime" = true, .default_value_ptr = @ptrCast(&Default.value),
+        \\    }});
+        \\}
+        \\const value: Generated() = .{};
+        \\const member = value.Item.ca<>ll;
+    );
+}
+
+test "source comptime Struct type defaults preserve navigation" {
+    try testDefinition(
+        \\const Item = struct { <def><decl>count</decl></def>: <tdef>u16</tdef> };
+        \\const Record = struct { comptime ItemType: type = Item, value: u8 };
+        \\const record: Record = undefined;
+        \\const item: record.ItemType = undefined;
+        \\const field = item.co<>unt;
+    );
+}
+
+test "reflected Struct type defaults preserve navigation" {
+    try testDefinition(
+        \\const Item = struct { <def><decl>count</decl></def>: <tdef>u16</tdef> };
+        \\const Record = struct { comptime ItemType: type = Item };
+        \\const field = @typeInfo(Record).@"struct".fields[0];
+        \\const Default = field.defaultValue().?;
+        \\const item: Default = undefined;
+        \\const member = item.co<>unt;
+    );
+}
+
+test "reflected sentinel methods select source navigation" {
+    try testDefinition(
+        \\const Right = struct { const <def><decl>count</decl></def>: <tdef>u16</tdef> = 3; };
+        \\const Wrong = struct { const count: u8 = 0; };
+        \\fn Select() type {
+        \\    const info = @typeInfo([*:3]const u8).pointer;
+        \\    return if (info.sentinel().? == 3) Right else Wrong;
+        \\}
+        \\const Item = Select();
+        \\const value = Item.co<>unt;
+    );
+}
+
 test "generated Struct fields navigate to reflected source names" {
     try testDefinition(
         \\const std = @import("std");
@@ -623,6 +707,26 @@ test "hasDecl guard navigates members of an unresolved type" {
         \\    const Base = switch (@typeInfo(T)) { .pointer => |pointer| pointer.child, else => T };
         \\    if (@hasDecl(Base, "Value")) _ = Base.Val<>ue;
         \\}
+    );
+}
+
+test "comptime type call cache preserves reflected field provenance" {
+    try testDefinition(
+        \\const First = struct { value: u32 };
+        \\const Second = struct { <def><decl>value</decl></def>: u32 };
+        \\fn Copy(comptime name: []const u8) type {
+        \\    return @Struct(.auto, null, &.{name}, &.{u32}, &.{.{} });
+        \\}
+        \\fn Select() type {
+        \\    var marker: usize = 0;
+        \\    marker += 1;
+        \\    const A = Copy(@typeInfo(First).@"struct".fields[0].name);
+        \\    const B = Copy(@typeInfo(Second).@"struct".fields[0].name);
+        \\    _ = A;
+        \\    return B;
+        \\}
+        \\const selected: Select() = undefined;
+        \\const item = selected.val<>ue;
     );
 }
 

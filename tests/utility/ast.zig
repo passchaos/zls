@@ -9,6 +9,25 @@ const ast = zls.ast;
 
 const allocator = std.testing.allocator;
 
+test "pointer modifiers exclude address space expressions" {
+    const cases = [_]struct { source: [:0]const u8, is_const: bool, is_volatile: bool, is_allowzero: bool }{
+        .{ .source = "const P = *addrspace(block: { const T = u8; break :block .generic; }) u8;", .is_const = false, .is_volatile = false, .is_allowzero = false },
+        .{ .source = "const P = [*]align(4) addrspace(block: { const T = u8; break :block .generic; }) u8;", .is_const = false, .is_volatile = false, .is_allowzero = false },
+        .{ .source = "const P = []addrspace(block: { const T = u8; break :block .generic; }) const volatile allowzero u8;", .is_const = true, .is_volatile = true, .is_allowzero = true },
+        .{ .source = "const P = *addrspace(block: { const T = *allowzero volatile u8; break :block .generic; }) const u8;", .is_const = true, .is_volatile = false, .is_allowzero = false },
+    };
+    for (cases) |case| {
+        var tree = try std.zig.Ast.parse(allocator, case.source, .zig);
+        defer tree.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), tree.errors.len);
+        const declaration = tree.fullVarDecl(tree.rootDecls()[0]).?;
+        const pointer = ast.fullPtrType(&tree, declaration.ast.init_node.unwrap().?).?;
+        try std.testing.expectEqual(case.is_const, pointer.const_token != null);
+        try std.testing.expectEqual(case.is_volatile, pointer.volatile_token != null);
+        try std.testing.expectEqual(case.is_allowzero, pointer.allowzero_token != null);
+    }
+}
+
 test "recovered overlapping nodes keep inner expressions before their parents" {
     const sources = [_][]const u8{
         "const value: S = .{ .field = 42<cursor> };",
