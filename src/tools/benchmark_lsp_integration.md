@@ -815,3 +815,26 @@ performance change. All response hashes matched. Baseline binary SHA-256:
 `6446a81fe63b0fadf61aec8938900efd76ed38beb133cb7feda08460b7654e13`.
 Candidate binary SHA-256:
 `a8a0a847102e49f773d13f4737f9575bef872f9bc2ace1fde5719abb69fc37db`.
+
+## Exact declared types from comptime call chains
+
+2026-10-12, same machine, Zig version, and build options. Struct field type
+expressions now fall back to comptime interpretation when ordinary resolution
+remains unknown and the field-access chain contains a call. Known types retain
+the existing fast path. This makes a declaration such as
+`value: BufferReader.associated().Error` keep the concrete associated error set
+instead of displaying `(unknown type)`.
+
+All 1,291 ZLS tests and all 17 zigraft tests passed. The complete integration
+audit passed all 661 exact definition destinations and 1,626 completion edits
+across 698 scanned elements. A real-document overlay reports
+`error{OutOfBounds}` for the field whose declared type is
+`BufferReader.associated().Error`.
+
+Two reversed runs with 20 warmups and 500 measured rounds per order produced a
+`0.9987x` geometric mean across the 16 existing integration request cases. The
+multi-millisecond requests remained within 1.2%, so this is treated as no
+material performance change. All response hashes matched. Baseline binary
+SHA-256: `addbcc8eddbae5e697cebd684c01de25986857518ddfa16b5ccea5ec9c4a731b`.
+Candidate binary SHA-256:
+`abcaf6b42e95a12dbdeda336214820bc7d75c78989ddfcaaa0bb4e8470cbca54`.

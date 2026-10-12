@@ -11498,6 +11498,24 @@ test "generic function preserves aggregate values across nested type calls" {
     });
 }
 
+test "comptime method result fields resolve as declared types" {
+    try testCompletion(
+        \\const ConcreteError = error{Failed};
+        \\const Associated = struct { Error: type = anyerror };
+        \\fn Model(comptime associated_value: Associated) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn associated(comptime _: Self) Associated { return associated_value; }
+        \\    };
+        \\}
+        \\const model: Model(.{ .Error = ConcreteError }) = .{};
+        \\const holder: struct { value: model.associated().Error } = undefined;
+        \\const field = holder.<cursor>
+    , &.{
+        .{ .label = "value", .kind = .Field, .detail = "error{Failed}" },
+    });
+}
+
 test "comptime interpreter evaluates local value-returning instance methods" {
     try testCompletion(
         \\const Check = struct {

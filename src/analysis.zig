@@ -13859,6 +13859,16 @@ fn resolveBindingOfNodeInternal(analyser: *Analyser, options: ResolveOptions) Er
     return binding;
 }
 
+fn fieldAccessChainContainsCall(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    if (depth == 32) return false;
+    return switch (tree.nodeTag(node)) {
+        .call, .call_comma, .call_one, .call_one_comma => true,
+        .field_access => fieldAccessChainContainsCall(tree, tree.nodeData(node).node_and_token[0], depth + 1),
+        .grouped_expression => fieldAccessChainContainsCall(tree, tree.nodeData(node).node_and_token[0], depth + 1),
+        else => false,
+    };
+}
+
 fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error!?Type {
     const node_handle = options.node_handle;
     const node = node_handle.node;
@@ -14117,10 +14127,15 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             }
 
             const base = field.ast.type_expr.unwrap().?;
-            const base_type = (try analyser.resolveTypeOfNodeInternal(.{
+            var base_type = (try analyser.resolveTypeOfNodeInternal(.{
                 .node_handle = .of(base, handle),
                 .container_type = options.container_type,
             })) orelse return null;
+            if (analyser.hasUnknownType(base_type) and fieldAccessChainContainsCall(tree, base, 0)) {
+                if (try comptime_eval.Interpreter.evaluateValue(analyser, handle, base)) |value| {
+                    if (value.is_type_val) base_type = value;
+                }
+            }
             return try base_type.instanceTypeVal(analyser);
         },
         .@"comptime",
