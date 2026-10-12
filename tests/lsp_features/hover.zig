@@ -900,6 +900,24 @@ test "function" {
     , .{ .markup_kind = .plaintext });
 }
 
+test "explicit variable type from comptime method result" {
+    try testHoverWithOptions(
+        \\const ConcreteError = error{Failed};
+        \\const Associated = struct { Error: type = anyerror };
+        \\fn Model(comptime associated_value: Associated) type {
+        \\    return struct {
+        \\        const Self = @This();
+        \\        fn associated(comptime _: Self) Associated { return associated_value; }
+        \\    };
+        \\}
+        \\const model: Model(.{ .Error = ConcreteError }) = .{};
+        \\const error_v<cursor>alue: model.associated().Error = error.Failed;
+    ,
+        \\const error_value: model.associated().Error = error.Failed
+        \\(error{Failed} = error.Failed)
+    , .{ .markup_kind = .plaintext });
+}
+
 test "function parameter" {
     try testHover(
         \\fn foo(

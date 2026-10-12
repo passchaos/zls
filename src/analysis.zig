@@ -13869,6 +13869,50 @@ fn fieldAccessChainContainsCall(tree: *const Ast, node: Ast.Node.Index, depth: u
     };
 }
 
+fn isFieldAccessExpression(tree: *const Ast, node: Ast.Node.Index, depth: u8) bool {
+    if (depth == 32) return false;
+    return switch (tree.nodeTag(node)) {
+        .field_access => true,
+        .grouped_expression => isFieldAccessExpression(tree, tree.nodeData(node).node_and_token[0], depth + 1),
+        else => false,
+    };
+}
+
+const DeclaredTypeFallback = enum {
+    direct_unknown,
+    nested_unknown,
+};
+
+fn resolveDeclaredTypeExpression(
+    analyser: *Analyser,
+    handle: *DocumentStore.Handle,
+    node: Ast.Node.Index,
+    container_type: ?Type,
+    fallback: DeclaredTypeFallback,
+) Error!?Type {
+    var resolved = try analyser.resolveTypeOfNodeInternal(.{
+        .node_handle = .of(node, handle),
+        .container_type = container_type,
+    }) orelse return null;
+    const is_direct_unknown = resolved.is_type_val and switch (resolved.data) {
+        .ip_index => |payload| payload.type == .type_type and payload.index == null,
+        else => false,
+    };
+    const needs_fallback = switch (fallback) {
+        .direct_unknown => is_direct_unknown and
+            isFieldAccessExpression(&handle.tree, node, 0) and
+            analyser.comptime_interpreter == null and
+            analyser.generic_bindings == null,
+        .nested_unknown => analyser.hasUnknownType(resolved),
+    };
+    if (needs_fallback and fieldAccessChainContainsCall(&handle.tree, node, 0)) {
+        if (try comptime_eval.Interpreter.evaluateValue(analyser, handle, node)) |value| {
+            if (value.is_type_val) resolved = value;
+        }
+    }
+    return resolved;
+}
+
 fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error!?Type {
     const node_handle = options.node_handle;
     const node = node_handle.node;
@@ -13891,10 +13935,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             var fallback_type: ?Type = null;
 
             if (var_decl.ast.type_node.unwrap()) |type_node| blk: {
-                const decl_type = try analyser.resolveTypeOfNodeInternal(.{
-                    .node_handle = .of(type_node, handle),
-                    .container_type = options.container_type,
-                }) orelse break :blk;
+                const decl_type = try analyser.resolveDeclaredTypeExpression(
+                    handle,
+                    type_node,
+                    options.container_type,
+                    .direct_unknown,
+                ) orelse break :blk;
                 if (decl_type.isMetaType()) {
                     fallback_type = .unknown_type;
                     break :blk;
@@ -14127,15 +14173,12 @@ fn resolveTypeOfNodeUncached(analyser: *Analyser, options: ResolveOptions) Error
             }
 
             const base = field.ast.type_expr.unwrap().?;
-            var base_type = (try analyser.resolveTypeOfNodeInternal(.{
-                .node_handle = .of(base, handle),
-                .container_type = options.container_type,
-            })) orelse return null;
-            if (analyser.hasUnknownType(base_type) and fieldAccessChainContainsCall(tree, base, 0)) {
-                if (try comptime_eval.Interpreter.evaluateValue(analyser, handle, base)) |value| {
-                    if (value.is_type_val) base_type = value;
-                }
-            }
+            const base_type = try analyser.resolveDeclaredTypeExpression(
+                handle,
+                base,
+                options.container_type,
+                .nested_unknown,
+            ) orelse return null;
             return try base_type.instanceTypeVal(analyser);
         },
         .@"comptime",
